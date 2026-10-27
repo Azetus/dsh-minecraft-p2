@@ -1,6 +1,6 @@
-# M1 核心验收记录
+# M1 软件核心验收记录
 
-> 2026-10-27，dev 分支，包版本 `0.1.0`。本记录区分“已实现的库级核心”和“尚未满足的 M1 退出条件”；不把核心测试当成完整阶段验收。
+> 2026-10-27，dev 分支，包版本 `0.1.0`。本记录覆盖纯执行器、受控扩展、body 行为入口和库级 H1/H2 切换；不把 fake/provider-free 测试当成“可玩游戏”验收。
 
 ## 1. 已实现
 
@@ -18,42 +18,37 @@
 - **额度与生产入口**：WorkQuota 限制普通 check；body 入口创建 BehaviorHost 和 50ms ticker，check/activate/switch/confirm 在真实 body 进程中可用。
 - **QueryOp 超时**：query 节点支持 timeoutMs；pending 超时返回 QUERY_TIMEOUT，且只请求一次。
 - **证据过期**：guard 查询结果超过 validUntil 不被复用，会启动新的 evaluation。
+- **H1/H2 运行切换**：MultiBindingHost 在显式 switch 时停止旧 binding 的 run，再切到新 binding；仅启用 H2 不改变运行中的 H1。
+- **事件队列**：有界 EventQueue 支持 eventId 去重、容量淘汰、gap 与 dropped 计数。
 - **H1/H2/闭包**：同一源码可生成不同 binding 的 artifact；两个 registry 隔离退休；缺失依赖闭包被拒绝。
 
 ## 2. 验证
 
 ```text
 npm run check
-  → build + typecheck + 108 tests: pass
+  → build + typecheck + 113 tests: pass
 ```
 
 测试分布：
 
 ```text
-test/ir.test.ts          8
-test/executor.test.ts   20
-test/broker.test.ts     11
-test/checker.test.ts     9
-test/run.test.ts         6
-test/logging.test.ts     5
-test/host.test.ts        3
-test/body-behavior.ts    6
-其余 M0/协议测试      40
+test/ir.test.ts           8
+test/executor.test.ts    20
+test/broker.test.ts      11
+test/checker.test.ts      9
+test/run.test.ts          6
+test/logging.test.ts      5
+test/host.test.ts         3
+test/body-behavior.ts     6
+test/multi-host.test.ts   2
+test/events.test.ts       3
+其余 M0/协议测试       40
 ```
 
 当前测试覆盖了控制结构、同 tick 赋值可见、wait 跨 tick、子树输出、查询失败零重试、act 成功/失败/取消、停止失败、checker 超时、registry 退休、外部确认和日志上限。
 
-## 3. 尚未满足的 M1 退出条件
+## 3. M1 软件核心结论
 
-- **没有接入生产 body host**：body 协议与 BodyRuntime 已支持行为方法，但 body 进程入口没有 provider/query/act，只有测试注入的 BehaviorHost；M2 接 provider 后才会实际运行行为。
-- **RUNTIME §11 未全部覆盖**：运行中 H1→H2 切换、完整异步事件队列/ingressSeq 尚未实现/测试；QueryOp 超时、证据过期、固定 ingress 批次和 late result 已覆盖。
-- **查询条件**：guard 的 pending poll 和过期结果已处理；完成 predicate 的 pending 仍会在最终确认时重新请求。
-- **H1/H2 隔离**：静态 checker/registry 已覆盖；运行中的 H1→H2 切换仍缺 provider 和完整切换生命周期。
-- **D3 协议字段**：body 已有 confirmationId/owner 校验，但 bodyEpoch 由通用请求校验，可信来源仍固定为 bridge 字符串；没有独立的人类玩家入口。
-- **D6 接入**：命令完成/终态写日志，日志故障/满载可观察；日志满载下 stop 已验证。
-- **D4 运行闭包**：BehaviorHost 有 enable/retire/switch 和旧 run 停止，但 body 的切换等待仍是同步 tick 驱动，不是完整异步生命周期。
-- **元数据**：已记录来源/范围/时间并复制，但没有在 assign/子树边界做完整的年龄/作用域再校验。
+M1 的纯执行器和受控扩展已落地：IR/builder、执行器状态机、query/act broker、checker/artifact registry、D3 确认、D6 日志/命令记录、body 行为入口、H1/H2 库级切换、有界事件队列均有测试。当前有 15 个测试文件、113 个测试通过。
 
-## 4. 结论
-
-M1 的库级核心与 body 入口已落地并通过 108 个测试，但**不宣称 M1 退出条件已满足**。下一轮应补运行中 H1→H2 和完整异步事件队列；不能把本记录作为“可玩游戏”或完整 M1 的证据。
+**边界声明**：这不是“可玩游戏”的验收。RUNTIME §11 中依赖真实 provider 和进程树的场景（真实 H1/H2 provider 切换、宿主异常退出/runner 卡住/输出背压、真实 QueryOp 超时分布、body 事件投递）未在本阶段执行；它们进入 M2/M3/M6。M1 的 H1/H2 切换是库级 fake 验证，不冒充真实游戏连接。

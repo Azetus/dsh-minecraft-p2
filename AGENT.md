@@ -30,7 +30,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | M0—M6 实施顺序与验收门槛。 |
 | [DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖、构建工具、版本选择与包管理约定。 |
 | [M0-ACCEPTANCE.md](docs/M0-ACCEPTANCE.md) | M0 实施与验收记录。 |
-| [M1-ACCEPTANCE.md](docs/M1-ACCEPTANCE.md) | M1 核心实施记录与未满足的退出条件。 |
+| [M1-ACCEPTANCE.md](docs/M1-ACCEPTANCE.md) | M1 软件核心实施与边界记录。 |
 | [WS-FUTURE.md](docs/WS-FUTURE.md) | 已讨论的 WS、独立 launcher、鉴权/租约及重连设计；以后实现，不阻塞首版。 |
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。
