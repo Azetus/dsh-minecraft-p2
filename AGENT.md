@@ -33,6 +33,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | [M1-ACCEPTANCE.md](docs/M1-ACCEPTANCE.md) | M1 软件核心实施与边界记录。 |
 | [M2-ACCEPTANCE.md](docs/M2-ACCEPTANCE.md) | M2 DSH 软件闭环实施与边界记录。 |
 | [M3-ENVIRONMENT.md](docs/M3-ENVIRONMENT.md) | M3 首个 Vanilla 1.21.1 LAN 环境与连接探针记录。 |
+| [M3-G2.md](docs/M3-G2.md) | M3 G2 第一轮 look/move/jump/stop 实测记录。 |
 | [WS-FUTURE.md](docs/WS-FUTURE.md) | 已讨论的 WS、独立 launcher、鉴权/租约及重连设计；以后实现，不阻塞首版。 |
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。
