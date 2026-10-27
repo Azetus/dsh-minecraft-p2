@@ -109,4 +109,23 @@ describe('BehaviorRun external confirmation', () => {
     expect(late.outcome).toBe('rejected')
     expect(late.error?.code).toBe('ALREADY_TERMINAL')
   })
+
+  it('gives an accepted stop priority over a confirmation in the same batch', () => {
+    const run = externalRun()
+    run.tick(0)
+    run.stop()
+    const decision = run.confirm({
+      runId: 'run-1',
+      confirmationId: run.confirmation?.id ?? 'missing',
+      owner: 'session-1/agent-1',
+      source: 'player',
+      decision: 'confirm',
+      commandId: 'same-batch',
+    })
+    expect(decision.outcome).toBe('rejected')
+    expect(decision.status).toBe('cancelled')
+    expect(run.status).toBe('cancelled')
+    expect(run.confirmation?.status).toBe('cancelled')
+    expect(run.tick(1)).toBe('cancelled')
+  })
 })

@@ -145,6 +145,19 @@ export class BehaviorRun {
       this.outcomes.set(input.commandId, result)
       return result
     }
+
+    if (this.stopRequested) {
+      if (this.confirmationValue?.status === 'pending') this.confirmationValue.status = 'cancelled'
+      this.statusValue = 'cancelled'
+      const result: ConfirmResult = {
+        outcome: 'rejected',
+        status: 'cancelled',
+        error: p2Error('RUN_CANCELLED', 'control', 'run is being cancelled', { module: 'core.run' }),
+      }
+      this.outcomes.set(input.commandId, result)
+      return result
+    }
+
     if (this.confirmationValue?.status !== 'pending') {
       const result: ConfirmResult = {
         outcome: 'rejected',
