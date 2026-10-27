@@ -69,11 +69,13 @@ export function commandLine(command, args) {
 
 export function installBundle(home, profile, tarball = TARBALL, options = {}) {
   if (!existsSync(tarball)) throw new Error(`missing bundle: ${tarball}; run \`npm run bundle\` first`)
+  const env = { ...process.env, DSH_HOME: home }
+  if (options.force === true && existsSync(join(home, 'profiles', profile, 'node_modules', PACKAGE_NAME))) {
+    runDsh(['plugin', '--profile', profile, 'remove', PACKAGE_NAME], { env })
+  }
   const args = ['plugin', '--profile', profile, 'add', tarball]
   if (options.force === true) args.push('--force')
-  return runDsh(args, {
-    env: { ...process.env, DSH_HOME: home },
-  })
+  return runDsh(args, { env })
 }
 
 export function readProfile(home, profile) {
