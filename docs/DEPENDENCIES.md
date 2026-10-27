@@ -55,6 +55,7 @@ npm run clean
 - `node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace>`：通过 DSH Web API 执行 `/p2 status/setup/start/status/stop`，验证真实 body 子进程链路。该链路需要 DSH Host 能创建带管道的子进程；workspace-write 沙箱下会 `spawn EPERM`，应在 full access 下运行。
 - 直接运行 `node scripts/dev.mjs --keep` 可保留 `.dev-home/run` 供检查；默认退出时清理。
 - 需要模型回合时用 `node scripts/dev.mjs --with-credentials`；凭据只从真实 `DSH_HOME` 复制到隔离 home。
+- Minecraft provider 默认读取 owner workspace 的 `.p2/config.json`；`P2_MC_*` 环境变量覆盖文件值。没有文件且没有 `P2_MC_HOST` 时 body 保持 provider-unavailable。示例见 `.p2/config.example.json`，实际配置文件已忽略。详见 [M4-PREP.md](M4-PREP.md)。
 - 复用已有 session/workspace 时用 `node scripts/dev.mjs --reuse`。它跳过删除、bundle 安装和 workspace 重建，保留 `.dev-home/run` 下的 sessions、workspace 与 `.credentials.yaml`；目标 home 存在但 profile 无效时拒绝复用并保留现场，不自动删除。`--reuse` 不会自动重装 tarball。
 - 代码更新后仍要复用已有 session 时用 `node scripts/dev.mjs --refresh`：保留 sessions/workspace/credentials，只重装当前 tarball 并校验 profile。默认（或显式 `--fresh`）仍是全量重建。
 - `.dev-home/` 已加入 `.gitignore`；这些脚本不进入发布 tarball。

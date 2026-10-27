@@ -1,4 +1,5 @@
 import type { BehaviorArtifact } from '../contracts/ir.ts'
+import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -40,6 +41,7 @@ export type HostStatus = {
     id: string
     runId: string
   }
+  providerState: ProviderRuntimeStatus | null
   commandCount: number
 }
 
@@ -49,6 +51,7 @@ export type BehaviorHostOptions = {
   act: ActPort
   owner?: string
   builtinsDigest?: string
+  providerStatus?: () => ProviderRuntimeStatus
   newRunId?: () => string
 }
 
@@ -60,6 +63,7 @@ export class BehaviorHost {
   private readonly ledger = new CommandLedger<SwitchResult | ConfirmResult | { artifactId: string }>()
   private readonly query: QueryPort
   private readonly act: ActPort
+  private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | undefined
@@ -74,6 +78,7 @@ export class BehaviorHost {
     })
     this.query = options.query
     this.act = options.act
+    this.providerStatus = options.providerStatus
     this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
@@ -213,6 +218,7 @@ export class BehaviorHost {
       pendingConfirmation: run?.confirmation?.status === 'pending'
         ? { id: run.confirmation.id, runId: run.runId }
         : null,
+      providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
     }
   }

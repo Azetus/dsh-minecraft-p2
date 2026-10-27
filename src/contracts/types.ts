@@ -122,6 +122,10 @@ export type ValueMeta = {
   sampledAt: number
   validUntil?: number
   evidence?: string[]
+  /** Server world age observed with this value; absent when unavailable. */
+  serverAge?: number
+  /** True when the server tick/age is stalled (for example `/tick freeze`). */
+  paused?: boolean
 }
 
 export type LocalSlot = {

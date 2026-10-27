@@ -29,6 +29,7 @@ import type {
   HelloParams,
   HelloResult,
   OwnerContext,
+  ProviderRuntimeStatus,
   RequestEnvelope,
   ResponseEnvelope,
   ShutdownResult,
@@ -346,6 +347,7 @@ export class BodyRuntime {
       bindingId: this.body.bindingId,
       capabilities: this.body.capabilities,
       provider: this.body.provider,
+      providerState: behavior?.providerState ?? null,
       commandCount: this.commands.size,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,

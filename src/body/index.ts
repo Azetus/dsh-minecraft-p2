@@ -4,6 +4,7 @@ import { BehaviorHost } from '../core/host.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { loadBodyInfo } from './manifest.ts'
+import { loadProviderConfig } from './provider-config.ts'
 
 async function main(): Promise<void> {
   let body: BodyInfo
@@ -38,8 +39,8 @@ async function main(): Promise<void> {
 }
 
 async function createBehaviorHost(body: BodyInfo): Promise<BehaviorHost> {
-  const host = process.env.P2_MC_HOST
-  if (host === undefined || host.length === 0) {
+  const loaded = await loadProviderConfig()
+  if (loaded === undefined) {
     return new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
       query: () => ({
@@ -63,17 +64,20 @@ async function createBehaviorHost(body: BodyInfo): Promise<BehaviorHost> {
     const providerUrl = new URL('../provider/minecraft.mjs', import.meta.url).href
     const providerModule = await import(providerUrl) as typeof import('../provider/mineflayer.ts')
     const bot = await providerModule.connectMineflayer({
-      host,
-      port: Number(process.env.P2_MC_PORT ?? '25575'),
-      username: process.env.P2_MC_USERNAME ?? 'P2_Bot',
-      version: process.env.P2_MC_VERSION ?? '1.21.1',
-      timeoutMs: 15_000,
+      host: loaded.config.host,
+      port: loaded.config.port,
+      username: loaded.config.username,
+      version: loaded.config.version,
+      timeoutMs: loaded.config.connectTimeoutMs,
     })
-    const provider = new providerModule.MineflayerProvider(bot)
+    const provider = new providerModule.MineflayerProvider(bot, {
+      serverIdleMs: loaded.config.serverIdleMs,
+    })
     return new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
       query: provider.queryPort(),
       act: provider,
+      providerStatus: () => provider.liveStatus(),
     })
   } catch (error) {
     process.stderr.write(`dsh-minecraft-p2 body: provider connection failed: ${error instanceof Error ? error.message : String(error)}\n`)

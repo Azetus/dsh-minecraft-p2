@@ -18,7 +18,7 @@ function fakeBot() {
       1: { id: 1, name: 'P2_Bot', type: 'player', position: { x: 1, y: 64, z: 2 } },
       2: { id: 2, name: 'cow', type: 'animal', position: { x: 4, y: 64, z: 2 } },
     },
-    time: { timeOfDay: 1000 },
+    time: { timeOfDay: 1000, age: 1, doDaylightCycle: true },
     game: { difficulty: 'peaceful' },
     health: 20,
     food: 20,
@@ -66,6 +66,38 @@ describe('MineflayerProvider', () => {
 
     const stop = provider.start('stop', {})
     expect(stop.poll().status).toBe('succeeded')
+  })
+
+  it('fails closed and aborts acts when the server age stalls', () => {
+    const { bot, controls } = fakeBot()
+    const provider = new MineflayerProvider(bot, { serverIdleMs: 10 })
+    const startedAt = Date.now()
+    provider.refreshPauseState(startedAt)
+
+    const move = provider.start('move', { direction: 'forward', durationMs: 1000 })
+    provider.refreshPauseState(startedAt + 20)
+    expect(provider.liveStatus().paused).toBe(true)
+    expect(move.poll()).toMatchObject({ status: 'failed', error: { code: 'GAME_PAUSED' } })
+    expect(controls.get('forward')).not.toBe(true)
+
+    const position = provider.query('position')
+    expect(position).toMatchObject({ status: 'failed', error: { code: 'GAME_PAUSED' } })
+    const time = provider.query('time')
+    expect(time.status).toBe('ok')
+    if (time.status !== 'ok') throw new Error('expected time')
+    expect(time.value).toMatchObject({ paused: true, age: 1 })
+
+    let startError: unknown
+    try { provider.start('move', { direction: 'forward' }) } catch (error) { startError = error }
+    expect(startError).toMatchObject({ code: 'GAME_PAUSED' })
+
+    bot.time.age = 2
+    provider.refreshPauseState(startedAt + 30)
+    expect(provider.liveStatus().paused).toBe(false)
+    const resumed = provider.query('position')
+    expect(resumed.status).toBe('ok')
+    if (resumed.status !== 'ok') throw new Error('expected resumed position')
+    expect(resumed.meta).toMatchObject({ serverAge: 2, paused: false })
   })
 
   it('fails the active act and queries on connection end', () => {

@@ -384,8 +384,8 @@ npm run check
 | 多人延迟、同时人类操作、争抢 | 未测试 |
 | 长期运行、内存/CPU、背压、事件丢失 | 未测试 |
 | 真实 Desktop profile 安装/重载 | 未做（只做隔离 dev） |
-| provider 配置正式化 | **未完成**；目前仅 `P2_MC_*` 环境变量 |
-| `/p2 start` 在无 provider 环境自动连接 | 未完成 |
+| provider 配置正式化 | **已完成**：`.p2/config.json` + env 覆盖，见 [M4-PREP.md](M4-PREP.md) |
+| `/p2 start` 在无 provider 环境自动连接 | body 配置读取与隔离 dev `/p2 start`/`stop` 已验证；Desktop 未验证 |
 | 世界记忆/人格持久化与游戏行为闭环 | 只有 dev session/workspace 复用验证，未接游戏行为 |
 | NeoForge/整合包 | 明确未验证 |
 | 任意命令/模型代码安全 | 不提供任意命令 act；M5 才处理自定义 act 隔离 |
@@ -395,15 +395,13 @@ npm run check
 在开始“首个完整行为与反馈”前，建议先完成三件事：
 
 1. **Provider 配置正式化**
-   - 项目级 `.p2/config.json`（host/port/username/version）或等价配置；
-   - `/p2 start` 在 DSH 中能读到该配置；
-   - 环境变量作为覆盖，不作为唯一来源。
+   - 已实现 `.p2/config.json` + `P2_MC_*` 覆盖；详见 [M4-PREP.md](M4-PREP.md)。
+   - 还需在 M4 验证 DSH `/p2 start` 从 owner workspace 读取配置的完整链路。
 
 2. **Query 新鲜度与暂停语义**
-   - `time` 已有 world age；
-   - position/block/entity 结果应能判断 serverAge/连接状态；
-   - tick freeze 或 server tick 停顿时，明确是“拒绝新动作”“标记 stale”还是“暂停 behavior”；
-   - 在决定前，不允许模型把暂停期间的客户端预测位置当成服务端事实。
+   - `ValueMeta` 已带 `serverAge`/`paused`，provider watchdog 会在 server age 停滞时 abort act 并拒绝世界 query；
+   - `providerState` 已进入 `p2_status`；
+   - 仍需在 M4 首个 behavior 中决定“暂停后重新开始”的产品流程。
 
 3. **M4 行为范围**
    - 建议从非破坏性、可验证的有限行为开始，例如“看向目标点 + 接近到指定距离 + stop”；

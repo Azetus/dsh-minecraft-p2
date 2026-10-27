@@ -88,6 +88,13 @@ export type ProviderSummary = {
   capabilities: string[]
 }
 
+/** Live server-observation state maintained by the provider. */
+export type ProviderRuntimeStatus = {
+  paused: boolean
+  serverAge: number | null
+  idleMs: number
+}
+
 export type DescribeResult = {
   protocolVersion: number
   body: {
@@ -110,6 +117,7 @@ export type StatusResult = {
   bindingId: BindingId | null
   capabilities: string[]
   provider: ProviderSummary | null
+  providerState?: ProviderRuntimeStatus | null
   commandCount: number
   loggingUnavailable?: boolean
   droppedLogCount?: number

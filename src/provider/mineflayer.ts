@@ -10,6 +10,7 @@ import {
   sequence,
 } from '../authoring/index.ts'
 import type { BehaviorDefinition } from '../contracts/ir.ts'
+import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { BehaviorExecutor } from '../core/executor.ts'
@@ -24,6 +25,8 @@ import type {
 export type MineflayerProviderOptions = {
   actionTimeoutMs?: number
   moveDurationMs?: number
+  /** How long the server age must stay unchanged before the provider treats it as paused. */
+  serverIdleMs?: number
 }
 
 export type MineflayerConnectionOptions = {
@@ -86,14 +89,14 @@ function meta(source: ValueMeta['source'], scope: string, sampledAt = Date.now()
   return { source, scope, sampledAt, validUntil: sampledAt + 1000 }
 }
 
-function nowMeta(): ValueMeta {
-  return meta('query', 'mineflayer')
-}
-
 /** Query/act adapter over one connected Mineflayer bot. */
 export class MineflayerProvider implements ActPort {
   private current: ActHandle | undefined
   private disconnected: Error | undefined
+  private paused = false
+  private lastServerAge: number | undefined
+  private lastServerAgeAt = 0
+  private readonly pauseTimer: ReturnType<typeof setInterval>
   private readonly options: Required<MineflayerProviderOptions>
 
   constructor(
@@ -103,19 +106,79 @@ export class MineflayerProvider implements ActPort {
     this.options = {
       actionTimeoutMs: options.actionTimeoutMs ?? 600_000,
       moveDurationMs: options.moveDurationMs ?? 700,
+      serverIdleMs: options.serverIdleMs ?? 1500,
     }
+    this.pauseTimer = setInterval(() => this.refreshPauseState(), 250)
+    this.pauseTimer.unref?.()
     bot.once('end', reason => {
+      clearInterval(this.pauseTimer)
       this.disconnected = new Error(`Mineflayer connection ended: ${String(reason)}`)
       this.bot.clearControlStates()
-      const current = this.current as (ActHandle & { abort?: (error: Error) => void }) | undefined
-      current?.abort?.(this.disconnected)
+      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+      current?.abort?.(this.disconnected, 'CONNECTION_LOST')
     })
     bot.on('error', error => {
+      clearInterval(this.pauseTimer)
       this.disconnected = error instanceof Error ? error : new Error(String(error))
       this.bot.clearControlStates()
-      const current = this.current as (ActHandle & { abort?: (error: Error) => void }) | undefined
-      current?.abort?.(this.disconnected)
+      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+      current?.abort?.(this.disconnected, 'CONNECTION_LOST')
     })
+  }
+
+  /** Server world age, or null when the client has no time packet yet. */
+  serverAge(): number | null {
+    const age = this.bot.time?.age
+    if (typeof age === 'number') return age
+    if (typeof age === 'bigint') return Number(age)
+    return null
+  }
+
+  liveStatus(): ProviderRuntimeStatus {
+    const serverAge = this.serverAge()
+    return {
+      paused: this.paused,
+      serverAge,
+      idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
+    }
+  }
+
+  /**
+   * Apply the server-age watchdog at a deterministic instant.
+   * A stalled age means `/tick freeze` or a server that is not ticking; the
+   * current act is aborted and world queries fail closed until age advances.
+   */
+  refreshPauseState(now = Date.now()): void {
+    if (this.disconnected !== undefined) return
+    const age = this.serverAge()
+    if (age === null) return
+    if (this.lastServerAge === undefined) {
+      this.lastServerAge = age
+      this.lastServerAgeAt = now
+      return
+    }
+    if (age !== this.lastServerAge) {
+      this.lastServerAge = age
+      this.lastServerAgeAt = now
+      this.paused = false
+      return
+    }
+    if (!this.paused && now - this.lastServerAgeAt >= this.options.serverIdleMs) {
+      this.paused = true
+      this.bot.clearControlStates()
+      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+      current?.abort?.(new Error('server ticks are paused'), 'GAME_PAUSED')
+    }
+  }
+
+  private queryMeta(scope: string, sampledAt: number): ValueMeta {
+    const result = meta('query', scope, sampledAt)
+    const serverAge = this.serverAge()
+    return {
+      ...result,
+      ...(serverAge === null ? {} : { serverAge }),
+      paused: this.paused,
+    }
   }
 
   queryPort(): QueryPort {
@@ -129,6 +192,19 @@ export class MineflayerProvider implements ActPort {
         error: p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' }),
       }
     }
+    this.refreshPauseState()
+    if (this.paused && op !== 'time') {
+      return {
+        status: 'failed',
+        error: p2Error(
+          'GAME_PAUSED',
+          'environment',
+          'server ticks are not advancing; world queries are unavailable while paused',
+          { module: 'provider.mineflayer' },
+          { serverAge: this.serverAge(), idleMs: this.liveStatus().idleMs },
+        ),
+      }
+    }
     const sampledAt = Date.now()
     try {
       switch (op) {
@@ -140,14 +216,14 @@ export class MineflayerProvider implements ActPort {
           return {
             status: 'ok',
             value: { x: position.x, y: position.y, z: position.z },
-            meta: meta('query', 'mineflayer.position', sampledAt),
+            meta: this.queryMeta('mineflayer.position', sampledAt),
           }
         }
         case 'inventory': {
           return {
             status: 'ok',
             value: this.bot.inventory.items().map(item => ({ name: item.name, count: item.count })),
-            meta: meta('query', 'mineflayer.inventory', sampledAt),
+            meta: this.queryMeta('mineflayer.inventory', sampledAt),
           }
         }
         case 'entities': {
@@ -162,7 +238,7 @@ export class MineflayerProvider implements ActPort {
           return {
             status: 'ok',
             value: entities,
-            meta: meta('query', 'mineflayer.entities', sampledAt),
+            meta: this.queryMeta('mineflayer.entities', sampledAt),
           }
         }
         case 'time': {
@@ -172,13 +248,12 @@ export class MineflayerProvider implements ActPort {
               timeOfDay: typeof this.bot.time?.timeOfDay === 'bigint'
                 ? Number(this.bot.time.timeOfDay)
                 : this.bot.time?.timeOfDay ?? null,
-              age: typeof this.bot.time?.age === 'bigint'
-                ? Number(this.bot.time.age)
-                : this.bot.time?.age ?? null,
+              age: this.serverAge(),
+              paused: this.paused,
               doDaylightCycle: this.bot.time?.doDaylightCycle ?? null,
               difficulty: this.bot.game?.difficulty ?? null,
             },
-            meta: meta('query', 'mineflayer.time', sampledAt),
+            meta: this.queryMeta('mineflayer.time', sampledAt),
           }
         }
         case 'block': {
@@ -192,7 +267,7 @@ export class MineflayerProvider implements ActPort {
           return {
             status: 'ok',
             value: block === null ? null : { name: block.name, x: block.position.x, y: block.position.y, z: block.position.z },
-            meta: meta('query', 'mineflayer.block', sampledAt),
+            meta: this.queryMeta('mineflayer.block', sampledAt),
           }
         }
         default:
@@ -213,6 +288,16 @@ export class MineflayerProvider implements ActPort {
     if (this.disconnected !== undefined) {
       throw p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' })
     }
+    this.refreshPauseState()
+    if (this.paused) {
+      throw p2Error(
+        'GAME_PAUSED',
+        'environment',
+        'cannot start an act while server ticks are paused',
+        { module: 'provider.mineflayer', nodePath: name },
+        { serverAge: this.serverAge(), idleMs: this.liveStatus().idleMs },
+      )
+    }
     if (this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })
     }
@@ -225,6 +310,7 @@ export class MineflayerProvider implements ActPort {
 class MineflayerActHandle implements ActHandle {
   private result: JsonValue | undefined
   private failed: Error | undefined
+  private failedCode = 'ACT_FAILED'
   private cancelled = false
   private completed = false
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -243,9 +329,12 @@ class MineflayerActHandle implements ActHandle {
   poll(): ActPoll {
     if (this.cancelled) return { status: 'cancelled' }
     if (this.failed !== undefined) {
+      const category = this.failedCode === 'GAME_PAUSED' || this.failedCode === 'CONNECTION_LOST'
+        ? 'environment'
+        : 'runtime'
       return {
         status: 'failed',
-        error: p2Error('ACT_FAILED', 'runtime', this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
+        error: p2Error(this.failedCode, category, this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
       }
     }
     if (!this.completed && this.name === 'jump') {
@@ -279,9 +368,10 @@ class MineflayerActHandle implements ActHandle {
     this.bot.clearControlStates()
   }
 
-  abort(error: Error): void {
+  abort(error: Error, code = 'ACT_FAILED'): void {
     if (this.cancelled || this.completed) return
     this.failed = error
+    this.failedCode = code
     if (this.timer !== undefined) clearTimeout(this.timer)
     this.bot.clearControlStates()
   }
