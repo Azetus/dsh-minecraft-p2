@@ -28,11 +28,12 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | [OPERATIONS-AND-RELEASE.md](docs/OPERATIONS-AND-RELEASE.md) | 能力声明、精确绑定、依赖与发行。 |
 | [MINECRAFT-INTEGRATION-OPTIONS.md](docs/MINECRAFT-INTEGRATION-OPTIONS.md) | 已选客户端路线、适配边界与接入验收。 |
 | [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | M0—M6 实施顺序与验收门槛。 |
+| [DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖、构建工具、版本选择与包管理约定。 |
 | [WS-FUTURE.md](docs/WS-FUTURE.md) | 已讨论的 WS、独立 launcher、鉴权/租约及重连设计；以后实现，不阻塞首版。 |
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。
 
-当前仓库主要包含设计文档和辅助脚本，没有 P2 运行工程、包清单或已建立的测试命令。接口代码是设计草案，不能当成已实现 SDK。后续以实际工作区为准，不复用过时的完成状态。
+当前仓库已有单包骨架、构建脚本和依赖清单，但 P2 协议、执行器、provider 尚未实现；接口代码是设计草案，不能当成已实现 SDK。后续以实际工作区为准，不复用过时的完成状态。
 
 `scripts/dsh-task.ps1` 会启动 DSH 任务；其只读模式也可能写入宿主自己的会话数据，不把运行该脚本当作普通文件阅读或默认检查。
 

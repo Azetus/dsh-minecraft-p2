@@ -12,3 +12,11 @@
 
 # node
 node_modules/
+.npm-cache/
+
+# 构建与打包产物
+/lib/
+/bundles/*
+!/bundles/.gitkeep
+/coverage/
+*.tsbuildinfo
