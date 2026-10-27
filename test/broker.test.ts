@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { assign, defineBehavior, eq, lit, local, query, sequence, when } from '../src/authoring/index.ts'
+import { assign, defineBehavior, eq, ifThen, lit, local, query, queryRef, sequence, when, whenQuery } from '../src/authoring/index.ts'
 import { ActBroker, QueryBroker } from '../src/core/broker.ts'
 import { BehaviorExecutor } from '../src/core/executor.ts'
 import type { ActHandle, ActPoll, QueryOutcome } from '../src/core/node-runtime.ts'
@@ -111,5 +111,35 @@ describe('QueryBroker', () => {
     expect(run.tick(0)).toBe('running')
     expect(run.tick(1)).toBe('succeeded')
     expect(run.frame.get('seen')).toBe(8)
+  })
+
+  it('polls a pending query condition once and reuses its result', () => {
+    const broker = new QueryBroker()
+    broker.register('guard', (): QueryOutcome => ({
+      status: 'pending',
+      poll: () => ({ status: 'ok', value: 1 }),
+    }))
+    const definition = defineBehavior({
+      id: 'guard',
+      description: 'query guard',
+      mode: 'finite',
+      parameters: {},
+      locals: { ok: { type: 'number' } },
+      root: ifThen(
+        'if',
+        whenQuery(queryRef('guard'), eq(local('result'), lit(1))),
+        assign('set', 'ok', lit(1)),
+      ),
+      completion: { kind: 'predicate', condition: when(eq(local('ok'), lit(1))) },
+    })
+    const run = new BehaviorExecutor({
+      definition,
+      params: {},
+      query: broker.asPort(),
+      act: new ActBroker(),
+    })
+    expect(run.tick(0)).toBe('running')
+    expect(run.tick(1)).toBe('succeeded')
+    expect(broker.calls).toBe(1)
   })
 })

@@ -171,14 +171,16 @@ class WaitRuntime extends BaseRuntime {
 
 class IfRuntime extends BaseRuntime {
   private selected: NodeRuntime | undefined
+  private readonly condition: ConditionEvaluator
 
   constructor(private readonly node: Extract<Node, { kind: 'if' }>) {
     super()
+    this.condition = new ConditionEvaluator(node.when)
   }
 
   tick(context: NodeContext): NodeResult {
     if (this.selected === undefined) {
-      const condition = evaluateCondition(this.node.when, context)
+      const condition = this.condition.evaluate(context)
       if (condition.status === 'failed') return this.failure(condition.error)
       if (condition.status === 'unknown') return { status: 'running' }
       if (condition.status === 'false' && this.node.else === undefined) return this.success()
@@ -282,22 +284,24 @@ class SubtreeRuntime extends BaseRuntime {
 class ReactiveRuntime extends BaseRuntime {
   private branchIndex: number | undefined
   private child: NodeRuntime | undefined
+  private readonly conditions: ConditionEvaluator[]
 
   constructor(private readonly node: Extract<Node, { kind: 'reactivePriority' }>) {
     super()
+    this.conditions = node.branches.map(branch => new ConditionEvaluator(branch.when))
   }
 
   tick(context: NodeContext): NodeResult {
     let selected: number | undefined
     let unknown = false
-    for (const [index, branch] of this.node.branches.entries()) {
-      const condition = evaluateCondition(branch.when, context)
-      if (condition.status === 'failed') return this.failure(condition.error)
-      if (condition.status === 'true') {
+    for (const [index, condition] of this.conditions.entries()) {
+      const outcome = condition.evaluate(context)
+      if (outcome.status === 'failed') return this.failure(outcome.error)
+      if (outcome.status === 'true') {
         selected = index
         break
       }
-      if (condition.status === 'unknown') {
+      if (outcome.status === 'unknown') {
         unknown = true
         break
       }
@@ -512,6 +516,37 @@ class RecoverRuntime extends BaseRuntime {
   }
 }
 
+class ConditionEvaluator {
+  private pending: (() => QueryOutcome) | undefined
+
+  constructor(private readonly condition: Condition) {}
+
+  evaluate(context: NodeContext): ConditionOutcome {
+    if (this.condition.kind === 'expr') return evaluateCondition(this.condition, context)
+    if (this.pending !== undefined) return this.consume(this.pending(), context)
+
+    const args: Record<string, JsonValue> = {}
+    try {
+      for (const [name, expr] of Object.entries(this.condition.query.args)) {
+        args[name] = evaluate(expr, evalContext(context))
+      }
+    } catch (error) {
+      return { status: 'failed', error: expressionError(error, 'condition') }
+    }
+    return this.consume(context.query(this.condition.query, args), context)
+  }
+
+  private consume(outcome: QueryOutcome, context: NodeContext): ConditionOutcome {
+    if (outcome.status === 'pending') {
+      this.pending = outcome.poll
+      return { status: 'unknown' }
+    }
+    this.pending = undefined
+    if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
+    return evaluateQueryTest(this.condition as Extract<Condition, { kind: 'query' }>, outcome.value, context)
+  }
+}
+
 export function evaluateCondition(condition: Condition, context: NodeContext): ConditionOutcome {
   try {
     if (condition.kind === 'expr') {
@@ -529,16 +564,28 @@ export function evaluateCondition(condition: Condition, context: NodeContext): C
     const outcome = context.query(condition.query, args)
     if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
     if (outcome.status === 'pending') return { status: 'unknown' }
+    return evaluateQueryTest(condition, outcome.value, context)
+  } catch (error) {
+    return { status: 'failed', error: expressionError(error, 'condition') }
+  }
+}
+
+function evaluateQueryTest(
+  condition: Extract<Condition, { kind: 'query' }>,
+  value: JsonValue,
+  context: NodeContext,
+): ConditionOutcome {
+  try {
     const frame = context.frame.clone()
-    frame.set('result', outcome.value)
-    const value = evaluate(condition.test, {
+    frame.set('result', value)
+    const tested = evaluate(condition.test, {
       params: context.params,
       locals: new Map(frame.entries()),
     })
-    if (typeof value !== 'boolean') {
+    if (typeof tested !== 'boolean') {
       throw new EvalError('EXPRESSION_ERROR', 'query condition must evaluate to a boolean')
     }
-    return value ? { status: 'true' } : { status: 'false' }
+    return tested ? { status: 'true' } : { status: 'false' }
   } catch (error) {
     return { status: 'failed', error: expressionError(error, 'condition') }
   }
