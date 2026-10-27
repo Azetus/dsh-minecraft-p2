@@ -47,6 +47,7 @@ export class BodyRuntime {
   readonly bodyEpoch: BodyEpoch
   private behavior: BehaviorHost | undefined
   private readonly debugLog: DebugLog | undefined
+  private lastBehaviorStatus: string | undefined
   private owner: OwnerContext | null = null
   private initialized = false
   private closing = false
@@ -179,6 +180,7 @@ export class BodyRuntime {
             method: 'check',
             state: 'pending',
           })
+          this.debugLog?.log({ event: 'command', commandId, method: 'check', state: 'pending' })
           const checked = await this.behavior.check({
             sourcePath,
             ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
@@ -248,6 +250,7 @@ export class BodyRuntime {
         state: 'rejected',
         error: p2,
       })
+      this.debugLog?.log({ event: 'command', commandId, method: envelope.method, state: 'rejected', code: p2.code })
       return { ...base, error: p2 }
     }
   }
@@ -302,7 +305,14 @@ export class BodyRuntime {
   }
 
   tickBehavior(now = this.now()): string | undefined {
-    return this.behavior?.tick(now)
+    const status = this.behavior?.tick(now)
+    if (status !== undefined && status !== this.lastBehaviorStatus) {
+      this.lastBehaviorStatus = status
+      if (status === 'succeeded' || status === 'failed' || status === 'cancelled') {
+        this.debugLog?.log({ event: 'run/terminal', status })
+      }
+    }
+    return status
   }
 
   private handleHello(

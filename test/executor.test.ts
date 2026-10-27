@@ -157,6 +157,28 @@ describe('behavior executor control structures', () => {
     expect(run.frame.get('x')).toBeUndefined()
   })
 
+  it('requires a fresh final completion query before succeeding', () => {
+    let calls = 0
+    const queryPort: QueryPort = () => {
+      calls += 1
+      return { status: 'ok', value: calls === 1 }
+    }
+    const run = executor(defineBehavior({
+      id: 'fresh',
+      description: 'fresh completion',
+      mode: 'finite',
+      parameters: {},
+      locals: {},
+      root: sequence('root'),
+      completion: { kind: 'predicate', condition: whenQuery(queryRef('goal'), eq(local('result'), lit(true))) },
+    }), { query: queryPort })
+    expect(run.tick(0)).toBe('running')
+    expect(calls).toBe(1)
+    expect(run.tick(1)).toBe('failed')
+    expect(run.currentError?.code).toBe('GOAL_NOT_MET')
+    expect(calls).toBe(2)
+  })
+
   it('rejects a continuous tree that ends', () => {
     const run = executor(defineBehavior({
       id: 'continuous',

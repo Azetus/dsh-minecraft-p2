@@ -4,6 +4,7 @@ import { p2Error } from '../contracts/protocol.ts'
 import { LocalFrame, frameFrom } from './frame.ts'
 import {
   createNodeRuntime,
+  ConditionEvaluator,
   evaluateCondition,
 } from './node-runtime.ts'
 import type {
@@ -35,6 +36,8 @@ export class BehaviorExecutor {
   private error: P2Error | undefined
   private lastFailureValue: P2Error | undefined
   private cancelRequested = false
+  private preparedForSuccess = false
+  private readonly completion: ConditionEvaluator | undefined
 
   constructor(options: ExecutorOptions) {
     this.definition = options.definition
@@ -43,6 +46,9 @@ export class BehaviorExecutor {
     this.act = options.act
     this.frame = frameFrom(options.definition.locals)
     this.root = createNodeRuntime(options.definition.root)
+    this.completion = options.definition.completion?.kind === 'predicate'
+      ? new ConditionEvaluator(options.definition.completion.condition)
+      : undefined
   }
 
   get currentStatus(): ExecutorStatus {
@@ -72,6 +78,10 @@ export class BehaviorExecutor {
         return this.status
       }
       this.status = 'cancelled'
+      return this.status
+    }
+    if (this.preparedForSuccess) {
+      this.finalConfirmation(now)
       return this.status
     }
 
@@ -139,7 +149,45 @@ export class BehaviorExecutor {
       return
     }
 
-    const condition = evaluateCondition(completion.condition, this.context(now))
+    const condition = this.completion?.evaluate(this.context(now))
+      ?? evaluateCondition(completion.condition, this.context(now))
+    if (condition.status === 'true') {
+      if (completion.condition.kind === 'query') {
+        this.preparedForSuccess = true
+        return
+      }
+      this.status = 'succeeded'
+      return
+    }
+    if (condition.status === 'failed') {
+      this.fail(condition.error)
+      return
+    }
+    if (condition.status === 'unknown') {
+      this.preparedForSuccess = true
+      return
+    }
+    this.fail(p2Error(
+      'GOAL_NOT_MET',
+      'runtime',
+      'finite behavior tree ended without a satisfied completion rule',
+      { module: 'core.executor' },
+    ))
+  }
+
+  private finalConfirmation(now: number): void {
+    const condition = this.completion?.evaluate(this.context(now))
+    if (condition === undefined) {
+      this.fail(p2Error(
+        'COMPLETION_REQUIRED',
+        'runtime',
+        'finite behavior has no completion rule',
+        { module: 'core.executor' },
+      ))
+      return
+    }
+    if (condition.status === 'unknown') return
+    this.preparedForSuccess = false
     if (condition.status === 'true') {
       this.status = 'succeeded'
       return
@@ -149,9 +197,9 @@ export class BehaviorExecutor {
       return
     }
     this.fail(p2Error(
-      condition.status === 'unknown' ? 'GOAL_UNKNOWN' : 'GOAL_NOT_MET',
+      'GOAL_NOT_MET',
       'runtime',
-      'finite behavior tree ended without a satisfied completion rule',
+      'final completion confirmation failed',
       { module: 'core.executor' },
     ))
   }

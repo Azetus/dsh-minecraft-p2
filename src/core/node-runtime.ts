@@ -516,7 +516,7 @@ class RecoverRuntime extends BaseRuntime {
   }
 }
 
-class ConditionEvaluator {
+export class ConditionEvaluator {
   private pending: (() => QueryOutcome) | undefined
 
   constructor(private readonly condition: Condition) {}
