@@ -188,7 +188,7 @@ stop:    run=none:none  last=run-3:cancelled
 - `p2_events` 能看到 active/last/providerState 状态事件；
 - `/p2 stop` 最终关闭 body。
 
-验证环境注意：同版本 tarball 的 `dev --refresh` 可能被 pnpm 视为已安装，导致旧工具列表残留。本次改用 fresh staging 后通过；`--refresh` 的强制重装需要后续修复。
+验证环境注意：同版本 tarball 的 `dev --refresh` 已改为向 pnpm 传 `--force`，并实测能替换已安装的包；本次受阻/取消流程最终使用 fresh staging，refresh 修复单独验证。
 
 ## 7. 受阻、恢复与取消（真实 DSH）
 

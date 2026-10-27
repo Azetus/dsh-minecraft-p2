@@ -67,9 +67,11 @@ export function commandLine(command, args) {
   return [command, ...args].map(quoteArg).join(' ')
 }
 
-export function installBundle(home, profile, tarball = TARBALL) {
+export function installBundle(home, profile, tarball = TARBALL, options = {}) {
   if (!existsSync(tarball)) throw new Error(`missing bundle: ${tarball}; run \`npm run bundle\` first`)
-  return runDsh(['plugin', '--profile', profile, 'add', tarball], {
+  const args = ['plugin', '--profile', profile, 'add', tarball]
+  if (options.force === true) args.push('--force')
+  return runDsh(args, {
     env: { ...process.env, DSH_HOME: home },
   })
 }

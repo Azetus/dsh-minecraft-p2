@@ -145,7 +145,7 @@ function stage() {
   if (reusing) {
     reusedHome = true
     if (options.refresh) {
-      const installed = installBundle(home, options.profile)
+      const installed = installBundle(home, options.profile, undefined, { force: true })
       if (installed.status !== 0) {
         fail('dev: dsh plugin refresh failed', home)
         return false
