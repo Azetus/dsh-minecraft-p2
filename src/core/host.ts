@@ -60,7 +60,7 @@ export class BehaviorHost {
   private readonly ledger = new CommandLedger<SwitchResult | ConfirmResult | { artifactId: string }>()
   private readonly query: QueryPort
   private readonly act: ActPort
-  private readonly owner: string
+  private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | undefined
   private runArtifact: string | undefined
@@ -95,8 +95,11 @@ export class BehaviorHost {
     }
   }
 
-  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true } {
-    const credential = this.credentials.get(artifactId)
+  setOwner(owner: string): void {
+    this.owner = owner
+  }
+
+  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true } {    const credential = this.credentials.get(artifactId)
     if (credential === undefined) {
       throw new RegistryError('CHECKER_CREDENTIAL_MISSING', `no checker credential for ${artifactId}`)
     }

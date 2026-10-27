@@ -26,6 +26,7 @@ export class BodyServer {
   private readonly offError: () => void
   private readonly offClose: () => void
   private leaseTimer: ReturnType<typeof setInterval> | undefined
+  private behaviorTimer: ReturnType<typeof setInterval> | undefined
 
   constructor(
     private readonly runtime: BodyRuntime,
@@ -60,6 +61,10 @@ export class BodyServer {
       }, period)
       this.leaseTimer.unref?.()
     }
+    this.behaviorTimer = setInterval(() => {
+      this.runtime.tickBehavior()
+    }, 50)
+    this.behaviorTimer.unref?.()
   }
 
   onClose(listener: () => void): () => void {
@@ -72,6 +77,7 @@ export class BodyServer {
     if (this.stopped) return
     this.stopped = true
     if (this.leaseTimer !== undefined) clearInterval(this.leaseTimer)
+    if (this.behaviorTimer !== undefined) clearInterval(this.behaviorTimer)
     this.offLine()
     this.offError()
     this.offClose()

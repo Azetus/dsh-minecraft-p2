@@ -348,10 +348,12 @@ export class BodyRuntime {
       if (this.owner !== null && this.owner.sessionId !== params.value.owner.sessionId) {
         return { ...base, error: this.invalidOwner() }
       }
+      this.behavior?.setOwner(`${params.value.owner.sessionId}/${params.value.owner.agentId}`)
       return { ...base, result: this.helloResult(params.value.owner) }
     }
 
     this.owner = params.value.owner
+    this.behavior?.setOwner(`${params.value.owner.sessionId}/${params.value.owner.agentId}`)
     this.initialized = true
     this.lastHeartbeatAt = this.now()
     return { ...base, result: this.helloResult(params.value.owner) }

@@ -1,5 +1,6 @@
-import { createStdioTransport } from '../contracts/index.ts'
+import { createStdioTransport, p2Error } from '../contracts/index.ts'
 import type { BodyInfo } from '../contracts/index.ts'
+import { BehaviorHost } from '../core/host.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { loadBodyInfo } from './manifest.ts'
@@ -14,8 +15,26 @@ async function main(): Promise<void> {
     return
   }
 
+  const behavior = new BehaviorHost({
+    bindingId: body.bindingId ?? 'unbound',
+    query: () => ({
+      status: 'failed',
+      error: p2Error(
+        'PROVIDER_UNAVAILABLE',
+        'environment',
+        'no provider is connected in this M1 body',
+        { module: 'body.provider' },
+      ),
+    }),
+    act: {
+      start: () => {
+        throw new Error('no provider is connected in this M1 body')
+      },
+    },
+  })
   const runtime = new BodyRuntime({
     body,
+    behavior,
     heartbeatTimeoutMs: 10_000,
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
