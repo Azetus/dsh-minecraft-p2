@@ -5,7 +5,7 @@
 ## 环境
 
 - Minecraft：Java **1.21.1 Vanilla**（LAN status 返回 `1.21.1`，protocol 767）
-- 世界：超平坦，世界名 `Human_Player - dsh-minecraft-p2 超平坦`
+- 世界：超平坦，`P2 测试超平坦世界`
 - 模式：生存，允许指令
 - 难度：当前 **normal**；世界中存在村民、牛、羊、铁傀儡、史莱姆
 - 端口：`25575`
