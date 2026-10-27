@@ -33,6 +33,7 @@ export class BehaviorExecutor {
   private readonly act: ActPort
   private status: ExecutorStatus = 'running'
   private error: P2Error | undefined
+  private lastFailureValue: P2Error | undefined
   private cancelRequested = false
 
   constructor(options: ExecutorOptions) {
@@ -50,6 +51,10 @@ export class BehaviorExecutor {
 
   get currentError(): P2Error | undefined {
     return this.error
+  }
+
+  get lastFailure(): P2Error | undefined {
+    return this.lastFailureValue
   }
 
   tick(now = Date.now()): ExecutorStatus {
@@ -77,12 +82,18 @@ export class BehaviorExecutor {
       return this.status
     }
     if (result.status === 'failed') {
-      this.fail(result.error ?? p2Error(
+      const failure = result.error ?? p2Error(
         'NODE_FAILED',
         'runtime',
         'root node failed',
         { module: 'core.executor' },
-      ))
+      )
+      this.lastFailureValue = failure
+      if (this.canCompleteAfterEnvironmentFailure(failure, now)) {
+        this.status = 'succeeded'
+        return this.status
+      }
+      this.fail(failure)
       return this.status
     }
 
@@ -94,8 +105,16 @@ export class BehaviorExecutor {
     if (this.status === 'running') this.cancelRequested = true
   }
 
-  private finalize(now: number): void {
-    if (this.definition.mode === 'continuous') {
+  private canCompleteAfterEnvironmentFailure(failure: P2Error, now: number): boolean {
+    if (this.definition.mode !== 'finite') return false
+    if (failure.category !== 'environment') return false
+    const completion = this.definition.completion
+    if (completion?.kind !== 'predicate') return false
+    const condition = evaluateCondition(completion.condition, this.context(now))
+    return condition.status === 'true'
+  }
+
+  private finalize(now: number): void {    if (this.definition.mode === 'continuous') {
       this.fail(p2Error(
         'CONTINUOUS_TREE_ENDED',
         'runtime',

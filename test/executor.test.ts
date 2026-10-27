@@ -10,12 +10,14 @@ import {
   lit,
   local,
   query,
+  queryRef,
   reactivePriority,
   repeat,
   sequence,
   subtree,
   wait,
   when,
+  whenQuery,
 } from '../src/authoring/index.ts'
 import { BehaviorExecutor } from '../src/core/executor.ts'
 import type {
@@ -122,6 +124,39 @@ describe('behavior executor control structures', () => {
     expect(run.currentError?.code).toBe('GOAL_NOT_MET')
   })
 
+  it('lets a satisfied goal win over an ordinary environment failure', () => {
+    const queryPort: QueryPort = ref => ref.op === 'goal'
+      ? { status: 'ok', value: true }
+      : {
+          status: 'failed',
+          error: {
+            code: 'MATERIAL_MISSING',
+            category: 'environment',
+            message: 'missing material',
+            source: { module: 'test' },
+            retry: 'never',
+          },
+        }
+    const run = executor(defineBehavior({
+      id: 'goal-over-environment',
+      description: 'environment race',
+      mode: 'finite',
+      parameters: {},
+      locals: { have: { type: 'number' } },
+      root: query('q', 'inventory.count', {}, 'have'),
+      completion: { kind: 'predicate', condition: whenQuery(queryRef('goal'), eq(local('result'), lit(true))) },
+    }), { query: queryPort })
+    expect(run.tick(0)).toBe('succeeded')
+    expect(run.lastFailure?.code).toBe('MATERIAL_MISSING')
+  })
+
+  it('gives a pre-tick stop priority over a tree that would succeed', () => {
+    const run = executor(finite(assign('a', 'x', lit(1))))
+    run.stop()
+    expect(run.tick(0)).toBe('cancelled')
+    expect(run.frame.get('x')).toBeUndefined()
+  })
+
   it('rejects a continuous tree that ends', () => {
     const run = executor(defineBehavior({
       id: 'continuous',
@@ -189,8 +224,8 @@ describe('behavior executor query and act ports', () => {
       poll: () => ({
         status: 'failed',
         error: {
-          code: 'MATERIAL_MISSING',
-          category: 'environment',
+          code: 'ACT_RUNTIME_ERROR',
+          category: 'runtime',
           message: 'missing',
           source: { module: 'test' },
           retry: 'never',
@@ -214,7 +249,7 @@ describe('behavior executor query and act ports', () => {
         status: 'failed',
         error: {
           code: 'QUERY_FAILED',
-          category: 'environment',
+          category: 'runtime',
           message: 'query failed',
           source: { module: 'test' },
           retry: 'never',
