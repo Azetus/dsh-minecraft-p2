@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { checkBehavior, CheckerError } from '../src/core/checker.ts'
 import { ArtifactRegistry, RegistryError } from '../src/core/registry.ts'
 import type { CheckerCredential } from '../src/core/checker.ts'
+import { artifactDigest, artifactId } from '../src/contracts/digest.ts'
 
 const directories: string[] = []
 
@@ -124,6 +125,49 @@ describe('ArtifactRegistry', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(RegistryError)
       expect((error as RegistryError).code).toBe('ARTIFACT_INTEGRITY')
+    }
+  })
+
+  it('keeps H1/H2 bindings isolated and distinguishes artifacts from one source', async () => {
+    const directory = sourceDirectory()
+    const path = writeSource(directory, 'behavior.mjs', validSource)
+    const h1 = await checkBehavior({ sourcePath: path, bindingId: 'binding-1' })
+    const h2 = await checkBehavior({ sourcePath: path, bindingId: 'binding-2' })
+    expect(h1.artifact.artifactId).not.toBe(h2.artifact.artifactId)
+    expect(h1.artifact.sourceDigest).toBe(h2.artifact.sourceDigest)
+
+    const registry1 = new ArtifactRegistry({ bindingId: 'binding-1' })
+    const registry2 = new ArtifactRegistry({ bindingId: 'binding-2' })
+    registry1.add(h1.artifact, h1.credential)
+    registry2.add(h2.artifact, h2.credential)
+    registry1.enable(h1.artifact.artifactId, h1.credential)
+    registry2.enable(h2.artifact.artifactId, h2.credential)
+    registry1.retire(h1.artifact.artifactId)
+    expect(registry1.resolve()).toBeUndefined()
+    expect(registry2.resolve()?.artifactId).toBe(h2.artifact.artifactId)
+  })
+
+  it('rejects an artifact with a missing dependency closure', async () => {
+    const directory = sourceDirectory()
+    const path = writeSource(directory, 'behavior.mjs', validSource)
+    const checked = await checkBehavior({ sourcePath: path, bindingId: 'binding-1' })
+    const registry = new ArtifactRegistry({ bindingId: 'binding-1' })
+    const manifest = {
+      ...checked.artifact.manifest,
+      dependencies: [{ kind: 'behavior', id: 'p2:behavior:missing', digest: '0'.repeat(64) }],
+    }
+    const artifact = {
+      ...checked.artifact,
+      manifest,
+      artifactDigest: artifactDigest(manifest),
+      artifactId: artifactId(manifest),
+    }
+    try {
+      registry.add(artifact, checked.credential)
+      throw new Error('expected DEPENDENCY_CLOSURE')
+    } catch (error) {
+      expect(error).toBeInstanceOf(RegistryError)
+      expect((error as RegistryError).code).toBe('DEPENDENCY_CLOSURE')
     }
   })
 })
