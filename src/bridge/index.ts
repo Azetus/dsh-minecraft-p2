@@ -1,10 +1,7 @@
-import type { Context } from '@deepseek-ai/cordis'
+import { createP2Plugin } from './plugin.ts'
 
-const plugin = {
-  name: 'dsh-minecraft-p2',
-  apply(_ctx: Context): void {
-    // M0 registers the /p2 management commands here.
-  },
-}
+export { createP2Plugin, handleP2Command } from './plugin.ts'
+export { BodyManager, createProcessSpawner } from './process-manager.ts'
+export { BodyClient } from './body-client.ts'
 
-export default plugin
+export default createP2Plugin()

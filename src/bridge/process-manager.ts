@@ -1,0 +1,287 @@
+import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+
+import {
+  createStdioTransport,
+  PROTOCOL_VERSION,
+} from '../contracts/index.ts'
+import type {
+  MessageTransport,
+  OwnerContext,
+  StatusResult,
+} from '../contracts/index.ts'
+import { BodyClient } from './body-client.ts'
+
+export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
+
+export type BodyHandle = {
+  pid?: number
+  transport: MessageTransport
+  kill(signal?: NodeJS.Signals): void
+  waitForExit(): Promise<BodyExit>
+}
+
+export type BodySpawner = (entry: string, cwd: string) => BodyHandle
+
+export type BodyManagerState = 'inactive' | 'starting' | 'active' | 'stopping' | 'faulted'
+
+export type BodyManagerOptions = {
+  bodyEntry: string
+  spawnBody?: BodySpawner
+  heartbeatMs?: number
+  stopTimeoutMs?: number
+  log?: (line: string) => void
+}
+
+export type StartResult = {
+  state: 'active'
+  epoch: string
+}
+
+export type BodyStatus =
+  | { state: 'inactive' | 'starting' | 'stopping' | 'faulted' }
+  | { state: 'active'; status: StatusResult }
+
+export type StopResult = {
+  state: 'inactive' | 'faulted'
+  error?: string
+}
+
+/** One body process at a time; the DSH plugin owns this instance. */
+export class BodyManager {
+  private state: BodyManagerState = 'inactive'
+  private client: BodyClient | undefined
+  private handle: BodyHandle | undefined
+  private owner: OwnerContext | undefined
+  private epoch: string | undefined
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  private heartbeatSeq = 0
+  private readonly spawnBody: BodySpawner
+  private readonly heartbeatMs: number
+  private readonly stopTimeoutMs: number
+  private readonly log: (line: string) => void
+
+  constructor(private readonly options: BodyManagerOptions) {
+    this.spawnBody = options.spawnBody ?? createProcessSpawner(options.log)
+    this.heartbeatMs = options.heartbeatMs ?? 2000
+    this.stopTimeoutMs = options.stopTimeoutMs ?? 2000
+    this.log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`))
+  }
+
+  get currentState(): BodyManagerState {
+    return this.state
+  }
+
+  get currentOwner(): OwnerContext | undefined {
+    return this.owner
+  }
+
+  get bodyEpoch(): string | undefined {
+    return this.epoch
+  }
+
+  async start(owner: OwnerContext): Promise<StartResult> {
+    if (this.state === 'active' && this.epoch !== undefined) {
+      return { state: 'active', epoch: this.epoch }
+    }
+    if (this.state !== 'inactive' && this.state !== 'faulted') {
+      throw new Error(`body is ${this.state}`)
+    }
+
+    this.state = 'starting'
+    this.owner = owner
+    if (this.handle !== undefined) await this.cleanup(this.handle)
+    let handle: BodyHandle | undefined
+    try {
+      handle = this.spawnBody(this.options.bodyEntry, owner.cwd)
+      this.handle = handle
+      const client = new BodyClient(handle.transport, { log: this.log })
+      this.client = client
+      const hello = await client.hello([PROTOCOL_VERSION], owner)
+      this.epoch = hello.bodyEpoch
+      this.state = 'active'
+      this.startHeartbeat()
+      this.watchExit(handle)
+      return { state: 'active', epoch: hello.bodyEpoch }
+    } catch (error) {
+      await this.cleanup(handle)
+      this.state = 'inactive'
+      throw error
+    }
+  }
+
+  async status(): Promise<BodyStatus> {
+    if (this.state !== 'active' || this.client === undefined) {
+      return { state: this.state === 'active' ? 'faulted' : this.state }
+    }
+    try {
+      const status = await this.client.request('status', {})
+      return { state: 'active', status: status as unknown as StatusResult }
+    } catch (error) {
+      this.state = 'faulted'
+      this.stopHeartbeat()
+      this.log(`body status failed: ${errorText(error)}`)
+      throw error
+    }
+  }
+
+  async stop(): Promise<StopResult> {
+    if (this.state === 'inactive') return { state: 'inactive' }
+    if (this.state === 'faulted') {
+      await this.cleanup(this.handle)
+      return { state: 'faulted' }
+    }
+
+    this.state = 'stopping'
+    let shutdownError: string | undefined
+    if (this.client !== undefined) {
+      try {
+        await this.client.shutdown()
+      } catch (error) {
+        shutdownError = errorText(error)
+      }
+    }
+
+    const handle = this.handle
+    const exited = handle === undefined ? true : await this.waitForExit(handle, this.stopTimeoutMs)
+    if (!exited && handle !== undefined) {
+      handle.kill('SIGTERM')
+      await this.waitForExit(handle, 500)
+    }
+    this.stopHeartbeat()
+    this.client?.close()
+    this.client = undefined
+    this.handle = undefined
+    this.owner = undefined
+    this.epoch = undefined
+    if (!exited) {
+      this.state = 'faulted'
+      return {
+        state: 'faulted',
+        ...(shutdownError === undefined ? {} : { error: shutdownError }),
+      }
+    }
+    this.state = 'inactive'
+    return {
+      state: 'inactive',
+      ...(shutdownError === undefined ? {} : { error: shutdownError }),
+    }
+  }
+
+  async dispose(): Promise<void> {
+    try {
+      await this.stop()
+    } catch (error) {
+      this.log(`body dispose failed: ${errorText(error)}`)
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    this.heartbeatTimer = setInterval(() => {
+      void this.sendHeartbeat()
+    }, this.heartbeatMs)
+    this.heartbeatTimer.unref?.()
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer)
+    this.heartbeatTimer = undefined
+  }
+
+  private async sendHeartbeat(): Promise<void> {
+    if (this.state !== 'active' || this.client === undefined) return
+    this.heartbeatSeq += 1
+    try {
+      await this.client.request('heartbeat', { seq: this.heartbeatSeq })
+    } catch (error) {
+      this.state = 'faulted'
+      this.stopHeartbeat()
+      this.log(`heartbeat failed: ${errorText(error)}`)
+    }
+  }
+
+  private watchExit(handle: BodyHandle): void {
+    void handle.waitForExit().then(exit => {
+      if (this.handle !== handle) return
+      this.handle = undefined
+      this.stopHeartbeat()
+      this.client?.close()
+      this.client = undefined
+      if (this.state === 'stopping') {
+        this.state = 'inactive'
+        return
+      }
+      if (this.state === 'active' || this.state === 'starting') {
+        this.state = 'faulted'
+        this.log(`body exited unexpectedly (code=${exit.code ?? 'null'}, signal=${exit.signal ?? 'none'})`)
+      }
+    })
+  }
+
+  private async cleanup(handle: BodyHandle | undefined): Promise<void> {
+    this.stopHeartbeat()
+    this.client?.close()
+    this.client = undefined
+    this.handle = undefined
+    this.owner = undefined
+    this.epoch = undefined
+    if (handle !== undefined) {
+      handle.kill('SIGTERM')
+      await this.waitForExit(handle, 500)
+    }
+  }
+
+  private async waitForExit(handle: BodyHandle, timeoutMs: number): Promise<boolean> {
+    return Promise.race([
+      handle.waitForExit().then(() => true),
+      delay(timeoutMs).then(() => false),
+    ])
+  }
+}
+
+/** Spawn the body bundle next to the bridge with a dedicated stdio channel. */
+export function createProcessSpawner(log: (line: string) => void = line => process.stderr.write(`${line}\n`)): BodySpawner {
+  return (entry, cwd) => {
+    const child = spawn(process.execPath, [entry], {
+      cwd,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    if (child.stdout === null || child.stdin === null) {
+      throw new Error('body process did not expose stdio pipes')
+    }
+    child.stderr?.on('data', chunk => log(`body: ${String(chunk).trimEnd()}`))
+    return {
+      ...(child.pid === undefined ? {} : { pid: child.pid }),
+      transport: createStdioTransport(child.stdout, child.stdin),
+      kill(signal = 'SIGTERM') {
+        if (child.exitCode === null) child.kill(signal)
+      },
+      waitForExit: () => waitForChild(child),
+    }
+  }
+}
+
+function waitForChild(child: ChildProcess): Promise<BodyExit> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+  }
+  return new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }))
+  })
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
