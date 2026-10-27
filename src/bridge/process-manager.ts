@@ -172,6 +172,10 @@ export class BodyManager {
     return this.activeClient().commandGet(commandId)
   }
 
+  observe(op: string, args: JsonValue = {}): Promise<JsonValue> {
+    return this.activeClient().observe(op, args)
+  }
+
   private activeClient(): BodyClient {
     if (this.state !== 'active' || this.client === undefined) {
       throw new Error(`body is ${this.state}`)

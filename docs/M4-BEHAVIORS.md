@@ -147,7 +147,50 @@ npm run check
 - hold-position 的 continuous 执行与 stop/cancel；
 - 真实 body 的有限/持续行为与目标切换。
 
-## 6. 边界
+## 6. DSH 工具链
+
+隔离 dev 中真实模型调用通过。新增 `p2_observe` 用于读取当前位置；没有它，模型只能猜坐标。
+
+工具序列：
+
+```text
+p2_start（命令）
+p2_observe({op:"position"})
+p2_check(approach-target)
+p2_activate
+p2_switch({x: current.x + 2, z: current.z, tolerance: 0.8})
+p2_status
+p2_events
+p2_check(hold-position)
+p2_activate
+p2_switch({x: current.x + 2, z: current.z})
+p2_switch({x: current.x - 2, z: current.z})
+p2_status / p2_events
+p2_stop({runId: run-3})
+p2_status
+/p2 stop
+```
+
+真实状态：
+
+```text
+finite:  run=none:none  last=run-1:succeeded
+hold A:  run=run-2:running  last=run-1:succeeded
+hold B:  run=run-3:running  last=run-2:cancelled
+stop:    run=none:none  last=run-3:cancelled
+```
+
+说明：
+
+- `p2_switch` 旧 run 被新 run 终止；
+- finite behavior 的 `lastRun.succeeded` 不是由 activeRun=null 推断；
+- continuous behavior 由显式 `p2_stop` 取消；
+- `p2_events` 能看到 active/last/providerState 状态事件；
+- `/p2 stop` 最终关闭 body。
+
+验证环境注意：同版本 tarball 的 `dev --refresh` 可能被 pnpm 视为已安装，导致旧工具列表残留。本次改用 fresh staging 后通过；`--refresh` 的强制重装需要后续修复。
+
+## 7. 边界
 
 - 只在超平坦、无障碍、peaceful 世界验证；
 - 没有 pathfinder，遇到障碍会 `MOVE_TO_BLOCKED` 或超时；

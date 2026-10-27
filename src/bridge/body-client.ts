@@ -112,6 +112,10 @@ export class BodyClient {
     return this.request('command.get', { commandId })
   }
 
+  observe(op: string, args: JsonValue = {}): Promise<JsonValue> {
+    return this.request('observe', { op, args })
+  }
+
   async describe(): Promise<DescribeResult> {
     return await this.request('describe', {}) as unknown as DescribeResult
   }

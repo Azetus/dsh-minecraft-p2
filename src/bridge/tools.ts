@@ -61,6 +61,25 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   })
 
   register({
+    name: 'p2_observe',
+    description: 'Read a P2 world query such as position, inventory, entities, time, or block.',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', description: 'Query operation, for example position' },
+        args: { type: 'object', description: 'Optional query arguments', additionalProperties: true },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.observe(
+      String(args.op),
+      (args.args ?? {}) as JsonValue,
+    )),
+  })
+
+  register({
     name: 'p2_check',
     description: 'Check a behavior source file in the owner project without activating or running it.',
     parameters: {
