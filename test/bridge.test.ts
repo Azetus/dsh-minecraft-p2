@@ -193,6 +193,28 @@ describe('P2 commands', () => {
     expect(result.kind).toBe('error')
   })
 
+  it('disposes its owned body on plugin unload without destroying the agent', async () => {
+    const fake = fakeBody()
+    const disposers: Array<() => unknown> = []
+    const definitions: Definition[] = []
+    const ctx = {
+      commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+      effect: (callback: () => unknown) => {
+        const disposer = callback()
+        if (typeof disposer === 'function') disposers.push(disposer as () => unknown)
+        return () => {}
+      },
+    }
+    const plugin = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    expect(await (definitions[0] as Definition).handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
+    const bodyDisposer = disposers.at(-1) as () => Promise<void>
+    await bodyDisposer()
+    expect(fake.server.isStopped).toBe(true)
+    expect(agent.id).toBe(owner.agentId)
+  })
+
   it('registers owner-scoped tools only after start and disposes them on stop', async () => {
     const fake = fakeBody()
     const definitions: Definition[] = []
