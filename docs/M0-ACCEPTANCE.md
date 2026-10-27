@@ -20,7 +20,7 @@ M0 完成了单包骨架、契约与摘要基础、NDJSON/内存/stdio 传输、
 
 ```text
 npm run check
-  → build + typecheck + 37 tests: pass
+  → build + typecheck + 40 tests: pass
 
 npm run verify:dist
   → tarball install into isolated DSH_HOME: pass
@@ -33,10 +33,10 @@ npm run verify:dist
 
 当前测试文件：
 
-- `test/contracts.test.ts`：13
+- `test/contracts.test.ts`：15
 - `test/protocol.test.ts`：10
 - `test/body.test.ts`：9
-- `test/bridge.test.ts`：4
+- `test/bridge.test.ts`：5
 - `test/body-process.test.ts`：1
 
 ## 4. 真实进程与命令链路

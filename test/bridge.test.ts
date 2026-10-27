@@ -106,6 +106,23 @@ describe('BodyManager', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(manager.currentState).toBe('faulted')
   })
+
+  it('cleans up when the hello handshake fails', async () => {
+    const [client] = createMemoryTransportPair()
+    client.close()
+    const handle: BodyHandle = {
+      transport: client,
+      kill: () => {},
+      waitForExit: () => Promise.resolve({ code: 1, signal: null }),
+    }
+    const manager = new BodyManager({
+      bodyEntry: 'unused-body.mjs',
+      spawnBody: () => handle,
+      log: () => {},
+    })
+    await expect(manager.start(owner)).rejects.toThrow()
+    expect(manager.currentState).toBe('inactive')
+  })
 })
 
 describe('P2 commands', () => {

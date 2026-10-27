@@ -67,6 +67,12 @@ describe('canonical JSON and digests', () => {
     expect(() => canonicalJson({ x: Infinity as unknown as JsonValue })).toThrow(/non-finite/)
   })
 
+  it('rejects cyclic values instead of hashing a self-reference', () => {
+    const cyclic: Record<string, JsonValue> = {}
+    cyclic.self = cyclic
+    expect(() => canonicalJson(cyclic)).toThrow(/cycles/)
+  })
+
   it('separates digest domains', () => {
     expect(digest('p2-a-v1', { x: 1 })).not.toBe(digest('p2-b-v1', { x: 1 }))
   })
@@ -147,5 +153,14 @@ describe('manifest identities', () => {
     expect(artifactDigest(reordered)).toBe(artifactDigest(artifact))
     expect(artifactId(artifact)).toMatch(/^p2:behavior:[a-f0-9]{64}$/)
     expect(artifactDigest({ ...artifact, bindingId: '0'.repeat(64) })).not.toBe(artifactDigest(artifact))
+  })
+
+  it('ignores artifact audit fields outside the declared manifest shape', () => {
+    const audited = {
+      ...artifact,
+      artifactId: 'p2:behavior:deadbeef',
+      checkedAt: '2026-10-27T00:00:00Z',
+    } as ArtifactManifest
+    expect(artifactDigest(audited)).toBe(artifactDigest(artifact))
   })
 })

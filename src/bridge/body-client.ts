@@ -53,7 +53,10 @@ export class BodyClient {
     this.timeoutMs = options.timeoutMs ?? 5000
     this.log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`))
     this.offLine = transport.onLine(line => this.handleLine(line))
-    this.offClose = transport.onClose(() => this.failAll('body connection closed'))
+    this.offClose = transport.onClose(() => {
+      this.closed = true
+      this.failAll('body connection closed')
+    })
   }
 
   get bodyEpoch(): string | undefined {
