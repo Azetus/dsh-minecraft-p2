@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { BehaviorHost } from '../src/core/host.ts'
+import { DebugLog } from '../src/core/logging.ts'
 import type { ActPort, QueryPort } from '../src/core/node-runtime.ts'
 import { PROTOCOL_VERSION } from '../src/contracts/index.ts'
 import type { BodyInfo, BodyManifest, JsonValue, RequestEnvelope } from '../src/contracts/index.ts'
@@ -41,6 +42,14 @@ export default {
   completion: { kind: 'externalConfirmation', description: 'body ack' },
 }
 `)
+  return path
+}
+
+function loopSource(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-loop-'))
+  dirs.push(dir)
+  const path = join(dir, 'loop.mjs')
+  writeFileSync(path, 'while (true) {}\n')
   return path
 }
 
@@ -117,5 +126,41 @@ describe('body behavior methods', () => {
       sourcePath: join(process.cwd(), '..', 'outside.mjs'),
     }, 'check-2', 'epoch-1'))
     expect(outside.error?.code).toBe('SOURCE_OUTSIDE_PROJECT')
+  })
+
+  it('does not execute a duplicate pending check and still answers status', async () => {
+    const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const check = request('check', { sourcePath: loopSource(), timeoutMs: 100 }, 'same-check', 'epoch-1')
+    const first = rt.handleRequestAsync(check)
+    const duplicate = await rt.handleRequestAsync(check)
+    expect(duplicate.error?.code).toBe('COMMAND_PENDING')
+    const status = await rt.handleRequestAsync(request('status', {}, undefined, 'epoch-1'))
+    expect(status.error).toBeUndefined()
+    expect((await first).error).toBeDefined()
+  })
+
+  it('keeps commands and status working when debug logging is unavailable', async () => {
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-log-'))
+    dirs.push(dir)
+    const log = new DebugLog({ filePath: join(dir, 'missing', 'debug.jsonl') })
+    const host = new BehaviorHost({ bindingId: 'binding-1', owner: 's/a', query, act })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      debugLog: log,
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const checked = await rt.handleRequestAsync(request('check', { sourcePath: source() }, 'log-check', 'epoch-1'))
+    expect(checked.error).toBeUndefined()
+    await log.close()
+    expect(rt.status().loggingUnavailable).toBe(true)
+    expect(rt.status().droppedLogCount).toBeGreaterThan(0)
   })
 })

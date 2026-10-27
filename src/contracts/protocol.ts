@@ -108,6 +108,8 @@ export type StatusResult = {
   capabilities: string[]
   provider: ProviderSummary | null
   commandCount: number
+  loggingUnavailable?: boolean
+  droppedLogCount?: number
 }
 
 export type ActiveRunSummary = {

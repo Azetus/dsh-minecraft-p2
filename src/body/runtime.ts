@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { BehaviorHost } from '../core/host.ts'
 import { CheckerError } from '../core/checker.ts'
 import { RegistryError } from '../core/registry.ts'
+import type { DebugLog } from '../core/logging.ts'
 
 import {
   PROTOCOL_VERSION,
@@ -45,6 +46,7 @@ export class BodyRuntime {
   readonly body: BodyInfo
   readonly bodyEpoch: BodyEpoch
   private behavior: BehaviorHost | undefined
+  private readonly debugLog: DebugLog | undefined
   private owner: OwnerContext | null = null
   private initialized = false
   private closing = false
@@ -54,10 +56,11 @@ export class BodyRuntime {
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
 
-  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost }) {
+  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog }) {
     this.body = options.body
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     this.behavior = options.behavior
+    this.debugLog = options.debugLog
     this.owner = options.owner ?? null
     this.initialized = this.owner !== null
     this.now = options.now ?? Date.now
@@ -149,6 +152,9 @@ export class BodyRuntime {
     const existing = this.commands.get(commandId)
     if (existing !== undefined) {
       if (existing.method !== envelope.method) return { ...base, error: duplicateCommand(commandId) }
+      if (existing.state === 'pending') {
+        return { ...base, error: p2Error('COMMAND_PENDING', 'control', `command is still pending: ${commandId}`, { module: 'body.commands' }) }
+      }
       return existing.error === undefined
         ? { ...base, result: existing.result as JsonValue }
         : { ...base, error: existing.error }
@@ -168,6 +174,11 @@ export class BodyRuntime {
               error: p2Error('SOURCE_OUTSIDE_PROJECT', 'validation', 'sourcePath must be inside the owner project', { module: 'body.behavior' }),
             }
           }
+          this.commands.set(commandId, {
+            commandId: commandId as CommandId,
+            method: 'check',
+            state: 'pending',
+          })
           const checked = await this.behavior.check({
             sourcePath,
             ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
@@ -248,6 +259,12 @@ export class BodyRuntime {
       state: 'completed',
       result: result as JsonValue,
     })
+    this.debugLog?.log({
+      event: 'command',
+      commandId,
+      method,
+      state: 'completed',
+    })
   }
 
   describe(): DescribeResult {
@@ -277,6 +294,10 @@ export class BodyRuntime {
       capabilities: this.body.capabilities,
       provider: this.body.provider,
       commandCount: this.commands.size,
+      ...(this.debugLog === undefined ? {} : {
+        loggingUnavailable: this.debugLog.loggingUnavailable,
+        droppedLogCount: this.debugLog.droppedCount,
+      }),
     }
   }
 
