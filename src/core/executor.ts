@@ -66,13 +66,24 @@ export class BehaviorExecutor {
   tick(now = Date.now()): ExecutorStatus {
     if (this.status !== 'running') return this.status
     if (this.cancelRequested) {
+      let result
       try {
-        this.root.cancel(this.context(now))
+        result = this.root.cancel(this.context(now))
       } catch (error) {
         this.fail(p2Error(
           'ACT_STOP_FAILED',
           'runtime',
           error instanceof Error ? error.message : String(error),
+          { module: 'core.executor' },
+        ))
+        return this.status
+      }
+      if (result.status === 'running') return this.status
+      if (result.status === 'failed') {
+        this.fail(result.error ?? p2Error(
+          'ACT_STOP_FAILED',
+          'runtime',
+          'cancellation failed',
           { module: 'core.executor' },
         ))
         return this.status

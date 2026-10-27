@@ -33,6 +33,7 @@ export type ActPoll =
 export type ActHandle = {
   poll(): ActPoll
   stop(): void
+  cleanup?(): ActPoll
 }
 
 export type ActPort = {
@@ -56,7 +57,7 @@ export type ConditionOutcome =
 export interface NodeRuntime {
   readonly status: NodeStatus
   tick(context: NodeContext): NodeResult
-  cancel(context: NodeContext): void
+  cancel(context: NodeContext): NodeResult
 }
 
 export function createNodeRuntime(node: Node): NodeRuntime {
@@ -79,7 +80,7 @@ abstract class BaseRuntime implements NodeRuntime {
   status: NodeStatus = 'running'
 
   abstract tick(context: NodeContext): NodeResult
-  abstract cancel(context: NodeContext): void
+  abstract cancel(context: NodeContext): NodeResult
 
   protected success(): NodeResult {
     this.status = 'succeeded'
@@ -121,9 +122,11 @@ class SequenceRuntime extends BaseRuntime {
     return { status: 'running' }
   }
 
-  cancel(context: NodeContext): void {
-    this.child?.cancel(context)
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const result = this.child?.cancel(context)
+    if (result?.status === 'running') return result
+    if (result?.status === 'failed') return this.failure(requireError(result))
+    return this.cancelled()
   }
 }
 
@@ -146,8 +149,8 @@ class AssignRuntime extends BaseRuntime {
     }
   }
 
-  cancel(): void {
-    this.cancelled()
+  cancel(): NodeResult {
+    return this.cancelled()
   }
 }
 
@@ -164,8 +167,8 @@ class WaitRuntime extends BaseRuntime {
     return { status: 'running' }
   }
 
-  cancel(): void {
-    this.cancelled()
+  cancel(): NodeResult {
+    return this.cancelled()
   }
 }
 
@@ -194,9 +197,11 @@ class IfRuntime extends BaseRuntime {
     return result
   }
 
-  cancel(context: NodeContext): void {
-    this.selected?.cancel(context)
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const result = this.selected?.cancel(context)
+    if (result?.status === 'running') return result
+    if (result?.status === 'failed') return this.failure(requireError(result))
+    return this.cancelled()
   }
 }
 
@@ -228,9 +233,11 @@ class RepeatRuntime extends BaseRuntime {
     return { status: 'running' }
   }
 
-  cancel(context: NodeContext): void {
-    this.child?.cancel(context)
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const result = this.child?.cancel(context)
+    if (result?.status === 'running') return result
+    if (result?.status === 'failed') return this.failure(requireError(result))
+    return this.cancelled()
   }
 }
 
@@ -275,9 +282,11 @@ class SubtreeRuntime extends BaseRuntime {
     return this.success()
   }
 
-  cancel(context: NodeContext): void {
-    this.child?.cancel({ ...context, frame: this.childFrame ?? context.frame })
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const result = this.child?.cancel({ ...context, frame: this.childFrame ?? context.frame })
+    if (result?.status === 'running') return result
+    if (result?.status === 'failed') return this.failure(requireError(result))
+    return this.cancelled()
   }
 }
 
@@ -331,9 +340,11 @@ class ReactiveRuntime extends BaseRuntime {
     return result
   }
 
-  cancel(context: NodeContext): void {
-    this.child?.cancel(context)
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const result = this.child?.cancel(context)
+    if (result?.status === 'running') return result
+    if (result?.status === 'failed') return this.failure(requireError(result))
+    return this.cancelled()
   }
 }
 
@@ -379,9 +390,9 @@ class QueryRuntime extends BaseRuntime {
     return this.success()
   }
 
-  cancel(): void {
+  cancel(): NodeResult {
     this.pending = undefined
-    this.cancelled()
+    return this.cancelled()
   }
 }
 
@@ -436,9 +447,24 @@ class ActRuntime extends BaseRuntime {
     return this.success()
   }
 
-  cancel(): void {
-    this.handle?.stop()
-    this.cancelled()
+  cancel(): NodeResult {
+    if (this.handle === undefined) return this.cancelled()
+    const hasCleanup = this.handle.cleanup !== undefined
+    try {
+      this.handle.stop()
+    } catch (error) {
+      return this.failure(p2Error(
+        'ACT_STOP_FAILED',
+        'runtime',
+        error instanceof Error ? error.message : String(error),
+        { module: 'core.act', nodePath: this.node.id },
+      ))
+    }
+    if (!hasCleanup) return this.cancelled()
+    const result = this.handle.poll()
+    if (result.status === 'running') return { status: 'running' }
+    if (result.status === 'failed') return this.failure(result.error)
+    return this.cancelled()
   }
 }
 
@@ -509,10 +535,14 @@ class RecoverRuntime extends BaseRuntime {
     return { status: 'running' }
   }
 
-  cancel(context: NodeContext): void {
-    this.child?.cancel(context)
-    this.fallback?.cancel(context)
-    this.cancelled()
+  cancel(context: NodeContext): NodeResult {
+    const child = this.child?.cancel(context)
+    if (child?.status === 'running') return child
+    if (child?.status === 'failed') return this.failure(requireError(child))
+    const fallback = this.fallback?.cancel(context)
+    if (fallback?.status === 'running') return fallback
+    if (fallback?.status === 'failed') return this.failure(requireError(fallback))
+    return this.cancelled()
   }
 }
 

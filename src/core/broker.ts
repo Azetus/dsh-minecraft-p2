@@ -14,7 +14,18 @@ export type ActRunner = (args: Record<string, JsonValue>) => ActHandle
 /** Owns the single active act operation and its runner lookup. */
 export class ActBroker implements ActPort {
   private readonly runners = new Map<string, ActRunner>()
-  private active: { name: string; handle: ActHandle; done: boolean; stopped: boolean } | undefined
+  private readonly cleanupTimeoutMs: number
+  private active: {
+    name: string
+    handle: ActHandle
+    done: boolean
+    stopping: boolean
+    cleanupAt: number | undefined
+  } | undefined
+
+  constructor(options: { cleanupTimeoutMs?: number } = {}) {
+    this.cleanupTimeoutMs = options.cleanupTimeoutMs ?? 1000
+  }
 
   register(name: string, runner: ActRunner): void {
     this.runners.set(name, runner)
@@ -43,27 +54,41 @@ export class ActBroker implements ActPort {
       )
     }
     const handle = runner(args)
-    const state = { name, handle, done: false, stopped: false }
+    const state = { name, handle, done: false, stopping: false, cleanupAt: undefined as number | undefined }
     this.active = state
     return {
+      ...(handle.cleanup === undefined ? {} : { cleanup: () => handle.cleanup?.() ?? { status: 'running' as const } }),
       poll: (): ActPoll => {
-        if (state.stopped) {
+        if (state.stopping) {
+          if (state.handle.cleanup === undefined) {
+            state.done = true
+            return { status: 'cancelled' }
+          }
+          if (state.cleanupAt !== undefined && Date.now() > state.cleanupAt) {
+            state.done = true
+            return {
+              status: 'failed',
+              error: p2Error('STOP_TIMEOUT', 'timeout', 'act cleanup exceeded its deadline', { module: 'core.broker' }),
+            }
+          }
+          const cleanup = state.handle.cleanup()
+          if (cleanup.status === 'running') return cleanup
           state.done = true
+          if (cleanup.status === 'failed') return cleanup
           return { status: 'cancelled' }
         }
+        if (state.done) return { status: 'cancelled' }
         const result = state.handle.poll()
         if (result.status !== 'running') state.done = true
         return result
       },
       stop: (): void => {
-        if (state.done) return
-        state.stopped = true
-        state.done = true
+        if (state.done || state.stopping) return
+        state.stopping = true
         try {
           state.handle.stop()
         } catch (error) {
-          // A failed runner stop is surfaced by the broker's caller as a fault;
-          // the executor already treats cancelled acts as no successful output.
+          state.done = true
           throw p2Error(
             'ACT_STOP_FAILED',
             'runtime',
@@ -71,15 +96,21 @@ export class ActBroker implements ActPort {
             { module: 'core.broker' },
           )
         }
+        if (state.handle.cleanup === undefined) {
+          state.done = true
+        } else {
+          state.cleanupAt = Date.now() + this.cleanupTimeoutMs
+        }
       },
     }
   }
 
   stopActive(): void {
     if (this.active === undefined || this.active.done) return
-    this.active.stopped = true
-    this.active.done = true
+    this.active.stopping = true
     this.active.handle.stop()
+    if (this.active.handle.cleanup === undefined) this.active.done = true
+    else this.active.cleanupAt = Date.now() + this.cleanupTimeoutMs
   }
 
   dispose(): void {

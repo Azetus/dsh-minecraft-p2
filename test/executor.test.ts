@@ -20,6 +20,7 @@ import {
   whenQuery,
 } from '../src/authoring/index.ts'
 import { BehaviorExecutor } from '../src/core/executor.ts'
+import { ActBroker } from '../src/core/broker.ts'
 import type {
   ActHandle,
   ActPort,
@@ -316,6 +317,47 @@ describe('behavior executor query and act ports', () => {
     run.stop()
     expect(run.tick(1)).toBe('failed')
     expect(run.currentError?.code).toBe('ACT_STOP_FAILED')
+  })
+
+  it('waits for act cleanup before reporting cancelled', () => {
+    const broker = new ActBroker({ cleanupTimeoutMs: 500 })
+    let cleanupCalls = 0
+    broker.register('cleanup', (): ActHandle => ({
+      poll: () => ({ status: 'running' }),
+      stop: () => {},
+      cleanup: () => {
+        cleanupCalls += 1
+        return cleanupCalls === 1 ? { status: 'running' } : { status: 'succeeded' }
+      },
+    }))
+    const run = executor(defineBehavior({
+      ...finite(sequence('root', act('a', 'cleanup', {}, 'result'))),
+      locals: { result: { type: 'number' } },
+    }), { act: broker })
+    expect(run.tick(0)).toBe('running')
+    run.stop()
+    expect(run.tick(1)).toBe('running')
+    expect(run.tick(2)).toBe('cancelled')
+    expect(cleanupCalls).toBe(2)
+  })
+
+  it('faults when act cleanup exceeds its deadline', async () => {
+    const broker = new ActBroker({ cleanupTimeoutMs: 10 })
+    broker.register('slow-cleanup', (): ActHandle => ({
+      poll: () => ({ status: 'running' }),
+      stop: () => {},
+      cleanup: () => ({ status: 'running' }),
+    }))
+    const run = executor(defineBehavior({
+      ...finite(sequence('root', act('a', 'slow-cleanup', {}, 'result'))),
+      locals: { result: { type: 'number' } },
+    }), { act: broker })
+    expect(run.tick(0)).toBe('running')
+    run.stop()
+    expect(run.tick(1)).toBe('running')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(run.tick(2)).toBe('failed')
+    expect(run.currentError?.code).toBe('STOP_TIMEOUT')
   })
 
   it('switches reactive branches by cancelling the old child first', () => {
