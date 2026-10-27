@@ -224,11 +224,19 @@ describe('P2 commands', () => {
     const command = definitions[0] as Definition
     expect(await command.handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
     expect(tools.map(tool => tool.name)).toEqual([
-      'p2_status', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_command',
+      'p2_status', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_events', 'p2_command',
     ])
     const status = tools[0] as { execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown> }
     expect(await status.execute({}, { agent })).toBeDefined()
     await expect(status.execute({}, { agent: { ...agent, id: 'other' } })).rejects.toThrow(/different agent/)
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const events = tools.find(tool => tool.name === 'p2_events') as {
+      execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<{ events: unknown[]; gap: boolean }>
+    }
+    const drained = await events.execute({}, { agent })
+    expect(drained.events.length).toBeGreaterThan(0)
+    expect(drained.gap).toBe(false)
 
     expect(await command.handler({ agent, rawInput: ' stop' })).toMatchObject({ kind: 'success' })
     expect(disposed.length).toBeGreaterThan(0)

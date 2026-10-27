@@ -128,6 +128,21 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   })
 
   register({
+    name: 'p2_events',
+    description: 'Drain the bounded current-epoch P2 status event buffer.',
+    parameters: {},
+    output: jsonOutput(),
+    execute: guarded(async () => {
+      const drained = manager.drainEvents()
+      return {
+        events: drained.events as unknown as JsonValue,
+        gap: drained.gap,
+        dropped: drained.dropped,
+      }
+    }),
+  })
+
+  register({
     name: 'p2_command',
     description: 'Query an accepted/terminal command by commandId. Unknown is not proof it never ran.',
     parameters: {

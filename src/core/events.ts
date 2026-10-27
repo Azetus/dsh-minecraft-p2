@@ -55,4 +55,10 @@ export class EventQueue {
     this.seen.clear()
     return { events, gap }
   }
+
+  clear(): void {
+    this.events.length = 0
+    this.seen.clear()
+    this.gap = false
+  }
 }

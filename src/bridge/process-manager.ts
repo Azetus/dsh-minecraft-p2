@@ -11,6 +11,8 @@ import type {
   OwnerContext,
   StatusResult,
 } from '../contracts/index.ts'
+import { EventQueue } from '../core/events.ts'
+import type { RuntimeEvent } from '../core/events.ts'
 import { BodyClient } from './body-client.ts'
 
 export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
@@ -61,6 +63,9 @@ export class BodyManager {
   private readonly heartbeatMs: number
   private readonly stopTimeoutMs: number
   private readonly log: (line: string) => void
+  private readonly events = new EventQueue(128)
+  private eventSeq = 0
+  private lastStatusSignature: string | undefined
 
   constructor(private readonly options: BodyManagerOptions) {
     this.spawnBody = options.spawnBody ?? createProcessSpawner(options.log)
@@ -79,6 +84,11 @@ export class BodyManager {
 
   get bodyEpoch(): string | undefined {
     return this.epoch
+  }
+
+  drainEvents(): { events: RuntimeEvent[]; gap: boolean; dropped: number } {
+    const drained = this.events.drain()
+    return { ...drained, dropped: this.events.droppedCount }
   }
 
   async start(owner: OwnerContext): Promise<StartResult> {
@@ -109,8 +119,12 @@ export class BodyManager {
       }
       this.epoch = hello.bodyEpoch
       this.state = 'active'
+      this.events.clear()
+      this.eventSeq = 0
+      this.lastStatusSignature = undefined
       this.startHeartbeat()
       this.watchExit(handle)
+      void this.pumpStatus()
       return { state: 'active', epoch: hello.bodyEpoch }
     } catch (error) {
       await this.cleanup(handle)
@@ -234,10 +248,34 @@ export class BodyManager {
     this.heartbeatSeq += 1
     try {
       await this.client.request('heartbeat', { seq: this.heartbeatSeq })
+      await this.pumpStatus()
     } catch (error) {
       this.state = 'faulted'
       this.stopHeartbeat()
       this.log(`heartbeat failed: ${errorText(error)}`)
+    }
+  }
+
+  private async pumpStatus(): Promise<void> {
+    if (this.state !== 'active' || this.client === undefined) return
+    try {
+      const status = await this.client.request('status', {}) as unknown as StatusResult
+      const signature = JSON.stringify({
+        run: status.activeRun,
+        confirmation: status.pendingConfirmation,
+        health: status.health,
+      })
+      if (signature === this.lastStatusSignature) return
+      this.lastStatusSignature = signature
+      this.eventSeq += 1
+      this.events.push({
+        eventId: `${this.epoch ?? 'epoch'}:status:${this.eventSeq}`,
+        seq: this.eventSeq,
+        kind: 'status',
+        data: status as unknown as JsonValue,
+      })
+    } catch (error) {
+      this.log(`body status poll failed: ${errorText(error)}`)
     }
   }
 
