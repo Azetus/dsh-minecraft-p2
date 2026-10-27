@@ -1,4 +1,5 @@
 import type { JsonValue } from './types.ts'
+import type { ArtifactManifest } from './types.ts'
 
 /** Serializable behavior IR shared by the builder, checker and executor. */
 export type ValueExpr =
@@ -74,6 +75,7 @@ export type BehaviorDefinition = {
 
 export type BehaviorArtifact = {
   definition: BehaviorDefinition
+  manifest: ArtifactManifest
   artifactId: string
   artifactDigest: string
   bindingId: string

@@ -1,0 +1,129 @@
+import { artifactDigest, artifactId } from '../contracts/digest.ts'
+import type { BehaviorArtifact } from '../contracts/ir.ts'
+import type { CheckerCredential } from './checker.ts'
+
+export type ArtifactRecord = {
+  artifact: BehaviorArtifact
+  enabled: boolean
+  retired: boolean
+}
+
+export class RegistryError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'RegistryError'
+    this.code = code
+  }
+}
+
+/** In-memory, per-binding registry; artifacts are immutable once added. */
+export class ArtifactRegistry {
+  private readonly records = new Map<string, ArtifactRecord>()
+  private defaultId: string | undefined
+  private readonly bindingId: string
+  private readonly builtinsDigest: string
+
+  constructor(options: { bindingId: string; builtinsDigest?: string }) {
+    this.bindingId = options.bindingId
+    this.builtinsDigest = options.builtinsDigest ?? 'none'
+  }
+
+  add(artifact: BehaviorArtifact, credential: CheckerCredential): ArtifactRecord {
+    this.checkCredential(credential)
+    if (artifact.bindingId !== this.bindingId) {
+      throw new RegistryError('BINDING_MISMATCH', 'artifact belongs to a different binding')
+    }
+    const digestValue = artifactDigest(artifact.manifest)
+    const id = artifactId(artifact.manifest)
+    if (digestValue !== artifact.artifactDigest || id !== artifact.artifactId) {
+      throw new RegistryError('ARTIFACT_INTEGRITY', 'artifact id/digest does not match its manifest')
+    }
+    const existing = this.records.get(id)
+    if (existing !== undefined) return existing
+
+    for (const dependency of artifact.manifest.dependencies) {
+      const record = this.records.get(dependency.id)
+      if (record === undefined || record.artifact.artifactDigest !== dependency.digest) {
+        throw new RegistryError('DEPENDENCY_CLOSURE', `dependency ${dependency.id} is not in the registry`)
+      }
+    }
+
+    const record: ArtifactRecord = { artifact, enabled: false, retired: false }
+    this.records.set(id, record)
+    return record
+  }
+
+  enable(id: string, credential: CheckerCredential): ArtifactRecord {
+    this.checkCredential(credential)
+    const record = this.require(id)
+    if (record.retired) throw new RegistryError('ARTIFACT_RETIRED', `artifact ${id} is retired`)
+    record.enabled = true
+    this.defaultId = id
+    return record
+  }
+
+  retire(id: string): void {
+    const record = this.require(id)
+    record.retired = true
+    record.enabled = false
+    if (this.defaultId === id) this.defaultId = undefined
+  }
+
+  resolve(): BehaviorArtifact | undefined {
+    if (this.defaultId === undefined) return undefined
+    const record = this.records.get(this.defaultId)
+    if (record === undefined || record.retired || !record.enabled) return undefined
+    return record.artifact
+  }
+
+  get(id: string): ArtifactRecord | undefined {
+    return this.records.get(id)
+  }
+
+  list(): ArtifactRecord[] {
+    return [...this.records.values()]
+  }
+
+  closure(id: string): BehaviorArtifact[] {
+    const root = this.require(id).artifact
+    const result: BehaviorArtifact[] = []
+    const seen = new Set<string>()
+    const visit = (artifact: BehaviorArtifact): void => {
+      if (seen.has(artifact.artifactId)) return
+      seen.add(artifact.artifactId)
+      for (const dependency of artifact.manifest.dependencies) {
+        const record = this.records.get(dependency.id)
+        if (record === undefined || record.artifact.artifactDigest !== dependency.digest) {
+          throw new RegistryError('DEPENDENCY_CLOSURE', `dependency ${dependency.id} is not in the registry`)
+        }
+        visit(record.artifact)
+      }
+      result.push(artifact)
+    }
+    visit(root)
+    return result
+  }
+
+  private require(id: string): ArtifactRecord {
+    const record = this.records.get(id)
+    if (record === undefined) throw new RegistryError('ARTIFACT_NOT_FOUND', `unknown artifact: ${id}`)
+    return record
+  }
+
+  private checkCredential(credential: CheckerCredential): void {
+    if (credential.bindingId !== this.bindingId) {
+      throw new RegistryError('CHECKER_BINDING_MISMATCH', 'checker credential belongs to a different binding')
+    }
+    if (credential.network !== false) {
+      throw new RegistryError('CHECKER_NETWORK', 'checker credential does not allow network access')
+    }
+    if (credential.builtinsDigest !== this.builtinsDigest) {
+      throw new RegistryError('CHECKER_BUILTINS_MISMATCH', 'checker built-in digest does not match')
+    }
+    if (credential.checkerVersion.length === 0) {
+      throw new RegistryError('CHECKER_VERSION', 'checker version is required')
+    }
+  }
+}
