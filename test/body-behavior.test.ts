@@ -123,6 +123,7 @@ describe('body behavior methods', () => {
     expect(confirmed.error).toBeUndefined()
     expect((confirmed.result as { outcome: string }).outcome).toBe('confirmed')
     expect(rt.tickBehavior(1)).toBe('succeeded')
+    expect(rt.status().lastRun).toMatchObject({ runId: run.runId, status: 'succeeded' })
   })
 
   it('rejects a source outside the owner project and requires a behavior host', async () => {
@@ -176,6 +177,7 @@ describe('body behavior methods', () => {
     expect(stopped.error).toBeUndefined()
     expect(rt.status().activeRun).toBeNull()
     expect(stops).toBe(1)
+    expect(rt.status().lastRun).toMatchObject({ runId, status: 'cancelled' })
   })
 
   it('stops only the behavior run and keeps the body alive', async () => {
@@ -196,6 +198,7 @@ describe('body behavior methods', () => {
     expect(stopped.error).toBeUndefined()
     expect((stopped.result as { accepted: boolean }).accepted).toBe(true)
     expect(rt.status().activeRun).toBeNull()
+    expect(rt.status().lastRun).toMatchObject({ runId, status: 'cancelled' })
     expect(rt.status().bodyEpoch).toBe('epoch-1')
   })
 

@@ -1,5 +1,5 @@
 import type { BehaviorArtifact } from '../contracts/ir.ts'
-import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
+import type { LastRunSummary, ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -41,6 +41,7 @@ export type HostStatus = {
     id: string
     runId: string
   }
+  lastRun: LastRunSummary | null
   providerState: ProviderRuntimeStatus | null
   commandCount: number
 }
@@ -68,6 +69,7 @@ export class BehaviorHost {
   private readonly newRunId: () => string
   private run: BehaviorRun | undefined
   private runArtifact: string | undefined
+  private lastRun: LastRunSummary | null = null
   private sequence = 0
 
   constructor(options: BehaviorHostOptions) {
@@ -135,6 +137,7 @@ export class BehaviorHost {
     if (this.run !== undefined && !isTerminal(this.run.status)) {
       this.run.stop()
       for (let index = 0; index < 100 && !isTerminal(this.run.status); index += 1) this.run.tick()
+      this.rememberLastRun()
       if (!isTerminal(this.run.status)) {
         const result: SwitchResult = {
           accepted: false,
@@ -163,7 +166,9 @@ export class BehaviorHost {
   }
 
   tick(now = Date.now()): RunStatus | undefined {
-    return this.run?.tick(now)
+    const status = this.run?.tick(now)
+    if (this.run !== undefined && isTerminal(this.run.status)) this.rememberLastRun()
+    return status
   }
 
   confirm(input: ConfirmInput): ConfirmResult {
@@ -196,6 +201,7 @@ export class BehaviorHost {
     }
     this.run.stop()
     this.run.tick()
+    this.rememberLastRun()
     return { accepted: true, status: this.run.status }
   }
 
@@ -205,6 +211,7 @@ export class BehaviorHost {
 
   status(): HostStatus {
     const run = this.run
+    if (run !== undefined && isTerminal(run.status)) this.rememberLastRun()
     return {
       bindingId: this.registryBinding,
       activeRun: run === undefined || isTerminal(run.status)
@@ -218,6 +225,7 @@ export class BehaviorHost {
       pendingConfirmation: run?.confirmation?.status === 'pending'
         ? { id: run.confirmation.id, runId: run.runId }
         : null,
+      lastRun: this.lastRun,
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
     }
@@ -227,6 +235,17 @@ export class BehaviorHost {
     if (this.run !== undefined && !isTerminal(this.run.status)) {
       this.run.stop()
       this.run.tick()
+      this.rememberLastRun()
+    }
+  }
+
+  private rememberLastRun(): void {
+    const run = this.run
+    if (run === undefined || !isTerminal(run.status)) return
+    this.lastRun = {
+      runId: run.runId,
+      status: run.status,
+      ...(run.error === undefined ? {} : { error: run.error }),
     }
   }
 
@@ -235,6 +254,6 @@ export class BehaviorHost {
   }
 }
 
-function isTerminal(status: RunStatus): boolean {
+function isTerminal(status: RunStatus): status is 'succeeded' | 'failed' | 'cancelled' {
   return status === 'succeeded' || status === 'failed' || status === 'cancelled'
 }

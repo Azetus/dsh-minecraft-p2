@@ -343,6 +343,7 @@ export class BodyRuntime {
       health: this.closing ? 'faulted' : 'ready',
       connection: 'connected',
       activeRun: behavior?.activeRun ?? null,
+      lastRun: behavior?.lastRun ?? null,
       pendingConfirmation: behavior?.pendingConfirmation ?? null,
       bindingId: this.body.bindingId,
       capabilities: this.body.capabilities,

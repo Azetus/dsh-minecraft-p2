@@ -113,6 +113,7 @@ export type StatusResult = {
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
   activeRun: ActiveRunSummary | null
+  lastRun?: LastRunSummary | null
   pendingConfirmation: PendingConfirmationSummary | null
   bindingId: BindingId | null
   capabilities: string[]
@@ -128,6 +129,12 @@ export type ActiveRunSummary = {
   status: string
   artifactId: string
   completion: string | null
+}
+
+export type LastRunSummary = {
+  runId: string
+  status: 'succeeded' | 'failed' | 'cancelled'
+  error?: P2Error
 }
 
 export type PendingConfirmationSummary = {

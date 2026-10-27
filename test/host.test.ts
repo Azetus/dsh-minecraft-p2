@@ -63,6 +63,7 @@ describe('BehaviorHost workflow', () => {
     expect(confirmed.outcome).toBe('confirmed')
     expect(host.tick()).toBe('succeeded')
     expect(host.status().activeRun).toBeNull()
+    expect(host.status().lastRun).toMatchObject({ runId: first.runId, status: 'succeeded' })
 
     const second = host.switch({ artifactId: b.artifactId, params: {}, commandId: 'switch-b' })
     expect(second.accepted).toBe(true)
@@ -84,6 +85,7 @@ describe('BehaviorHost workflow', () => {
     const second = host.switch({ artifactId: a.artifactId, params: {}, commandId: 'two' })
     expect(second.accepted).toBe(true)
     expect(second.runId).not.toBe(first.runId)
+    expect(host.status().lastRun).toMatchObject({ runId: first.runId, status: 'cancelled' })
 
     const missing = host.switch({ artifactId: 'p2:behavior:missing', params: {}, commandId: 'missing' })
     expect(missing.accepted).toBe(false)

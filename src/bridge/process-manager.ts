@@ -262,8 +262,11 @@ export class BodyManager {
       const status = await this.client.request('status', {}) as unknown as StatusResult
       const signature = JSON.stringify({
         run: status.activeRun,
+        lastRun: status.lastRun,
         confirmation: status.pendingConfirmation,
         health: status.health,
+        providerPaused: status.providerState?.paused ?? null,
+        serverAge: status.providerState?.serverAge ?? null,
       })
       if (signature === this.lastStatusSignature) return
       this.lastStatusSignature = signature

@@ -111,6 +111,8 @@ try {
     ok: frozenStatus.providerState?.paused === true
       && frozenStatus.activeRun === null
       && frozenStatus.pendingConfirmation === null
+      && frozenStatus.lastRun?.status === 'failed'
+      && frozenStatus.lastRun?.error?.code === 'GAME_PAUSED'
       && frozenPosition?.code === 'GAME_PAUSED'
       && frozenTime.paused === true
       && resumedStatus.providerState?.paused === false
@@ -119,12 +121,14 @@ try {
     before: { activeRun: before.activeRun, providerState: before.providerState },
     frozen: {
       activeRun: frozenStatus.activeRun,
+      lastRun: frozenStatus.lastRun,
       providerState: frozenStatus.providerState,
       positionError: frozenPosition,
       time: frozenTime,
     },
     resumed: {
       activeRun: resumedStatus.activeRun,
+      lastRun: resumedStatus.lastRun,
       providerState: resumedStatus.providerState,
       position: resumedPosition,
     },

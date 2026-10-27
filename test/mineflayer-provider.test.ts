@@ -100,6 +100,31 @@ describe('MineflayerProvider', () => {
     expect(resumed.meta).toMatchObject({ serverAge: 2, paused: false })
   })
 
+  it('moves toward a target and stops inside tolerance', () => {
+    const { bot, controls } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const move = provider.start('moveTo', { x: 3, z: 2, tolerance: 0.5, blockedMs: 1000 })
+    expect(controls.get('forward')).toBe(true)
+    bot.entity.position.x = 3
+    bot.entity.position.z = 2
+    expect(move.poll()).toMatchObject({
+      status: 'succeeded',
+      result: { distance: 0, target: { x: 3, z: 2 } },
+    })
+    expect(controls.get('forward')).not.toBe(true)
+  })
+
+  it('fails moveTo when it makes no progress', async () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const move = provider.start('moveTo', { x: 10, z: 2, blockedMs: 10, timeoutMs: 500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(move.poll()).toMatchObject({
+      status: 'failed',
+      error: { code: 'MOVE_TO_BLOCKED' },
+    })
+  })
+
   it('fails the active act and queries on connection end', () => {
     const { bot, emitter } = fakeBot()
     const provider = new MineflayerProvider(bot)

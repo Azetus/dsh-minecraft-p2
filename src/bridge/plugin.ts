@@ -164,6 +164,8 @@ async function statusText(manager: BodyManager): Promise<string> {
     `owner=${status.owner?.sessionId ?? 'none'}`,
     `commands=${status.commandCount}`,
     `run=${status.activeRun?.runId ?? 'none'}:${status.activeRun?.status ?? 'none'}`,
+    `last=${status.lastRun?.runId ?? 'none'}:${status.lastRun?.status ?? 'none'}${status.lastRun?.error === undefined ? '' : `:${status.lastRun.error.code}`}`,
+    `paused=${status.providerState?.paused ?? false}`,
     `confirm=${status.pendingConfirmation?.id ?? 'none'}`,
   ].join(' ')
 }

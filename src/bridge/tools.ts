@@ -153,7 +153,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
 
   register({
     name: 'p2_events',
-    description: 'Drain the bounded current-epoch P2 status event buffer.',
+    description: 'Drain the bounded current-epoch P2 status event buffer, including active/last run and provider pause state.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {

@@ -316,6 +316,16 @@ class MineflayerActHandle implements ActHandle {
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly startedAt = Date.now()
   private wasAirborne = false
+  private moveTarget: {
+    x: number
+    z: number
+    tolerance: number
+    timeoutMs: number
+    blockedMs: number
+  } | undefined
+  private lastDistance = Number.POSITIVE_INFINITY
+  private lastProgressAt = Date.now()
+  private lastLookAt = 0
 
   constructor(
     private readonly name: string,
@@ -329,12 +339,9 @@ class MineflayerActHandle implements ActHandle {
   poll(): ActPoll {
     if (this.cancelled) return { status: 'cancelled' }
     if (this.failed !== undefined) {
-      const category = this.failedCode === 'GAME_PAUSED' || this.failedCode === 'CONNECTION_LOST'
-        ? 'environment'
-        : 'runtime'
       return {
         status: 'failed',
-        error: p2Error(this.failedCode, category, this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
+        error: p2Error(this.failedCode, actErrorCategory(this.failedCode), this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
       }
     }
     if (!this.completed && this.name === 'jump') {
@@ -344,8 +351,12 @@ class MineflayerActHandle implements ActHandle {
         this.completed = true
       }
     }
+    if (!this.completed && this.failed === undefined && this.name === 'moveTo') {
+      this.pollMoveTo()
+    }
     if (!this.completed && Date.now() - this.startedAt > this.options.actionTimeoutMs) {
       this.failed = new Error(`act ${this.name} timed out`)
+      this.failedCode = 'ACT_TIMEOUT'
     }
     if (this.completed) {
       return this.result === undefined
@@ -355,7 +366,7 @@ class MineflayerActHandle implements ActHandle {
     if (this.failed !== undefined) {
       return {
         status: 'failed',
-        error: p2Error('ACT_TIMEOUT', 'timeout', this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
+        error: p2Error(this.failedCode, actErrorCategory(this.failedCode), this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
       }
     }
     return { status: 'running' }
@@ -413,6 +424,22 @@ class MineflayerActHandle implements ActHandle {
           }, 150)
           return
         }
+        case 'moveTo': {
+          const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+          if (x === undefined || z === undefined) throw new Error('moveTo requires numeric x and z')
+          const tolerance = typeof this.args.tolerance === 'number' ? this.args.tolerance : 0.6
+          const timeoutMs = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 10_000
+          const blockedMs = typeof this.args.blockedMs === 'number' ? this.args.blockedMs : 1500
+          if (tolerance < 0 || timeoutMs <= 0 || blockedMs <= 0) throw new Error('moveTo limits must be positive')
+          this.moveTarget = { x, z, tolerance, timeoutMs, blockedMs }
+          const initial = this.bot.entity?.position
+          this.lastDistance = initial === undefined ? Number.POSITIVE_INFINITY : Math.hypot(x - initial.x, z - initial.z)
+          this.lastProgressAt = Date.now()
+          this.faceTarget()
+          this.bot.setControlState('forward', true)
+          return
+        }
         case 'stop': {
           this.bot.clearControlStates()
           this.result = this.position()
@@ -431,11 +458,68 @@ class MineflayerActHandle implements ActHandle {
     const position = this.bot.entity?.position
     return position === undefined ? null : { x: position.x, y: position.y, z: position.z }
   }
+
+  private faceTarget(): void {
+    const target = this.moveTarget
+    const position = this.bot.entity?.position
+    if (target === undefined || position === undefined) return
+    const yaw = Math.atan2(-(target.x - position.x), -(target.z - position.z))
+    this.lastLookAt = Date.now()
+    void this.bot.look(yaw, 0, true).catch((error: unknown) => {
+      this.failed = error instanceof Error ? error : new Error(String(error))
+      this.bot.clearControlStates()
+    })
+  }
+
+  private pollMoveTo(): void {
+    const target = this.moveTarget
+    const position = this.bot.entity?.position
+    if (target === undefined || position === undefined) return
+    const dx = target.x - position.x
+    const dz = target.z - position.z
+    const distance = Math.hypot(dx, dz)
+    const now = Date.now()
+    if (distance <= target.tolerance) {
+      this.bot.clearControlStates()
+      this.result = {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        distance,
+        target: { x: target.x, z: target.z },
+      }
+      this.completed = true
+      return
+    }
+    if (now - this.startedAt > target.timeoutMs) {
+      this.failed = new Error(`moveTo timed out after ${target.timeoutMs}ms at distance ${distance.toFixed(2)}`)
+      this.failedCode = 'MOVE_TO_TIMEOUT'
+      this.bot.clearControlStates()
+      return
+    }
+    if (distance <= this.lastDistance - 0.05) {
+      this.lastDistance = distance
+      this.lastProgressAt = now
+    } else if (now - this.lastProgressAt > target.blockedMs) {
+      this.failed = new Error(`moveTo made no progress for ${target.blockedMs}ms at distance ${distance.toFixed(2)}`)
+      this.failedCode = 'MOVE_TO_BLOCKED'
+      this.bot.clearControlStates()
+      return
+    }
+    if (now - this.lastLookAt > 100) this.faceTarget()
+    this.bot.setControlState('forward', true)
+  }
 }
 
 function isControl(value: string): value is BotControl {
   return value === 'forward' || value === 'back' || value === 'left' || value === 'right'
     || value === 'jump' || value === 'sprint' || value === 'sneak'
+}
+
+function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
+  if (code === 'GAME_PAUSED' || code === 'CONNECTION_LOST' || code === 'MOVE_TO_BLOCKED') return 'environment'
+  if (code === 'ACT_TIMEOUT' || code === 'MOVE_TO_TIMEOUT') return 'timeout'
+  return 'runtime'
 }
 
 export function g2Definition(moveDurationMs = 700): BehaviorDefinition {
