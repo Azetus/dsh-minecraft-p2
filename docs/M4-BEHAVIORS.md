@@ -136,7 +136,7 @@ repeat:
 
 ```text
 npm run check
-  → 18 test files / 131 tests: pass
+  → 18 test files / 132 tests: pass
 ```
 
 覆盖：
