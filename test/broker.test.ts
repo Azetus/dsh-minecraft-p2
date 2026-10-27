@@ -155,4 +155,40 @@ describe('QueryBroker', () => {
     expect(run.tick(1)).toBe('succeeded')
     expect(broker.calls).toBe(1)
   })
+
+  it('starts a new query evaluation when its arguments change', () => {
+    const broker = new QueryBroker()
+    const seen: unknown[] = []
+    broker.register('guard', (args): QueryOutcome => {
+      seen.push(args.n)
+      return {
+        status: 'pending',
+        poll: () => ({ status: 'ok', value: true }),
+      }
+    })
+    const definition = defineBehavior({
+      id: 'guard-args',
+      description: 'guard args',
+      mode: 'finite',
+      parameters: {},
+      locals: { n: { type: 'number', initial: 1 }, ok: { type: 'number' } },
+      root: ifThen(
+        'if',
+        whenQuery(queryRef('guard', { n: local('n') }), eq(local('result'), lit(true))),
+        assign('set', 'ok', lit(1)),
+      ),
+      completion: { kind: 'predicate', condition: when(eq(local('ok'), lit(1))) },
+    })
+    const run = new BehaviorExecutor({
+      definition,
+      params: {},
+      query: broker.asPort(),
+      act: new ActBroker(),
+    })
+    expect(run.tick(0)).toBe('running')
+    run.frame.set('n', 2)
+    expect(run.tick(1)).toBe('running')
+    expect(run.tick(2)).toBe('succeeded')
+    expect(seen).toEqual([1, 2])
+  })
 })

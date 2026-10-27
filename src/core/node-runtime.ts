@@ -5,6 +5,7 @@ import type {
   ValueExpr,
 } from '../contracts/ir.ts'
 import type { JsonValue, LocalSlot, P2Error, ValueMeta } from '../contracts/types.ts'
+import { canonicalJson } from '../contracts/digest.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { EvalError, evaluate } from './expression.ts'
 import type { EvalContext } from './expression.ts'
@@ -568,12 +569,17 @@ class RecoverRuntime extends BaseRuntime {
 
 export class ConditionEvaluator {
   private pending: (() => QueryOutcome) | undefined
+  private pendingArgs: string | undefined
+  private evaluation = 0
 
   constructor(private readonly condition: Condition) {}
 
+  get evaluationId(): number {
+    return this.evaluation
+  }
+
   evaluate(context: NodeContext): ConditionOutcome {
     if (this.condition.kind === 'expr') return evaluateCondition(this.condition, context)
-    if (this.pending !== undefined) return this.consume(this.pending(), context)
 
     const args: Record<string, JsonValue> = {}
     try {
@@ -583,6 +589,15 @@ export class ConditionEvaluator {
     } catch (error) {
       return { status: 'failed', error: expressionError(error, 'condition') }
     }
+    const argsKey = canonicalJson(args)
+    if (this.pending !== undefined && this.pendingArgs !== argsKey) {
+      this.pending = undefined
+      this.pendingArgs = undefined
+    }
+    if (this.pending !== undefined) return this.consume(this.pending(), context)
+
+    this.evaluation += 1
+    this.pendingArgs = argsKey
     return this.consume(context.query(this.condition.query, args), context)
   }
 
@@ -592,6 +607,7 @@ export class ConditionEvaluator {
       return { status: 'unknown' }
     }
     this.pending = undefined
+    this.pendingArgs = undefined
     if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
     return evaluateQueryTest(this.condition as Extract<Condition, { kind: 'query' }>, outcome.value, context)
   }
