@@ -4,6 +4,7 @@ import {
   p2Error,
 } from '../contracts/index.ts'
 import type {
+  DescribeResult,
   HelloResult,
   JsonValue,
   MessageTransport,
@@ -71,6 +72,10 @@ export class BodyClient {
 
   request(method: string, params: JsonValue): Promise<JsonValue> {
     return this.send(method, params, { requireEpoch: true })
+  }
+
+  async describe(): Promise<DescribeResult> {
+    return await this.request('describe', {}) as unknown as DescribeResult
   }
 
   stop(runId?: string): Promise<JsonValue> {

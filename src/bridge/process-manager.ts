@@ -98,6 +98,14 @@ export class BodyManager {
       const client = new BodyClient(handle.transport, { log: this.log })
       this.client = client
       const hello = await client.hello([PROTOCOL_VERSION], owner)
+      if (hello.protocolVersion !== PROTOCOL_VERSION) {
+        throw new Error(`body negotiated unsupported protocol ${hello.protocolVersion}`)
+      }
+      const description = await client.describe()
+      if (description.protocolVersion !== PROTOCOL_VERSION
+        || description.body.manifestDigest !== hello.body.manifestDigest) {
+        throw new Error('body describe does not match the hello handshake')
+      }
       this.epoch = hello.bodyEpoch
       this.state = 'active'
       this.startHeartbeat()

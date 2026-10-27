@@ -11,7 +11,7 @@ M0 完成了单包骨架、契约与摘要基础、NDJSON/内存/stdio 传输、
 ## 2. 实现结果
 
 - 一个 npm 包同时包含 bridge、body、authoring 子路径和 `cordis.patch.yml`。
-- body 是独立子进程；bridge 加载时不创建进程，`/p2 start` 才创建并 hello。
+- body 是独立子进程；bridge 加载时不创建进程，`/p2 start` 才创建，并完成 hello + describe 一致性校验。
 - 已实现 `hello`、`heartbeat`、`describe`、`status`、`stop`、`shutdown`、`command.get`。
 - `sourceDigest`、`bindingId`、`artifactDigest`、`artifactId` 有固定样例和规范化规则测试。
 - `npm run verify:dist` 覆盖 tarball 安装、DSH profile 组合、模块导入、body manifest 摘要、authoring 入口和项目级 authoring 安装。
