@@ -77,6 +77,16 @@ export function createNodeRuntime(node: Node): NodeRuntime {
   }
 }
 
+function isP2Error(value: unknown): value is P2Error {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { code?: unknown }).code === 'string'
+    && typeof (value as { category?: unknown }).category === 'string'
+    && typeof (value as { message?: unknown }).message === 'string'
+    && typeof (value as { source?: unknown }).source === 'object'
+    && (value as { source?: unknown }).source !== null
+}
+
 abstract class BaseRuntime implements NodeRuntime {
   status: NodeStatus = 'running'
 
@@ -446,6 +456,12 @@ class ActRuntime extends BaseRuntime {
       try {
         this.handle = context.act.start(this.node.act, args)
       } catch (error) {
+        if (isP2Error(error)) {
+          return this.failure({
+            ...error,
+            source: { ...error.source, nodePath: this.node.id },
+          })
+        }
         return this.failure(p2Error(
           'ACT_START_FAILED',
           'runtime',

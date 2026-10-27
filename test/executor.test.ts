@@ -412,4 +412,22 @@ describe('behavior executor query and act ports', () => {
     expect(stops).toEqual(['attack'])
     expect(starts).toEqual(['attack', 'idle'])
   })
+
+  it('preserves a P2Error code thrown by act start', () => {
+    const run = executor(finite(act('guarded', 'guarded'), when(lit(false))), {
+      act: {
+        start: () => {
+          throw {
+            code: 'GAME_PAUSED',
+            category: 'environment',
+            message: 'server ticks are paused',
+            source: { module: 'test' },
+            retry: 'never',
+          }
+        },
+      },
+    })
+    expect(run.tick(0)).toBe('failed')
+    expect(run.currentError?.code).toBe('GAME_PAUSED')
+  })
 })

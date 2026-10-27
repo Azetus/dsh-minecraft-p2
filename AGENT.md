@@ -39,6 +39,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | [M3-FEASIBILITY.md](docs/M3-FEASIBILITY.md) | M3 可行性报告：环境、G0—G3、DSH 工具 stop、边界与 M4 前置。 |
 | [M4-PREP.md](docs/M4-PREP.md) | M4 前置：provider 配置文件、serverAge 与暂停语义。 |
 | [M4-BEHAVIORS.md](docs/M4-BEHAVIORS.md) | M4 首个有限/持续行为、moveTo 与真实目标切换实测。 |
+| [M4-ACCEPTANCE.md](docs/M4-ACCEPTANCE.md) | M4 阶段验收：行为、DSH、受阻/取消、暂停/查询失败、世界固定与备份。 |
 | [WS-FUTURE.md](docs/WS-FUTURE.md) | 已讨论的 WS、独立 launcher、鉴权/租约及重连设计；以后实现，不阻塞首版。 |
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。
