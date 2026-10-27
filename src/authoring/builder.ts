@@ -54,11 +54,12 @@ export function query(
   args: Record<string, ValueExpr>,
   output: string,
   freshnessMs?: number,
+  timeoutMs?: number,
 ): Node {
   return {
     kind: 'query',
     id,
-    query: queryRef(op, args, freshnessMs),
+    query: queryRef(op, args, freshnessMs, timeoutMs),
     output,
   }
 }
@@ -97,8 +98,14 @@ export function queryRef(
   op: string,
   args: Record<string, ValueExpr> = {},
   freshnessMs?: number,
+  timeoutMs?: number,
 ): QueryRef {
-  return freshnessMs === undefined ? { op, args } : { op, args, freshnessMs }
+  return {
+    op,
+    args,
+    ...(freshnessMs === undefined ? {} : { freshnessMs }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  }
 }
 
 export function when(expr: ValueExpr): Condition {

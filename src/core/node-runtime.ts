@@ -362,6 +362,8 @@ class ReactiveRuntime extends BaseRuntime {
 class QueryRuntime extends BaseRuntime {
   private started = false
   private pending: (() => QueryOutcome) | undefined
+  private startedAt: number | undefined
+  private timeoutMs = 5000
 
   constructor(private readonly node: Extract<Node, { kind: 'query' }>) {
     super()
@@ -369,6 +371,15 @@ class QueryRuntime extends BaseRuntime {
 
   tick(context: NodeContext): NodeResult {
     if (this.pending !== undefined) {
+      if (this.startedAt !== undefined && context.now - this.startedAt > this.timeoutMs) {
+        this.pending = undefined
+        return this.failure(p2Error(
+          'QUERY_TIMEOUT',
+          'timeout',
+          `query ${this.node.query.op} exceeded its deadline`,
+          { module: 'core.query', nodePath: this.node.id },
+        ))
+      }
       const outcome = this.pending()
       if (outcome.status === 'pending') {
         this.pending = outcome.poll
@@ -390,6 +401,8 @@ class QueryRuntime extends BaseRuntime {
     const outcome = context.query(this.node.query, args)
     if (outcome.status === 'pending') {
       this.pending = outcome.poll
+      this.startedAt = context.now
+      this.timeoutMs = this.node.query.timeoutMs ?? 5000
       return { status: 'running' }
     }
     return this.finish(outcome, context)
@@ -407,6 +420,7 @@ class QueryRuntime extends BaseRuntime {
 
   cancel(): NodeResult {
     this.pending = undefined
+    this.startedAt = undefined
     return this.cancelled()
   }
 }

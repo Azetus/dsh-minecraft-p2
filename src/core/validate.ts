@@ -155,13 +155,16 @@ export function validateBehavior(definition: BehaviorDefinition): void {
     }
   }
 
-  const visitQuery = (query: { op: string; args: Record<string, ValueExpr>; freshnessMs?: number }, path: string): void => {
+  const visitQuery = (query: { op: string; args: Record<string, ValueExpr>; freshnessMs?: number; timeoutMs?: number }, path: string): void => {
     if (typeof query.op !== 'string' || query.op.length === 0) {
       throw new BehaviorValidationError('INVALID_QUERY', path, 'query op is required')
     }
     for (const [name, value] of Object.entries(query.args)) visitExpr(value, `${path}.args.${name}`)
     if (query.freshnessMs !== undefined && (!Number.isFinite(query.freshnessMs) || query.freshnessMs < 0)) {
       throw new BehaviorValidationError('INVALID_QUERY', path, 'freshness must be non-negative')
+    }
+    if (query.timeoutMs !== undefined && (!Number.isFinite(query.timeoutMs) || query.timeoutMs < 0)) {
+      throw new BehaviorValidationError('INVALID_QUERY', path, 'timeout must be non-negative')
     }
   }
 

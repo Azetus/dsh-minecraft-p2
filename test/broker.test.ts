@@ -191,4 +191,31 @@ describe('QueryBroker', () => {
     expect(run.tick(2)).toBe('succeeded')
     expect(seen).toEqual([1, 2])
   })
+
+  it('times out a single pending query without retrying', () => {
+    const broker = new QueryBroker()
+    broker.register('forever', (): QueryOutcome => ({
+      status: 'pending',
+      poll: () => ({ status: 'pending', poll: () => ({ status: 'pending', poll: () => ({ status: 'pending', poll: () => ({ status: 'pending', poll: () => ({ status: 'ok', value: 1 }) }) }) }) }),
+    }))
+    const definition = defineBehavior({
+      id: 'query-timeout',
+      description: 'query timeout',
+      mode: 'finite',
+      parameters: {},
+      locals: { have: { type: 'number' } },
+      root: query('q', 'forever', {}, 'have', undefined, 10),
+      completion: { kind: 'predicate', condition: when(eq(lit(1), lit(1))) },
+    })
+    const run = new BehaviorExecutor({
+      definition,
+      params: {},
+      query: broker.asPort(),
+      act: new ActBroker(),
+    })
+    expect(run.tick(0)).toBe('running')
+    expect(run.tick(100)).toBe('failed')
+    expect(run.currentError?.code).toBe('QUERY_TIMEOUT')
+    expect(broker.calls).toBe(1)
+  })
 })

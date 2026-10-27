@@ -21,6 +21,7 @@ export type QueryRef = {
   op: string
   args: Record<string, ValueExpr>
   freshnessMs?: number
+  timeoutMs?: number
 }
 
 export type Condition =
