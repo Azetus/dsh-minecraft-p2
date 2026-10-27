@@ -20,6 +20,7 @@ export type NodeResult = {
 export type QueryOutcome =
   | { status: 'ok'; value: JsonValue }
   | { status: 'failed'; error: P2Error }
+  | { status: 'pending'; poll(): QueryOutcome }
 
 export type QueryPort = (ref: QueryRef, args: Record<string, JsonValue>) => QueryOutcome
 
@@ -334,12 +335,22 @@ class ReactiveRuntime extends BaseRuntime {
 
 class QueryRuntime extends BaseRuntime {
   private started = false
+  private pending: (() => QueryOutcome) | undefined
 
   constructor(private readonly node: Extract<Node, { kind: 'query' }>) {
     super()
   }
 
   tick(context: NodeContext): NodeResult {
+    if (this.pending !== undefined) {
+      const outcome = this.pending()
+      if (outcome.status === 'pending') {
+        this.pending = outcome.poll
+        return { status: 'running' }
+      }
+      this.pending = undefined
+      return this.finish(outcome, context)
+    }
     if (this.started) return { status: 'running' }
     this.started = true
     const args: Record<string, JsonValue> = {}
@@ -351,12 +362,21 @@ class QueryRuntime extends BaseRuntime {
       return this.failure(expressionError(error, this.node.id))
     }
     const outcome = context.query(this.node.query, args)
+    if (outcome.status === 'pending') {
+      this.pending = outcome.poll
+      return { status: 'running' }
+    }
+    return this.finish(outcome, context)
+  }
+
+  private finish(outcome: Exclude<QueryOutcome, { status: 'pending' }>, context: NodeContext): NodeResult {
     if (outcome.status === 'failed') return this.failure(outcome.error)
     context.frame.set(this.node.output, outcome.value)
     return this.success()
   }
 
   cancel(): void {
+    this.pending = undefined
     this.cancelled()
   }
 }
@@ -508,6 +528,7 @@ export function evaluateCondition(condition: Condition, context: NodeContext): C
     }
     const outcome = context.query(condition.query, args)
     if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
+    if (outcome.status === 'pending') return { status: 'unknown' }
     const frame = context.frame.clone()
     frame.set('result', outcome.value)
     const value = evaluate(condition.test, {

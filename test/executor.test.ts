@@ -246,6 +246,21 @@ describe('behavior executor query and act ports', () => {
     expect(run.frame.get('result')).toBeUndefined()
   })
 
+  it('turns a failed act stop into a control fault, not cancelled', () => {
+    const handle: ActHandle = {
+      poll: () => ({ status: 'running' }),
+      stop: () => { throw new Error('cleanup failed') },
+    }
+    const run = executor(defineBehavior({
+      ...finite(sequence('root', act('a', 'mine', {}, 'result'))),
+      locals: { result: { type: 'number' } },
+    }), { act: { start: () => handle } })
+    expect(run.tick(0)).toBe('running')
+    run.stop()
+    expect(run.tick(1)).toBe('failed')
+    expect(run.currentError?.code).toBe('ACT_STOP_FAILED')
+  })
+
   it('switches reactive branches by cancelling the old child first', () => {
     let starts: string[] = []
     let stops: string[] = []
