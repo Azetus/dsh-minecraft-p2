@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 
 import type { Bot } from 'mineflayer'
@@ -6,7 +7,7 @@ import { MineflayerProvider } from '../src/provider/mineflayer.ts'
 
 function fakeBot() {
   const controls = new Map<string, boolean>()
-  const bot = {
+  const bot = Object.assign(new EventEmitter(), {
     entity: {
       position: { x: 1, y: 64, z: 2 },
       onGround: true,
@@ -26,8 +27,8 @@ function fakeBot() {
     setControlState: (name: string, value: boolean) => { controls.set(name, value) },
     getControlState: (name: string) => controls.get(name) ?? false,
     clearControlStates: () => { controls.clear() },
-  }
-  return { bot: bot as unknown as Bot, controls }
+  })
+  return { bot: bot as unknown as Bot, controls, emitter: bot }
 }
 
 describe('MineflayerProvider', () => {
@@ -65,5 +66,14 @@ describe('MineflayerProvider', () => {
 
     const stop = provider.start('stop', {})
     expect(stop.poll().status).toBe('succeeded')
+  })
+
+  it('fails the active act and queries on connection end', () => {
+    const { bot, emitter } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const move = provider.start('move', { direction: 'forward', durationMs: 1000 })
+    emitter.emit('end', 'server closed')
+    expect(move.poll()).toMatchObject({ status: 'failed' })
+    expect(provider.query('position')).toMatchObject({ status: 'failed' })
   })
 })

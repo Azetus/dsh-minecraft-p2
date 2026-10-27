@@ -93,6 +93,7 @@ function nowMeta(): ValueMeta {
 /** Query/act adapter over one connected Mineflayer bot. */
 export class MineflayerProvider implements ActPort {
   private current: ActHandle | undefined
+  private disconnected: Error | undefined
   private readonly options: Required<MineflayerProviderOptions>
 
   constructor(
@@ -103,6 +104,12 @@ export class MineflayerProvider implements ActPort {
       actionTimeoutMs: options.actionTimeoutMs ?? 5000,
       moveDurationMs: options.moveDurationMs ?? 700,
     }
+    bot.once('end', reason => {
+      this.disconnected = new Error(`Mineflayer connection ended: ${String(reason)}`)
+      this.bot.clearControlStates()
+      const current = this.current as (ActHandle & { abort?: (error: Error) => void }) | undefined
+      current?.abort?.(this.disconnected)
+    })
   }
 
   queryPort(): QueryPort {
@@ -110,6 +117,12 @@ export class MineflayerProvider implements ActPort {
   }
 
   query(op: string, args: Record<string, JsonValue> = {}): QueryOutcome {
+    if (this.disconnected !== undefined) {
+      return {
+        status: 'failed',
+        error: p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' }),
+      }
+    }
     const sampledAt = Date.now()
     try {
       switch (op) {
@@ -187,6 +200,9 @@ export class MineflayerProvider implements ActPort {
   }
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
+    if (this.disconnected !== undefined) {
+      throw p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' })
+    }
     if (this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })
     }
@@ -249,6 +265,13 @@ class MineflayerActHandle implements ActHandle {
   stop(): void {
     if (this.cancelled || this.completed) return
     this.cancelled = true
+    if (this.timer !== undefined) clearTimeout(this.timer)
+    this.bot.clearControlStates()
+  }
+
+  abort(error: Error): void {
+    if (this.cancelled || this.completed) return
+    this.failed = error
     if (this.timer !== undefined) clearTimeout(this.timer)
     this.bot.clearControlStates()
   }
