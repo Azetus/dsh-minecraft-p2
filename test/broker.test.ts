@@ -53,6 +53,19 @@ describe('ActBroker', () => {
     const handle = broker.start('bad-stop', {})
     expect(() => handle.stop()).toThrow(/cleanup failed/)
   })
+
+  it('returns cancelled after stop and ignores a late runner result', () => {
+    const broker = new ActBroker()
+    let lateResult: ActPoll = { status: 'succeeded', result: 1 }
+    broker.register('late', (): ActHandle => ({
+      poll: () => lateResult,
+      stop: () => { lateResult = { status: 'succeeded', result: 2 } },
+    }))
+    const handle = broker.start('late', {})
+    handle.stop()
+    expect(handle.poll()).toEqual({ status: 'cancelled' })
+    expect(broker.activeName).toBeUndefined()
+  })
 })
 
 describe('QueryBroker', () => {

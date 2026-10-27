@@ -163,4 +163,31 @@ describe('body behavior methods', () => {
     expect(rt.status().loggingUnavailable).toBe(true)
     expect(rt.status().droppedLogCount).toBeGreaterThan(0)
   })
+
+  it('does not let a full log buffer block check, terminal status, or stop', async () => {
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-log-full-'))
+    dirs.push(dir)
+    const log = new DebugLog({ filePath: join(dir, 'debug.jsonl'), maxBuffer: 1 })
+    log.log({ filler: true })
+    const host = new BehaviorHost({ bindingId: 'binding-1', owner: 's/a', query, act })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      debugLog: log,
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const checked = await rt.handleRequestAsync(request('check', { sourcePath: source() }, 'full-check', 'epoch-1'))
+    expect(checked.error).toBeUndefined()
+    const artifactId = (checked.result as { artifactId: string }).artifactId
+    await rt.handleRequestAsync(request('activate', { artifactId }, 'full-activate', 'epoch-1'))
+    const switched = await rt.handleRequestAsync(request('switch', { artifactId, params: {} }, 'full-switch', 'epoch-1'))
+    expect(switched.error).toBeUndefined()
+    expect(rt.tickBehavior(0)).toBe('blocked')
+    const runId = (switched.result as { runId: string }).runId
+    const stopped = await rt.handleRequestAsync(request('stop', { runId }, 'full-stop', 'epoch-1'))
+    expect(stopped.error).toBeUndefined()
+    expect(rt.status().droppedLogCount).toBeGreaterThan(0)
+    await log.close()
+  })
 })
