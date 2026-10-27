@@ -94,6 +94,43 @@ export function ensureWebProfile(home, profile) {
   return manifest
 }
 
+/** Inspect an existing dev home without modifying it. */
+export function inspectDevHome(home, profile) {
+  if (!existsSync(home)) {
+    return { exists: false, reusable: false, reason: 'missing' }
+  }
+  const profilePath = join(home, 'profiles', profile, 'package.json')
+  if (!existsSync(profilePath)) {
+    return { exists: true, reusable: false, reason: `missing profile ${profile}` }
+  }
+  try {
+    const manifest = readProfile(home, profile)
+    const bundles = manifest.dsh?.profile?.bundles ?? []
+    if (!bundles.includes(PACKAGE_NAME)) {
+      return {
+        exists: true,
+        reusable: false,
+        reason: `${PACKAGE_NAME} is not in profile ${profile}`,
+        bundles,
+      }
+    }
+    return { exists: true, reusable: true, profile: profilePath, bundles, manifest }
+  } catch (error) {
+    return {
+      exists: true,
+      reusable: false,
+      reason: `invalid profile ${profile}: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+}
+
+/** Keep an existing workspace/storage; create the dev workspace only when absent. */
+export function ensureDevWorkspace(home, title = 'p2-dev') {
+  const path = join(home, 'workspace')
+  if (existsSync(path) && existsSync(join(home, 'storages', 'workspace.json'))) return path
+  return writeDevWorkspace(home, title)
+}
+
 export function writeDevWorkspace(home, title = 'p2-dev') {
   const id = '00000000-0000-4000-8000-000000000001'
   const path = join(home, 'workspace')

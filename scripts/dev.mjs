@@ -10,7 +10,7 @@
  * Use `--keep` to keep the generated home for inspection.
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -21,8 +21,10 @@ import {
   captureDsh,
   commandLine,
   copyCredentials,
+  ensureDevWorkspace,
   ensureWebProfile,
   fail,
+  inspectDevHome,
   installBundle,
   removeHome,
   runNpm,
@@ -35,6 +37,8 @@ const options = {
   start: true,
   open: false,
   withCredentials: false,
+  reuse: false,
+  refresh: false,
   port: 0,
   profile: 'p2-dev',
   credentialsHome: process.env.DSH_HOME ?? join(homedir(), '.dsh'),
@@ -58,6 +62,17 @@ for (let index = 2; index < process.argv.length; index += 1) {
     case '--with-credentials':
       options.withCredentials = true
       break
+    case '--reuse':
+      options.reuse = true
+      break
+    case '--refresh':
+      options.reuse = true
+      options.refresh = true
+      break
+    case '--fresh':
+      options.reuse = false
+      options.refresh = false
+      break
     case '--port':
       options.port = Number(process.argv[++index])
       if (!Number.isInteger(options.port) || options.port < 0) {
@@ -79,6 +94,9 @@ Options:
   --no-build          use the existing bundles/*.tgz
   --no-start          stage and validate the profile, then exit
   --keep              keep .dev-home/run after exit
+  --reuse             reuse an existing .dev-home/run (sessions/workspace/credentials)
+  --refresh           reuse the home and reinstall the current tarball
+  --fresh             force a fresh .dev-home/run (default)
   --port <port>       web port; 0 lets the OS choose (default: 0)
   --open              let DSH open a browser (default: no)
   --with-credentials  copy .credentials.yaml from the real DSH_HOME
@@ -86,7 +104,8 @@ Options:
   --dsh-home <path>   where to read credentials from
   -h, --help          this text
 
-The generated home is always rebuilt, except with --keep after a failed run.
+The generated home is rebuilt by default. --reuse keeps an existing run and
+its sessions/workspace; --refresh updates its installed tarball in place.
 `)
       process.exit(0)
       break
@@ -97,9 +116,22 @@ The generated home is always rebuilt, except with --keep after a failed run.
 }
 
 const home = join(DEV_HOME, 'run')
+let reusedHome = false
 
 function stage() {
-  if (options.build) {
+  const inspection = inspectDevHome(home, options.profile)
+  const wantsReuse = options.reuse
+  if (wantsReuse && inspection.exists && !inspection.reusable && !options.refresh) {
+    fail(
+      `dev: cannot reuse ${home}: ${inspection.reason}; use --refresh to reinstall or --fresh to rebuild`,
+      home,
+    )
+    return false
+  }
+
+  const reusing = wantsReuse && inspection.exists && (inspection.reusable || options.refresh)
+  const needBuild = options.build && (!reusing || options.refresh)
+  if (needBuild) {
     const built = runNpm(['run', 'bundle'])
     if (built.status !== 0) {
       fail('dev: bundle build failed', home)
@@ -107,34 +139,66 @@ function stage() {
     }
   }
 
-  removeHome(home)
-  mkdirSync(home, { recursive: true })
-
-  const installed = installBundle(home, options.profile)
-  if (installed.status !== 0) {
-    fail('dev: dsh plugin install failed', home)
-    return false
+  let bundles
+  let manifest
+  let bundleState
+  if (reusing) {
+    reusedHome = true
+    if (options.refresh) {
+      const installed = installBundle(home, options.profile)
+      if (installed.status !== 0) {
+        fail('dev: dsh plugin refresh failed', home)
+        return false
+      }
+      manifest = ensureWebProfile(home, options.profile)
+      bundleState = 'refreshed'
+    } else {
+      manifest = inspection.manifest
+      bundleState = 'reused'
+    }
+    bundles = manifest.dsh?.profile?.bundles ?? []
+    if (!bundles.includes(PACKAGE_NAME)) {
+      fail(`dev: ${PACKAGE_NAME} is not in the reused profile`, home)
+      return false
+    }
+  } else {
+    if (wantsReuse) {
+      process.stdout.write(`dev: reuse unavailable (${inspection.reason}); staging fresh\n`)
+    }
+    removeHome(home)
+    mkdirSync(home, { recursive: true })
+    const installed = installBundle(home, options.profile)
+    if (installed.status !== 0) {
+      fail('dev: dsh plugin install failed', home)
+      return false
+    }
+    manifest = ensureWebProfile(home, options.profile)
+    bundles = manifest.dsh?.profile?.bundles ?? []
+    if (!bundles.includes(PACKAGE_NAME)) {
+      fail(`dev: ${PACKAGE_NAME} is not in the generated profile`, home)
+      return false
+    }
+    bundleState = 'installed'
   }
 
-  const manifest = ensureWebProfile(home, options.profile)
-  const bundles = manifest.dsh?.profile?.bundles ?? []
-  if (!bundles.includes(PACKAGE_NAME)) {
-    fail(`dev: ${PACKAGE_NAME} is not in the generated profile`, home)
-    return false
-  }
-
-  const workspace = writeDevWorkspace(home, 'p2-dev')
-  const credentials = options.withCredentials
+  const workspace = reusing
+    ? ensureDevWorkspace(home, 'p2-dev')
+    : writeDevWorkspace(home, 'p2-dev')
+  const copiedCredentials = options.withCredentials
     ? copyCredentials(options.credentialsHome, home)
     : false
+  const credentials = copiedCredentials || existsSync(join(home, '.credentials.yaml'))
 
   process.stdout.write(
-    `dev: staged\n`
+    `${reusing ? 'dev: reused' : 'dev: staged'}\n`
     + `  DSH_HOME: ${home}\n`
     + `  profile: ${options.profile}\n`
+    + `  bundle: ${bundleState}\n`
     + `  bundles: ${bundles.join(', ')}\n`
     + `  workspace: ${workspace}\n`
-    + `  credentials: ${credentials ? 'copied' : 'not copied'}\n`,
+    + `  credentials: ${options.withCredentials
+      ? (copiedCredentials ? 'copied' : (credentials ? 'kept' : 'source missing'))
+      : (credentials ? 'kept' : 'not copied')}\n`,
   )
 
   if (!credentials) {
@@ -155,7 +219,9 @@ function checkProfile() {
     return false
   }
   if (options.keep) process.stdout.write(`  check: ${log}\n`)
-  else {
+  else if (reusedHome) {
+    process.stdout.write(`  check: ok; home kept (${home})\n`)
+  } else {
     removeHome(home)
     process.stdout.write('  check: ok; home removed\n')
   }
@@ -199,7 +265,7 @@ function start() {
     if (success || options.keep) {
       process.stdout.write(`dev: dsh exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})\n`)
     }
-    if (success && !options.keep) removeHome(home)
+    if (success && !options.keep && !reusedHome) removeHome(home)
     else process.stdout.write(`dev: diagnostics kept at ${home}\n`)
     process.exit(code ?? (success ? 0 : 1))
   })
