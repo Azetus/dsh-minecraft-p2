@@ -52,7 +52,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   register({
     name: 'p2_status',
     description: 'Read the P2 body, heartbeat, active run, and pending confirmation.',
-    parameters: {},
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {
       const status = await manager.status()
@@ -64,8 +64,13 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_check',
     description: 'Check a behavior source file in the owner project without activating or running it.',
     parameters: {
-      sourcePath: { type: 'string', required: true, description: 'Path inside the owner project' },
-      timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
+      type: 'object',
+      properties: {
+        sourcePath: { type: 'string', description: 'Path inside the owner project' },
+        timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
+      },
+      required: ['sourcePath'],
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => {
@@ -79,7 +84,12 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_activate',
     description: 'Activate a checked artifact in its target binding. This does not start a run.',
     parameters: {
-      artifactId: { type: 'string', required: true },
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: 'Checked artifact id' },
+      },
+      required: ['artifactId'],
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => manager.activate(String(args.artifactId))),
@@ -89,8 +99,13 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_switch',
     description: 'Accept a serial switch to an activated artifact. Accepted is not task completion.',
     parameters: {
-      artifactId: { type: 'string', required: true },
-      params: { type: 'json', description: 'Behavior parameters' },
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: 'Activated artifact id' },
+        params: { type: 'object', description: 'Behavior parameters', additionalProperties: true },
+      },
+      required: ['artifactId'],
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => manager.switch(
@@ -103,9 +118,14 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_confirm',
     description: 'Submit the agent judgment for a pending external confirmation. The source is bridge-derived, never self-reported.',
     parameters: {
-      runId: { type: 'string', required: true },
-      confirmationId: { type: 'string', required: true },
-      decision: { type: 'string', required: true, enum: ['confirm', 'deny'] },
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: 'Run awaiting confirmation' },
+        confirmationId: { type: 'string', description: 'Confirmation record id' },
+        decision: { type: 'string', enum: ['confirm', 'deny'], description: 'Agent decision' },
+      },
+      required: ['runId', 'confirmationId', 'decision'],
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => manager.confirm(
@@ -119,7 +139,11 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_stop',
     description: 'Stop the current behavior run while keeping the P2 body alive.',
     parameters: {
-      runId: { type: 'string', description: 'Active run id; defaults to the current run' },
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: 'Active run id; defaults to the current run' },
+      },
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => manager.stopBehavior(
@@ -130,7 +154,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   register({
     name: 'p2_events',
     description: 'Drain the bounded current-epoch P2 status event buffer.',
-    parameters: {},
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {
       const drained = manager.drainEvents()
@@ -146,7 +170,12 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     name: 'p2_command',
     description: 'Query an accepted/terminal command by commandId. Unknown is not proof it never ran.',
     parameters: {
-      commandId: { type: 'string', required: true },
+      type: 'object',
+      properties: {
+        commandId: { type: 'string', description: 'Command id to query' },
+      },
+      required: ['commandId'],
+      additionalProperties: false,
     },
     output: jsonOutput(),
     execute: guarded(async args => manager.commandGet(String(args.commandId))),
