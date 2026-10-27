@@ -190,7 +190,46 @@ stop:    run=none:none  last=run-3:cancelled
 
 验证环境注意：同版本 tarball 的 `dev --refresh` 可能被 pnpm 视为已安装，导致旧工具列表残留。本次改用 fresh staging 后通过；`--refresh` 的强制重装需要后续修复。
 
-## 7. 边界
+## 7. 受阻、恢复与取消（真实 DSH）
+
+测试操作员先 `/tp P2_Bot P2_Operator` 对齐位置，再在 P2 前方用 barrier 建一堵 1×3×5 的短墙；测试后填回 air。
+
+工具链：
+
+```text
+p2_observe(position)
+p2_check(approach-target)
+p2_activate
+p2_switch(x + 3, z)       # 墙后目标
+p2_status / p2_events
+p2_switch(x - 2, z)       # 墙后恢复目标
+p2_status / p2_events
+p2_check(hold-position)
+p2_activate
+p2_switch(x + 2, z)
+p2_stop(run-3)
+p2_status
+/p2 stop
+```
+
+真实状态：
+
+```text
+blocked:   run=none:none  last=run-1:failed:MOVE_TO_BLOCKED
+recovered: run=none:none  last=run-2:succeeded
+running:   run=run-3:running  last=run-2:succeeded
+cancelled: run=none:none  last=run-3:cancelled
+```
+
+结论：
+
+- `MOVE_TO_BLOCKED` 是从真实墙体碰撞和 moveTo 无进展产生的；
+- 失败后同一 artifact 重新 switch 可以恢复，产生新 run；
+- 持续行为被 `p2_stop` 显式取消；
+- `lastRun` 始终保留 succeeded/failed/cancelled 及错误码；
+- 墙体已清理，P2 已下线。
+
+## 8. 边界
 
 - 只在超平坦、无障碍、peaceful 世界验证；
 - 没有 pathfinder，遇到障碍会 `MOVE_TO_BLOCKED` 或超时；
