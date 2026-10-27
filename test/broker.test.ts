@@ -218,4 +218,45 @@ describe('QueryBroker', () => {
     expect(run.currentError?.code).toBe('QUERY_TIMEOUT')
     expect(broker.calls).toBe(1)
   })
+
+  it('does not reuse stale query evidence in a guard', () => {
+    const broker = new QueryBroker()
+    let calls = 0
+    broker.register('stale', (): QueryOutcome => {
+      calls += 1
+      const call = calls
+      return {
+        status: 'pending',
+        poll: () => ({
+          status: 'ok',
+          value: true,
+          meta: { source: 'query', scope: 'guard', sampledAt: 0, validUntil: call === 1 ? 5 : 100 },
+        }),
+      }
+    })
+    const definition = defineBehavior({
+      id: 'stale-guard',
+      description: 'stale guard',
+      mode: 'finite',
+      parameters: {},
+      locals: { ok: { type: 'number' } },
+      root: ifThen(
+        'if',
+        whenQuery(queryRef('stale'), eq(local('result'), lit(true))),
+        assign('set', 'ok', lit(1)),
+      ),
+      completion: { kind: 'predicate', condition: when(eq(local('ok'), lit(1))) },
+    })
+    const run = new BehaviorExecutor({
+      definition,
+      params: {},
+      query: broker.asPort(),
+      act: new ActBroker(),
+    })
+    expect(run.tick(0)).toBe('running')
+    expect(run.tick(10)).toBe('running')
+    expect(run.tick(11)).toBe('running')
+    expect(run.tick(12)).toBe('succeeded')
+    expect(calls).toBe(2)
+  })
 })

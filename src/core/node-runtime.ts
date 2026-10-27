@@ -623,6 +623,10 @@ export class ConditionEvaluator {
     this.pending = undefined
     this.pendingArgs = undefined
     if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
+    if (outcome.meta?.validUntil !== undefined && context.now > outcome.meta.validUntil) {
+      // Fresh evidence is required; the next evaluation starts a new request.
+      return { status: 'unknown' }
+    }
     return evaluateQueryTest(this.condition as Extract<Condition, { kind: 'query' }>, outcome.value, context)
   }
 }
