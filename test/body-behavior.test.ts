@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { BehaviorHost } from '../src/core/host.ts'
 import { DebugLog } from '../src/core/logging.ts'
+import { WorkQuota } from '../src/core/quota.ts'
 import type { ActPort, QueryPort } from '../src/core/node-runtime.ts'
 import { PROTOCOL_VERSION } from '../src/contracts/index.ts'
 import type { BodyInfo, BodyManifest, JsonValue, RequestEnvelope } from '../src/contracts/index.ts'
@@ -189,5 +190,30 @@ describe('body behavior methods', () => {
     expect(stopped.error).toBeUndefined()
     expect(rt.status().droppedLogCount).toBeGreaterThan(0)
     await log.close()
+  })
+
+  it('rejects a second normal build when the work quota is full but keeps status available', async () => {
+    const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      workQuota: new WorkQuota(1),
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const first = rt.handleRequestAsync(request('check', {
+      sourcePath: loopSource(),
+      timeoutMs: 100,
+    }, 'quota-1', 'epoch-1'))
+    const second = await rt.handleRequestAsync(request('check', {
+      sourcePath: source(),
+    }, 'quota-2', 'epoch-1'))
+    expect(second.error?.code).toBe('QUOTA_EXCEEDED')
+    const status = await rt.handleRequestAsync(request('status', {}, undefined, 'epoch-1'))
+    expect(status.error).toBeUndefined()
+    expect((await first).error?.code).toBe('CHECK_TIMEOUT')
+
+    const after = await rt.handleRequestAsync(request('check', { sourcePath: source() }, 'quota-3', 'epoch-1'))
+    expect(after.error).toBeUndefined()
   })
 })

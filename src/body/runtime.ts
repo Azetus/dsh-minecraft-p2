@@ -5,6 +5,7 @@ import { BehaviorHost } from '../core/host.ts'
 import { CheckerError } from '../core/checker.ts'
 import { RegistryError } from '../core/registry.ts'
 import type { DebugLog } from '../core/logging.ts'
+import type { WorkQuota } from '../core/quota.ts'
 
 import {
   PROTOCOL_VERSION,
@@ -47,6 +48,7 @@ export class BodyRuntime {
   readonly bodyEpoch: BodyEpoch
   private behavior: BehaviorHost | undefined
   private readonly debugLog: DebugLog | undefined
+  private readonly workQuota: WorkQuota | undefined
   private lastBehaviorStatus: string | undefined
   private owner: OwnerContext | null = null
   private initialized = false
@@ -57,11 +59,12 @@ export class BodyRuntime {
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
 
-  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog }) {
+  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota }) {
     this.body = options.body
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     this.behavior = options.behavior
     this.debugLog = options.debugLog
+    this.workQuota = options.workQuota
     this.owner = options.owner ?? null
     this.initialized = this.owner !== null
     this.now = options.now ?? Date.now
@@ -181,11 +184,26 @@ export class BodyRuntime {
             state: 'pending',
           })
           this.debugLog?.log({ event: 'command', commandId, method: 'check', state: 'pending' })
-          const checked = await this.behavior.check({
-            sourcePath,
-            ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
-            ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
-          })
+          if (this.workQuota !== undefined && !this.workQuota.tryAcquire()) {
+            const quotaError = p2Error('QUOTA_EXCEEDED', 'control', 'normal work quota is full', { module: 'body.quota' })
+            this.commands.set(commandId, {
+              commandId: commandId as CommandId,
+              method: 'check',
+              state: 'rejected',
+              error: quotaError,
+            })
+            return { ...base, error: quotaError }
+          }
+          let checked
+          try {
+            checked = await this.behavior.check({
+              sourcePath,
+              ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
+              ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
+            })
+          } finally {
+            this.workQuota?.release()
+          }
           const result: CheckResult = {
             artifactId: checked.artifactId,
             definitionId: checked.artifact.definition.id,
