@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline'
 const host = process.argv[2] ?? '127.0.0.1'
 const port = Number(process.argv[3] ?? '25575')
 const username = 'P2_Bot'
+const stderr = []
 
 const child = spawn(process.execPath, [join(process.cwd(), 'lib/body/body.mjs')], {
   cwd: process.cwd(),
@@ -27,7 +28,9 @@ const child = spawn(process.execPath, [join(process.cwd(), 'lib/body/body.mjs')]
   stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,
 })
-child.stderr.on('data', () => {})
+child.stderr.on('data', chunk => { stderr.push(String(chunk)) })
+let bodyExit
+child.once('exit', (code, signal) => { bodyExit = { code, signal } })
 const pending = new Map()
 createInterface({ input: child.stdout }).on('line', line => {
   if (!line.trim().startsWith('{')) return
@@ -67,14 +70,21 @@ try {
     owner: { sessionId: 'm3-kick', agentId: 'kick', cwd: process.cwd() },
   }))
   epoch = hello.bodyEpoch
+  let heartbeatSeq = 0
+  const heartbeat = setInterval(() => {
+    heartbeatSeq += 1
+    void request('heartbeat', { seq: heartbeatSeq }).catch(() => {})
+  }, 1000)
+  heartbeat.unref?.()
   const checked = value(await request('check', {
     sourcePath: join(process.cwd(), 'scripts', 'm3-g3-source.mjs'),
   }, 'kick-check'))
   value(await request('activate', { artifactId: checked.artifactId }, 'kick-activate'))
-  value(await request('switch', {
+  const switched = value(await request('switch', {
     artifactId: checked.artifactId,
     params: {},
   }, 'kick-switch'))
+  process.stdout.write(`SWITCHED: ${JSON.stringify(switched)}\n`)
 
   await sleep(900)
   const before = value(await request('observe', { op: 'position' })).value
@@ -113,8 +123,11 @@ try {
     before,
     disconnect,
     observeError,
-    stderrLines: 0,
+    bodyExit,
+    heartbeatCount: heartbeatSeq,
+    stderr: stderr.join('').slice(-2000),
   })}\n`)
+  clearInterval(heartbeat)
   await request('shutdown', {}, 'kick-shutdown').catch(() => {})
   child.stdin.end()
   setTimeout(() => { try { child.kill() } catch {} process.exit(0) }, 100)
@@ -122,6 +135,8 @@ try {
   process.stdout.write(`${JSON.stringify({
     ok: false,
     error: error instanceof Error ? error.message : String(error),
+    bodyExit,
+    stderr: stderr.join('').slice(-2000),
   })}\n`)
   try { child.kill() } catch {}
   process.exit(1)

@@ -110,6 +110,12 @@ export class MineflayerProvider implements ActPort {
       const current = this.current as (ActHandle & { abort?: (error: Error) => void }) | undefined
       current?.abort?.(this.disconnected)
     })
+    bot.on('error', error => {
+      this.disconnected = error instanceof Error ? error : new Error(String(error))
+      this.bot.clearControlStates()
+      const current = this.current as (ActHandle & { abort?: (error: Error) => void }) | undefined
+      current?.abort?.(this.disconnected)
+    })
   }
 
   queryPort(): QueryPort {
