@@ -16,13 +16,14 @@
 - **终态裁决**：pre-tick stop 优先；act stop 失败转控制故障；query predicate 需要第二次新鲜确认，第二次为 false 返回 GOAL_NOT_MET；act cleanup 期间保持 running，超时转 STOP_TIMEOUT；固定 ingress 批次中 stop 优先于确认。
 - **D1 元数据**：LocalSlot 记录 source/scope/sampledAt/validUntil；query/act/子树输出复制元数据，assign 生成来源。
 - **额度与生产入口**：WorkQuota 限制普通 check；body 入口创建 BehaviorHost 和 50ms ticker，check/activate/switch/confirm 在真实 body 进程中可用。
+- **QueryOp 超时**：query 节点支持 timeoutMs；pending 超时返回 QUERY_TIMEOUT，且只请求一次。
 - **H1/H2/闭包**：同一源码可生成不同 binding 的 artifact；两个 registry 隔离退休；缺失依赖闭包被拒绝。
 
 ## 2. 验证
 
 ```text
 npm run check
-  → build + typecheck + 106 tests: pass
+  → build + typecheck + 107 tests: pass
 ```
 
 测试分布：
@@ -30,7 +31,7 @@ npm run check
 ```text
 test/ir.test.ts          8
 test/executor.test.ts   20
-test/broker.test.ts      9
+test/broker.test.ts     10
 test/checker.test.ts     9
 test/run.test.ts         6
 test/logging.test.ts     5
@@ -44,7 +45,7 @@ test/body-behavior.ts    6
 ## 3. 尚未满足的 M1 退出条件
 
 - **没有接入生产 body host**：body 协议与 BodyRuntime 已支持行为方法，但 body 进程入口没有 provider/query/act，只有测试注入的 BehaviorHost；M2 接 provider 后才会实际运行行为。
-- **RUNTIME §11 未全部覆盖**：QueryOp 超时/重试、运行中 H1→H2 切换、完整事件队列和来源年龄校验尚未实现/测试；固定 ingress 批次和 late result 已覆盖。
+- **RUNTIME §11 未全部覆盖**：运行中 H1→H2 切换、完整异步事件队列/ingressSeq、来源年龄校验尚未实现/测试；QueryOp 超时、固定 ingress 批次和 late result 已覆盖。
 - **查询条件**：guard 的 pending poll 已补，参数变化会新建 evaluationId；完成 predicate 的 pending 仍会在最终确认时重新请求。
 - **H1/H2 隔离**：静态 checker/registry 已覆盖；运行中的 H1→H2 切换仍缺 provider 和完整切换生命周期。
 - **D3 协议字段**：body 已有 confirmationId/owner 校验，但 bodyEpoch 由通用请求校验，可信来源仍固定为 bridge 字符串；没有独立的人类玩家入口。
@@ -54,4 +55,4 @@ test/body-behavior.ts    6
 
 ## 4. 结论
 
-M1 的库级核心与 body 入口已落地并通过 106 个测试，但**不宣称 M1 退出条件已满足**。下一轮应补 QueryOp 超时/重试、运行中 H1→H2、完整事件队列和元数据年龄校验；不能把本记录作为“可玩游戏”或完整 M1 的证据。
+M1 的库级核心与 body 入口已落地并通过 107 个测试，但**不宣称 M1 退出条件已满足**。下一轮应补运行中 H1→H2、完整异步事件队列和元数据年龄校验；不能把本记录作为“可玩游戏”或完整 M1 的证据。
