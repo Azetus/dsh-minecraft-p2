@@ -117,6 +117,32 @@ describe('behavior executor control structures', () => {
     }))
     expect(run.tick(0)).toBe('succeeded')
     expect(run.frame.get('copied')).toBe(7)
+    expect(run.frame.getSlot('out')?.meta.source).toBe('assign')
+    expect(run.frame.getSlot('out')?.meta.scope).toBe('inner')
+  })
+
+  it('keeps query output provenance when copying through a subtree', () => {
+    const queryPort: QueryPort = () => ({
+      status: 'ok',
+      value: 3,
+      meta: { source: 'query', scope: 'inventory', sampledAt: 10, validUntil: 100 },
+    })
+    const run = executor(defineBehavior({
+      ...finite(sequence(
+        'root',
+        query('q', 'count', {}, 'have'),
+        subtree('sub', sequence('sub-root'), { have: local('have') }, { copy: 'have' }),
+      )),
+      locals: { have: { type: 'number' }, copy: { type: 'number' } },
+      completion: { kind: 'predicate', condition: when(eq(local('copy'), lit(3))) },
+    }), { query: queryPort })
+    expect(run.tick(0)).toBe('succeeded')
+    expect(run.frame.getSlot('copy')?.meta).toMatchObject({
+      source: 'query',
+      scope: 'inventory',
+      sampledAt: 10,
+      validUntil: 100,
+    })
   })
 
   it('fails with GOAL_NOT_MET when the tree ends without the predicate', () => {

@@ -114,3 +114,17 @@ export type ArtifactManifest = {
     digest: string
   }>
 }
+
+/** Provenance carried by a local slot or a query/act output. */
+export type ValueMeta = {
+  source: 'initial' | 'assign' | 'query' | 'act' | 'subtree'
+  scope: string
+  sampledAt: number
+  validUntil?: number
+  evidence?: string[]
+}
+
+export type LocalSlot = {
+  value: JsonValue
+  meta: ValueMeta
+}

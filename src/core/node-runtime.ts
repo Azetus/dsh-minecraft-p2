@@ -4,7 +4,7 @@ import type {
   QueryRef,
   ValueExpr,
 } from '../contracts/ir.ts'
-import type { JsonValue, P2Error } from '../contracts/types.ts'
+import type { JsonValue, LocalSlot, P2Error, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { EvalError, evaluate } from './expression.ts'
 import type { EvalContext } from './expression.ts'
@@ -18,7 +18,7 @@ export type NodeResult = {
 }
 
 export type QueryOutcome =
-  | { status: 'ok'; value: JsonValue }
+  | { status: 'ok'; value: JsonValue; meta?: ValueMeta }
   | { status: 'failed'; error: P2Error }
   | { status: 'pending'; poll(): QueryOutcome }
 
@@ -26,7 +26,7 @@ export type QueryPort = (ref: QueryRef, args: Record<string, JsonValue>) => Quer
 
 export type ActPoll =
   | { status: 'running' }
-  | { status: 'succeeded'; result?: JsonValue }
+  | { status: 'succeeded'; result?: JsonValue; meta?: ValueMeta }
   | { status: 'failed'; error: P2Error }
   | { status: 'cancelled'; error?: P2Error }
 
@@ -142,7 +142,11 @@ class AssignRuntime extends BaseRuntime {
     this.started = true
     try {
       const value = evaluate(this.node.value, evalContext(context))
-      context.frame.set(this.node.target, value)
+      context.frame.set(this.node.target, value, {
+        source: 'assign',
+        scope: this.node.id,
+        sampledAt: context.now,
+      })
       return this.success()
     } catch (error) {
       return this.failure(expressionError(error, this.node.id))
@@ -251,15 +255,21 @@ class SubtreeRuntime extends BaseRuntime {
 
   tick(context: NodeContext): NodeResult {
     if (this.child === undefined) {
-      const inputs = new Map<string, JsonValue>()
+      const inputs = new Map<string, LocalSlot>()
       try {
         for (const [name, expr] of Object.entries(this.node.inputs)) {
-          inputs.set(name, evaluate(expr, evalContext(context)))
+          const value = evaluate(expr, evalContext(context))
+          const source = expr.kind === 'local' ? context.frame.getSlot(expr.name) : undefined
+          inputs.set(name, source ?? {
+            value,
+            meta: { source: 'initial', scope: this.node.id, sampledAt: context.now },
+          })
         }
       } catch (error) {
         return this.failure(expressionError(error, this.node.id))
       }
-      this.childFrame = new LocalFrame(inputs)
+      this.childFrame = new LocalFrame()
+      for (const [name, slot] of inputs) this.childFrame.setSlot(name, slot)
       this.child = createNodeRuntime(this.node.tree)
     }
     const result = this.child.tick({ ...context, frame: this.childFrame as LocalFrame })
@@ -268,8 +278,8 @@ class SubtreeRuntime extends BaseRuntime {
     if (result.status === 'running') return result
 
     for (const [output, localName] of Object.entries(this.node.outputs)) {
-      const value = this.childFrame?.get(localName)
-      if (value === undefined) {
+      const slot = this.childFrame?.getSlot(localName)
+      if (slot === undefined) {
         return this.failure(p2Error(
           'SUBTREE_OUTPUT_MISSING',
           'runtime',
@@ -277,7 +287,7 @@ class SubtreeRuntime extends BaseRuntime {
           { module: 'core.subtree', nodePath: this.node.id },
         ))
       }
-      context.frame.set(output, value)
+      context.frame.setSlot(output, slot)
     }
     return this.success()
   }
@@ -386,7 +396,11 @@ class QueryRuntime extends BaseRuntime {
 
   private finish(outcome: Exclude<QueryOutcome, { status: 'pending' }>, context: NodeContext): NodeResult {
     if (outcome.status === 'failed') return this.failure(outcome.error)
-    context.frame.set(this.node.output, outcome.value)
+    context.frame.set(this.node.output, outcome.value, outcome.meta ?? {
+      source: 'query',
+      scope: this.node.query.op,
+      sampledAt: context.now,
+    })
     return this.success()
   }
 
@@ -441,7 +455,13 @@ class ActRuntime extends BaseRuntime {
           { module: 'core.act', nodePath: this.node.id },
         ))
       }
-      if (this.node.output !== undefined) context.frame.set(this.node.output, result.result)
+      if (this.node.output !== undefined) {
+        context.frame.set(this.node.output, result.result, result.meta ?? {
+          source: 'act',
+          scope: this.node.act,
+          sampledAt: context.now,
+        })
+      }
       this.outputPending = false
     }
     return this.success()
