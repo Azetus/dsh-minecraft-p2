@@ -1,2 +1,3 @@
-- id: dsh-minecraft-p2
-  name: 'dsh-minecraft-p2'
+- insert:
+    - id: dsh-minecraft-p2
+      name: 'dsh-minecraft-p2'

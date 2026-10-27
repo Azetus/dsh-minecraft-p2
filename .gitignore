@@ -20,3 +20,7 @@ node_modules/
 !/bundles/.gitkeep
 /coverage/
 *.tsbuildinfo
+
+# 本地 DSH 安装验证
+/.verify-dsh/
+/.pnpm-store/

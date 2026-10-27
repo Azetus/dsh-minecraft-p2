@@ -115,6 +115,8 @@ AGENTS.md只放简短身份、工作目录与边界，编写behavior/act的长�
 
 首版采用单包交付：一个 npm 包同时包含 DSH bridge（Cordis 入口）、body（stdio 子进程入口）、内置 Mineflayer provider、authoring 子路径和预设 behavior。包内按目录分层；bridge 不 import core/body/provider，body 仍是独立进程。`package.json` 保留 `dsh.bundle.patch` 字段并指向包根的 `cordis.patch.yml`；`files` 只包含构建产物、manifest、patch 和显示元数据，不发布 `src` 或测试。初版使用本地私有包名，发布前再定 scope，不假称官方 `@deepseek-ai` 包。
 
+bundle patch 新增插件必须写在 `insert:` 下；顶层带 `id` 的行用于覆盖已有 entry，直接写会报 `entry not found`。当前 patch 形如 `- insert: - id: dsh-minecraft-p2 / name: dsh-minecraft-p2`。
+
 bridge 对 DSH/Cordis 使用宿主兼容的 peer 依赖，并显式声明经过验证的 `engines.dsh` 范围。不要把第二份宿主核心打入 bridge；初版以实际安装 runtime 的版本为准，M0 实测后固定。当前不能据此承诺整个 0.2 系列或未来版本均兼容。
 
 body 与 provider 随包交付，但 body 不引用 DSH 安装目录内部文件、不依赖 profile runtime resolution；provider 只在 body 内通过 registry 加载。DSH 通过插件经理安装该包；项目以 devDependency 安装同一 tarball 以获得 authoring，版本必须与 body 所在包一致。初版不发布 registry，本地用 `npm run bundle` 输出 tarball 到 `bundles/`。
