@@ -101,7 +101,7 @@ export class MineflayerProvider implements ActPort {
     options: MineflayerProviderOptions = {},
   ) {
     this.options = {
-      actionTimeoutMs: options.actionTimeoutMs ?? 120_000,
+      actionTimeoutMs: options.actionTimeoutMs ?? 600_000,
       moveDurationMs: options.moveDurationMs ?? 700,
     }
     bot.once('end', reason => {
@@ -172,6 +172,10 @@ export class MineflayerProvider implements ActPort {
               timeOfDay: typeof this.bot.time?.timeOfDay === 'bigint'
                 ? Number(this.bot.time.timeOfDay)
                 : this.bot.time?.timeOfDay ?? null,
+              age: typeof this.bot.time?.age === 'bigint'
+                ? Number(this.bot.time.age)
+                : this.bot.time?.age ?? null,
+              doDaylightCycle: this.bot.time?.doDaylightCycle ?? null,
               difficulty: this.bot.game?.difficulty ?? null,
             },
             meta: meta('query', 'mineflayer.time', sampledAt),

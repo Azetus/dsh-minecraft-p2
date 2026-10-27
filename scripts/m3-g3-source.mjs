@@ -20,7 +20,7 @@ export default {
         act: 'move',
         args: {
           direction: { kind: 'literal', value: 'forward' },
-          durationMs: { kind: 'literal', value: 60000 },
+          durationMs: { kind: 'literal', value: 300000 },
         },
       },
       {
