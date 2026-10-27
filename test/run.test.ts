@@ -39,6 +39,7 @@ describe('BehaviorRun external confirmation', () => {
 
     const first = run.confirm({
       runId: 'run-1',
+      confirmationId: run.confirmation?.id ?? 'missing',
       owner: 'session-1/agent-1',
       source: 'player',
       decision: 'confirm',
@@ -50,6 +51,7 @@ describe('BehaviorRun external confirmation', () => {
 
     const duplicate = run.confirm({
       runId: 'run-1',
+      confirmationId: run.confirmation?.id ?? 'missing',
       owner: 'session-1/agent-1',
       source: 'player',
       decision: 'confirm',
@@ -62,20 +64,23 @@ describe('BehaviorRun external confirmation', () => {
     const run = externalRun()
     run.tick(0)
     expect(run.confirm({
-      runId: 'other', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'bad-run',
+      runId: 'other', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'bad-run',
     }).error?.code).toBe('RUN_NOT_FOUND')
     expect(run.confirm({
-      runId: 'run-1', owner: 'other', source: 'player', decision: 'confirm', commandId: 'bad-owner',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'other', source: 'player', decision: 'confirm', commandId: 'bad-owner',
     }).error?.code).toBe('OWNER_MISMATCH')
     expect(run.confirm({
-      runId: 'run-1', owner: 'session-1/agent-1', source: '', decision: 'confirm', commandId: 'bad-source',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: '', decision: 'confirm', commandId: 'bad-source',
     }).error?.code).toBe('CONFIRMATION_SOURCE_REQUIRED')
+    expect(run.confirm({
+      runId: 'run-1', confirmationId: 'wrong', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'bad-confirmation',
+    }).error?.code).toBe('CONFIRMATION_MISMATCH')
 
     run.confirm({
-      runId: 'run-1', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'ok',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'ok',
     })
     const late = run.confirm({
-      runId: 'run-1', owner: 'session-1/agent-1', source: 'player', decision: 'deny', commandId: 'late',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: 'player', decision: 'deny', commandId: 'late',
     })
     expect(late.outcome).toBe('rejected')
     expect(late.error?.code).toBe('ALREADY_TERMINAL')
@@ -85,7 +90,7 @@ describe('BehaviorRun external confirmation', () => {
     const run = externalRun()
     run.tick(0)
     const denied = run.confirm({
-      runId: 'run-1', owner: 'session-1/agent-1', source: 'player', decision: 'deny', commandId: 'deny',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: 'player', decision: 'deny', commandId: 'deny',
     })
     expect(denied.outcome).toBe('denied')
     expect(run.status).toBe('failed')
@@ -99,7 +104,7 @@ describe('BehaviorRun external confirmation', () => {
     expect(run.tick(1)).toBe('cancelled')
     expect(run.confirmation?.status).toBe('cancelled')
     const late = run.confirm({
-      runId: 'run-1', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'late-cancel',
+      runId: 'run-1', confirmationId: run.confirmation?.id ?? 'missing', owner: 'session-1/agent-1', source: 'player', decision: 'confirm', commandId: 'late-cancel',
     })
     expect(late.outcome).toBe('rejected')
     expect(late.error?.code).toBe('ALREADY_TERMINAL')

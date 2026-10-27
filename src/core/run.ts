@@ -17,6 +17,7 @@ export type ConfirmationRequest = {
 
 export type ConfirmInput = {
   runId: string
+  confirmationId: string
   owner: string
   source: string
   decision: 'confirm' | 'deny'
@@ -184,6 +185,9 @@ export class BehaviorRun {
     }
     if (input.owner !== this.owner) {
       return p2Error('OWNER_MISMATCH', 'validation', 'confirmation owner does not match', { module: 'core.run' })
+    }
+    if (input.confirmationId !== this.confirmationValue?.id) {
+      return p2Error('CONFIRMATION_MISMATCH', 'validation', 'confirmation id does not match', { module: 'core.run' })
     }
     if (typeof input.source !== 'string' || input.source.length === 0) {
       return p2Error('CONFIRMATION_SOURCE_REQUIRED', 'validation', 'confirmation source is required', { module: 'core.run' })
