@@ -32,7 +32,9 @@ export class BodyServer {
     private readonly transport: MessageTransport,
     private readonly options: BodyServerOptions = {},
   ) {
-    this.offLine = transport.onLine(line => this.handleLine(line))
+    this.offLine = transport.onLine(line => {
+      void this.handleLine(line)
+    })
     this.offError = transport.onError(error => {
       this.log(`transport error: ${error.message}`)
       this.stop()
@@ -77,7 +79,7 @@ export class BodyServer {
     for (const listener of this.closeListeners) listener()
   }
 
-  private handleLine(line: string): void {
+  private async handleLine(line: string): Promise<void> {
     let parsed: unknown
     try {
       parsed = JSON.parse(line)
@@ -100,7 +102,7 @@ export class BodyServer {
 
     let response: ResponseEnvelope
     try {
-      response = this.runtime.handleRequest(request.value)
+      response = await this.runtime.handleRequestAsync(request.value)
     } catch (error) {
       this.log(`request failed: ${error instanceof Error ? error.message : String(error)}`)
       response = {

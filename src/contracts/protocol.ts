@@ -17,6 +17,10 @@ export const METHODS = [
   'heartbeat',
   'describe',
   'status',
+  'check',
+  'activate',
+  'switch',
+  'confirm',
   'stop',
   'shutdown',
   'command.get',
@@ -98,11 +102,72 @@ export type StatusResult = {
   owner: OwnerContext | null
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
-  activeRun: null
+  activeRun: ActiveRunSummary | null
+  pendingConfirmation: PendingConfirmationSummary | null
   bindingId: BindingId | null
   capabilities: string[]
   provider: ProviderSummary | null
   commandCount: number
+}
+
+export type ActiveRunSummary = {
+  runId: string
+  status: string
+  artifactId: string
+  completion: string | null
+}
+
+export type PendingConfirmationSummary = {
+  id: string
+  runId: string
+}
+
+export type CheckParams = {
+  sourcePath: string
+  sourceRoot?: string
+  timeoutMs?: number
+}
+
+export type CheckResult = {
+  artifactId: string
+  definitionId: string
+  sourceDigest: string
+  bindingId: string
+  enabled: false
+}
+
+export type ActivateParams = {
+  artifactId: string
+}
+
+export type ActivateResult = {
+  artifactId: string
+  bindingId: string
+  enabled: true
+}
+
+export type SwitchParams = {
+  artifactId: string
+  params: Record<string, JsonValue>
+}
+
+export type SwitchResult = {
+  accepted: boolean
+  runId: string | null
+  status: string
+  error?: P2Error
+}
+
+export type ConfirmParams = {
+  runId: string
+  confirmationId: string
+  decision: 'confirm' | 'deny'
+}
+
+export type ConfirmationResult = {
+  outcome: 'confirmed' | 'denied' | 'alreadyDecided' | 'rejected'
+  status: string
+  error?: P2Error
 }
 
 export type HeartbeatParams = { seq: number }

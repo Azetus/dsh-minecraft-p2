@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+
+import { BehaviorHost } from '../core/host.ts'
+import { CheckerError } from '../core/checker.ts'
+import { RegistryError } from '../core/registry.ts'
 
 import {
   PROTOCOL_VERSION,
@@ -13,7 +17,11 @@ import {
 import type {
   BodyInfo,
   BodyRuntimeOptions,
+  CheckParams,
+  CheckResult,
   CommandRecord,
+  ConfirmParams,
+  ConfirmationResult,
   DescribeResult,
   HeartbeatParams,
   HelloParams,
@@ -25,6 +33,10 @@ import type {
   StatusResult,
   StopParams,
   StopResult,
+  SwitchParams,
+  SwitchResult,
+  ActivateParams,
+  ActivateResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -32,6 +44,7 @@ import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contrac
 export class BodyRuntime {
   readonly body: BodyInfo
   readonly bodyEpoch: BodyEpoch
+  private behavior: BehaviorHost | undefined
   private owner: OwnerContext | null = null
   private initialized = false
   private closing = false
@@ -41,9 +54,10 @@ export class BodyRuntime {
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
 
-  constructor(options: BodyRuntimeOptions) {
+  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost }) {
     this.body = options.body
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
+    this.behavior = options.behavior
     this.owner = options.owner ?? null
     this.initialized = this.owner !== null
     this.now = options.now ?? Date.now
@@ -108,6 +122,134 @@ export class BodyRuntime {
     }
   }
 
+  async handleRequestAsync(envelope: RequestEnvelope): Promise<ResponseEnvelope> {
+    if (envelope.method !== 'check'
+      && envelope.method !== 'activate'
+      && envelope.method !== 'switch'
+      && envelope.method !== 'confirm') {
+      return this.handleRequest(envelope)
+    }
+
+    const base = {
+      protocol: PROTOCOL_VERSION as 1,
+      requestId: envelope.requestId,
+      bodyEpoch: this.bodyEpoch,
+    }
+    if (this.closing) return { ...base, error: this.shuttingDown() }
+    if (!this.initialized) return { ...base, error: this.notInitialized() }
+    if (envelope.bodyEpoch !== this.bodyEpoch) return { ...base, error: this.staleEpoch(envelope.bodyEpoch) }
+    if (this.behavior === undefined) {
+      return {
+        ...base,
+        error: p2Error('BEHAVIOR_UNAVAILABLE', 'runtime', 'body has no behavior host', { module: 'body.behavior' }),
+      }
+    }
+    const commandId = this.requireCommandId(envelope)
+    if (typeof commandId !== 'string') return { ...base, error: commandId.error }
+    const existing = this.commands.get(commandId)
+    if (existing !== undefined) {
+      if (existing.method !== envelope.method) return { ...base, error: duplicateCommand(commandId) }
+      return existing.error === undefined
+        ? { ...base, result: existing.result as JsonValue }
+        : { ...base, error: existing.error }
+    }
+    const params = asRecord(envelope.params)
+    if (params === undefined) return { ...base, error: invalidMessageError('params must be an object') }
+
+    try {
+      switch (envelope.method) {
+        case 'check': {
+          const sourcePath = typeof params.sourcePath === 'string' ? params.sourcePath : undefined
+          if (sourcePath === undefined) return { ...base, error: invalidMessageError('sourcePath is required') }
+          const owner = this.owner
+          if (owner === null || !inside(owner.cwd, sourcePath)) {
+            return {
+              ...base,
+              error: p2Error('SOURCE_OUTSIDE_PROJECT', 'validation', 'sourcePath must be inside the owner project', { module: 'body.behavior' }),
+            }
+          }
+          const checked = await this.behavior.check({
+            sourcePath,
+            ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
+            ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
+          })
+          const result: CheckResult = {
+            artifactId: checked.artifactId,
+            definitionId: checked.artifact.definition.id,
+            sourceDigest: checked.artifact.sourceDigest,
+            bindingId: checked.artifact.bindingId,
+            enabled: false,
+          }
+          this.recordCommand(commandId, 'check', result)
+          return { ...base, result: result as unknown as JsonValue }
+        }
+        case 'activate': {
+          const artifactId = typeof params.artifactId === 'string' ? params.artifactId : undefined
+          if (artifactId === undefined) return { ...base, error: invalidMessageError('artifactId is required') }
+          const activated = this.behavior.activate(artifactId)
+          const result: ActivateResult = activated
+          this.recordCommand(commandId, 'activate', result)
+          return { ...base, result: result as unknown as JsonValue }
+        }
+        case 'switch': {
+          const artifactId = typeof params.artifactId === 'string' ? params.artifactId : undefined
+          if (artifactId === undefined) return { ...base, error: invalidMessageError('artifactId is required') }
+          const switchParams = asRecord(params.params ?? {}) ?? {}
+          const switched = this.behavior.switch({
+            artifactId,
+            params: switchParams,
+            commandId,
+          })
+          const result: SwitchResult = switched
+          this.recordCommand(commandId, 'switch', result)
+          return { ...base, result: result as unknown as JsonValue }
+        }
+        case 'confirm': {
+          const runId = typeof params.runId === 'string' ? params.runId : undefined
+          const confirmationId = typeof params.confirmationId === 'string' ? params.confirmationId : undefined
+          const decision = params.decision === 'confirm' || params.decision === 'deny' ? params.decision : undefined
+          const owner = this.owner
+          if (runId === undefined || confirmationId === undefined || decision === undefined || owner === null) {
+            return { ...base, error: invalidMessageError('runId, confirmationId, decision, and owner are required') }
+          }
+          const confirmed = this.behavior.confirm({
+            runId,
+            confirmationId,
+            decision,
+            owner: `${owner.sessionId}/${owner.agentId}`,
+            source: 'bridge',
+            commandId,
+          })
+          const result: ConfirmationResult = confirmed
+          this.recordCommand(commandId, 'confirm', result)
+          return { ...base, result: result as unknown as JsonValue }
+        }
+        default:
+          return { ...base, error: unknownMethodError(envelope.method) }
+      }
+    } catch (error) {
+      const p2 = error instanceof CheckerError || error instanceof RegistryError
+        ? p2Error(error.code, 'validation', error.message, { module: 'body.behavior' })
+        : p2Error('BEHAVIOR_ERROR', 'runtime', error instanceof Error ? error.message : String(error), { module: 'body.behavior' })
+      this.commands.set(commandId, {
+        commandId: commandId as CommandId,
+        method: envelope.method,
+        state: 'rejected',
+        error: p2,
+      })
+      return { ...base, error: p2 }
+    }
+  }
+
+  private recordCommand(commandId: string, method: string, result: unknown): void {
+    this.commands.set(commandId, {
+      commandId: commandId as CommandId,
+      method,
+      state: 'completed',
+      result: result as JsonValue,
+    })
+  }
+
   describe(): DescribeResult {
     return {
       protocolVersion: PROTOCOL_VERSION,
@@ -123,17 +265,23 @@ export class BodyRuntime {
   }
 
   status(): StatusResult {
+    const behavior = this.behavior?.status()
     return {
       bodyEpoch: this.bodyEpoch,
       owner: this.owner,
       health: this.closing ? 'faulted' : 'ready',
       connection: 'connected',
-      activeRun: null,
+      activeRun: behavior?.activeRun ?? null,
+      pendingConfirmation: behavior?.pendingConfirmation ?? null,
       bindingId: this.body.bindingId,
       capabilities: this.body.capabilities,
       provider: this.body.provider,
       commandCount: this.commands.size,
     }
+  }
+
+  tickBehavior(now = this.now()): string | undefined {
+    return this.behavior?.tick(now)
   }
 
   private handleHello(
@@ -304,6 +452,14 @@ export class BodyRuntime {
       { module: 'body.lifecycle' },
     )
   }
+}
+
+function inside(root: string, path: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path))
+  return relativePath === ''
+    || (!isAbsolute(relativePath)
+      && !relativePath.startsWith('..')
+      && !relativePath.split(sep).includes('..'))
 }
 
 function parseHelloParams(params: JsonValue): { value: HelloParams } | { error: P2Error } {

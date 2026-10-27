@@ -138,19 +138,22 @@ describe('BodyRuntime', () => {
     expect(later.error?.code).toBe(ErrorCodes.SHUTTING_DOWN)
   })
 
-  it('handles every method in METHODS through the switch', () => {
+  it('handles every method in METHODS through the switch', async () => {
     for (const method of METHODS) {
       const rt = runtime()
       hello(rt)
       let params: RequestEnvelope['params'] = {}
       let extra: Partial<RequestEnvelope> = {}
       if (method === 'heartbeat') params = { seq: 1 }
-      if (method === 'stop' || method === 'shutdown') extra = { commandId: `cmd-${method}` }
+      if (method === 'stop' || method === 'shutdown' || method === 'check'
+        || method === 'activate' || method === 'switch' || method === 'confirm') {
+        extra = { commandId: `cmd-${method}` }
+      }
       if (method === 'command.get') {
         rt.handleRequest(request('stop', {}, { commandId: 'known' }))
         params = { commandId: 'known' }
       }
-      const response = rt.handleRequest(request(method, params, extra))
+      const response = await rt.handleRequestAsync(request(method, params, extra))
       expect(response.error?.code).not.toBe(ErrorCodes.UNKNOWN_METHOD)
     }
   })
@@ -180,12 +183,13 @@ describe('BodyServer', () => {
       protocols: [PROTOCOL_VERSION],
       owner,
     })))
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(responses).toHaveLength(1)
     expect(responses[0]?.error).toBeUndefined()
 
     client.send(encodeJsonLine(request('shutdown', {}, { commandId: 'bye' })))
-    expect(responses).toHaveLength(2)
     await new Promise(resolve => setTimeout(resolve, 20))
+    expect(responses).toHaveLength(2)
     expect(closed).toBe(true)
     expect(server.isStopped).toBe(true)
   })

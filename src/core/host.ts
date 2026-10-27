@@ -47,6 +47,7 @@ export type BehaviorHostOptions = {
   bindingId: string
   query: QueryPort
   act: ActPort
+  owner?: string
   builtinsDigest?: string
   newRunId?: () => string
 }
@@ -59,6 +60,7 @@ export class BehaviorHost {
   private readonly ledger = new CommandLedger<SwitchResult | ConfirmResult | { artifactId: string }>()
   private readonly query: QueryPort
   private readonly act: ActPort
+  private readonly owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | undefined
   private runArtifact: string | undefined
@@ -72,6 +74,7 @@ export class BehaviorHost {
     })
     this.query = options.query
     this.act = options.act
+    this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
 
@@ -135,7 +138,7 @@ export class BehaviorHost {
     const runId = this.newRunId()
     this.run = new BehaviorRun({
       runId,
-      owner: 'host',
+      owner: this.owner,
       definition: record.artifact.definition,
       params: input.params,
       query: this.query,
