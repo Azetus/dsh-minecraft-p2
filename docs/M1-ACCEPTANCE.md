@@ -13,27 +13,28 @@
 - **BehaviorHost**：check → activate → switch → tick → confirm/stop → retire 的库级闭环，切换时先停止旧 run，退休阻止新 switch。
 - **body 行为入口**：body 协议新增 `check/activate/switch/confirm`；BodyRuntime 可接收 BehaviorHost 并在 status 中暴露 activeRun/pendingConfirmation，BodyServer 支持异步分发。
 - **body 并发与日志**：同一 pending check 不重复构建；无限构建时 status 仍可响应；命令完成写 JSONL，日志故障通过 status 的 loggingUnavailable/droppedLogCount 可观察。
-- **终态裁决**：pre-tick stop 优先；act stop 失败转控制故障；query predicate 需要第二次新鲜确认，第二次为 false 返回 GOAL_NOT_MET。
+- **终态裁决**：pre-tick stop 优先；act stop 失败转控制故障；query predicate 需要第二次新鲜确认，第二次为 false 返回 GOAL_NOT_MET；act cleanup 期间保持 running，超时转 STOP_TIMEOUT。
+- **H1/H2/闭包**：同一源码可生成不同 binding 的 artifact；两个 registry 隔离退休；缺失依赖闭包被拒绝。
 - **裁决补强**：查询 guard 的 pending poll 只保留一次请求；目标 predicate 为 true 时可压过普通 environment 失败。
 
 ## 2. 验证
 
 ```text
 npm run check
-  → build + typecheck + 95 tests: pass
+  → build + typecheck + 101 tests: pass
 ```
 
 测试分布：
 
 ```text
 test/ir.test.ts          8
-test/executor.test.ts   17
-test/broker.test.ts      7
-test/checker.test.ts     7
+test/executor.test.ts   19
+test/broker.test.ts      8
+test/checker.test.ts     9
 test/run.test.ts         4
 test/logging.test.ts     5
 test/host.test.ts        3
-test/body-behavior.ts    4
+test/body-behavior.ts    5
 其余 M0/协议测试      40
 ```
 
@@ -42,13 +43,13 @@ test/body-behavior.ts    4
 ## 3. 尚未满足的 M1 退出条件
 
 - **没有接入生产 body host**：body 协议与 BodyRuntime 已支持行为方法，但 body 进程入口没有 provider/query/act，只有测试注入的 BehaviorHost；M2 接 provider 后才会实际运行行为。
-- **RUNTIME §11 未全部覆盖**：清理超时、晚到结果、同批取消/成功顺序、事件顺序、recover 完整预算尚未实现/测试；最终新鲜确认只做了 query predicate 的二次检查。
+- **RUNTIME §11 未全部覆盖**：同批事件顺序、晚到授权/事件队列、额度拒绝、D1 元数据传播和来源/年龄校验尚未实现/测试；清理超时和晚到 act 结果已覆盖。
 - **查询条件**：guard 的 pending poll 已补；完成 predicate 的 pending 仍会在最终确认时重新请求。
-- **H1/H2 隔离**：checker 是 worker_threads + 超时，不是 OS 进程/H1 网络/文件权限隔离；M5 才要求更强隔离。
+- **H1/H2 隔离**：静态 checker/registry 已覆盖；运行中的 H1→H2 切换仍缺 provider 和完整切换生命周期。
 - **D3 协议字段**：body 已有 confirmationId/owner 校验，但 bodyEpoch 由通用请求校验，可信来源仍固定为 bridge 字符串；没有独立的人类玩家入口。
-- **D6 接入**：命令完成/终态写日志，日志故障可观察；日志满载下 stop 推进尚未完整验证。
+- **D6 接入**：命令完成/终态写日志，日志故障/满载可观察；日志满载下 stop 已验证。
 - **D4 运行闭包**：BehaviorHost 有 enable/retire/switch 和旧 run 停止，但 body 的切换等待仍是同步 tick 驱动，不是完整异步生命周期。
 
 ## 4. 结论
 
-M1 的库级核心已落地并通过 95 个测试，但**不宣称 M1 退出条件已满足**。下一轮应补 RUNTIME §11 的清理超时、晚到结果、同批事件顺序和日志满载 stop，并决定生产 body host 的 provider 注入边界；不能把本记录作为“可玩游戏”或完整 M1 的证据。
+M1 的库级核心已落地并通过 101 个测试，但**不宣称 M1 退出条件已满足**。下一轮应补 D1 元数据/来源年龄、同批事件顺序、额度拒绝和运行中 H1→H2 切换；不能把本记录作为“可玩游戏”或完整 M1 的证据。
