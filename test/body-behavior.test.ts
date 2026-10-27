@@ -54,6 +54,20 @@ function loopSource(): string {
   return path
 }
 
+function stuckSource(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-stuck-'))
+  dirs.push(dir)
+  const path = join(dir, 'stuck.mjs')
+  writeFileSync(path, `
+export default {
+  id: 'body-stuck', description: 'stuck act', mode: 'finite', parameters: {}, locals: { done: { type: 'boolean' } },
+  root: { kind: 'sequence', id: 'root', children: [{ kind: 'act', id: 'stuck', act: 'stuck', args: {} }] },
+  completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
+}
+`)
+  return path
+}
+
 function request(method: string, params: Record<string, JsonValue>, commandId?: string, epoch?: string): RequestEnvelope {
   return {
     protocol: PROTOCOL_VERSION,
@@ -131,6 +145,37 @@ describe('body behavior methods', () => {
       sourcePath: join(process.cwd(), '..', 'outside.mjs'),
     }, 'check-2', 'epoch-1'))
     expect(outside.error?.code).toBe('SOURCE_OUTSIDE_PROJECT')
+  })
+
+  it('stops a stuck act through the body behavior.stop surface', async () => {
+    let stops = 0
+    const host = new BehaviorHost({
+      bindingId: 'binding-1',
+      owner: 's/a',
+      query,
+      act: {
+        start: () => ({
+          poll: () => ({ status: 'running' as const }),
+          stop: () => { stops += 1 },
+        }),
+      },
+    })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const checked = await rt.handleRequestAsync(request('check', { sourcePath: stuckSource() }, 'stuck-check', 'epoch-1'))
+    const artifactId = (checked.result as { artifactId: string }).artifactId
+    await rt.handleRequestAsync(request('activate', { artifactId }, 'stuck-activate', 'epoch-1'))
+    const switched = await rt.handleRequestAsync(request('switch', { artifactId, params: {} }, 'stuck-switch', 'epoch-1'))
+    const runId = (switched.result as { runId: string }).runId
+    expect(rt.tickBehavior(0)).toBe('running')
+    const stopped = await rt.handleRequestAsync(request('behavior.stop', { runId }, 'stuck-stop', 'epoch-1'))
+    expect(stopped.error).toBeUndefined()
+    expect(rt.status().activeRun).toBeNull()
+    expect(stops).toBe(1)
   })
 
   it('stops only the behavior run and keeps the body alive', async () => {
