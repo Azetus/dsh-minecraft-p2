@@ -1,7 +1,7 @@
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
-for (const path of ['lib', 'coverage']) {
+for (const path of ['lib', 'coverage', '.dev-home']) {
   await rm(path, { recursive: true, force: true })
 }
 

@@ -36,6 +36,9 @@ npm run test
 npm run check
 npm run build
 npm run bundle
+npm run verify:dist
+npm run dev
+npm run dev:check
 npm run clean
 ```
 
@@ -43,7 +46,16 @@ npm run clean
 
 构建脚本调用 esbuild CLI 并继承 stdio，而不是使用 esbuild 的 JS API；当前 Windows 沙箱下，JS API 启动的服务进程需要 piped stdio，会被拒绝。不要为绕开这一点改成其他捕获输出的调用方式。
 
-## 5. 版本更新原则
+## 5. 自主测试环境
+
+- `npm run verify:dist`：构建 tarball，在 `.dev-home/verify` 创建隔离 `DSH_HOME`，通过 `dsh plugin add` 安装同一个 tarball，检查 profile 组合、`--dump-config` 与 `--dump-config-schema`；成功自动清理，失败保留诊断。
+- `npm run dev`：在 `.dev-home/run` 创建隔离 `DSH_HOME`，生成包含 base、web-app 与 P2 的 profile，并启动 `dsh --port 0 --no-open`。不会读写真实 Desktop profile，也不会在用户 Documents 下创建 workspace。
+- `npm run dev:check`：只 staging 并运行 profile 检查，不启动服务，适合快速排查。
+- 直接运行 `node scripts/dev.mjs --keep` 可保留 `.dev-home/run` 供检查；默认退出时清理。
+- 需要模型回合时用 `node scripts/dev.mjs --with-credentials`；凭据只从真实 `DSH_HOME` 复制到隔离 home。
+- `.dev-home/` 已加入 `.gitignore`；这些脚本不进入发布 tarball。
+
+## 6. 版本更新原则
 
 - Cordis 版本跟随已实测的 DSH 版本，不单独升级。
 - `engines.dsh` 固定为实际受测 runtime（当前 `0.2.1-rc.3`）；DSH 升级后先跑安装/加载/停止验证，再改这个值。

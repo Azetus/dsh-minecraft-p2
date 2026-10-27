@@ -40,7 +40,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "check": "npm run typecheck && npm run test",
-    "bundle": "npm run build && node scripts/bundle.mjs"
+    "bundle": "npm run build && node scripts/bundle.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:check": "node scripts/dev.mjs --no-start",
+    "verify:dist": "node scripts/verify-dist.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",

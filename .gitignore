@@ -23,5 +23,5 @@ node_modules/
 *.tsbuildinfo
 
 # 本地 DSH 安装验证
-/.verify-dsh/
+/.dev-home/
 /.pnpm-store/
