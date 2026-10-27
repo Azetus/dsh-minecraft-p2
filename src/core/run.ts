@@ -3,6 +3,7 @@ import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { BehaviorExecutor } from './executor.ts'
 import type { ExecutorStatus } from './executor.ts'
+import type { IngressEvent } from './ingress.ts'
 import type { ActPort, QueryPort } from './node-runtime.ts'
 
 export type RunStatus = 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
@@ -125,8 +126,19 @@ export class BehaviorRun {
     this.stopRequested = true
   }
 
-  confirm(input: ConfirmInput): ConfirmResult {
-    const duplicate = this.outcomes.get(input.commandId)
+  /** Process one fixed ingress batch: any accepted stop wins before decisions. */
+  applyIngress(events: IngressEvent[]): { status: RunStatus; decisions: ConfirmResult[] } {
+    const ordered = [...events].sort((left, right) => left.seq - right.seq)
+    if (ordered.some(event => event.kind === 'stop')) this.stop()
+    const decisions: ConfirmResult[] = []
+    for (const event of ordered) {
+      if (event.kind === 'confirm') decisions.push(this.confirm(event.input))
+    }
+    if (ordered.some(event => event.kind === 'stop')) this.tick()
+    return { status: this.statusValue, decisions }
+  }
+
+  confirm(input: ConfirmInput): ConfirmResult {    const duplicate = this.outcomes.get(input.commandId)
     if (duplicate !== undefined) return duplicate
 
     const rejected = this.validateConfirmation(input)

@@ -128,4 +128,28 @@ describe('BehaviorRun external confirmation', () => {
     expect(run.confirmation?.status).toBe('cancelled')
     expect(run.tick(1)).toBe('cancelled')
   })
+
+  it('arbitrates a fixed ingress batch with stop priority regardless of order', () => {
+    const run = externalRun()
+    run.tick(0)
+    const confirmationId = run.confirmation?.id ?? 'missing'
+    const result = run.applyIngress([
+      { seq: 2, kind: 'stop' },
+      {
+        seq: 1,
+        kind: 'confirm',
+        input: {
+          runId: 'run-1',
+          confirmationId,
+          owner: 'session-1/agent-1',
+          source: 'player',
+          decision: 'confirm',
+          commandId: 'batch-confirm',
+        },
+      },
+    ])
+    expect(result.status).toBe('cancelled')
+    expect(result.decisions[0]?.status).toBe('cancelled')
+    expect(run.confirmation?.status).toBe('cancelled')
+  })
 })
