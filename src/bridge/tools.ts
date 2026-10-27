@@ -1,0 +1,159 @@
+import type { JsonValue } from '../contracts/index.ts'
+import type { BodyManager } from './process-manager.ts'
+
+type ToolText = { type: 'text'; text: string }
+
+type ToolDefinition = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  output: {
+    schema: Record<string, unknown>
+    render: (args: Record<string, unknown>, value: unknown) => ToolText[]
+  }
+  execute: (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }) => Promise<JsonValue>
+}
+
+export type AgentLike = {
+  id: string
+  session: {
+    id: string
+    header?: { cwd?: string }
+  }
+  ctx?: {
+    tools?: { register(definition: ToolDefinition): () => void }
+    effect?: (callback: () => unknown, label?: string) => unknown
+  }
+}
+
+export type ToolRegistration = {
+  owner: { sessionId: string; agentId: string }
+  dispose: () => void
+}
+
+/** Register owner-scoped P2 tools after a human `/p2 start`; never starts a body. */
+export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolRegistration {
+  const tools = agent.ctx?.tools
+  if (tools === undefined) {
+    return { owner: { sessionId: agent.session.id, agentId: agent.id }, dispose: () => {} }
+  }
+  const owner = { sessionId: agent.session.id, agentId: agent.id }
+  const disposers: Array<() => void> = []
+  const guarded = (
+    execute: (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }) => Promise<JsonValue>,
+  ) => async (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }): Promise<JsonValue> => {
+    assertOwner(exec, owner)
+    return execute(args, exec)
+  }
+  const register = (definition: ToolDefinition): void => {
+    disposers.push(tools.register(definition))
+  }
+
+  register({
+    name: 'p2_status',
+    description: 'Read the P2 body, heartbeat, active run, and pending confirmation.',
+    parameters: {},
+    output: jsonOutput(),
+    execute: guarded(async () => {
+      const status = await manager.status()
+      return status as unknown as JsonValue
+    }),
+  })
+
+  register({
+    name: 'p2_check',
+    description: 'Check a behavior source file in the owner project without activating or running it.',
+    parameters: {
+      sourcePath: { type: 'string', required: true, description: 'Path inside the owner project' },
+      timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => {
+      return manager.check(String(args.sourcePath), {
+        ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
+      })
+    }),
+  })
+
+  register({
+    name: 'p2_activate',
+    description: 'Activate a checked artifact in its target binding. This does not start a run.',
+    parameters: {
+      artifactId: { type: 'string', required: true },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.activate(String(args.artifactId))),
+  })
+
+  register({
+    name: 'p2_switch',
+    description: 'Accept a serial switch to an activated artifact. Accepted is not task completion.',
+    parameters: {
+      artifactId: { type: 'string', required: true },
+      params: { type: 'json', description: 'Behavior parameters' },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.switch(
+      String(args.artifactId),
+      (args.params ?? {}) as JsonValue,
+    )),
+  })
+
+  register({
+    name: 'p2_confirm',
+    description: 'Submit the agent judgment for a pending external confirmation. The source is bridge-derived, never self-reported.',
+    parameters: {
+      runId: { type: 'string', required: true },
+      confirmationId: { type: 'string', required: true },
+      decision: { type: 'string', required: true, enum: ['confirm', 'deny'] },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.confirm(
+      String(args.runId),
+      String(args.confirmationId),
+      args.decision === 'deny' ? 'deny' : 'confirm',
+    )),
+  })
+
+  register({
+    name: 'p2_stop',
+    description: 'Stop the current behavior run while keeping the P2 body alive.',
+    parameters: {
+      runId: { type: 'string', description: 'Active run id; defaults to the current run' },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.stopBehavior(
+      typeof args.runId === 'string' ? args.runId : undefined,
+    )),
+  })
+
+  register({
+    name: 'p2_command',
+    description: 'Query an accepted/terminal command by commandId. Unknown is not proof it never ran.',
+    parameters: {
+      commandId: { type: 'string', required: true },
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.commandGet(String(args.commandId))),
+  })
+
+  return { owner, dispose: () => { for (const dispose of disposers.splice(0)) dispose() } }
+}
+
+function assertOwner(
+  exec: { agent?: AgentLike },
+  owner: { sessionId: string; agentId: string },
+): void {
+  if (exec.agent === undefined
+    || exec.agent.session.id !== owner.sessionId
+    || exec.agent.id !== owner.agentId) {
+    throw new Error('P2 tools are owned by a different agent')
+  }
+}
+
+function jsonOutput(): ToolDefinition['output'] {
+  return {
+    schema: { type: 'object' },
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+  }
+}

@@ -146,7 +146,8 @@ describe('BodyRuntime', () => {
       let extra: Partial<RequestEnvelope> = {}
       if (method === 'heartbeat') params = { seq: 1 }
       if (method === 'stop' || method === 'shutdown' || method === 'check'
-        || method === 'activate' || method === 'switch' || method === 'confirm') {
+        || method === 'activate' || method === 'switch' || method === 'confirm'
+        || method === 'behavior.stop') {
         extra = { commandId: `cmd-${method}` }
       }
       if (method === 'command.get') {

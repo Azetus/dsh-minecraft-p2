@@ -8,18 +8,19 @@ import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodySpawner } from './process-manager.ts'
+import { registerP2Tools } from './tools.ts'
+import type { AgentLike, ToolRegistration } from './tools.ts'
 
 type CommandResult = { kind: 'success' | 'error'; text: string }
 
 type CommandInvocation = {
-  agent: {
-    id: string
-    session: {
-      id: string
-      header: { cwd?: string }
-    }
-  }
+  agent: AgentLike
   rawInput: string
+}
+
+type CommandHooks = {
+  onStarted?: (agent: AgentLike) => void
+  onStopped?: () => void
 }
 
 type CommandsService = {
@@ -58,17 +59,29 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     name: 'dsh-minecraft-p2',
     inject: ['commands'],
     apply(ctx: P2Context): void {
+      let tools: ToolRegistration | undefined
+      const disposeTools = (): void => {
+        tools?.dispose()
+        tools = undefined
+      }
       ctx.effect(
         () => ctx.commands.register({
           name: 'p2',
           description: 'Manage the P2 Minecraft player runtime',
           input: { hint: '<setup|start|status|stop>' },
-          handler: invocation => handleP2Command(manager, invocation),
+          handler: invocation => handleP2Command(manager, invocation, {
+            onStarted: agent => {
+              disposeTools()
+              tools = registerP2Tools(agent, manager)
+            },
+            onStopped: disposeTools,
+          }),
         }),
         'p2.commands',
       )
       ctx.effect(
         () => async () => {
+          disposeTools()
           await manager.dispose()
         },
         'p2.body',
@@ -80,6 +93,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 export async function handleP2Command(
   manager: BodyManager,
   invocation: CommandInvocation,
+  hooks: CommandHooks = {},
 ): Promise<CommandResult> {
   const input = invocation.rawInput.trim()
   const [verb = '', ...rest] = input.split(/\s+/u)
@@ -94,6 +108,7 @@ export async function handleP2Command(
       case 'start': {
         const owner = ownerOf(invocation.agent)
         const result = await manager.start(owner)
+        hooks.onStarted?.(invocation.agent)
         return success(`P2 body active (epoch ${result.epoch})`)
       }
       case 'status':
@@ -104,6 +119,7 @@ export async function handleP2Command(
         if (result.state === 'faulted') {
           return error(`P2 body stop was not confirmed${result.error === undefined ? '' : `: ${result.error}`}`)
         }
+        hooks.onStopped?.()
         return success('P2 body stopped')
       }
       default:
@@ -115,7 +131,7 @@ export async function handleP2Command(
 }
 
 function setup(agent: CommandInvocation['agent']): CommandResult {
-  const cwd = agent.session.header.cwd
+  const cwd = agent.session.header?.cwd
   if (cwd === undefined || cwd.length === 0) {
     return error('session has no project cwd; create the session in the P2 project')
   }
@@ -124,7 +140,7 @@ function setup(agent: CommandInvocation['agent']): CommandResult {
 }
 
 function ownerOf(agent: CommandInvocation['agent']): OwnerContext {
-  const cwd = agent.session.header.cwd
+  const cwd = agent.session.header?.cwd
   if (cwd === undefined || cwd.length === 0) {
     throw new Error('session has no project cwd; create the session in the P2 project')
   }
@@ -147,6 +163,8 @@ async function statusText(manager: BodyManager): Promise<string> {
     `health=${status.health}`,
     `owner=${status.owner?.sessionId ?? 'none'}`,
     `commands=${status.commandCount}`,
+    `run=${status.activeRun?.runId ?? 'none'}:${status.activeRun?.status ?? 'none'}`,
+    `confirm=${status.pendingConfirmation?.id ?? 'none'}`,
   ].join(' ')
 }
 

@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
+  JsonValue,
   MessageTransport,
   OwnerContext,
   StatusResult,
@@ -131,6 +132,37 @@ export class BodyManager {
       this.log(`body status failed: ${errorText(error)}`)
       throw error
     }
+  }
+
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number } = {}): Promise<JsonValue> {
+    return this.activeClient().check(sourcePath, options)
+  }
+
+  activate(artifactId: string): Promise<JsonValue> {
+    return this.activeClient().activate(artifactId)
+  }
+
+  switch(artifactId: string, params: JsonValue = {}): Promise<JsonValue> {
+    return this.activeClient().switch(artifactId, params)
+  }
+
+  confirm(runId: string, confirmationId: string, decision: 'confirm' | 'deny'): Promise<JsonValue> {
+    return this.activeClient().confirm(runId, confirmationId, decision)
+  }
+
+  stopBehavior(runId?: string): Promise<JsonValue> {
+    return this.activeClient().behaviorStop(runId)
+  }
+
+  commandGet(commandId: string): Promise<JsonValue> {
+    return this.activeClient().commandGet(commandId)
+  }
+
+  private activeClient(): BodyClient {
+    if (this.state !== 'active' || this.client === undefined) {
+      throw new Error(`body is ${this.state}`)
+    }
+    return this.client
   }
 
   async stop(): Promise<StopResult> {

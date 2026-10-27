@@ -21,6 +21,7 @@ export const METHODS = [
   'activate',
   'switch',
   'confirm',
+  'behavior.stop',
   'stop',
   'shutdown',
   'command.get',
@@ -164,6 +165,16 @@ export type ConfirmParams = {
   runId: string
   confirmationId: string
   decision: 'confirm' | 'deny'
+}
+
+export type BehaviorStopParams = {
+  runId?: string
+}
+
+export type BehaviorStopResult = {
+  accepted: boolean
+  status: string
+  error?: P2Error
 }
 
 export type ConfirmationResult = {

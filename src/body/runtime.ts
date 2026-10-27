@@ -133,7 +133,8 @@ export class BodyRuntime {
     if (envelope.method !== 'check'
       && envelope.method !== 'activate'
       && envelope.method !== 'switch'
-      && envelope.method !== 'confirm') {
+      && envelope.method !== 'confirm'
+      && envelope.method !== 'behavior.stop') {
       return this.handleRequest(envelope)
     }
 
@@ -248,12 +249,22 @@ export class BodyRuntime {
             confirmationId,
             decision,
             owner: `${owner.sessionId}/${owner.agentId}`,
-            source: 'bridge',
+            source: 'agent',
             commandId,
           })
           const result: ConfirmationResult = confirmed
           this.recordCommand(commandId, 'confirm', result)
           return { ...base, result: result as unknown as JsonValue }
+        }
+        case 'behavior.stop': {
+          const requested = typeof params.runId === 'string' ? params.runId : undefined
+          const runId = requested ?? this.behavior.status().activeRun?.runId
+          if (runId === undefined) {
+            return { ...base, error: invalidMessageError('no active behavior run') }
+          }
+          const stopped = this.behavior.stop(runId)
+          this.recordCommand(commandId, 'behavior.stop', stopped)
+          return { ...base, result: stopped as unknown as JsonValue }
         }
         default:
           return { ...base, error: unknownMethodError(envelope.method) }

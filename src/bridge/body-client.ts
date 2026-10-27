@@ -77,6 +77,41 @@ export class BodyClient {
     return this.send(method, params, { requireEpoch: true })
   }
 
+  command(method: string, params: JsonValue, commandId?: string): Promise<JsonValue> {
+    return this.send(method, params, {
+      requireEpoch: true,
+      commandId: commandId ?? `${method}-${++this.requestSeq}`,
+    })
+  }
+
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number } = {}): Promise<JsonValue> {
+    return this.command('check', {
+      sourcePath,
+      ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    })
+  }
+
+  activate(artifactId: string): Promise<JsonValue> {
+    return this.command('activate', { artifactId })
+  }
+
+  switch(artifactId: string, params: JsonValue = {}): Promise<JsonValue> {
+    return this.command('switch', { artifactId, params })
+  }
+
+  confirm(runId: string, confirmationId: string, decision: 'confirm' | 'deny'): Promise<JsonValue> {
+    return this.command('confirm', { runId, confirmationId, decision })
+  }
+
+  behaviorStop(runId?: string): Promise<JsonValue> {
+    return this.command('behavior.stop', runId === undefined ? {} : { runId })
+  }
+
+  commandGet(commandId: string): Promise<JsonValue> {
+    return this.request('command.get', { commandId })
+  }
+
   async describe(): Promise<DescribeResult> {
     return await this.request('describe', {}) as unknown as DescribeResult
   }

@@ -192,4 +192,45 @@ describe('P2 commands', () => {
     })
     expect(result.kind).toBe('error')
   })
+
+  it('registers owner-scoped tools only after start and disposes them on stop', async () => {
+    const fake = fakeBody()
+    const definitions: Definition[] = []
+    const tools: Array<Record<string, unknown>> = []
+    const disposed: number[] = []
+    let disposerCount = 0
+    const ctx = {
+      commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+      effect: (callback: () => unknown) => { callback(); return () => {} },
+    }
+    const plugin = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const agent = {
+      id: owner.agentId,
+      session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+      ctx: {
+        tools: { register: (definition: Record<string, unknown>) => {
+          tools.push(definition)
+          disposerCount += 1
+          const index = disposerCount
+          return () => { disposed.push(index) }
+        } },
+        effect: (callback: () => unknown) => {
+          callback()
+          return () => {}
+        },
+      },
+    }
+    const command = definitions[0] as Definition
+    expect(await command.handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
+    expect(tools.map(tool => tool.name)).toEqual([
+      'p2_status', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_command',
+    ])
+    const status = tools[0] as { execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown> }
+    expect(await status.execute({}, { agent })).toBeDefined()
+    await expect(status.execute({}, { agent: { ...agent, id: 'other' } })).rejects.toThrow(/different agent/)
+
+    expect(await command.handler({ agent, rawInput: ' stop' })).toMatchObject({ kind: 'success' })
+    expect(disposed.length).toBeGreaterThan(0)
+  })
 })

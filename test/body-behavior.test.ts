@@ -129,6 +129,27 @@ describe('body behavior methods', () => {
     expect(outside.error?.code).toBe('SOURCE_OUTSIDE_PROJECT')
   })
 
+  it('stops only the behavior run and keeps the body alive', async () => {
+    const host = new BehaviorHost({ bindingId: 'binding-1', owner: 's/a', query, act })
+    const rt = new BodyRuntime({
+      body,
+      behavior: host,
+      owner: { sessionId: 's', agentId: 'a', cwd: process.cwd() },
+      newEpoch: () => 'epoch-1',
+    })
+    const checked = await rt.handleRequestAsync(request('check', { sourcePath: source() }, 'stop-check', 'epoch-1'))
+    const artifactId = (checked.result as { artifactId: string }).artifactId
+    await rt.handleRequestAsync(request('activate', { artifactId }, 'stop-activate', 'epoch-1'))
+    const switched = await rt.handleRequestAsync(request('switch', { artifactId, params: {} }, 'stop-switch', 'epoch-1'))
+    const runId = (switched.result as { runId: string }).runId
+    expect(rt.tickBehavior(0)).toBe('blocked')
+    const stopped = await rt.handleRequestAsync(request('behavior.stop', { runId }, 'stop-run', 'epoch-1'))
+    expect(stopped.error).toBeUndefined()
+    expect((stopped.result as { accepted: boolean }).accepted).toBe(true)
+    expect(rt.status().activeRun).toBeNull()
+    expect(rt.status().bodyEpoch).toBe('epoch-1')
+  })
+
   it('does not execute a duplicate pending check and still answers status', async () => {
     const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
     const rt = new BodyRuntime({
