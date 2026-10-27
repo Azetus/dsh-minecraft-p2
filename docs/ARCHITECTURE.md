@@ -125,7 +125,7 @@ P2 核心不内置 Java 版或基岩版的策略分支，不负责保证同一�
 
 DSH不逐tick操控角色。body的串行调度器控制唯一活动act，隔离runner只承载其代码；辅助进程不产生第二个控制者。broker持有实际游戏操作的账本与清理能力，生成代码不持原始连接。
 
-首版人工 /p2 start 后，bridge 为正确项目的现有会话创建并持有一个 body，通过 stdio 通信。安装、加载或热重载不自动创建 P2 进程；启动 body 不自动启动 behavior。body 独立调度但生命周期跟随插件，插件释放时收尾并回收 body/辅助进程，不销毁用户 agent。模型 stop 只停 behavior，人工 stop 关闭托管 body；换 session 先关闭旧 body 再人工启动。
+首版人工 /p2 start 后，bridge 为正确项目的现有会话创建并持有一个 body，通过 stdio 通信。初版 bridge、body 与内置 provider 同包交付；body 仍是独立子进程。安装、加载或热重载不自动创建 P2 进程；启动 body 不自动启动 behavior。body 独立调度但生命周期跟随插件，插件释放时收尾并回收 body/辅助进程，不销毁用户 agent。模型 stop 只停 behavior，人工 stop 关闭托管 body；换 session 先关闭旧 body 再人工启动。
 
 协议层与传输层分离：首版 UTF-8 JSON Lines，stdout 专用于协议、stderr 日志；保留命令去重、epoch 和事件语义。管道失效或 bridge 存活超时后清理退出，不重连旧 body、不自动重启。强制结束不构成游戏停止证明。独立 launcher、WS 鉴权及 lease 重连已整理为[后续设计](WS-FUTURE.md)，不阻塞首版；未来迁移还需补全独立服务生命周期。详见[运行时](RUNTIME.md)与[DSH 接入](DSH-INTEGRATION.md)。
 
@@ -231,7 +231,7 @@ agent 编写新 behavior 时使用已有 act 编排策略；需要新的完整�
 
 ### 4.3 operation 库的维护与扩展权限
 
-operation 作为独立维护的基础库，统一提供名称、类型定义、参数与结果、错误含义、持续效果的停止及清理契约、接入实现和兼容信息。独立维护不强制独立仓库；首版可以作为同一项目中的独立包。
+operation 作为独立维护的基础库，统一提供名称、类型定义、参数与结果、错误含义、持续效果的停止及清理契约、接入实现和兼容信息。独立维护不强制独立仓库；初版作为同一个包内的独立模块，后续再考虑拆包/拆仓。
 
 | 层级 | 游戏中的 agent 的扩展方式 |
 | --- | --- |
@@ -273,27 +273,27 @@ D4 将环境 binding、产物依赖与运行实例分开：binding 固定 body/I
 
 revision 表示源码版本，artifactId 表示确切可执行内容；同源码在不同依赖或 binding 下可以生成不同产物。启用与 switch 指定 artifactId，运行时不追随默认版本。候选可以面向其他 binding 静态检查并启用，但仅与当前加载环境一致且实际能力满足时才能启动。退休依赖阻止新 run，不替换已有 run 的后续节点。摘要输入、规范化与变更范围见[发布设计 §3](OPERATIONS-AND-RELEASE.md#3-不可变-binding)，启用状态见[生命周期 §5](BEHAVIOR-LIFECYCLE.md#5-artifact-与检查凭据)。
 
-### 4.5 仓库组织与包管理（暂定，待发布验证）
+### 4.5 仓库组织与包管理（初版单包，后续可拆）
 
-**首版暂采用一个 Git 仓库中的多个独立包，包管理器暂选 pnpm；后续可选择将 operation 实现拆为独立仓库，不要求最终一定拆仓。** 这一选择以 P2 与 operation 上层实现继续采用 TypeScript／JavaScript 为前提，尚未确定最终交付形式。
+**初版采用一个 npm 包交付：bridge、body、内置 Mineflayer provider、authoring 子路径、共享契约与预设 behavior 同包；后续验证可行后再拆包/拆仓。** 包管理器用于开发和构建；`npm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装，初版不发布 registry。
 
-首版将 P2 核心、operation 契约与 operation 实现放在主项目仓库中，方便接口、实现与检查共同调整。各包拥有独立的公开入口、依赖声明和版本，跨包使用公开接口，不直接引用其他包的内部源码。以下仅示意包边界，不确定具体名称与目录：
+包内按目录分层：contracts、authoring、core、body、bridge、provider-minecraft、presets。模块名不等于发行包，依赖方向仍按 §1：bridge 不 import core/body/provider；core 不 import Mineflayer；authoring 只依赖 contracts/op-contracts。初版用一个轻量 import-boundary 检查维持这些方向。
 
 ```text
 主仓库
-└─ packages
-   ├─ p2-core
-   ├─ operation-contract
-   └─ operation-minecraft-java
+└─ 单包
+   ├─ src/contracts
+   ├─ src/authoring
+   ├─ src/core
+   ├─ src/body
+   ├─ src/bridge
+   ├─ src/provider-minecraft
+   └─ src/presets
 ```
 
-暂用 pnpm workspace 管理同仓库包依赖，通过锁文件固定开发与构建所用的依赖组合。工作区包可分别打包或发布，不因源码位于同一仓库就必须作为一个包交付。包管理器负责软件依赖；operation 能力声明、游戏兼容检查和运行时实现选择仍由 P2 的机制负责。
+同一个 tarball 安装到 DSH profile 获得运行时；项目以 devDependency 安装同一 tarball 获得 authoring，`/p2 setup` 校验版本一致。body 仍是独立子进程，provider 仍通过接口加载，act runner 仍隔离；合并的是交付物，不是进程或依赖方向。
 
-后续出现独立维护者、独立发布节奏或其他项目复用需求时，可以拆分 operation 实现仓库。契约包暂建议继续由 P2 项目维护，实现包依赖该契约。拆仓时保留包名与公开契约，将主项目的工作区依赖改为已发布版本，并迁移相应构建、检查与发布流程；正常消费已发布包不要求使用 Git submodule。
-
-首版可考虑将 operation 打成版本化包并随完整发行包交付，之后再决定是否使用包注册平台。单个包归档不等于包含全部依赖的离线发行包；若接入涉及其他语言组件，应使用对应构建工具，不要求 pnpm 替代它们。
-
-**以上工具与交付选型仍暂定，未通过实际发布验证。** 已核验 DSH bundle 入口、兼容声明及宿主依赖解析；首版 bridge 使用宿主接口并管理 body 子进程，body 自行携带依赖闭包。详见[DSH 接入](DSH-INTEGRATION.md)与[发布设计](OPERATIONS-AND-RELEASE.md)。首版进程树回收、完整发行和游戏驱动交付仍需原型验证；独立 launcher 属于后续 WS 阶段。当前仅有设计文档，不代表运行工程已实现。
+后续出现独立维护者、独立发布节奏、第二 provider，或 body 需要脱离 DSH 运行时，再拆 provider/body/authoring。拆分保持包名、公开契约、协议、provider manifest/registry 不变，不要求 submodule。初版不建设多版本、provider store、registry、签名或自动更新。
 
 ## 5. behaviorTree 的定义与构建
 
@@ -787,7 +787,7 @@ export default defineBehavior({
 - 查询/收尾期限、调度周期及数据年龄已有起始配置，需用运行测量调整，不能当SLA。
 - 自定义act的受限JS引擎需要中断、内存与宿主能力隔离验证；未完成前先用维护者act，不把生成代码直接放进body。
 - checker、日志、消息去重与生命周期仍需软件实现和测试；checker不因此增加模拟游戏职责。
-- pnpm 与包边界继续暂定，DSH 源码支持 bundle 方向；首版须实测干净安装、托管进程树回收、依赖闭包和交付方式，独立 launcher 后续验证。
+- 初版单包交付已定；bridge/body/provider/authoring 的内部边界仍须通过 import-boundary 检查。首版须实测 `bundles/` tarball 干净安装、项目 authoring 版本一致、托管进程树回收、依赖闭包和离线安装；拆包与独立 launcher 后续验证。
 - 崩溃时持续控制能否可靠释放由provider验证；P2不能仅凭进程退出宣称游戏已停止。
 
 ### 11.3 保留的游戏接入与发布决策

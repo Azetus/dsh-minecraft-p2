@@ -1,2 +1,14 @@
+# agent
 /.env
+
+# 编辑器 / IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# 临时文档
 /TODO.md
+
+# node
+node_modules/

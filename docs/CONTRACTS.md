@@ -18,7 +18,7 @@
 | bridge | DSH 命令/工具、session 归属、事件合并和模型唤醒 | 直接发送游戏控制 |
 | operation provider | 落实查询/控制/取消/对账契约 | 自动更换 behavior |
 
-这是模块责任划分，不要求每行成为一个 npm 包；首版物理包布局见 [发布设计](OPERATIONS-AND-RELEASE.md)。
+这是模块责任划分，不要求每行成为一个 npm 包；初版为单包交付，authoring 是同一包的子路径，body/provider 是包内资产，模块边界仍按本表。
 
 ## 2. 标识、时间与边界校验
 

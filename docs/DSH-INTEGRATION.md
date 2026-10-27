@@ -12,7 +12,7 @@
 | bundle 用 `dsh.bundle.patch` 指定一份或多份 Cordis patch | bridge可作为Host-only bundle交付 | packages/boot/app-boot/README.md:48–52 |
 | `engines.dsh` 存在时优先决定兼容，DSH peers不再参与该兼容判定 | 显式写受测范围，不能以为两种声明共同收紧范围 | 同上:52 |
 | Host插件安装可执行代码，影响当前profile的所有session | 不能宣传安装绝对零副作用；项目只保证默认不启动P2游戏工作 | packages/boot/plugin-manager/README.md:14、31 |
-| 插件管理接受本地目录、registry、git或tarball等来源 | 首版可使用本地构建包，不必先建独立仓库/市场 | 同上:44–54 |
+| 插件管理接受本地目录、registry、git或tarball等来源 | 首版使用本地构建的单包 tarball，不必先建独立仓库/市场 | 同上:44–54 |
 | tools.register支持全局/agent局部作用域，返回准确disposer | P2工具按owner agent挂载，结束只释放自己的注册 | packages/core/tools/src/index.ts:1065–1096 |
 | 命令运行不自动成为模型消息，但有session命令日志 | `/p2`管理动作与模型游戏工具分开 | packages/interaction/commands/README.md:11、31–45 |
 | inject不唤醒；followup和steer会唤醒 | 先合并事件再投递，不把每tick都变成回合 | packages/core/agent/README.md:47；src/runtime-types.ts:214–241 |
@@ -113,22 +113,22 @@ AGENTS.md只放简短身份、工作目录与边界，编写behavior/act的长�
 
 ## 8. bundle 与依赖发布
 
-首版开发维持同仓库多包、pnpm；DSH bridge为可安装的ESM bundle，携带已构建入口、类型、Cordis patch、配置schema及必要显示元数据。包名使用项目自己的scope，不假称官方 `@deepseek-ai` 包。
+首版采用单包交付：一个 npm 包同时包含 DSH bridge（Cordis 入口）、body（stdio 子进程入口）、内置 Mineflayer provider、authoring 子路径和预设 behavior。包内按目录分层；bridge 不 import core/body/provider，body 仍是独立进程。`package.json` 保留 `dsh.bundle.patch` 字段并指向包根的 `cordis.patch.yml`；`files` 只包含构建产物、manifest、patch 和显示元数据，不发布 `src` 或测试。初版使用本地私有包名，发布前再定 scope，不假称官方 `@deepseek-ai` 包。
 
-bridge对DSH/Cordis使用宿主兼容的peer依赖，并显式声明经过验证的 `engines.dsh` 范围。不要把第二份宿主核心打入bridge。当前只核验0.2.1-rc.2源码；不能据此承诺整个0.2系列或未来版本均兼容。
+bridge 对 DSH/Cordis 使用宿主兼容的 peer 依赖，并显式声明经过验证的 `engines.dsh` 范围。不要把第二份宿主核心打入 bridge；初版以实际安装 runtime 的版本为准，M0 实测后固定。当前不能据此承诺整个 0.2 系列或未来版本均兼容。
 
-body及act runner独立打包其运行依赖和执行引擎，不引用DSH安装目录内部文件、不依赖profile runtime resolution。DSH通过插件经理安装bridge；body发行和游戏驱动安装分别由自己的管理流程处理。
+body 与 provider 随包交付，但 body 不引用 DSH 安装目录内部文件、不依赖 profile runtime resolution；provider 只在 body 内通过 registry 加载。DSH 通过插件经理安装该包；项目以 devDependency 安装同一 tarball 以获得 authoring，版本必须与 body 所在包一致。初版不发布 registry，本地用 `npm run bundle` 输出 tarball 到 `bundles/`。
 
-安装成功、插件已加载、body 已创建、协议已就绪、behavior 已启动是不同事实。HMR 与宿主重启后不自动 start；更新 bridge/body 前正常关闭并确认清理。
+安装成功、插件已加载、body 已创建、协议已就绪、behavior 已启动是不同事实。HMR 与宿主重启后不自动 start；更新该包前正常关闭并确认清理。
 
-首版验证插件托管入口、Node 运行时及依赖闭包、Windows 进程树回收和离线安装。独立 launcher 与 WS 保留到后续阶段，不作为首版交付前提。
+首版验证插件托管入口、单包 tarball 安装、Node 运行时及依赖闭包、Windows 进程树回收和离线安装。独立 launcher 与 WS 保留到后续阶段，不作为首版交付前提；后续拆 bridge/body/provider/authoring 时保持协议、manifest 与包名。
 
 ## 9. 对原调查的修正
 
 | 原表述 | 本架构采用的限定 |
 | --- | --- |
 | MCP只有请求，不能表达通知/控制权 | 不将此作为协议不可能性结论；本项目选择bridge以便会话唤醒和生命周期集成，控制权仍是应用层协议。 |
-| 必须Fabric客户端或服务端mod | 游戏侧尚未选定，协议客户端也是候选；见独立候选文档。 |
+| 必须Fabric客户端或服务端mod | 已选独立客户端路线，初版用 Mineflayer 验证；客户端驱动与服务器角色分别保留为后续方向与历史方案。 |
 | 未分组会话半瘫痪、一定不能推理 | DSH有fallback cwd；项目拒绝不匹配session是本项目政策。 |
 | 插件卸载即teardown agent | 仅插件创建并持有handle的agent可由其销毁；本项目附着现有agent，不拥有其生命周期。 |
 | 注入免费 | 不唤醒不等于没有后续上下文token成本。 |
@@ -138,7 +138,7 @@ body及act runner独立打包其运行依赖和执行引擎，不引用DSH安装
 
 ## 10. 接入验收
 
-1. 安装/启用bundle后没有body/游戏连接与P2模型工具；管理命令可用。
+1. 安装/启用单包后没有body/游戏连接与P2模型工具；管理命令可用。
 2. 正确 session 可人工 start；目录不匹配、非 owner 调用或旧 epoch 请求被拒绝，其他 session 看不到可写工具；重复 start 不创建第二个 body。
 3. 工具返回的accepted/started/terminal可区分，PTC并发不绕过单act规则。
 4. HMR/dispose 关闭本插件的 body、runner/构建进程及工具，不销毁用户 agent；重载后保持未启动。
@@ -146,7 +146,7 @@ body及act runner独立打包其运行依赖和执行引擎，不引用DSH安装
 6. 当前进程内事件去重、缓冲超限提示缺口；插件退出不恢复未投递通知，不承诺跨崩溃不丢失，也不制造无限模型回合。
 7. confirm 指定请求且模型无法伪装玩家；同一存活 body 可查询待确认记录，新 epoch 不复活旧请求，重复决定不重复发终态事件。
 8. stdout 无日志污染，JSON Lines 可拆包/合包且限制未完成缓冲；stderr 持续消费，输出背压不阻塞收尾。更换测试用内存传输不改变协议处理规则。
-7. 从干净环境安装bridge与body发行物，验证DSH peers、第三方依赖及runner解析。
-8. 与已核验DSH版本及下一候选版本分别跑集成测试后，才扩展兼容范围。
+9. 从干净环境安装 `bundles/` 中的单包 tarball，验证 DSH peers、项目 authoring 版本一致、第三方依赖及 runner 解析。
+10. 与已核验DSH版本及下一候选版本分别跑集成测试后，才扩展兼容范围。
 
 本次仅阅读源码和写设计，以上尚未执行。原始调查保留供追溯，出现冲突时按主架构、本文源码限定及当前版本验证结果处理。

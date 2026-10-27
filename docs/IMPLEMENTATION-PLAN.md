@@ -4,7 +4,7 @@
 
 ## 1. 设计基线与适用范围
 
-首版为本机、一个 body 控制一个角色、一个 owner session。人工 start 后由 DSH bridge 创建并持有独立 body 子进程，使用 stdio；插件安装/加载/重载不自动创建进程。body 生命周期跟随插件，调度仍不等待模型。behavior/act 可由 agent 扩展，operation 只经基础库维护发布；单线程树无 Parallel，一个 act 可协调多个底层效果。
+首版为本机、一个 body 控制一个角色、一个 owner session。人工 start 后由 DSH bridge 创建并持有独立 body 子进程，使用 stdio；插件安装/加载/重载不自动创建进程。body 生命周期跟随插件，调度仍不等待模型。**初版全部合并为一个 npm 包**：bridge、body、内置 provider、authoring 子路径与预设 behavior 同包交付；bridge 仍是 Cordis 入口，body 仍是独立子进程。behavior/act 可由 agent 扩展，operation 只经基础库维护发布；单线程树无 Parallel，一个 act 可协调多个底层效果。
 
 首版不承诺硬实时生存、跨游戏版本行为自动正确、全量世界记忆、整局确定性回放、任意代码安全证明、多人多角色调度或运行中provider热替换。上述边界不是待补接口，而是明确控制项目范围。
 
@@ -13,7 +13,7 @@
 | 编号 | 决定 | 依据/细节 |
 | --- | --- | --- |
 | A01 | 模型不在动作关键路径，既有behavior继续由代码推进 | [运行时](RUNTIME.md) |
-| A02 | behavior/act/op三层；query读取可供多个上层使用 | [主架构](dsh-minecraft-p2.md) |
+| A02 | behavior/act/op三层；query读取可供多个上层使用 | [主架构](ARCHITECTURE.md) |
 | A03 | 一棵活动树、一个控制act，先确认停止再接管 | [状态与控制权](RUNTIME.md) |
 | A04 | 代码构建数据IR，执行器不运行作者任意树回调 | [契约](CONTRACTS.md) |
 | A05 | 检测器被动，无真实或模拟游戏测试 | [扩展生命周期](BEHAVIOR-LIFECYCLE.md) |
@@ -21,7 +21,7 @@
 | A07 | 不建P2世界副本、不记录环境变化事件 | [反馈与数据归属](FEEDBACK-AND-RECOVERY.md) |
 | A08 | body 独立调度、生命周期由插件托管；人工 start，stdio 关闭或存活超时清理退出 | [DSH 接入](DSH-INTEGRATION.md)；独立常驻 body 与 WS 保留为后续方案。 |
 | A09 | 不可变artifact、精确binding、运行中版本不变 | [发布设计](OPERATIONS-AND-RELEASE.md) |
-| A10 | 首版同仓库多包，pnpm暂选，后续可选拆仓 | [主架构4.5](dsh-minecraft-p2.md#45-仓库组织与包管理暂定待发布验证) |
+| A10 | 初版单包交付：bridge、body、内置 provider、authoring 子路径同包；内部按目录分层，后续再拆 | [主架构4.5](ARCHITECTURE.md#45-仓库组织与包管理初版单包后续可拆) |
 | A11 | 生成代码不持游戏连接，隔离runner与可信broker分开 | [扩展生命周期4](BEHAVIOR-LIFECYCLE.md#4-构建及-act-的代码隔离) |
 | A12 | 采用独立客户端路线，初版用 Mineflayer 验证；服务器角色不作为当前方向 | [接入决策](MINECRAFT-INTEGRATION-OPTIONS.md#11-接入路线决策) |
 | A13 | Mineflayer 仅为 operation 实现依赖，core、观测层及行为内容不直接依赖其对象或接口 | [依赖边界](MINECRAFT-INTEGRATION-OPTIONS.md#12-mineflayer-与-p2-的依赖边界) |
@@ -38,13 +38,13 @@
 
 ### M0：契约与可安装骨架
 
-建立最少物理包、统一 schema、错误类型、binding manifest 及构建产物格式。构建 stdio body 空进程和仅有管理命令的 bridge bundle：安装/加载无子进程，人工 start 创建并握手，stop 回收。此时不连接 Minecraft，不注册可执行游戏工具。
+建立单包骨架：一个 npm 包内的 bridge、body、authoring 子路径与共享契约；统一 schema、错误类型、binding manifest 及构建产物格式。构建 stdio body 空进程和仅有管理命令的 bridge：安装/加载无子进程，人工 start 创建并握手，stop 回收。本地通过 `npm run bundle` 把 tarball 输出到 `bundles/`，供 DSH 安装测试；初版不发布 registry。此时不连接 Minecraft，不注册可执行游戏工具。
 
 D4 在 M0 定义环境清单、精确依赖清单、源码 revision 与 artifactId，以及带格式版本的统一规范化器和 SHA-256 摘要规则。固定样例验证对象键/集合排序、语义数组顺序、相对路径、原始字节、排除字段和无循环摘要；sourceDigest 相同而依赖/binding 不同的产物应可明确区分。
 
 D5 在 M0 建立消息接口、stdio JSON Lines 和内存测试传输，分开协议分发与进程管理；验证 hello 的 epoch 引导、分帧、stdout/stderr 分离、重复 start、正常关闭、管道失效及握手失败回收。暂不实现 WS 端口、令牌、租约竞争或独立 launcher。
 
-退出条件：干净环境能加载 bundle，人工 start 创建唯一 body 并完成 hello/describe；错误版本、错误归属和非法消息被拒绝；安装后无 P2 子进程、游戏连接或自动模型回合。确认 Node 运行时和依赖解析，取得最小进程树生命周期证据。
+退出条件：干净环境能从 `bundles/` 安装并加载同一个 tarball，人工 start 创建唯一 body 并完成 hello/describe；错误版本、错误归属和非法消息被拒绝；安装后无 P2 子进程、游戏连接或自动模型回合。同一个 tarball 安装到临时项目后，`authoring` 子路径可解析并完成类型检查，版本与 body 包一致。确认 Node 运行时、tarball 依赖解析和 Windows 进程树生命周期证据。
 
 ### M1：纯执行器与受控扩展
 
@@ -72,7 +72,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 ### M3：Minecraft接入可行性实验
 
-使用 Mineflayer operation 实现进行最小实验，固定一个受支持的原版或可接受原版客户端的环境。具体游戏版本、世界入口、独立身份及所有者授权条件另行确定，不能静默修改现有整合包或更换用户版本。按接入文档G0—G3验证独立P2、当前事实与可停止控制；同时检查core、观测层和behavior／act没有直接依赖Mineflayer对象、类型、事件或插件接口。
+使用 Mineflayer operation 实现进行最小实验，固定一个受支持的原版或可接受原版客户端的环境。具体游戏版本、世界入口、独立身份及所有者授权条件另行确定，不能静默修改现有整合包或更换用户版本。按接入文档G0—G3验证独立P2、当前事实与可停止控制；同时检查core、观测层和behavior／act没有直接依赖Mineflayer对象、类型、事件或插件接口。provider 仍作为单包内的模块构建，不新建发行物；若 Mineflayer 无法完整 bundle，则记录依赖闭包与安装限制，不因此拆包。
 
 退出条件：可观察到两个独立角色；动作控制不争抢人类角色；取消、body丢失、游戏暂停、世界卸载均有明确结果。失败时记录实现限制，再评估修复或真实客户端实现，不绕过核心控制契约、不自动转向服务器假玩家。此阶段通过不代表目标模组包兼容。
 
@@ -92,7 +92,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 ### M6：可复现发行与体验验收
 
-固定DSH/Node/provider/游戏/加载器/模组集合，生成发行清单、依赖摘要、安装说明及回退说明。执行纯软件回归、DSH集成、实际游戏适配三类验证，分别记录证据。
+固定DSH/Node/provider/游戏/加载器/模组集合，使用单包 tarball 生成发行清单、依赖摘要、安装说明及回退说明。执行纯软件回归、DSH集成、实际游戏适配三类验证，分别记录证据。
 
 退出条件：干净环境可安装、停止、升级和回退；安装不自动启动角色；断连/重启不重放旧控制；长期目标跨session保留但需显式启动执行。
 
@@ -105,7 +105,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 | broker/provider | 未确认控制、部分成功、重复取消、连接丢失、thread延迟 | 玩家目标一定达成。 |
 | bridge | scope清理、session错配、重复事件、DSH退出/重载 | 模型一定及时响应。 |
 | 日志/队列 | 不可写、磁盘满、缓冲溢出、轮换、满载停止、旧 epoch 拒绝 | 日志完整、可靠落盘或崩溃后恢复。 |
-| packaging | 干净安装、依赖闭包、版本拒绝、回退 | 未测试平台或整合包兼容。 |
+| packaging | 单包 tarball 干净安装、项目 authoring 版本、依赖闭包、版本拒绝、回退 | 未测试平台或整合包兼容。 |
 | game体验 | 有限/持续行为、协作、长期项目、偏好一致性 | 整局输入可确定性回放。 |
 
 ## 5. 明确保留的验证门槛
@@ -115,9 +115,9 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 | Minecraft客户端接入 | Mineflayer首版验证已选；真实客户端为后续方向 | 固定测试版本、连接与授权条件，取得G0—G6证据；真实客户端另测驱动、模组交互与运行资源。 |
 | 生成代码执行引擎 | 独立进程+受限JS上下文，候选需核验 | 中断/内存/能力桥原型与逃逸面审查；未完成不开放自动act。 |
 | 具体超时与数据年龄 | RUNTIME配置初值 | Windows及选定游戏组合的分位数和卡顿数据。 |
-| DSH新版本兼容 | 本次只读核验0.2.1-rc.2 | 实际安装、命令、工具、session和HMR测试。 |
+| DSH新版本兼容 | 源码核验 0.2.1-rc.2；安装端为 0.2.1-rc.3（卸载器版本），M0 以实际 runtime 为准 | 实际安装、命令、工具、session和HMR测试。 |
 | Windows 托管进程生命周期 | 人工 start 后由插件持有 body，stdio 通信 | 正常 stop、热重载、DSH 异常退出、管道失效、runner 卡住和进程树回收实验。 |
-| 发行格式与pnpm | 同仓库、独立包暂定 | 干净安装、offline依赖与Node携带方式验证。 |
+| 发行格式与包管理 | 初版单包；`npm run bundle` 输出 tarball 到 `bundles/`，不发布 registry | 干净环境安装同一 tarball、项目 authoring 版本一致、offline 依赖与 Node 携带方式验证。 |
 | 游戏专用schema | 只确定通用Query/Control契约 | 首批行为需求、所选provider真实可用数据。 |
 
 独立 launcher、WS 鉴权、租约交接和跨连接恢复单列在[后续 WS 方案](WS-FUTURE.md)，不阻塞 stdio 首版。首版日志及队列按 D6 简化方案实现并测量初始额度；可靠落盘、持久索引/通知、日志修复和崩溃恢复明确延期。上述首版门槛仍需验证，不能跳过后声称成品可玩。
@@ -126,6 +126,6 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 本轮只进行文件/源码/安装元数据读取、官方资料研究、架构文档编写及文档一致性检查。没有执行DSH/游戏端安装、没有连接服务器、没有运行行为或模型集成测试、没有提交或推送Git。
 
-本轮文档检查覆盖主文档及8份子文档，扫描108处链接，本地目标文件与章节锚点未发现错误，代码围栏配对及行尾空白检查通过，`git diff --check`通过。外部链接的实时可达性不由本地检查器保证。两份Minecraft启动配置摘要与JAR内版本信息另作只读复核，与候选文档一致。
+本轮文档检查覆盖主文档及子文档，修复了 A02/A10 指向旧文件名的链接；代码围栏配对及行尾空白已检查。相对链接与章节锚点以当前工作区检查为准；外部链接的实时可达性不由本地检查器保证。两份Minecraft启动配置摘要与JAR内版本信息另作只读复核，与候选文档一致。
 
 后续实施应在本文件或独立验收记录中逐项补充“版本、环境、步骤、观察结果”，不得用计划表替代测试证据。

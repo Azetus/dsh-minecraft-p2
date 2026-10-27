@@ -12,6 +12,8 @@
 | act | 人类或 agent | 源码及能力声明 → 类型/打包检查 → 隔离运行包 → 注册 → behavior 引用。 |
 | operation | 基础库维护者，AI 可协助写候选 | 库开发、独立测试、兼容验证与版本发布；游戏中 agent 不能自动安装。 |
 
+表内 builder-sdk、checker 等是模块职责；初版它们同包交付，authoring 是同一包的项目入口，不代表独立发行物。
+
 behavior 不承担 op 实现，act 只用已发布 op。缺能力时返回 CAPABILITY_MISSING 及最小能力需求，agent 可以改变目标或提出基础库变更，不能绕过 broker 使用原始游戏 API。
 
 ## 2. 候选及产物生命周期
