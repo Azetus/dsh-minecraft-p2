@@ -7,12 +7,16 @@
  * and checks that DSH can compose and import it. It never starts a server and
  * never touches the real Desktop profile.
  */
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
   DEV_HOME,
   PACKAGE_NAME,
+  ROOT,
   TARBALL,
   captureDsh,
   fail,
@@ -54,6 +58,10 @@ const home = join(DEV_HOME, 'verify')
 const profile = 'p2-verify'
 
 function main() {
+  return mainAsync()
+}
+
+async function mainAsync() {
   if (options.build) {
     const built = runNpm(['run', 'bundle'])
     if (built.status !== 0) {
@@ -70,8 +78,8 @@ function main() {
   removeHome(home)
   mkdirSync(home, { recursive: true })
 
-  const installed = installBundle(home, profile)
-  if (installed.status !== 0) {
+  const installedResult = installBundle(home, profile)
+  if (installedResult.status !== 0) {
     fail('verify-dist: dsh plugin install failed', home)
     return
   }
@@ -80,6 +88,82 @@ function main() {
   const bundles = manifest.dsh?.profile?.bundles ?? []
   if (!bundles.includes(PACKAGE_NAME)) {
     fail(`verify-dist: ${PACKAGE_NAME} is not in dsh.profile.bundles (${bundles.join(', ')})`, home)
+    return
+  }
+
+  const profileDir = join(home, 'profiles', profile)
+  const installedDir = join(profileDir, 'node_modules', PACKAGE_NAME)
+  for (const relative of [
+    'package.json',
+    'cordis.patch.yml',
+    'lib/bridge.js',
+    'lib/body/body.mjs',
+    'lib/body/body.manifest.json',
+    'lib/authoring/index.js',
+    'lib/authoring/index.d.ts',
+  ]) {
+    if (!existsSync(join(installedDir, relative))) {
+      fail(`verify-dist: installed package is missing ${relative}`, home)
+      return
+    }
+  }
+
+  const installedManifest = JSON.parse(await readFile(join(installedDir, 'package.json'), 'utf8'))
+  const bodyManifest = JSON.parse(await readFile(join(installedDir, 'lib/body/body.manifest.json'), 'utf8'))
+  if (bodyManifest.bodyVersion !== installedManifest.version || bodyManifest.protocolVersion !== 1) {
+    fail('verify-dist: body manifest version/protocol does not match the package', home)
+    return
+  }
+  const bodyDigest = createHash('sha256')
+    .update(await readFile(join(installedDir, 'lib/body/body.mjs')))
+    .digest('hex')
+  if (bodyManifest.files['body.mjs'] !== bodyDigest) {
+    fail('verify-dist: body manifest digest does not match lib/body/body.mjs', home)
+    return
+  }
+
+  const authoringCheck = spawnSync(process.execPath, [
+    '-e',
+    `import('${PACKAGE_NAME}/authoring').then(m => {`
+      + ` if (m.AUTHORING_VERSION !== ${JSON.stringify(installedManifest.version)}) {`
+      + ` process.stderr.write('authoring version mismatch\\n'); process.exit(1) }`
+      + `})`,
+  ], { cwd: profileDir, stdio: 'inherit' })
+  if (authoringCheck.status !== 0) {
+    fail('verify-dist: authoring entry could not be imported or has the wrong version', home)
+    return
+  }
+
+  const projectDir = join(home, 'project')
+  mkdirSync(projectDir, { recursive: true })
+  await writeFile(join(projectDir, 'package.json'), `${JSON.stringify({
+    name: 'p2-verify-project',
+    private: true,
+    type: 'module',
+  }, null, 2)}\n`)
+  const projectInstall = runNpm([
+    'install',
+    '--prefix',
+    projectDir,
+    '--no-audit',
+    '--no-fund',
+    '--cache',
+    join(ROOT, '.npm-cache'),
+    TARBALL,
+  ])
+  if (projectInstall.status !== 0) {
+    fail('verify-dist: project authoring install failed', home)
+    return
+  }
+  const projectCheck = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    `import('${PACKAGE_NAME}/authoring').then(m => {`
+      + ` if (m.AUTHORING_VERSION !== ${JSON.stringify(installedManifest.version)}) process.exit(1)`
+      + `})`,
+  ], { cwd: projectDir, stdio: 'inherit' })
+  if (projectCheck.status !== 0) {
+    fail('verify-dist: project authoring entry has the wrong version', home)
     return
   }
 
@@ -124,4 +208,4 @@ function main() {
   }
 }
 
-main()
+await main()
