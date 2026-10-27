@@ -134,7 +134,8 @@ export class BodyRuntime {
       && envelope.method !== 'activate'
       && envelope.method !== 'switch'
       && envelope.method !== 'confirm'
-      && envelope.method !== 'behavior.stop') {
+      && envelope.method !== 'behavior.stop'
+      && envelope.method !== 'observe') {
       return this.handleRequest(envelope)
     }
 
@@ -152,6 +153,28 @@ export class BodyRuntime {
         error: p2Error('BEHAVIOR_UNAVAILABLE', 'runtime', 'body has no behavior host', { module: 'body.behavior' }),
       }
     }
+    const params = asRecord(envelope.params)
+    if (params === undefined) return { ...base, error: invalidMessageError('params must be an object') }
+
+    if (envelope.method === 'observe') {
+      const op = typeof params.op === 'string' ? params.op : undefined
+      if (op === undefined) return { ...base, error: invalidMessageError('observe op is required') }
+      const args = asRecord(params.args ?? {}) ?? {}
+      const observed = this.behavior.observe(op, args)
+      if (observed.status === 'failed') return { ...base, error: observed.error }
+      if (observed.status === 'pending') {
+        return { ...base, error: p2Error('OBSERVE_PENDING', 'environment', 'observation is pending', { module: 'body.behavior' }) }
+      }
+      return {
+        ...base,
+        result: {
+          op,
+          value: observed.value,
+          ...(observed.meta === undefined ? {} : { meta: observed.meta }),
+        } as unknown as JsonValue,
+      }
+    }
+
     const commandId = this.requireCommandId(envelope)
     if (typeof commandId !== 'string') return { ...base, error: commandId.error }
     const existing = this.commands.get(commandId)
@@ -164,8 +187,6 @@ export class BodyRuntime {
         ? { ...base, result: existing.result as JsonValue }
         : { ...base, error: existing.error }
     }
-    const params = asRecord(envelope.params)
-    if (params === undefined) return { ...base, error: invalidMessageError('params must be an object') }
 
     try {
       switch (envelope.method) {

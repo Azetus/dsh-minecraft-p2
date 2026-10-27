@@ -46,7 +46,7 @@ const bodyManifest = {
 await writeFile(join(root, 'lib/body/body.manifest.json'), `${JSON.stringify(bodyManifest, null, 2)}\n`)
 
 if (existsSync(join(root, 'src/provider/index.ts'))) {
-  compile('src/provider/index.ts', 'lib/provider/minecraft.mjs')
+  compile('src/provider/index.ts', 'lib/provider/minecraft.mjs', ['--packages=external'])
   const provider = await readFile(join(root, 'lib/provider/minecraft.mjs'))
   const providerManifest = {
     schemaVersion: 1,

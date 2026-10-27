@@ -124,6 +124,7 @@ export class BehaviorRun {
   stop(): void {
     if (this.statusValue === 'succeeded' || this.statusValue === 'failed' || this.statusValue === 'cancelled') return
     this.stopRequested = true
+    this.executor.stop()
   }
 
   /** Process one fixed ingress batch: any accepted stop wins before decisions. */

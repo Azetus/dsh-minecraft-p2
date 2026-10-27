@@ -97,6 +97,10 @@ describe('body behavior methods', () => {
     expect(rt.tickBehavior(0)).toBe('blocked')
     expect(rt.status().pendingConfirmation?.runId).toBe(run.runId)
 
+    const observed = await rt.handleRequestAsync(request('observe', { op: 'position' }, undefined, 'epoch-1'))
+    expect(observed.error).toBeUndefined()
+    expect((observed.result as { op: string }).op).toBe('position')
+
     const confirmed = await rt.handleRequestAsync(request('confirm', {
       runId: run.runId,
       confirmationId: rt.status().pendingConfirmation?.id ?? '',

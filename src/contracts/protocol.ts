@@ -6,6 +6,7 @@ import type {
   JsonValue,
   P2Error,
   RunId,
+  ValueMeta,
 } from './types.ts'
 import { ErrorCodes } from './types.ts'
 
@@ -17,6 +18,7 @@ export const METHODS = [
   'heartbeat',
   'describe',
   'status',
+  'observe',
   'check',
   'activate',
   'switch',
@@ -129,6 +131,17 @@ export type CheckParams = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
+}
+
+export type ObserveParams = {
+  op: string
+  args?: Record<string, JsonValue>
+}
+
+export type ObserveResult = {
+  op: string
+  value: JsonValue
+  meta?: ValueMeta
 }
 
 export type CheckResult = {

@@ -15,23 +15,7 @@ async function main(): Promise<void> {
     return
   }
 
-  const behavior = new BehaviorHost({
-    bindingId: body.bindingId ?? 'unbound',
-    query: () => ({
-      status: 'failed',
-      error: p2Error(
-        'PROVIDER_UNAVAILABLE',
-        'environment',
-        'no provider is connected in this M1 body',
-        { module: 'body.provider' },
-      ),
-    }),
-    act: {
-      start: () => {
-        throw new Error('no provider is connected in this M1 body')
-      },
-    },
-  })
+  const behavior = await createBehaviorHost(body)
   const runtime = new BodyRuntime({
     body,
     behavior,
@@ -51,6 +35,50 @@ async function main(): Promise<void> {
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   server.start()
+}
+
+async function createBehaviorHost(body: BodyInfo): Promise<BehaviorHost> {
+  const host = process.env.P2_MC_HOST
+  if (host === undefined || host.length === 0) {
+    return new BehaviorHost({
+      bindingId: body.bindingId ?? 'unbound',
+      query: () => ({
+        status: 'failed',
+        error: p2Error(
+          'PROVIDER_UNAVAILABLE',
+          'environment',
+          'no provider is connected in this body',
+          { module: 'body.provider' },
+        ),
+      }),
+      act: {
+        start: () => {
+          throw new Error('no provider is connected in this body')
+        },
+      },
+    })
+  }
+
+  try {
+    const providerUrl = new URL('../provider/minecraft.mjs', import.meta.url).href
+    const providerModule = await import(providerUrl) as typeof import('../provider/mineflayer.ts')
+    const bot = await providerModule.connectMineflayer({
+      host,
+      port: Number(process.env.P2_MC_PORT ?? '25575'),
+      username: process.env.P2_MC_USERNAME ?? 'P2_Bot',
+      version: process.env.P2_MC_VERSION ?? '1.21.1',
+      timeoutMs: 15_000,
+    })
+    const provider = new providerModule.MineflayerProvider(bot)
+    return new BehaviorHost({
+      bindingId: body.bindingId ?? 'unbound',
+      query: provider.queryPort(),
+      act: provider,
+    })
+  } catch (error) {
+    process.stderr.write(`dsh-minecraft-p2 body: provider connection failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    throw error
+  }
 }
 
 await main()

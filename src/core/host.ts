@@ -7,7 +7,7 @@ import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
-import type { ActPort, QueryPort } from './node-runtime.ts'
+import type { ActPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 
 export type CheckHostRequest = {
   sourcePath: string
@@ -97,6 +97,10 @@ export class BehaviorHost {
 
   setOwner(owner: string): void {
     this.owner = owner
+  }
+
+  observe(op: string, args: Record<string, JsonValue> = {}): QueryOutcome {
+    return this.query({ op, args: {} }, args)
   }
 
   activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true } {    const credential = this.credentials.get(artifactId)

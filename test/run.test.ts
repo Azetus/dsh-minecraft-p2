@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  act as actNode,
   defineBehavior,
   externalCompletion,
+  lit,
   sequence,
+  when,
 } from '../src/authoring/index.ts'
 import { BehaviorRun } from '../src/core/run.ts'
-import type { ActPort, QueryPort } from '../src/core/node-runtime.ts'
+import type { ActHandle, ActPort, QueryPort } from '../src/core/node-runtime.ts'
 
 const query: QueryPort = () => ({ status: 'ok', value: null })
 const act: ActPort = { start: () => ({ poll: () => ({ status: 'failed', error: { code: 'NO_ACT', category: 'runtime', message: 'no act', source: { module: 'test' }, retry: 'never' } }), stop: () => {} }) }
@@ -151,5 +154,33 @@ describe('BehaviorRun external confirmation', () => {
     expect(result.status).toBe('cancelled')
     expect(result.decisions[0]?.status).toBe('cancelled')
     expect(run.confirmation?.status).toBe('cancelled')
+  })
+
+  it('propagates stop into the executor for a running act', () => {
+    let stopped = 0
+    const handle: ActHandle = {
+      poll: () => ({ status: 'running' }),
+      stop: () => { stopped += 1 },
+    }
+    const run = new BehaviorRun({
+      runId: 'run-act',
+      owner: 'owner',
+      definition: defineBehavior({
+        id: 'act-stop',
+        description: 'act stop',
+        mode: 'finite',
+        parameters: {},
+        locals: {},
+        root: sequence('root', actNode('a', 'fake')),
+        completion: { kind: 'predicate', condition: when(lit(true)) },
+      }),
+      params: {},
+      query,
+      act: { start: () => handle },
+    })
+    expect(run.tick(0)).toBe('running')
+    run.stop()
+    expect(run.tick(1)).toBe('cancelled')
+    expect(stopped).toBe(1)
   })
 })

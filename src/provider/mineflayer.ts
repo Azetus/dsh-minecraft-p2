@@ -1,4 +1,5 @@
 import type { Bot } from 'mineflayer'
+import mineflayer from 'mineflayer'
 import { Vec3 } from 'vec3'
 
 import {
@@ -23,6 +24,60 @@ import type {
 export type MineflayerProviderOptions = {
   actionTimeoutMs?: number
   moveDurationMs?: number
+}
+
+export type MineflayerConnectionOptions = {
+  host: string
+  port: number
+  username: string
+  version?: string
+  timeoutMs?: number
+}
+
+export async function connectMineflayer(options: MineflayerConnectionOptions): Promise<Bot> {
+  const bot = mineflayer.createBot({
+    host: options.host,
+    port: options.port,
+    username: options.username,
+    auth: 'offline',
+    version: options.version ?? '1.21.1',
+    hideErrors: false,
+  })
+  const timeout = options.timeoutMs ?? 15_000
+  return await new Promise<Bot>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      try { bot.quit('connect timeout') } catch {}
+      reject(new Error(`Mineflayer connect timed out after ${timeout}ms`))
+    }, timeout)
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      bot.removeListener('spawn', onSpawn)
+      bot.removeListener('error', onError)
+      bot.removeListener('kicked', onKicked)
+      bot.removeListener('end', onEnd)
+    }
+    const onSpawn = (): void => {
+      cleanup()
+      resolve(bot)
+    }
+    const onError = (error: Error): void => {
+      cleanup()
+      reject(error)
+    }
+    const onKicked = (reason: unknown): void => {
+      cleanup()
+      reject(new Error(`Mineflayer kicked: ${typeof reason === 'string' ? reason : JSON.stringify(reason)}`))
+    }
+    const onEnd = (reason: unknown): void => {
+      cleanup()
+      reject(new Error(`Mineflayer ended before spawn: ${String(reason)}`))
+    }
+    bot.once('spawn', onSpawn)
+    bot.once('error', onError)
+    bot.once('kicked', onKicked)
+    bot.once('end', onEnd)
+  })
 }
 
 type BotControl = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'sneak'
