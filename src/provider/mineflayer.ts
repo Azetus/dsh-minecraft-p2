@@ -101,7 +101,7 @@ export class MineflayerProvider implements ActPort {
     options: MineflayerProviderOptions = {},
   ) {
     this.options = {
-      actionTimeoutMs: options.actionTimeoutMs ?? 5000,
+      actionTimeoutMs: options.actionTimeoutMs ?? 120_000,
       moveDurationMs: options.moveDurationMs ?? 700,
     }
     bot.once('end', reason => {
