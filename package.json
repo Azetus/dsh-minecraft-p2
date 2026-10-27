@@ -43,6 +43,7 @@
     "bundle": "npm run build && node scripts/bundle.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:check": "node scripts/dev.mjs --no-start",
+    "dev:smoke": "node scripts/dev-api-smoke.mjs",
     "verify:dist": "node scripts/verify-dist.mjs"
   },
   "devDependencies": {

@@ -87,6 +87,9 @@ describe('BodyManager', () => {
     expect(started.epoch).toBe('epoch-1')
     expect(manager.currentState).toBe('active')
 
+    const again = await manager.start(owner)
+    expect(again.epoch).toBe(started.epoch)
+
     const status = await manager.status()
     expect(status.state).toBe('active')
 

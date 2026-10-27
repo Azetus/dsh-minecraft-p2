@@ -39,6 +39,7 @@ npm run bundle
 npm run verify:dist
 npm run dev
 npm run dev:check
+npm run dev:smoke
 npm run clean
 ```
 
@@ -51,6 +52,7 @@ npm run clean
 - `npm run verify:dist`：构建 tarball，在 `.dev-home/verify` 创建隔离 `DSH_HOME`，通过 `dsh plugin add` 安装同一个 tarball，检查 profile 组合、`--dump-config` 与 `--dump-config-schema`；成功自动清理，失败保留诊断。
 - `npm run dev`：在 `.dev-home/run` 创建隔离 `DSH_HOME`，生成包含 base、web-app 与 P2 的 profile，并启动 `dsh --port 0 --no-open`。不会读写真实 Desktop profile，也不会在用户 Documents 下创建 workspace。
 - `npm run dev:check`：只 staging 并运行 profile 检查，不启动服务，适合快速排查。
+- `node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace>`：通过 DSH Web API 执行 `/p2 status/setup/start/status/stop`，验证真实 body 子进程链路。该链路需要 DSH Host 能创建带管道的子进程；workspace-write 沙箱下会 `spawn EPERM`，应在 full access 下运行。
 - 直接运行 `node scripts/dev.mjs --keep` 可保留 `.dev-home/run` 供检查；默认退出时清理。
 - 需要模型回合时用 `node scripts/dev.mjs --with-credentials`；凭据只从真实 `DSH_HOME` 复制到隔离 home。
 - `.dev-home/` 已加入 `.gitignore`；这些脚本不进入发布 tarball。
