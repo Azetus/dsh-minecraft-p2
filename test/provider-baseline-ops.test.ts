@@ -232,6 +232,27 @@ describe('baseline query operations', () => {
     expect(calls.map(call => call.name)).toContain('close')
   })
 
+  it('reports only the container slots, not the player inventory of the window', async () => {
+    const blocks = new Map<string, string>([['2,63,0', 'chest']])
+    const { bot, raw } = fakeBot({ blocks })
+    const slots: Array<{ name: string; count: number } | null> = new Array(90).fill(null)
+    slots[0] = { name: 'raw_iron', count: 61 }
+    slots[30] = { name: 'iron_ingot', count: 3 }
+    slots[81] = { name: 'torch', count: 1 }
+    ;(raw as unknown as { openContainer: unknown }).openContainer = async () => ({
+      slots,
+      // The real window object reports a total slot count here, not the container size.
+      containerSlots: 90,
+      close: async () => {},
+    })
+    const provider = new MineflayerProvider(bot)
+    const result = await settle(provider.query('container', { x: 2, y: 63, z: 0 }))
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { kind: 'chest', containerSlots: 27, slots: [{ slot: 0, name: 'raw_iron', count: 61 }] },
+    })
+  })
+
   it('reports weather state', () => {
     const { bot } = fakeBot()
     const provider = new MineflayerProvider(bot)

@@ -211,6 +211,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Container blocks and the number of slots that belong to the container itself. */
+const CONTAINER_SLOT_COUNT: Record<string, number> = {
+  chest: 27,
+  trapped_chest: 27,
+  barrel: 27,
+  furnace: 3,
+  blast_furnace: 3,
+  smoker: 3,
+  dispenser: 9,
+  dropper: 9,
+}
+
 /** Structural view of a container/villager window; only the fields we use. */
 type AnyWindow = {
   slots?: Array<{ name: string; count: number } | null>
@@ -453,7 +465,8 @@ export class MineflayerProvider implements ActPort {
     const slots = Array.isArray(window.slots) ? window.slots : []
     // Window slots include the player inventory; a container query must only
     // report the container's own slots.
-    const containerSlots = typeof window.containerSlots === 'number' ? window.containerSlots : slots.length
+    const containerSlots = CONTAINER_SLOT_COUNT[kind]
+      ?? (typeof window.containerSlots === 'number' ? window.containerSlots : slots.length)
     const items: JsonValue[] = []
     for (let index = 0; index < Math.min(containerSlots, slots.length); index += 1) {
       const item = slots[index]
