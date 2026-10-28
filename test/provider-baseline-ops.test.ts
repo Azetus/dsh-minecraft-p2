@@ -269,7 +269,8 @@ describe('baseline control operations', () => {
     const { bot, calls } = fakeBot({ inventory: [{ name: 'oak_log', count: 2 }], recipes })
     const provider = new MineflayerProvider(bot)
     const handle = provider.start('craft', { item: 'oak_planks', count: 2 })
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // The provider settles between crafts, so give the batch time to finish.
+    await new Promise(resolve => setTimeout(resolve, 1200))
     expect(handle.poll()).toMatchObject({
       status: 'succeeded',
       result: { item: 'oak_planks', requested: 2, crafted: 2, produced: 8 },

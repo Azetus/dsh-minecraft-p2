@@ -211,6 +211,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
+}
+
 /** Container blocks and the number of slots that belong to the container itself. */
 const CONTAINER_SLOT_COUNT: Record<string, number> = {
   chest: 27,
@@ -1729,20 +1735,31 @@ class MineflayerActHandle implements ActHandle {
     let crafted = 0
     let lastError: unknown
     for (let attempt = 0; attempt < requested; attempt += 1) {
+      // A craft fired immediately after the previous one is silently dropped by
+      // the server; give the window a moment to settle and wait for the result
+      // item to actually appear before starting the next one.
+      if (crafted > 0) await delay(400)
+      const beforeThis = this.inventoryCountOfType(itemType)
       try {
         await this.craftOnce(recipe, table)
-        crafted += 1
       } catch (error) {
         lastError = error
         try {
           await this.closeCurrentWindow()
           await this.craftOnce(recipe, table)
-          crafted += 1
         } catch (retryError) {
           lastError = retryError
           break
         }
       }
+      if (!(await this.waitForItemCount(itemType, beforeThis, 800))) {
+        await this.syncInventoryWindow()
+        if (!(await this.waitForItemCount(itemType, beforeThis, 300))) {
+          lastError = lastError ?? new Error('craft produced no item')
+          break
+        }
+      }
+      crafted += 1
     }
     const produced = this.inventoryCountOfType(itemType) - before
     const expected = (recipe.result?.count ?? 1) * crafted
@@ -1787,6 +1804,15 @@ class MineflayerActHandle implements ActHandle {
     return this.bot.inventory.items()
       .filter(item => item.type === itemType)
       .reduce((total, item) => total + item.count, 0)
+  }
+
+  private async waitForItemCount(itemType: number, before: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (this.inventoryCountOfType(itemType) > before) return true
+      await delay(50)
+    }
+    return this.inventoryCountOfType(itemType) > before
   }
 
   private async transferContainer(block: Parameters<Bot['openFurnace']>[0]): Promise<JsonValue> {
