@@ -6,8 +6,10 @@ import { CheckerError, checkBehavior } from './checker.ts'
 import type { CheckerCredential } from './checker.ts'
 import { checkAct } from './act-checker.ts'
 import { checkPolicy } from './policy-checker.ts'
+import { checkBehaviorJs } from './js-checker.ts'
 import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
+import { JsBehaviorRun } from './js-runtime.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
 import type { ActPort, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
@@ -19,6 +21,8 @@ export type CheckHostRequest = {
   sourceRoot?: string
   timeoutMs?: number
   artifactKind?: 'behavior' | 'act' | 'policy'
+  /** Experimental behavior script format; default is IR. */
+  format?: 'ir' | 'js'
 }
 
 export type CheckHostResult = {
@@ -90,7 +94,7 @@ export class BehaviorHost {
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
   private owner: string
   private readonly newRunId: () => string
-  private run: BehaviorRun | undefined
+  private run: BehaviorRun | JsBehaviorRun | undefined
   private runArtifact: string | undefined
   private lastRun: LastRunSummary | null = null
   private sequence = 0
@@ -117,6 +121,7 @@ export class BehaviorHost {
     const kind = request.artifactKind ?? 'behavior'
     if (kind === 'act') return this.checkAct(request)
     if (kind === 'policy') return this.checkPolicy(request)
+    if (request.format === 'js') return this.checkJsBehavior(request)
     return this.checkBehavior(request)
   }
 
@@ -128,6 +133,24 @@ export class BehaviorHost {
       bindingId: this.bindingId,
       resolveAct: definitionId => this.registry.resolveDefault('act', definitionId)?.artifactId,
       resolvePolicy: definitionId => this.registry.find('policy', definitionId)?.artifactId,
+    })
+    this.credentials.set(result.artifact.artifactId, result.credential)
+    this.registry.add(result.artifact, result.credential)
+    return {
+      artifactId: result.artifact.artifactId,
+      definitionId: result.artifact.definition.id,
+      sourceDigest: result.artifact.sourceDigest,
+      kind: 'behavior',
+      artifact: result.artifact,
+    }
+  }
+
+  private async checkJsBehavior(request: CheckHostRequest): Promise<CheckHostResult> {
+    const result = await checkBehaviorJs({
+      sourcePath: request.sourcePath,
+      ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      bindingId: this.bindingId,
     })
     this.credentials.set(result.artifact.artifactId, result.credential)
     this.registry.add(result.artifact, result.credential)
@@ -292,15 +315,29 @@ export class BehaviorHost {
     }
 
     const runId = this.newRunId()
-    this.run = new BehaviorRun({
-      runId,
-      owner: this.owner,
-      definition: record.artifact.definition,
-      params,
-      query: this.query,
-      act: this.act,
-      policy: this.policy,
-    })
+    if (record.artifact.kind === 'behavior' && record.artifact.format === 'js') {
+      this.run = new JsBehaviorRun({
+        runId,
+        owner: this.owner,
+        artifact: record.artifact,
+        params,
+        query: this.query,
+        act: this.act,
+        policy: this.policy,
+        resolveAct: definitionId => this.registry.resolveDefault('act', definitionId)?.artifactId,
+        resolvePolicy: definitionId => this.registry.find('policy', definitionId)?.artifactId,
+      })
+    } else {
+      this.run = new BehaviorRun({
+        runId,
+        owner: this.owner,
+        definition: record.artifact.definition,
+        params,
+        query: this.query,
+        act: this.act,
+        policy: this.policy,
+      })
+    }
     this.runArtifact = input.artifactId
     const result: SwitchResult = { accepted: true, runId, status: 'running' }
     this.ledger.record(input.commandId, result)

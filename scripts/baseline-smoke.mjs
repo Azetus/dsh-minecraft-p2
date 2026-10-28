@@ -14,6 +14,7 @@ const WORKSPACE = process.cwd()
 const HOST = '127.0.0.1'
 const PORT = 25575
 const VERSION = '1.21.1'
+const FORMAT = process.env.SMOKE_FORMAT === 'js' ? 'js' : 'ir'
 const SMOKE_DIR = join(WORKSPACE, '.m5-smoke')
 const RUNS_DIR = join(WORKSPACE, '.m5-runs')
 mkdirSync(SMOKE_DIR, { recursive: true })
@@ -138,6 +139,67 @@ function actNode(id, definitionId, args) {
 }
 
 function writeBehaviors() {
+  if (FORMAT === 'js') {
+    const sources = {
+      'smoke-move': `defineBehavior({
+  manifest: { id: 'smoke-move', mode: 'finite', parameters: { x: { type: 'number', required: true }, z: { type: 'number', required: true } } },
+  *run(ctx) {
+    yield ctx.act('move-to', { x: ctx.params.x, z: ctx.params.z, timeoutMs: 8000 })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-mine': `defineBehavior({
+  manifest: { id: 'smoke-mine', mode: 'finite', parameters: { pos: { type: 'json', required: true } } },
+  *run(ctx) {
+    yield ctx.act('mine-one', { pos: ctx.params.pos })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-place': `defineBehavior({
+  manifest: { id: 'smoke-place', mode: 'finite', parameters: { pos: { type: 'json', required: true }, item: { type: 'string', required: true } } },
+  *run(ctx) {
+    yield ctx.act('place-block', { pos: ctx.params.pos, item: ctx.params.item })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-attack': `defineBehavior({
+  manifest: { id: 'smoke-attack', mode: 'finite', parameters: { entityId: { type: 'number', required: true } } },
+  *run(ctx) {
+    yield ctx.act('attack-one', { entityId: ctx.params.entityId })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-equip': `defineBehavior({
+  manifest: { id: 'smoke-equip', mode: 'finite', parameters: { item: { type: 'string', required: true } } },
+  *run(ctx) {
+    yield ctx.act('equip-item', { item: ctx.params.item, destination: 'hand' })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-use': `defineBehavior({
+  manifest: { id: 'smoke-use', mode: 'finite', parameters: { durationMs: { type: 'number', required: true } } },
+  *run(ctx) {
+    yield ctx.act('use-item', { durationMs: ctx.params.durationMs })
+    return ctx.succeed({ done: true })
+  },
+})`,
+      'smoke-patrol': `defineBehavior({
+  manifest: { id: 'smoke-patrol', mode: 'continuous', parameters: { x1: { type: 'number', required: true }, z1: { type: 'number', required: true }, x2: { type: 'number', required: true }, z2: { type: 'number', required: true } } },
+  *run(ctx) {
+    while (true) {
+      yield ctx.act('move-to', { x: ctx.params.x1, z: ctx.params.z1, timeoutMs: 8000 })
+      yield ctx.wait(200)
+      yield ctx.act('move-to', { x: ctx.params.x2, z: ctx.params.z2, timeoutMs: 8000 })
+      yield ctx.wait(200)
+    }
+  },
+})`,
+    }
+    for (const [name, code] of Object.entries(sources)) {
+      writeFileSync(join(SMOKE_DIR, `${name}.mjs`), `${code}\n`)
+    }
+    return Object.fromEntries(Object.keys(sources).map(name => [name, true]))
+  }
   const done = { done: { type: 'boolean', initial: false } }
   const behaviors = {
     'smoke-move': behaviorIR('smoke-move', {
@@ -202,7 +264,7 @@ function record(id, name, ok, detail) {
 async function main() {
   const operator = await connectBot('P2_Operator')
   const body = new Body()
-  const evidence = { startedAt: new Date().toISOString(), checks: results, queries: {}, runs: {}, errors: [] }
+  const evidence = { startedAt: new Date().toISOString(), format: FORMAT, checks: results, queries: {}, runs: {}, errors: [] }
   let base
   try {
     const hello = await body.hello()
@@ -249,11 +311,11 @@ async function main() {
     const behaviorFiles = writeBehaviors()
     const behaviorIds = {}
     for (const name of Object.keys(behaviorFiles)) {
-      const checked = await body.request('check', { sourcePath: join(SMOKE_DIR, `${name}.mjs`), artifactKind: 'behavior' }, { commandId: `check-${name}` })
+      const checked = await body.request('check', { sourcePath: join(SMOKE_DIR, `${name}.mjs`), artifactKind: 'behavior', ...(FORMAT === 'js' ? { format: 'js' } : {}) }, { commandId: `check-${name}` })
       await body.request('activate', { artifactId: checked.artifactId }, { commandId: `activate-${name}` })
       behaviorIds[name] = checked.artifactId
     }
-    record('B3', 'check smoke behaviors', Object.keys(behaviorIds).length === Object.keys(behaviorFiles).length, behaviorIds)
+    record(`B3`, `check smoke behaviors (${FORMAT})`, Object.keys(behaviorIds).length === Object.keys(behaviorFiles).length, behaviorIds)
 
     const run = async (name, params, timeoutMs = 20_000) => {
       const switched = await body.request('switch', { artifactId: behaviorIds[name], params }, { commandId: `switch-${name}-${Date.now()}` })

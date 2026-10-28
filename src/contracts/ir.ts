@@ -89,6 +89,10 @@ export type BehaviorDefinition = {
 
 export type BehaviorArtifact = {
   kind: 'behavior'
+  /** 'ir' (default) or an experimental generator script. */
+  format?: 'ir' | 'js'
+  /** Present for format === 'js'; evaluated in a sandboxed step runner. */
+  code?: string
   definition: BehaviorDefinition
   manifest: ArtifactManifest
   artifactId: string
