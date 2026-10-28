@@ -1,6 +1,7 @@
 import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
-import { goals, Movements, pathfinder } from 'mineflayer-pathfinder'
+import type { Movements } from 'mineflayer-pathfinder'
+import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 
 import {
@@ -119,12 +120,44 @@ export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
   'pathfind',
 ])
 
+/** Runtime shape of the pathfinder package (published as CommonJS). */
+type PathfinderRuntime = {
+  pathfinder: (bot: Bot) => void
+  Movements: new (bot: Bot) => Movements
+  goals: {
+    GoalNear: new (x: number, y: number, z: number, range: number) => unknown
+    GoalFollow: new (entity: unknown, distance: number) => unknown
+  }
+}
+
+const requireFromHere = createRequire(import.meta.url)
+let pathfinderRuntime: PathfinderRuntime | undefined
+
+/**
+ * Load `mineflayer-pathfinder` through `require`.
+ *
+ * The package is CommonJS; a named ESM import compiles fine but throws
+ * "Named export not found" at runtime once the provider is bundled. Loading it
+ * lazily also keeps fake-bot unit tests working without the plugin.
+ */
+function loadPathfinder(): PathfinderRuntime | undefined {
+  if (pathfinderRuntime !== undefined) return pathfinderRuntime
+  try {
+    pathfinderRuntime = requireFromHere('mineflayer-pathfinder') as PathfinderRuntime
+    return pathfinderRuntime
+  } catch {
+    return undefined
+  }
+}
+
 /** Load the pathfinder plugin and build conservative movement settings. */
 function createMovements(bot: Bot): Movements | undefined {
+  const library = loadPathfinder()
+  if (library === undefined) return undefined
   try {
     const loadable = bot as unknown as { loadPlugin?: (plugin: unknown) => void }
-    loadable.loadPlugin?.(pathfinder)
-    const movements = new Movements(bot as never)
+    loadable.loadPlugin?.(library.pathfinder)
+    const movements = new library.Movements(bot as never)
     // Navigation must not dig or tower by itself: those are explicit acts.
     movements.canDig = false
     movements.allow1by1towers = false
@@ -1017,9 +1050,10 @@ class MineflayerActHandle implements ActHandle {
           return
         }
         case 'goto': {
+          const library = loadPathfinder()
           const nav = this.navigation()
           const { x, y, z } = this.args
-          if (nav === undefined) {
+          if (nav === undefined || library === undefined) {
             this.failed = new Error('pathfinding is not available in this provider')
             this.failedCode = 'GOTO_UNAVAILABLE'
             return
@@ -1034,7 +1068,7 @@ class MineflayerActHandle implements ActHandle {
           nav.pathfinder.setMovements(this.movements)
           // GoalNear accepts a 3D target plus a radius; it walks, jumps and drops
           // as needed instead of the flat-only `moveTo` walker.
-          nav.pathfinder.setGoal(new goals.GoalNear(x, y, z, range))
+          nav.pathfinder.setGoal(new library.goals.GoalNear(x, y, z, range))
           const started = Date.now()
           let idleSince = 0
           const check = (): void => {
@@ -1070,8 +1104,9 @@ class MineflayerActHandle implements ActHandle {
           return
         }
         case 'follow': {
+          const library = loadPathfinder()
           const nav = this.navigation()
-          if (nav === undefined) {
+          if (nav === undefined || library === undefined) {
             this.failed = new Error('pathfinding is not available in this provider')
             this.failedCode = 'GOTO_UNAVAILABLE'
             return
@@ -1085,7 +1120,7 @@ class MineflayerActHandle implements ActHandle {
           const distance = typeof this.args.distance === 'number' ? Math.max(1, this.args.distance) : 3
           const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 60_000
           nav.pathfinder.setMovements(this.movements)
-          nav.pathfinder.setGoal(new goals.GoalFollow(entity as never, distance), true)
+          nav.pathfinder.setGoal(new library.goals.GoalFollow(entity as never, distance), true)
           const started = Date.now()
           const check = (): void => {
             if (this.cancelled || this.completed || this.failed !== undefined) return
