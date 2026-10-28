@@ -14,8 +14,8 @@ import mineflayer from 'mineflayer'
 
 const scenario = process.argv[2]
 const keep = process.argv.includes('--keep')
-if (!['s1', 's2', 's3', 's4', 's1x', 's2x', 's3x', 's4x'].includes(scenario)) {
-  console.error('usage: node scripts/m5-g2.mjs <s1|s2|s3|s4|s1x|s2x|s3x|s4x> [--keep]')
+if (!['s1', 's2', 's3', 's4', 's1x', 's2x', 's3x', 's4x', 's1v', 's4v'].includes(scenario)) {
+  console.error('usage: node scripts/m5-g2.mjs <s1|s2|s3|s4|s1x|s2x|s3x|s4x|s1v|s4v> [--keep]')
   process.exit(2)
 }
 
@@ -483,6 +483,69 @@ async function scenarioS4Counter(context) {
   }, 'S4x cancel terminal', 30_000)
   return { scenario: 'S4x', sawB, sawC, events, stopped, final }
 }
+
+async function scenarioS1Variant(context) {
+  const { body, operator } = context
+  await command(operator, 'clear P2_Bot', 200)
+  for (const [x, z] of [[106, 106], [108, 106], [110, 106]]) {
+    await command(operator, `summon minecraft:item ${x} ${ARENA.feet} ${z} {Item:{id:"minecraft:apple",Count:1b},PickupDelay:5}`, 150)
+  }
+  await command(operator, `tp P2_Bot 104 ${ARENA.feet} 104`, 300)
+  const artifacts = await checkAndActivate(body, [
+    ['act', join(WORKSPACE, 'acts', 'move-to.mjs')],
+    ['act', join(WORKSPACE, 'acts', 'stop.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'pick-farthest.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'item-count.mjs')],
+    ['behavior', join(WORKSPACE, 'behaviors', 'm5-pick-farthest.mjs')],
+  ])
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { item: 'apple' } }, { commandId: `switch-${Date.now()}` })
+  const final = await waitFor(async () => {
+    const status = await inspect(body)
+    return status.lastRun ?? undefined
+  }, 'S1v terminal', 90_000)
+  const pos = await position(body)
+  const inv = await inventory(body)
+  return { scenario: 'S1v', final, position: pos, inventoryCount: countItem(inv, 'apple'), farthestDistance: Math.hypot(pos.x - 110.5, pos.z - 106.5) }
+}
+
+async function scenarioS4Variant(context) {
+  const { body, operator } = context
+  const start = Date.now()
+  await command(operator, 'clear P2_Bot', 200)
+  await command(operator, `tp P2_Bot ${WAYPOINTS.A.x} ${WAYPOINTS.A.y} ${WAYPOINTS.A.z}`, 300)
+  const artifacts = await checkAndActivate(body, [
+    ['act', join(WORKSPACE, 'acts', 'move-to.mjs')],
+    ['act', join(WORKSPACE, 'acts', 'stop.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'pick-nearest.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'next-waypoint.mjs')],
+    ['behavior', join(WORKSPACE, 'behaviors', 'm5-patrol-pickup-fail.mjs')],
+  ])
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C] } }, { commandId: `switch-${Date.now()}` })
+  let spawned = false
+  let final
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    const pos = await position(body)
+    const status = await inspect(body)
+    if (status.lastRun !== null && status.lastRun !== undefined) { final = status.lastRun; break }
+    const distanceToB = Math.hypot(pos.x - WAYPOINTS.B.x, pos.z - WAYPOINTS.B.z)
+    if (!spawned && distanceToB < 6 && distanceToB > 3) {
+      await command(operator, `summon minecraft:item 110 ${ARENA.feet} 106 {Item:{id:"minecraft:apple",Count:1b},PickupDelay:5}`, 100)
+      await command(operator, 'kill @e[type=minecraft:item,x=109,y=99,z=105,dx=3,dy=4,dz=3]', 100)
+      spawned = true
+    }
+    await sleep(200)
+  }
+  if (final === undefined) {
+    const status = await inspect(body)
+    await body.request('behavior.stop', status.activeRun === null ? {} : { runId: status.activeRun.runId }, { commandId: `stop-${Date.now()}` })
+    final = await waitFor(async () => {
+      const status2 = await inspect(body)
+      return status2.lastRun ?? undefined
+    }, 'S4v terminal', 30_000)
+  }
+  return { scenario: 'S4v', spawned, final, elapsedMs: Date.now() - start }
+}
 const operator = await connectBot('P2_Operator')
 const body = new Body()
 let result
@@ -493,7 +556,7 @@ try {
   console.log(`body=${describe.body.version} binding=${describe.bindingId}`)
   await waitFor(async () => (operator.players.P2_Bot === undefined ? undefined : true), 'P2_Bot online', 20_000, 200)
   await sleep(800)
-  result = await ({ s1: scenarioS1, s2: scenarioS2, s3: scenarioS3, s4: scenarioS4, s1x: scenarioS1Counter, s2x: scenarioS2Counter, s3x: scenarioS3Counter, s4x: scenarioS4Counter })[scenario]({ body, operator })
+  result = await ({ s1: scenarioS1, s2: scenarioS2, s3: scenarioS3, s4: scenarioS4, s1x: scenarioS1Counter, s2x: scenarioS2Counter, s3x: scenarioS3Counter, s4x: scenarioS4Counter, s1v: scenarioS1Variant, s4v: scenarioS4Variant })[scenario]({ body, operator })
   result.ok = result.final?.status === 'succeeded' || result.final?.status === 'cancelled'
   result.describe = describe
 } catch (error) {
