@@ -314,7 +314,8 @@
 
 - `entities`：`maxDistance` 按到 bot 的欧氏距离过滤；结果带 `distance`，按距离升序，默认上限 64（最大 256）。`objectType` 是 mineflayer 精确值（`Pig`），`type` 才是宽类（`animal`/`hostile`）。
 - `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
-- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。
+- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。`p2_observe` 现在也在 body 内轮询同一 pending 结果（默认 3s，可用 `timeoutMs` 调整），超时返回 `OBSERVE_TIMEOUT`。
+- `craft`：逐次执行（每次 `count=1`），窗口不同步时关闭遗留窗口重试一次，最后按背包增量校验产物；不足返回 `CRAFT_INCOMPLETE`（含 requested/crafted/produced），成功返回 `{item,requested,crafted,produced}`。实测连续合成曾触发 mineflayer `updateSlot` 超时并丢件，故改为逐次+校验。
 - `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
 - `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`allowParkour=false`、`maxDropDown=3`、`allowSprinting=true`——导航不会挖方块、搭塔、跑酷或连续深降；挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。实测：4 格下落 + parkour 的旧配置曾在一次普通 `goto` 中把 bot 摔死，故收紧。
 - `forward`/`back`/`left`/`right`：`move` 的固定方向别名，参数只需 `durationMs`。

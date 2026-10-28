@@ -1341,7 +1341,9 @@ class MineflayerActHandle implements ActHandle {
           }
           const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : 1
           const table = this.craftTable()
-          const recipes = this.bot.recipesFor(itemType, null, count, table ?? null)
+          // Resolve the recipe for one execution; the loop below crafts one at a
+          // time so a stale window cannot silently swallow a whole batch.
+          const recipes = this.bot.recipesFor(itemType, null, 1, table ?? null)
           const recipe = recipes[0]
           if (recipe === undefined) {
             const needsTable = this.bot.recipesAll(itemType, null, true).some(entry => entry.requiresTable)
@@ -1351,12 +1353,14 @@ class MineflayerActHandle implements ActHandle {
             this.failedCode = needsTable && table === undefined ? 'CRAFT_NO_TABLE' : 'CRAFT_NO_INGREDIENTS'
             return
           }
-          void this.bot.craft(recipe, count, table).then(() => {
-            this.result = { item: name, count }
+          void this.craftRepeatedly(recipe, count, table, itemType, name).then(result => {
+            this.result = result
             this.completed = true
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = 'CRAFT_FAILED'
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'CRAFT_FAILED'
           })
           return
         }
@@ -1686,6 +1690,71 @@ class MineflayerActHandle implements ActHandle {
   private blockTypeId(name: string): number | undefined {
     const registry = this.bot.registry as unknown as { blocksByName?: Record<string, { id?: number }> }
     return registry.blocksByName?.[name]?.id
+  }
+
+  /**
+   * Craft one recipe at a time and verify the inventory delta.
+   *
+   * `bot.craft(recipe, N)` performs N window transactions; when a window gets
+   * out of sync mineflayer waits for an `updateSlot` event that never arrives
+   * and the whole batch is lost. Crafting one at a time, closing a stale window
+   * and retrying once keeps the failure local and reports an honest incomplete.
+   */
+  private async craftRepeatedly(
+    recipe: Parameters<Bot['craft']>[0],
+    requested: number,
+    table: Parameters<Bot['craft']>[2],
+    itemType: number,
+    name: string,
+  ): Promise<JsonValue> {
+    const before = this.inventoryCountOfType(itemType)
+    let crafted = 0
+    let lastError: unknown
+    for (let attempt = 0; attempt < requested; attempt += 1) {
+      try {
+        await this.craftOnce(recipe, table)
+        crafted += 1
+      } catch (error) {
+        lastError = error
+        try {
+          await this.closeCurrentWindow()
+          await this.craftOnce(recipe, table)
+          crafted += 1
+        } catch (retryError) {
+          lastError = retryError
+          break
+        }
+      }
+    }
+    const produced = this.inventoryCountOfType(itemType) - before
+    const expected = (recipe.result?.count ?? 1) * crafted
+    if (crafted < requested || produced < expected) {
+      throw Object.assign(
+        new Error(
+          `crafted ${crafted}/${requested} of ${name} (produced ${produced}, expected ${expected})`
+          + (lastError === undefined ? '' : `: ${errorMessage(lastError)}`),
+        ),
+        { code: 'CRAFT_INCOMPLETE' },
+      )
+    }
+    return { item: name, requested, crafted, produced }
+  }
+
+  private async craftOnce(recipe: Parameters<Bot['craft']>[0], table: Parameters<Bot['craft']>[2]): Promise<void> {
+    await this.closeCurrentWindow()
+    await this.bot.craft(recipe, 1, table)
+  }
+
+  private async closeCurrentWindow(): Promise<void> {
+    const window = this.bot.currentWindow as unknown as AnyWindow | null
+    if (window === null || window === undefined) return
+    await closeWindowQuietly(window)
+  }
+
+  private inventoryCountOfType(itemType: number): number {
+    return this.bot.inventory.items()
+      .filter(item => item.type === itemType)
+      .reduce((total, item) => total + item.count, 0)
   }
 
   private async transferContainer(block: Parameters<Bot['openFurnace']>[0]): Promise<JsonValue> {

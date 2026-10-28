@@ -16,17 +16,41 @@ function fakeBot(options: {
   inventory?: FakeItem[]
   blocks?: Map<string, string>
   recipes?: unknown[]
+  craftError?: unknown
 } = {}) {
   const controls = new Map<string, boolean>()
   const blocks = options.blocks ?? new Map<string, string>()
   const calls: Array<{ name: string; args: unknown }> = []
+  const itemIds: Record<string, number> = {
+    stone: 1,
+    oak_planks: 5,
+    oak_log: 17,
+    crafting_table: 58,
+    white_wool: 35,
+    torch: 50,
+    birch_log: 134,
+    coal: 263,
+    raw_iron: 264,
+    iron_ingot: 265,
+    stick: 280,
+  }
+  const itemNamesById = Object.fromEntries(Object.entries(itemIds).map(([name, id]) => [id, name]))
+  const inventory: Array<FakeItem & { type?: number }> = (options.inventory ?? []).map(item => ({
+    ...item,
+    type: itemIds[item.name] ?? 0,
+  }))
+  const addItem = (name: string, count: number): void => {
+    const existing = inventory.find(item => item.name === name)
+    if (existing === undefined) inventory.push({ name, count, type: itemIds[name] ?? 0 })
+    else existing.count += count
+  }
   const emitter = new EventEmitter()
   const bot = Object.assign(emitter, {
     entity: { position: { x: 0, y: 64, z: 0 }, onGround: true },
     entities: {} as Record<number, unknown>,
     players: {} as Record<string, unknown>,
     inventory: {
-      items: () => options.inventory ?? [],
+      items: () => inventory,
       slots: [] as Array<FakeItem | null>,
     },
     heldItem: null as FakeItem | null,
@@ -82,7 +106,12 @@ function fakeBot(options: {
     toss: async (itemType: number, _metadata: unknown, count: number) => {
       calls.push({ name: 'toss', args: { itemType, count } })
     },
-    craft: async (recipe: unknown, count: number, table?: unknown) => { calls.push({ name: 'craft', args: { recipe, count, table } }) },
+    craft: async (recipe: unknown, count: number, table?: unknown) => {
+      calls.push({ name: 'craft', args: { recipe, count, table } })
+      if (options.craftError !== undefined) throw options.craftError
+      const result = (recipe as { result?: { id: number; count: number } } | undefined)?.result
+      if (result !== undefined) addItem(itemNamesById[result.id] ?? `item:${result.id}`, result.count)
+    },
     recipesAll: () => options.recipes ?? [],
     recipesFor: () => options.recipes ?? [],
     isABed: () => true,
@@ -220,8 +249,20 @@ describe('baseline control operations', () => {
     const provider = new MineflayerProvider(bot)
     const handle = provider.start('craft', { item: 'oak_planks', count: 2 })
     await new Promise(resolve => setTimeout(resolve, 20))
-    expect(handle.poll().status).toBe('succeeded')
-    expect(calls.some(call => call.name === 'craft')).toBe(true)
+    expect(handle.poll()).toMatchObject({
+      status: 'succeeded',
+      result: { item: 'oak_planks', requested: 2, crafted: 2, produced: 8 },
+    })
+    expect(calls.filter(call => call.name === 'craft')).toHaveLength(2)
+  })
+
+  it('reports CRAFT_INCOMPLETE when the window transaction never completes', async () => {
+    const recipes = [{ result: { id: 5, count: 4 }, requiresTable: false, delta: [{ id: 17, count: -1 }] }]
+    const { bot } = fakeBot({ inventory: [{ name: 'oak_log', count: 2 }], recipes, craftError: new Error('updateSlot timeout') })
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'CRAFT_INCOMPLETE' } })
   })
 
   it('fails craft for an unknown item', () => {

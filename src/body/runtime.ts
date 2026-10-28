@@ -167,10 +167,23 @@ export class BodyRuntime {
       const op = typeof params.op === 'string' ? params.op : undefined
       if (op === undefined) return { ...base, error: invalidMessageError('observe op is required') }
       const args = asRecord(params.args ?? {}) ?? {}
-      const observed = this.behavior.observe(op, args)
+      const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)
+        ? Math.min(10_000, Math.max(0, params.timeoutMs))
+        : 3000
+      let observed = this.behavior.observe(op, args)
+      const deadline = Date.now() + timeoutMs
+      // Container/villager queries open a window asynchronously; poll the same
+      // pending observation instead of failing the tool call outright.
+      while (observed.status === 'pending' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        observed = observed.poll()
+      }
       if (observed.status === 'failed') return { ...base, error: observed.error }
       if (observed.status === 'pending') {
-        return { ...base, error: p2Error('OBSERVE_PENDING', 'environment', 'observation is pending', { module: 'body.behavior' }) }
+        return {
+          ...base,
+          error: p2Error('OBSERVE_TIMEOUT', 'timeout', `observation did not finish within ${timeoutMs}ms`, { module: 'body.behavior' }),
+        }
       }
       return {
         ...base,
