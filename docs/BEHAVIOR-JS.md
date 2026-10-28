@@ -173,3 +173,13 @@ JS 行为没有节点树，agent 无法像 IR 那样看到“计划结构”；�
 - **生命周期 bug**：行为代码可能吞取消、漏清理、无限循环；运行时要强制边界。
 - **策略泄漏**：作者可能把规划写进 behavior 或 act；实验必须记录这种泄漏，因为它决定“JS 是否只是把复杂度藏起来”。
 - **隔离基线**：vm 不是完整安全边界；实验结论不能外推为“可安全运行第三方 behavior”。
+
+## 13. 分支实现状态（2026-10-28）
+
+- 已实现：`kind: behavior` + `format: 'js'`、`checkBehaviorJs`、`JsBehaviorRun`、status 当前步骤/act/目标/等待原因、取消与 act 失败传播。
+- 形态：`defineBehavior({ manifest, run })` 全局函数（不是 `export default`），`run` 是生成器；这是初版实现细节，若采纳 JS 可改为模块导出。
+- **原型偏差**：behavior 代码在 body 进程内的 `node:vm` 中执行，尚未搬到隔离 runner；原因是先验证作者体验与执行语义。进入实验前若要求同等隔离，需要把 `JsBehaviorRun` 的 step 协议搬进 runner。
+- 已支持命令：query / act / decide / wait / succeed / fail / progress / log；`ctx.fresh(snapshot)` 显式校验时效。
+- smoke：与 IR 分支同一套 19 项，JS 分支 PASS 19/19；`npm run check` 178 tests pass。
+- 已知限制：`progress` 只记录在运行内部、尚未进入 status；没有 external confirmation；`vm` 不是完整安全边界；没有对 `ctx` 宿主对象泄漏做对抗性验证。
+- 证据：`.m5-runs/baseline-smoke-2026-10-28T08-23-23-959Z.json`。

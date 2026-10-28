@@ -173,6 +173,8 @@ export type CheckParams = {
   sourceRoot?: string
   timeoutMs?: number
   artifactKind?: 'behavior' | 'act' | 'policy'
+  /** Experimental behavior format; ignored for act/policy. */
+  format?: 'ir' | 'js'
 }
 
 export type ObserveParams = {

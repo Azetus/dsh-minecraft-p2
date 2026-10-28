@@ -241,6 +241,11 @@ export class BodyRuntime {
             return { ...base, error: invalidMessageError('artifactKind must be behavior, act or policy') }
           }
           const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | undefined
+          const rawFormat = params.format
+          if (rawFormat !== undefined && rawFormat !== 'ir' && rawFormat !== 'js') {
+            return { ...base, error: invalidMessageError('format must be ir or js') }
+          }
+          const format = rawFormat as 'ir' | 'js' | undefined
           let checked
           try {
             checked = await this.behavior.check({
@@ -248,6 +253,7 @@ export class BodyRuntime {
               ...(artifactKind === undefined ? {} : { artifactKind }),
               ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
               ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
+              ...(format === undefined ? {} : { format }),
             })
           } finally {
             this.workQuota?.release()

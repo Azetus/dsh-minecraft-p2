@@ -135,12 +135,12 @@ M5 的 G3 判定为“继续采用小 IR”，但那只证明了四个简单场�
 | 项 | 状态 |
 | --- | --- |
 | 实验协议 | 本文（草案） |
-| JS 架构 | [BEHAVIOR-JS.md](BEHAVIOR-JS.md)（草案；§10 初值已确认） |
+| JS 架构 | [BEHAVIOR-JS.md](BEHAVIOR-JS.md)（§10 初值已确认；JS 分支原型已实现，PASS 19/19） |
 | 共享基线 | 清单已整理（[BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md)）；实现未开始 |
 | 基线 tag | 未创建 |
-| 两分支 | 未创建 |
+| 两分支 | 已创建；IR 分支 smoke PASS 19/19，JS 分支 smoke PASS 19/19 |
 | 桌面 bundle 安装 | 未验证 |
-| 实验 | 未开始 |
+| 实验 | 未开始（分支实现与 smoke 已完成） |
 
 ## 11. 下一步
 
