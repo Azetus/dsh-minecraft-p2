@@ -81,11 +81,13 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
 
   register({
     name: 'p2_check',
-    description: 'Check a behavior source file in the owner project without activating or running it.',
+    description: 'Check a behavior, act or policy source file in the owner project without activating or running it.',
     parameters: {
       type: 'object',
       properties: {
         sourcePath: { type: 'string', description: 'Path inside the owner project' },
+        artifactKind: { type: 'string', enum: ['behavior', 'act', 'policy'], description: 'Artifact kind; defaults to behavior' },
+        format: { type: 'string', enum: ['ir', 'js'], description: 'Behavior format; defaults to ir' },
         timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
       },
       required: ['sourcePath'],
@@ -93,7 +95,11 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     },
     output: jsonOutput(),
     execute: guarded(async args => {
+      const kind = args.artifactKind === 'act' || args.artifactKind === 'policy' || args.artifactKind === 'behavior' ? args.artifactKind : undefined
+      const format = args.format === 'js' || args.format === 'ir' ? args.format : undefined
       return manager.check(String(args.sourcePath), {
+        ...(kind === undefined ? {} : { artifactKind: kind }),
+        ...(format === undefined ? {} : { format }),
         ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
       })
     }),
