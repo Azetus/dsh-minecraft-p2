@@ -97,6 +97,8 @@ export type ProviderRuntimeStatus = {
   idleMs: number
   /** Wall-clock time of the last observed bot death, when any. */
   lastDeathAt?: number | null
+  /** Where the bot died, when the provider observed it. */
+  lastDeathPosition?: { x: number; y: number; z: number } | null
 }
 
 export type DescribeResult = {

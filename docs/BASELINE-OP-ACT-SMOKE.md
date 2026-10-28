@@ -316,7 +316,7 @@
 - `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
 - `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。
 - `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
-- `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`maxDropDown=4`、`allowParkour/allowSprinting=true`——导航不会挖方块或搭塔，挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。
+- `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`allowParkour=false`、`maxDropDown=3`、`allowSprinting=true`——导航不会挖方块、搭塔、跑酷或连续深降；挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。实测：4 格下落 + parkour 的旧配置曾在一次普通 `goto` 中把 bot 摔死，故收紧。
 - `forward`/`back`/`left`/`right`：`move` 的固定方向别名，参数只需 `durationMs`。
 - `consume` 与 `use`：`consume` 等服务端确认吃完/喝完（`bot.consume`），`use` 只是按住固定时长后释放；进食优先用 `consume`。
 - `drive` 需要先 `mount`，停止时把载具输入归零；`fish` 需要手持钓竿，超时按 `FISH_TIMEOUT` 失败并释放使用状态。

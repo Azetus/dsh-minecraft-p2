@@ -159,11 +159,13 @@ function createMovements(bot: Bot): Movements | undefined {
     loadable.loadPlugin?.(library.pathfinder)
     const movements = new library.Movements(bot as never)
     // Navigation must not dig or tower by itself: those are explicit acts.
+    // Parkour and deep drops are off as well: a chain of legal 4-block drops was
+    // enough to kill the bot during a routine goto.
     movements.canDig = false
     movements.allow1by1towers = false
-    movements.allowParkour = true
+    movements.allowParkour = false
     movements.allowSprinting = true
-    movements.maxDropDown = 4
+    movements.maxDropDown = 3
     return movements
   } catch {
     return undefined
@@ -319,6 +321,7 @@ export class MineflayerProvider implements ActPort {
       serverAge,
       idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
       lastDeathAt: this.lastDeath?.at ?? null,
+      lastDeathPosition: this.lastDeath?.position ?? null,
     }
   }
 
