@@ -34,6 +34,8 @@
 | A20 | 三层职责纠正：op 是原子能力（声明归 P2 核心、实现归 provider），act 是唯一控制层，behavior 不得直接引用 ControlOp | [主架构 §3](ARCHITECTURE.md#3-核心概念)、[运行时 §5](RUNTIME.md#5-act-与操作控制权)；现有 provider 动作下沉为 op。 |
 | A21 | behavior = 计划（v1 小内核 IR）+ 决策（`decide` 调用的 policy）+ 状态；集合算子、`forEach`、`call` 为候选，由 [M5 验证](M5-VALIDATION.md) 的结论决定是否加入 | [IR](IR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；先证明小内核够用，再按证据扩展。 |
 | A22 | 安全口径只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全，不为第三方来源背书 | [隔离设计](ISOLATION.md)；`imported` 产物默认不启用。 |
+| A23 | G3 判定：继续采用小 IR；不引入集合算子、`forEach`、`call`，为多阶段与引用成本预设观察项 | [M5 G3 判定](M5-G3-DECISION.md)；M5 阶段仍待隔离与真实扰动证据。 |
+| A24 | 启动 behavior 表示方式对照实验：IR 仍是 `dev` 主线，JS 只在实验分支评估；结论前不合并 JS | [实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)；分支 `exp/behavior-ir`、`exp/behavior-js`，结论由 DSH 实操后给出、用户确认合并。 |
 
 这些是当前架构基线，新增部分仍是可复审的设计决定，不是源码实现事实。修改长期约束时应更新关联文档与验收，而不是只改示例代码。
 
@@ -109,11 +111,31 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 - 一组公共扰动：policy 等待中取消、取消与成功同批、unknown/过期、活动分支 policy 失败、清理失败。
 - 指标与结论规则见验证计划 §7—§8。
 
-**G3 结论**
+**G3 结论（已完成）**
 
-按验证计划 §8 判定「继续小 IR / 收缩后重试 / 转替代方案」。**G3 之前不实现集合算子、`forEach`、`call`，也不拆独立 policy runner。**
+判定为**继续采用小 IR**，不进入替代方案对照；不引入集合算子、`forEach`、`call`，也不拆独立 policy runner。观察项与触发条件见 [M5 G3 判定](M5-G3-DECISION.md)：多阶段/退出原语、精确引用成本、隔离证据、共享 runner 故障耦合。
 
-退出条件：G1 的冻结集实现并通过测试；G2 的四个场景、四个变体、公共扰动都有明确结论且证据可复核；G3 结论与依据写入验证计划；M4 链路在分层后回归通过；恶意/错误示例无法直接访问宿主能力（朴素攻击集），runner 失控时 broker 仍清理并拒绝未声明 op。
+2026-10-28 起，该结论进入 **IR vs 受限 JS 的对照实验（M5.5）**复核；实验期间 IR 仍是 `dev` 主线，若实验结论不同，将以新 decision 显式修订本条，不默认推翻。
+
+**M5 阶段尚未完成**：隔离 S1—S7 与真实游戏公共扰动仍未执行。
+
+退出条件：G1 的冻结集实现并通过测试；G2 的四个场景、四个反例、四个变体有明确结论且证据可复核；G3 结论与依据已记录；M4 链路在分层后回归通过；恶意/错误示例无法直接访问宿主能力（朴素攻击集），runner 失控时 broker 仍清理并拒绝未声明 op；隔离 S1—S7 与真实扰动补齐。
+
+### M5.5：behavior 表示方式对照实验
+
+目标：在 agent 作为决策者的前提下，比较 behavior IR 与受限 JS 协程在表达、作者效率、长跑稳定性与扩展性上的潜力；结论决定 behavior 层沿用 IR 还是转向 JS（或混合）。
+
+步骤：
+
+1. 固定实验协议与判定标准（[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)），评审 JS 架构草案（[BEHAVIOR-JS.md](BEHAVIOR-JS.md)）。
+2. 完成共享基线：op、provider、broker、act/policy runner、body/bridge、status/observability；补齐基本 act。
+3. 冻结基线：`m5-baseline` tag；smoke 清单与日志模板。
+4. 从基线拉 `exp/behavior-ir` 与 `exp/behavior-js`；各自实现 behavior 层，共享其余部分。
+5. 两分支分别打包为同包名、不同版本的 bundle，在桌面 DSH 一次装一个，验证工具面与 smoke。
+6. 正常生存世界实验：基本 behavior/act 起步，过程中由 subagent 编写新策略；每分支至少两组 session，交替进行，记录日志。
+7. DSH 写决策 memo；用户确认后合并胜者到 `dev`，败者归档；共享资产可移植。
+
+退出条件：两分支都通过同一 smoke；实验日志完整；决策 memo 说明证据、结论与合并/归档方案；若结论为 JS，`ARCHITECTURE.md §5.1` 与相关 decision 同步修订。
 
 ### M6：可复现发行与体验验收
 

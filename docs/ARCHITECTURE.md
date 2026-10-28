@@ -19,6 +19,8 @@
 | [MINECRAFT-INTEGRATION-OPTIONS.md](MINECRAFT-INTEGRATION-OPTIONS.md) | 客户端路线决策、Mineflayer 首版验证与解耦边界、真实客户端方向、历史方案及验证门槛。 |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | 决策索引、M0—M6实施阶段、验收矩阵与未验证项。 |
 | [M5-VALIDATION.md](M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
+| [BEHAVIOR-JS.md](BEHAVIOR-JS.md) | 实验草案：behavior 作为受限 JS 协程的初版架构、ctx API、生命周期与取舍。 |
+| [EXPERIMENT-BEHAVIOR-SUBSTRATE.md](EXPERIMENT-BEHAVIOR-SUBSTRATE.md) | 实验计划：IR vs 受限 JS 的共享基线、分支、安装、协议与判定。 |
 | [WS-FUTURE.md](WS-FUTURE.md) | 保留的 WebSocket、独立常驻 body、鉴权/租约与重连方案，后续实现，不是首版门槛。 |
 
 ## 目录
@@ -346,6 +348,8 @@ revision 表示源码版本，artifactId 表示确切可执行内容；同源码
 ### 5.1 表达方式的架构决定
 
 **采用方案二：通过带类型的代码接口构建行为树（behaviorTree），再由统一执行器运行。behavior 不采用 XML 定义，也不采用直接执行任意异步程序的形式。**
+
+> **实验说明（2026-10-28）**：本节的“不采用任意异步程序”仍是当前主线决定，behavior IR 继续作为 `dev` 的实现。为验证 behavior 层的表示方式，计划另开 `exp/behavior-ir` 与 `exp/behavior-js` 两个分支做 IR vs 受限 JS 协程的对照实验；JS 方案是**受限生成器协程**（I/O 只能通过 yield 命令），不是任意异步程序。实验结论出来前不改变本节；若选择 JS，将显式修订本节与相关 decision。详见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)与[JS 架构草案](BEHAVIOR-JS.md)。
 
 这一决定明确了 behavior 的表达方式；控制结构、调度与切换的基本机制见后文，数据IR和构建接口见[接口文档](CONTRACTS.md)。
 

@@ -237,3 +237,9 @@ act 只能处理一个已选目标，不得出现承包整个配额的动作。
 - **隔离**：G2 的 runner 只要求共享模式与纯桥/op 桥分离；独立 policy runner 是否拆分在 G3 后决定，见[隔离设计](ISOLATION.md)。
 - **来源与启用**：G2 的 act/policy 均由本会话编写（session-authored），不涉及 `imported`。
 - **发布**：G2 不是发行验收，不宣称可玩或支持整合包。
+
+## 11. G3 判定记录
+
+2026-10-28 完成 G3：**继续采用小 IR**，不进入替代方案对照。依据、观察项 C1—C4 与 M5 剩余门槛见 [M5 G3 判定](M5-G3-DECISION.md)。
+
+2026-10-28 起，该判定进入 behavior IR vs 受限 JS 的对照实验复核；实验期间 IR 仍是 `dev` 主线，见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)。

@@ -1,6 +1,6 @@
-# M5 G2 报告（G3 判定前）
+# M5 G2 报告（G3 输入）
 
-> 2026-10-28。本报告汇总 G1 冻结后的 G2 实测、指标与遗留问题，供 G3 判定使用。**本报告不给出 G3 结论**。
+> 2026-10-28。本报告汇总 G1 冻结后的 G2 实测、指标与遗留问题，供 G3 判定使用。G3 判定已记录：[M5-G3-DECISION.md](M5-G3-DECISION.md)。
 > 详细证据见 [M5-G2-EVIDENCE.md](M5-G2-EVIDENCE.md) 与 `.m5-runs/`（本机，ignored）。
 
 ## 1. 范围与冻结
@@ -47,7 +47,7 @@
 
 | 指标 | 观察 | 结论 |
 | --- | --- | --- |
-| 核心稳定 | 冻结后核心语义修改 0；只改场景/脚本 | 通过 |
+| 核心稳定 | 冻结后节点/表达式/checker/执行器分支修改 0；只改场景/脚本与 status 诊断字段 | 通过 |
 | 策略归属 | act 全是单 op 包装；policy 只做选择/计数/距离；无巨型 act/policy | 通过 |
 | 取消责任 | behavior/policy 无停止标志；S2/S4 的取消由平台完成 | 通过 |
 | 状态负担 | `leg`、`dir`、`attempt`、`pick`、`verdict` 都有业务含义；无 programCounter | 通过 |
@@ -110,3 +110,4 @@ policy 等待中取消、取消与成功同批、unknown/过期、活动分支 p
 - `.m5-runs/s1v-*.json`、`s2v-*.json`、`s3v-*.json`
 - 场景源码：`behaviors/m5-*.mjs`、`policies/*.mjs`、`acts/*.mjs`
 - harness：`scripts/m5-g2.mjs`
+- G3 判定：[M5-G3-DECISION.md](M5-G3-DECISION.md)
