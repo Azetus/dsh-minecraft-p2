@@ -718,6 +718,10 @@ export class MineflayerProvider implements ActPort {
           const count = clampNumber(args.count, 16, 1, 64)
           const yMin = typeof args.yMin === 'number' ? args.yMin : undefined
           const yMax = typeof args.yMax === 'number' ? args.yMax : undefined
+          // `exposed` keeps only blocks with at least one air neighbour, which is
+          // what a player could actually see or reach. Without it a query returns
+          // buried ores too, because findBlocks scans whole chunk sections.
+          const exposed = args.exposed === true
           const registry = (this.bot.registry?.blocksByName ?? {}) as unknown as Record<string, { id: number } | undefined>
           const ids = names
             .map(name => registry[name]?.id)
@@ -728,13 +732,15 @@ export class MineflayerProvider implements ActPort {
           const matching = ids.length > 0 ? ids : (block: { name: string }) => !isAirName(block.name)
           // findBlocks only returns the nearest N candidates, so a y filter needs a
           // wider candidate window before the (post-)filter; otherwise the layer the
-          // caller asked for is silently missing.
-          const yBounded = yMin !== undefined || yMax !== undefined
-          const candidateCount = yBounded ? Math.min(2048, Math.max(256, count * 32)) : Math.min(256, Math.max(64, count * 4))
+          // caller asked for is silently missing. The exposed filter has the same
+          // problem: most candidates can be buried.
+          const narrowed = yMin !== undefined || yMax !== undefined || exposed
+          const candidateCount = narrowed ? Math.min(2048, Math.max(256, count * 32)) : Math.min(256, Math.max(64, count * 4))
           const found = this.bot.findBlocks({ matching, maxDistance: radius, count: candidateCount })
           const position = this.bot.entity?.position
           const blocks = found
             .filter(point => (yMin === undefined || point.y >= yMin) && (yMax === undefined || point.y <= yMax))
+            .filter(point => !exposed || this.isExposedBlock(point.x, point.y, point.z))
             .map(point => {
               const block = this.bot.blockAt(point)
               if (block === null) return null
@@ -937,6 +943,18 @@ export class MineflayerProvider implements ActPort {
     this.current = handle
     return handle
   }
+
+  /** True when at least one of the six neighbours of a block is air. */
+  private isExposedBlock(x: number, y: number, z: number): boolean {
+    const offsets: ReadonlyArray<readonly [number, number, number]> = [
+      [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    ]
+    for (const [dx, dy, dz] of offsets) {
+      const neighbor = this.bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
+      if (neighbor !== null && isAirName(neighbor.name)) return true
+    }
+    return false
+  }
 }
 
 class MineflayerActHandle implements ActHandle {
@@ -1033,6 +1051,9 @@ class MineflayerActHandle implements ActHandle {
       // Documented way out of a bed; stop() must not leave the bot asleep.
       try { void this.bot.wake() } catch { /* the connection may be gone */ }
     }
+    if (this.name === 'pillar') {
+      try { this.bot.setControlState('jump', false) } catch { /* the connection may be gone */ }
+    }
     this.bot.clearControlStates()
   }
 
@@ -1088,6 +1109,51 @@ class MineflayerActHandle implements ActHandle {
           this.timer = setTimeout(() => {
             this.bot.setControlState('jump', false)
           }, 150)
+          return
+        }
+        case 'pillar': {
+          const count = typeof this.args.count === 'number' ? Math.min(8, Math.max(1, Math.floor(this.args.count))) : 1
+          void (async () => {
+            let placed = 0
+            for (let index = 0; index < count; index += 1) {
+              await this.syncInventoryWindow()
+              const feet = this.bot.entity.position
+              const x = Math.floor(feet.x)
+              const z = Math.floor(feet.z)
+              const startY = Math.floor(feet.y)
+              const support = this.bot.blockAt(new Vec3(x, startY - 1, z))
+              if (support === null || isAirName(support.name)) {
+                throw Object.assign(new Error(`no support block under ${x},${startY - 1},${z}`), { code: 'PILLAR_NO_SUPPORT' })
+              }
+              const held = this.bot.heldItem
+              if (held === null || held === undefined) {
+                throw Object.assign(new Error('pillar requires a held block'), { code: 'PILLAR_NO_ITEM' })
+              }
+              this.bot.setControlState('jump', true)
+              try {
+                const deadline = Date.now() + 1200
+                while (this.bot.entity.position.y < startY + 0.2 && Date.now() < deadline) await delay(20)
+              } finally {
+                this.bot.setControlState('jump', false)
+              }
+              if (this.bot.entity.position.y < startY + 0.1) {
+                throw Object.assign(new Error('jump did not lift the bot'), { code: 'PILLAR_JUMP_FAILED' })
+              }
+              await this.bot.placeBlock(support, new Vec3(0, 1, 0))
+              placed += 1
+              const landDeadline = Date.now() + 2000
+              while (this.bot.entity.onGround !== true && Date.now() < landDeadline) await delay(20)
+            }
+            return { placed }
+          })().then(result => {
+            this.result = result
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'PILLAR_FAILED'
+          })
           return
         }
         case 'moveTo': {
@@ -1766,6 +1832,18 @@ class MineflayerActHandle implements ActHandle {
   private blockTypeId(name: string): number | undefined {
     const registry = this.bot.registry as unknown as { blocksByName?: Record<string, { id?: number }> }
     return registry.blocksByName?.[name]?.id
+  }
+
+  /** True when at least one of the six neighbours of a block is air. */
+  private isExposedBlock(x: number, y: number, z: number): boolean {
+    const offsets: ReadonlyArray<readonly [number, number, number]> = [
+      [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    ]
+    for (const [dx, dy, dz] of offsets) {
+      const neighbor = this.bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
+      if (neighbor !== null && isAirName(neighbor.name)) return true
+    }
+    return false
   }
 
   /**

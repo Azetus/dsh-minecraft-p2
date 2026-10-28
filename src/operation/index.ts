@@ -24,9 +24,11 @@ export type OperationContract = {
   effects: OperationEffects
   stop: OperationStop
   capabilities: string[]
+  /** May run alongside one exclusive control (for example `jump` before `place`). */
+  concurrent?: boolean
 }
 
-export const OPERATION_CONTRACT_VERSION = '3'
+export const OPERATION_CONTRACT_VERSION = '4'
 
 export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   // Queries: read-only observations. They never change world state.
@@ -53,7 +55,8 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'back', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'left', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'right', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
-  { id: 'jump', kind: 'control', effects: 'none', stop: 'none', capabilities: ['move'] },
+  { id: 'jump', kind: 'control', effects: 'none', stop: 'none', capabilities: ['move'], concurrent: true },
+  { id: 'pillar', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move', 'place'] },
   { id: 'moveTo', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'goto', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['pathfind'] },
   { id: 'follow', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['pathfind'] },

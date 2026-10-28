@@ -232,6 +232,23 @@ describe('baseline query operations', () => {
     expect(calls.map(call => call.name)).toContain('close')
   })
 
+  it('keeps only exposed blocks when the exposed filter is requested', () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'iron_ore'],
+      ['5,64,0', 'iron_ore'],
+      ['5,65,0', 'air'],
+    ])
+    const { bot } = fakeBot({ blocks })
+    const provider = new MineflayerProvider(bot)
+    const buried = provider.query('blocks', { radius: 16, count: 8 })
+    expect(buried.status).toBe('ok')
+    if (buried.status !== 'ok') throw new Error('expected blocks')
+    expect((buried.value as unknown[]).length).toBe(2)
+    const exposed = provider.query('blocks', { radius: 16, count: 8, exposed: true })
+    expect(exposed.status).toBe('ok')
+    if (exposed.status !== 'ok') throw new Error('expected blocks')
+    expect(exposed.value).toMatchObject([{ name: 'iron_ore', x: 5, y: 64, z: 0 }])
+  })
   it('reports only the container slots, not the player inventory of the window', async () => {
     const blocks = new Map<string, string>([['2,63,0', 'chest']])
     const { bot, raw } = fakeBot({ blocks })

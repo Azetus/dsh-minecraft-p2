@@ -266,7 +266,7 @@
 | `inventory` | — | `[{name,count}]` | 仅主背包 |
 | `health` | — | `{health,food,saturation,oxygen,armor[]}` | `armor` 是已穿戴物品列表 |
 | `entities` | `{objectType?,type?,name?,maxDistance?,count?}` | 见 §10.3 | 已实现限距与 `distance` |
-| `blocks` | `{names?,radius?,count?,yMin?,yMax?}` | `[{name,x,y,z,distance}]` | y 过滤作用于候选集，见 §10.3 |
+| `blocks` | `{names?,radius?,count?,yMin?,yMax?,exposed?}` | `[{name,x,y,z,distance}]` | y/exposed 过滤作用于候选集，见 §10.3 |
 | `block` | `{x,y,z}` | `{name,x,y,z}` 或 `null` | |
 | `time` | — | `{timeOfDay,age,paused,doDaylightCycle,difficulty}` | `age` 是世界 age |
 | `equipment` | — | `{held,offhand,armor[],quickBarSlot}` | 补 `inventory` 缺的手持/护甲 |
@@ -277,7 +277,7 @@
 | `offers` | `{entityId}` | `[{index,input1,input2,output,disabled,uses,maxUses}]` | 村民交易列表 |
 | `weather` | — | `{raining,thundering,thunderState}` | |
 
-### 10.2 控制 op（21）
+### 10.2 控制 op（22）
 
 | op | 参数 | 效果 | 备注 |
 | --- | --- | --- | --- |
@@ -285,7 +285,8 @@
 | `lookAt` | `{entityId}` 或 `{x,y,z}` | none | 实体取头部高度 |
 | `move` | `{direction,durationMs?}` | active | direction 含 `jump/sprint/sneak` |
 | `forward` / `back` / `left` / `right` | `{durationMs?}` | active | `move` 的固定方向别名 |
-| `jump` | — | none | 落地才完成，会占用控制位 |
+| `jump` | — | none | 落地才完成；声明 `concurrent`，可与一个独占控制共存 |
+| `pillar` | `{count?}` | active | 跳跃并在脚下放方块，`count` 1–8；需要手持方块 |
 | `moveTo` | `{x,z,tolerance?,timeoutMs?,blockedMs?}` | active | 平地直线；无进展时自动跳一格台阶 |
 | `goto` | `{x,y,z,range?,timeoutMs?}` | active | pathfinder：可上下台阶、绕障、跳落 |
 | `follow` | `{entityId,distance?,timeoutMs?}` | active | pathfinder 动态跟随实体 |
@@ -319,6 +320,9 @@
 - `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
 - `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`allowParkour=false`、`maxDropDown=3`、`allowSprinting=true`——导航不会挖方块、搭塔、跑酷或连续深降；挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。实测：4 格下落 + parkour 的旧配置曾在一次普通 `goto` 中把 bot 摔死，故收紧。
 - `forward`/`back`/`left`/`right`：`move` 的固定方向别名，参数只需 `durationMs`。
+- 控制独占：`DeclaredOpBroker` 默认只允许一个 active control；声明 `concurrent: true` 的 op（`jump`）可与一个独占控制共存，这是「跳跃中放置」搭柱的前提。`stop` 会先释放所有 active control。
+- `pillar`：跳跃并在脚下放方块，循环 `count` 次（1–8）；需要手持方块、下方有支撑。竖井脱困用 `pillar`，不要用 `jump`+`place` 手工拼时序。
+- `blocks` 的 `exposed:true`：只返回至少一面暴露于空气的方块（等价「玩家可见/可达」）；不带该参数时 `findBlocks` 会返回整块区块内的方块，包括埋藏矿石。
 - `consume` 与 `use`：`consume` 等服务端确认吃完/喝完（`bot.consume`），`use` 只是按住固定时长后释放；进食优先用 `consume`。
 - `drive` 需要先 `mount`，停止时把载具输入归零；`fish` 需要手持钓竿，超时按 `FISH_TIMEOUT` 失败并释放使用状态。
 - 能力门控：provider 声明 `capabilities`（`src/provider/mineflayer.ts` 的 `PROVIDER_CAPABILITIES`），`DeclaredOpBroker` 对未声明的能力返回 `CAPABILITY_MISSING`。capabilities 目前**未纳入 bindingId**（binding 仍由 body manifest 计算），这是已知缺口。
@@ -343,6 +347,7 @@
 | `look-at` | `{entityId?}` 或 `{x,y,z}` | `lookAt`,`stop` |
 | `walk-forward` / `walk-back` / `walk-left` / `walk-right` | `{durationMs?}` | 对应方向 op,`stop` |
 | `jump` | — | `jump`,`stop` |
+| `pillar` | `{count?}` | `pillar`,`stop` |
 | `goto` | `{x,y,z,range?,timeoutMs?}` | `goto`,`stop` |
 | `follow` | `{entityId,distance?,timeoutMs?}` | `follow`,`stop` |
 | `unequip` | `{destination?}` | `unequip`,`stop` |
