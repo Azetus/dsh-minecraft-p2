@@ -9,6 +9,7 @@ export default {
   mode: 'continuous',
   parameters: {
     route: { type: 'json', required: true },
+    item: { type: 'string', required: true },
   },
   locals: {
     leg: { type: 'number', initial: 0 },
@@ -16,6 +17,8 @@ export default {
     drops: { type: 'json' },
     self: { type: 'json' },
     pick: { type: 'json' },
+    inv: { type: 'json' },
+    verdict: { type: 'json' },
   },
   root: {
     kind: 'repeat',
@@ -84,6 +87,32 @@ export default {
                       },
                     },
                     { kind: 'wait', id: 'settle', durationMs: 600 },
+                    { kind: 'query', id: 'q-inv', query: { op: 'inventory', args: {} }, output: 'inv' },
+                    {
+                      kind: 'decide',
+                      id: 'verify',
+                      policy: { definitionId: 'item-count' },
+                      inputs: {
+                        items: { kind: 'local', name: 'inv' },
+                        name: { kind: 'param', name: 'item' },
+                        want: { kind: 'literal', value: 1 },
+                      },
+                      output: 'verdict',
+                    },
+                    {
+                      kind: 'if',
+                      id: 'picked',
+                      when: {
+                        kind: 'expr',
+                        expr: {
+                          kind: 'binary', op: 'eq',
+                          left: { kind: 'member', object: { kind: 'local', name: 'verdict' }, key: { kind: 'literal', value: 'atLeast' } },
+                          right: { kind: 'literal', value: true },
+                        },
+                      },
+                      then: { kind: 'wait', id: 'picked-ok', durationMs: 1 },
+                      else: { kind: 'fail', id: 'not-picked', code: 'TARGET_GONE', message: 'the item never reached the inventory' },
+                    },
                   ],
                 },
               },

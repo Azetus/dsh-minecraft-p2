@@ -14,8 +14,8 @@ import mineflayer from 'mineflayer'
 
 const scenario = process.argv[2]
 const keep = process.argv.includes('--keep')
-if (!['s1', 's2', 's3', 's4', 's1x', 's2x', 's3x', 's4x', 's1v', 's4v'].includes(scenario)) {
-  console.error('usage: node scripts/m5-g2.mjs <s1|s2|s3|s4|s1x|s2x|s3x|s4x|s1v|s4v> [--keep]')
+if (!['s1', 's2', 's3', 's4', 's1x', 's2x', 's3x', 's4x', 's1v', 's2v', 's3v', 's4v'].includes(scenario)) {
+  console.error('usage: node scripts/m5-g2.mjs <s1|s2|s3|s4|s1x|s2x|s3x|s4x|s1v|s2v|s3v|s4v> [--keep]')
   process.exit(2)
 }
 
@@ -311,7 +311,7 @@ async function scenarioS4(context) {
   ])
   await body.request('switch', {
     artifactId: artifacts.behavior.artifactId,
-    params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C] },
+    params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' },
   }, { commandId: `switch-${Date.now()}` })
   const positions = []
   const events = []
@@ -403,7 +403,7 @@ async function scenarioS2Counter(context) {
     ['policy', join(WORKSPACE, 'policies', 'next-waypoint.mjs')],
     ['behavior', join(WORKSPACE, 'behaviors', 'm5-patrol.mjs')],
   ])
-  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C] } }, { commandId: `switch-${Date.now()}` })
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' } }, { commandId: `switch-${Date.now()}` })
   const final = await waitFor(async () => {
     const status = await inspect(body)
     return status.lastRun ?? undefined
@@ -449,7 +449,7 @@ async function scenarioS4Counter(context) {
     ['policy', join(WORKSPACE, 'policies', 'next-waypoint.mjs')],
     ['behavior', join(WORKSPACE, 'behaviors', 'm5-patrol-pickup.mjs')],
   ])
-  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C] } }, { commandId: `switch-${Date.now()}` })
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' } }, { commandId: `switch-${Date.now()}` })
   const events = []
   let spawned = false
   let sawB = false
@@ -462,7 +462,10 @@ async function scenarioS4Counter(context) {
     const distanceToB = Math.hypot(pos.x - WAYPOINTS.B.x, pos.z - WAYPOINTS.B.z)
     if (!spawned && distanceToB < 6 && distanceToB > 3) {
       await command(operator, `summon minecraft:item 110 ${ARENA.feet} 106 {Item:{id:"minecraft:apple",Count:1b},PickupDelay:5}`, 100)
-      await command(operator, 'kill @e[type=minecraft:item,x=109,y=99,z=105,dx=3,dy=4,dz=3]', 100)
+      await sleep(1200)
+      await command(operator, 'kill @e[type=minecraft:item,x=117,y=99,z=113,dx=3,dy=4,dz=3]', 150)
+      const after = await body.request('observe', { op: 'entities', args: { objectType: 'Item' } })
+      afterKill = after.value.length
       spawned = true
       events.push({ kind: 'spawn-and-remove', at: Date.now() - start })
     }
@@ -518,20 +521,27 @@ async function scenarioS4Variant(context) {
     ['act', join(WORKSPACE, 'acts', 'stop.mjs')],
     ['policy', join(WORKSPACE, 'policies', 'pick-nearest.mjs')],
     ['policy', join(WORKSPACE, 'policies', 'next-waypoint.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'item-count.mjs')],
     ['behavior', join(WORKSPACE, 'behaviors', 'm5-patrol-pickup-fail.mjs')],
   ])
-  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C] } }, { commandId: `switch-${Date.now()}` })
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' } }, { commandId: `switch-${Date.now()}` })
   let spawned = false
   let final
+  let afterKill
+  const timeline = []
   const deadline = Date.now() + 90_000
   while (Date.now() < deadline) {
     const pos = await position(body)
     const status = await inspect(body)
+    timeline.push({ t: Date.now() - start, act: status.activeAct, wait: status.waiting, run: status.activeRun === null ? null : status.activeRun.runId })
     if (status.lastRun !== null && status.lastRun !== undefined) { final = status.lastRun; break }
     const distanceToB = Math.hypot(pos.x - WAYPOINTS.B.x, pos.z - WAYPOINTS.B.z)
     if (!spawned && distanceToB < 6 && distanceToB > 3) {
       await command(operator, `summon minecraft:item 110 ${ARENA.feet} 106 {Item:{id:"minecraft:apple",Count:1b},PickupDelay:5}`, 100)
-      await command(operator, 'kill @e[type=minecraft:item,x=109,y=99,z=105,dx=3,dy=4,dz=3]', 100)
+      await sleep(1200)
+      await command(operator, 'kill @e[type=minecraft:item,x=117,y=99,z=113,dx=3,dy=4,dz=3]', 150)
+      const after = await body.request('observe', { op: 'entities', args: { objectType: 'Item' } })
+      afterKill = after.value.length
       spawned = true
     }
     await sleep(200)
@@ -544,7 +554,72 @@ async function scenarioS4Variant(context) {
       return status2.lastRun ?? undefined
     }, 'S4v terminal', 30_000)
   }
-  return { scenario: 'S4v', spawned, final, elapsedMs: Date.now() - start }
+  return { scenario: 'S4v', spawned, afterKill, final, timeline: timeline.slice(-25), elapsedMs: Date.now() - start }
+}
+
+async function scenarioS2Variant(context) {
+  const { body, operator } = context
+  await command(operator, `tp P2_Bot ${WAYPOINTS.A.x} ${WAYPOINTS.A.y} ${WAYPOINTS.A.z}`, 300)
+  const artifacts = await checkAndActivate(body, [
+    ['act', join(WORKSPACE, 'acts', 'move-to.mjs')],
+    ['act', join(WORKSPACE, 'acts', 'stop.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'next-waypoint-bounce.mjs')],
+    ['behavior', join(WORKSPACE, 'behaviors', 'm5-patrol-bounce.mjs')],
+  ])
+  await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' } }, { commandId: `switch-${Date.now()}` })
+  const arrivals = []
+  const expected = ['A', 'B', 'C', 'B', 'A']
+  let index = 0
+  const deadline = Date.now() + 90_000
+  while (index < expected.length && Date.now() < deadline) {
+    const pos = await position(body)
+    const target = WAYPOINTS[expected[index]]
+    if (Math.hypot(pos.x - target.x, pos.z - target.z) <= 0.8) {
+      arrivals.push(expected[index])
+      index += 1
+    }
+    await sleep(150)
+  }
+  const statusBeforeStop = await inspect(body)
+  const stopped = await body.request('behavior.stop', statusBeforeStop.activeRun === null ? {} : { runId: statusBeforeStop.activeRun.runId }, { commandId: `stop-${Date.now()}` })
+  const final = await waitFor(async () => {
+    const status = await inspect(body)
+    return status.activeRun === null && status.lastRun !== null ? status.lastRun : undefined
+  }, 'S2v cancel terminal', 30_000)
+  return { scenario: 'S2v', arrivals, stopped, final }
+}
+
+async function scenarioS3Variant(context) {
+  const { body, operator } = context
+  await command(operator, 'clear P2_Bot', 200)
+  await command(operator, 'give P2_Bot minecraft:dirt 2', 200)
+  const targets = []
+  for (let index = 0; index < 2; index += 1) {
+    const x = 104 + index
+    await command(operator, `setblock ${x} ${ARENA.feet} 116 minecraft:dirt`, 120)
+    targets.push({ pos: { x, y: ARENA.feet, z: 116 }, stand: { x, z: 115 } })
+  }
+  await command(operator, `tp P2_Bot 104 ${ARENA.feet} 113`, 300)
+  const artifacts = await checkAndActivate(body, [
+    ['act', join(WORKSPACE, 'acts', 'move-to.mjs')],
+    ['act', join(WORKSPACE, 'acts', 'stop.mjs')],
+    ['act', join(WORKSPACE, 'acts', 'mine-one.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'item-count.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'pick-target.mjs')],
+    ['policy', join(WORKSPACE, 'policies', 'is-near.mjs')],
+    ['behavior', join(WORKSPACE, 'behaviors', 'm5-gather-return.mjs')],
+  ])
+  await body.request('switch', {
+    artifactId: artifacts.behavior.artifactId,
+    params: { targets, item: 'dirt', want: 4, home: { x: 104, z: 113 } },
+  }, { commandId: `switch-${Date.now()}` })
+  const final = await waitFor(async () => {
+    const status = await inspect(body)
+    return status.lastRun ?? undefined
+  }, 'S3v terminal', 150_000)
+  const inv = await inventory(body)
+  const pos = await position(body)
+  return { scenario: 'S3v', final, inventoryCount: countItem(inv, 'dirt'), position: pos, distanceHome: Math.hypot(pos.x - 104, pos.z - 113) }
 }
 const operator = await connectBot('P2_Operator')
 const body = new Body()
@@ -556,7 +631,7 @@ try {
   console.log(`body=${describe.body.version} binding=${describe.bindingId}`)
   await waitFor(async () => (operator.players.P2_Bot === undefined ? undefined : true), 'P2_Bot online', 20_000, 200)
   await sleep(800)
-  result = await ({ s1: scenarioS1, s2: scenarioS2, s3: scenarioS3, s4: scenarioS4, s1x: scenarioS1Counter, s2x: scenarioS2Counter, s3x: scenarioS3Counter, s4x: scenarioS4Counter, s1v: scenarioS1Variant, s4v: scenarioS4Variant })[scenario]({ body, operator })
+  result = await ({ s1: scenarioS1, s2: scenarioS2, s3: scenarioS3, s4: scenarioS4, s1x: scenarioS1Counter, s2x: scenarioS2Counter, s3x: scenarioS3Counter, s4x: scenarioS4Counter, s1v: scenarioS1Variant, s2v: scenarioS2Variant, s3v: scenarioS3Variant, s4v: scenarioS4Variant })[scenario]({ body, operator })
   result.ok = result.final?.status === 'succeeded' || result.final?.status === 'cancelled'
   result.describe = describe
 } catch (error) {
