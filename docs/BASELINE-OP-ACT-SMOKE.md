@@ -253,3 +253,77 @@
 | `place` 参照面 | act 负责相邻面/支撑的局部选择；behavior 只给目标位置 |
 | `blocks` 上限 | 半径默认 16、最大 32；数量默认 16、最大 64；支持 y 范围 |
 | 攻击边界 | 基线只给 `attack-one`（单次）；战斗循环由 behavior 编写，`attack-target` 后续再议 |
+
+## 10. M5.5 基线扩展（2026-10-28，`dev`）
+
+> 本节是当前基线的权威清单；§2、§3 是 M5 时的历史目标表。op 声明在 `src/operation/index.ts`，实现在 `src/provider/mineflayer.ts`。
+
+### 10.1 查询 op（14）
+
+| op | 参数 | 返回 | 备注 |
+| --- | --- | --- | --- |
+| `position` | — | `{x,y,z,dimension}` | |
+| `inventory` | — | `[{name,count}]` | 仅主背包 |
+| `health` | — | `{health,food,saturation,oxygen,armor[]}` | `armor` 是已穿戴物品列表 |
+| `entities` | `{objectType?,type?,name?,maxDistance?,count?}` | 见 §10.3 | 已实现限距与 `distance` |
+| `blocks` | `{names?,radius?,count?,yMin?,yMax?}` | `[{name,x,y,z,distance}]` | y 过滤作用于候选集，见 §10.3 |
+| `block` | `{x,y,z}` | `{name,x,y,z}` 或 `null` | |
+| `time` | — | `{timeOfDay,age,paused,doDaylightCycle,difficulty}` | `age` 是世界 age |
+| `equipment` | — | `{held,offhand,armor[],quickBarSlot}` | 补 `inventory` 缺的手持/护甲 |
+| `entity` | `{id}` | 单个实体视图或 `null` | |
+| `players` | `{maxDistance?}` | `[{name,uuid,position,dimension,distance}]` | escort/协作 |
+| `recipe` | `{item,craftableOnly?}` | `[{result,requiresTable,ingredients[],craftable}]` | craft 的事实来源，不做递归规划 |
+| `container` | `{x,y,z}` | `{kind,slots[],fuel?,progress?}` | 打开窗口读快照后关闭；pending 查询 |
+| `offers` | `{entityId}` | `[{index,input1,input2,output,disabled,uses,maxUses}]` | 村民交易列表 |
+| `weather` | — | `{raining,thundering,thunderState}` | |
+
+### 10.2 控制 op（21）
+
+| op | 参数 | 效果 | 备注 |
+| --- | --- | --- | --- |
+| `look` | `{yaw,pitch}` | none | |
+| `lookAt` | `{entityId}` 或 `{x,y,z}` | none | 实体取头部高度 |
+| `move` | `{direction,durationMs?}` | active | direction 含 `jump/sprint/sneak` |
+| `jump` | — | none | 落地才完成，会占用控制位 |
+| `moveTo` | `{x,z,tolerance?,timeoutMs?,blockedMs?}` | active | 无进展时自动跳跃上一格台阶 |
+| `stop` | — | none | 清控制状态 |
+| `dig` | `{x,y,z}` | active | 无工具/掉落语义 |
+| `place` | `{x,y,z,face?}` | none | 需要手持方块 |
+| `attack` | `{entityId}` | none | 单次挥击，无射程检查 |
+| `equip` | `{item,destination?}` | none | |
+| `use` | `{offhand?,durationMs?}` | active | 按住时长由调用方给 |
+| `craft` | `{item,count?,table?}` | active | 就近工作台（4 格内）或显式坐标 |
+| `container-transfer` | `{x,y,z,action,item?,count?}` | none | action：`deposit/withdraw/load-input/load-fuel/take-input/take-fuel/take-output` |
+| `toss` | `{item,count?}` | none | |
+| `respawn` | — | none | 死亡后重生；provider 监听 `death` 清控制 |
+| `sleep` | `{x,y,z}` | active | 成功=上床且醒来（跳过夜晚） |
+| `interact` | `{entityId}` | none | 右键实体（挤奶/剪羊毛/交互） |
+| `activate` | `{x,y,z}` | none | 右键方块（门/按钮/拉杆/床） |
+| `mount` / `dismount` | `{entityId}` / — | active / none | 船、马 |
+| `trade` | `{entityId,index,count?}` | none | 与村民成交 |
+
+### 10.3 语义与限制
+
+- `entities`：`maxDistance` 按到 bot 的欧氏距离过滤；结果带 `distance`，按距离升序，默认上限 64（最大 256）。`objectType` 是 mineflayer 精确值（`Pig`），`type` 才是宽类（`animal`/`hostile`）。
+- `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
+- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。
+- `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
+- 能力门控：provider 声明 `capabilities`（`src/provider/mineflayer.ts` 的 `PROVIDER_CAPABILITIES`），`DeclaredOpBroker` 对未声明的能力返回 `CAPABILITY_MISSING`。capabilities 目前**未纳入 bindingId**（binding 仍由 body manifest 计算），这是已知缺口。
+- `status` 新增 `version`（bodyVersion）、真实 `connection`、`rescue:{enabled,tpRadius}`；run 进入终态后 `activeAct/activeNode/activeTarget/waiting` 置空。
+
+### 10.4 act 清单
+
+| act | 参数 | 声明 op |
+| --- | --- | --- |
+| `move-to` / `mine-one` / `stop` / `place-block` / `attack-one` / `equip-item` / `use-item` | 同 §3.3 | 不变 |
+| `craft` | `{item,count?,table?}` | `craft`,`stop` |
+| `furnace-load` | `{pos,input:{item,count},fuel:{item,count}}` | `container-transfer`,`stop` |
+| `furnace-take` | `{pos}` | `container-transfer`,`stop` |
+| `chest-transfer` | `{pos,action:'deposit'|'withdraw',item,count?}` | `container-transfer`,`stop` |
+| `toss-item` | `{item,count?}` | `toss`,`stop` |
+| `sleep` | `{pos?}` | `blocks`,`sleep`,`stop` |
+| `respawn` | — | `respawn`,`stop` |
+| `interact` | `{entityId,item?}` | `equip`,`interact`,`stop` |
+| `trade` | `{entityId,index,count?}` | `trade`,`stop` |
+| `mount` | `{entityId}` | `mount`,`stop` |
+

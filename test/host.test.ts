@@ -96,4 +96,28 @@ describe('BehaviorHost workflow', () => {
     const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
     expect(() => host.activate('p2:behavior:unknown')).toThrow(/credential/)
   })
+
+  it('clears active act/node/target once the run is terminal', async () => {
+    const waiting = `
+export default {
+  id: 'waiting-c', description: 'wait', mode: 'finite', parameters: {}, locals: {},
+  root: { kind: 'wait', id: 'settle-node', durationMs: 5000 },
+  completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: false } } },
+}
+`
+    const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
+    const artifact = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    host.activate(artifact.artifactId)
+    const run = host.switch({ artifactId: artifact.artifactId, params: {}, commandId: 'wait-run' })
+    host.tick()
+    expect(host.status().waiting).toBe('wait')
+    host.stop(run.runId as string)
+    host.tick()
+    const status = host.status()
+    expect(status.activeRun).toBeNull()
+    expect(status.activeAct).toBeNull()
+    expect(status.activeNode).toBeNull()
+    expect(status.activeTarget).toBeNull()
+    expect(status.waiting).toBeNull()
+  })
 })
