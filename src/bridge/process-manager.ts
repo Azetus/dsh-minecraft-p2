@@ -148,8 +148,12 @@ export class BodyManager {
     }
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.activeClient().check(sourcePath, options)
+  }
+
+  rescue(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().rescue(params)
   }
 
   activate(artifactId: string): Promise<JsonValue> {

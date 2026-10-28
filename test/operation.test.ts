@@ -43,11 +43,24 @@ function fakeSource(): OpSource & { started: string[]; queries: string[] } {
 }
 
 describe('operation declarations', () => {
-  it('declares the query and control operations needed by M5', () => {
-    expect(operationIds('query')).toEqual(['position', 'inventory', 'health', 'entities', 'blocks', 'time', 'block'])
-    expect(operationIds('control')).toEqual(['look', 'move', 'jump', 'moveTo', 'stop', 'dig', 'place', 'attack', 'equip', 'use'])
+  it('declares the baseline query and control operations', () => {
+    expect(operationIds('query')).toEqual([
+      'position', 'inventory', 'health', 'entities', 'blocks', 'block', 'time',
+      'equipment', 'entity', 'players', 'recipe', 'container', 'offers', 'weather',
+    ])
+    expect(operationIds('control')).toEqual([
+      'look', 'lookAt', 'move', 'forward', 'back', 'left', 'right', 'jump', 'pillar', 'moveTo', 'goto', 'follow', 'stop',
+      'dig', 'place', 'attack', 'equip', 'unequip', 'use', 'consume',
+      'craft', 'container-transfer', 'toss', 'respawn', 'sleep', 'interact', 'activate', 'mount', 'dismount',
+      'drive', 'place-entity', 'fish', 'trade',
+    ])
     expect(operationContract('dig')).toMatchObject({ kind: 'control', effects: 'active', stop: 'poll' })
-    expect(OPERATION_CONTRACTS.length).toBe(17)
+    expect(operationContract('jump')).toMatchObject({ concurrent: true })
+    expect(operationContract('pillar')).toMatchObject({ kind: 'control', effects: 'active', capabilities: ['move', 'place'] })
+    expect(operationContract('craft')).toMatchObject({ kind: 'control', capabilities: ['craft'] })
+    expect(operationContract('container')).toMatchObject({ kind: 'query', capabilities: ['container'] })
+    expect(operationContract('goto')).toMatchObject({ kind: 'control', capabilities: ['pathfind'] })
+    expect(OPERATION_CONTRACTS.length).toBe(47)
   })
 
   it('rejects unknown operations and kind mismatches', () => {
@@ -89,6 +102,15 @@ describe('DeclaredOpBroker', () => {
     first.stop()
     first.poll()
     expect(() => broker.start('dig', { x: 1, y: 2, z: 3 })).toThrow(/budget exhausted/u)
+  })
+
+  it('fails closed when the provider does not declare an operation capability', () => {
+    const source = { ...fakeSource(), capabilities: ['look', 'move'] }
+    const broker = new DeclaredOpBroker(source)
+    expect(() => broker.query('recipe', { item: 'oak_planks' })).toThrow(/does not declare/u)
+    expect(() => broker.start('craft', { item: 'oak_planks' })).toThrow(/does not declare/u)
+    expect(() => broker.start('moveTo', { x: 1, z: 2 })).not.toThrow()
+    expect(source.started).toEqual(['moveTo'])
   })
 
   it('rejects unknown control operations before reaching the provider', () => {

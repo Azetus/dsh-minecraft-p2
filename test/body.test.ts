@@ -90,6 +90,18 @@ describe('BodyRuntime', () => {
     expect(other.error?.code).toBe(ErrorCodes.INVALID_OWNER)
   })
 
+  it('reports body version, connection and rescue state', () => {
+    const rt = new BodyRuntime({
+      body,
+      newEpoch: () => 'epoch-1',
+      rescue: { enabled: true, tpRadius: 32 },
+    })
+    const status = rt.status()
+    expect(status.version).toBe('0.1.0')
+    expect(status.connection).toBe('connected')
+    expect(status.rescue).toEqual({ enabled: true, tpRadius: 32 })
+  })
+
   it('rejects requests before hello and stale epochs', () => {
     const rt = runtime()
     const before = rt.handleRequest(request('status', {}))

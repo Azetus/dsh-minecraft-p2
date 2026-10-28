@@ -22,6 +22,7 @@ export const METHODS = [
   'check',
   'activate',
   'switch',
+  'rescue',
   'confirm',
   'behavior.stop',
   'stop',
@@ -90,9 +91,23 @@ export type ProviderSummary = {
 
 /** Live server-observation state maintained by the provider. */
 export type ProviderRuntimeStatus = {
+  connected: boolean
   paused: boolean
   serverAge: number | null
   idleMs: number
+  /** Wall-clock time of the last observed bot death, when any. */
+  lastDeathAt?: number | null
+  /** Where the bot died, when the provider observed it. */
+  lastDeathPosition?: { x: number; y: number; z: number } | null
+}
+
+/** Developer-mode external operation hook state. */
+export type DevOpsStatus = {
+  enabled: boolean
+  path: string
+  generation: number
+  operations: string[]
+  lastError: string | null
 }
 
 export type DescribeResult = {
@@ -109,6 +124,8 @@ export type DescribeResult = {
 
 export type StatusResult = {
   bodyEpoch: BodyEpoch
+  /** Package/body version from body.manifest.json, e.g. 0.3.2-exp-ir.1. */
+  version: string
   owner: OwnerContext | null
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
@@ -125,6 +142,10 @@ export type StatusResult = {
   activeTarget?: { x: number; z: number } | null
   waiting?: string | null
   lastFailure?: P2Error | null
+  /** Experiment-only rescue channel state; null when the body has no provider. */
+  rescue?: { enabled: boolean; tpRadius: number } | null
+  /** Developer-mode external operations; null when the hook is disabled. */
+  devOps?: DevOpsStatus | null
   loggingUnavailable?: boolean
   droppedLogCount?: number
 }
@@ -189,6 +210,28 @@ export type ActivateResult = {
 export type SwitchParams = {
   artifactId: string
   params: Record<string, JsonValue>
+}
+
+export type RescueAction = 'tp' | 'effect' | 'respawn'
+
+export type RescueParams = {
+  action: RescueAction
+  x?: number
+  y?: number
+  z?: number
+  effect?: 'instant_health' | 'regeneration' | 'saturation'
+  durationSeconds?: number
+  amplifier?: number
+  reason: string
+  category: 'stuck' | 'trapped' | 'death_loop' | 'health' | 'food' | 'other'
+}
+
+export type RescueResult = {
+  auditId: string
+  command: string
+  sent: true
+  before: { position: JsonValue; health: JsonValue }
+  note: string
 }
 
 export type SwitchResult = {
@@ -261,6 +304,10 @@ export type BodyRuntimeOptions = {
   newEpoch?: () => string
   newCommandId?: () => string
   shutdownGraceMs?: number
+  /** Experiment-only rescue channel state, reported in status. */
+  rescue?: { enabled: boolean; tpRadius: number }
+  /** Developer-mode operation hook, read fresh on every status call. */
+  devOps?: () => DevOpsStatus | null
 }
 
 export function p2Error(

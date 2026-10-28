@@ -253,3 +253,147 @@
 | `place` 参照面 | act 负责相邻面/支撑的局部选择；behavior 只给目标位置 |
 | `blocks` 上限 | 半径默认 16、最大 32；数量默认 16、最大 64；支持 y 范围 |
 | 攻击边界 | 基线只给 `attack-one`（单次）；战斗循环由 behavior 编写，`attack-target` 后续再议 |
+
+## 10. M5.5 基线扩展（2026-10-28，`dev`）
+
+> 本节是当前基线的权威清单；§2、§3 是 M5 时的历史目标表。op 声明在 `src/operation/index.ts`，实现在 `src/provider/mineflayer.ts`。
+
+### 10.1 查询 op（14）
+
+| op | 参数 | 返回 | 备注 |
+| --- | --- | --- | --- |
+| `position` | — | `{x,y,z,dimension}` | |
+| `inventory` | — | `[{name,count}]` | 仅主背包 |
+| `health` | — | `{health,food,saturation,oxygen,armor[]}` | `armor` 是已穿戴物品列表 |
+| `entities` | `{objectType?,type?,name?,maxDistance?,count?}` | 见 §10.3 | 已实现限距与 `distance` |
+| `blocks` | `{names?,radius?,count?,yMin?,yMax?,exposed?}` | `[{name,x,y,z,distance}]` | y/exposed 过滤作用于候选集，见 §10.3 |
+| `block` | `{x,y,z}` | `{name,x,y,z}` 或 `null` | |
+| `time` | — | `{timeOfDay,age,paused,doDaylightCycle,difficulty}` | `age` 是世界 age |
+| `equipment` | — | `{held,offhand,armor[],quickBarSlot}` | 补 `inventory` 缺的手持/护甲 |
+| `entity` | `{id}` | 单个实体视图或 `null` | |
+| `players` | `{maxDistance?}` | `[{name,uuid,position,dimension,distance}]` | escort/协作 |
+| `recipe` | `{item,craftableOnly?}` | `[{result,requiresTable,ingredients[],craftable}]` | craft 的事实来源，不做递归规划 |
+| `container` | `{x,y,z}` | `{kind,slots[],fuel?,progress?}` | 打开窗口读快照后关闭；pending 查询 |
+| `offers` | `{entityId}` | `[{index,input1,input2,output,disabled,uses,maxUses}]` | 村民交易列表 |
+| `weather` | — | `{raining,thundering,thunderState}` | |
+
+### 10.2 控制 op（22）
+
+| op | 参数 | 效果 | 备注 |
+| --- | --- | --- | --- |
+| `look` | `{yaw,pitch}` | none | |
+| `lookAt` | `{entityId}` 或 `{x,y,z}` | none | 实体取头部高度 |
+| `move` | `{direction,durationMs?}` | active | direction 含 `jump/sprint/sneak` |
+| `forward` / `back` / `left` / `right` | `{durationMs?}` | active | `move` 的固定方向别名 |
+| `jump` | — | none | 落地才完成；声明 `concurrent`，可与一个独占控制共存 |
+| `pillar` | `{count?}` | active | 跳跃并在脚下放方块，`count` 1–8；需要手持方块 |
+| `moveTo` | `{x,z,tolerance?,timeoutMs?,blockedMs?}` | active | 平地直线；无进展时自动跳一格台阶 |
+| `goto` | `{x,y,z,range?,timeoutMs?}` | active | pathfinder：可上下台阶、绕障、跳落 |
+| `follow` | `{entityId,distance?,timeoutMs?}` | active | pathfinder 动态跟随实体 |
+| `stop` | — | none | 清控制状态 |
+| `dig` | `{x,y,z}` | active | 无工具/掉落语义 |
+| `place` | `{x,y,z,face?}` | none | 需要手持方块 |
+| `attack` | `{entityId}` | none | 单次挥击，无射程检查 |
+| `equip` | `{item,destination?}` | none | |
+| `unequip` | `{destination?}` | none | |
+| `use` | `{offhand?,durationMs?}` | active | 按住时长由调用方给 |
+| `consume` | — | active | 吃/喝手持物，等服务端确认 |
+| `craft` | `{item,count?,table?}` | active | 就近工作台（4 格内）或显式坐标 |
+| `container-transfer` | `{x,y,z,action,item?,count?}` | none | action：`deposit/withdraw/load-input/load-fuel/take-input/take-fuel/take-output` |
+| `toss` | `{item,count?}` | none | |
+| `respawn` | — | none | 死亡后重生；provider 监听 `death` 清控制 |
+| `sleep` | `{x,y,z}` | active | 成功=上床且醒来（跳过夜晚） |
+| `interact` | `{entityId}` | none | 右键实体（挤奶/剪羊毛/交互） |
+| `activate` | `{x,y,z}` | none | 右键方块（门/按钮/拉杆/床） |
+| `mount` / `dismount` | `{entityId}` / — | active / none | 船、马 |
+| `drive` | `{left,forward,durationMs?}` | active | 载具操控，-1..1 |
+| `place-entity` | `{x,y,z,face?}` | none | 放置船/矿车 |
+| `fish` | `{timeoutMs?}` | active | 钓鱼，需手持钓竿 |
+| `trade` | `{entityId,index,count?}` | none | 与村民成交 |
+
+### 10.3 语义与限制
+
+- `entities`：`maxDistance` 按到 bot 的欧氏距离过滤；结果带 `distance`，按距离升序，默认上限 64（最大 256）。`objectType` 是 mineflayer 精确值（`Pig`），`type` 才是宽类（`animal`/`hostile`）。
+- `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
+- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。`p2_observe` 现在也在 body 内轮询同一 pending 结果（默认 3s，可用 `timeoutMs` 调整），超时返回 `OBSERVE_TIMEOUT`。快照只返回容器自身槽位（`window.containerItems()`，回退 `inventoryStart` 之前的槽），`containerSlots` 为容器段槽位数，不再混入玩家背包。
+- `craft`：逐次执行（每次 `count=1`），每次合成前关闭遗留窗口并 `_syncWindow(inventory)`，合成后等待背包内结果物品增长（最长 800ms），两次合成之间间隔 400ms（实测紧跟其后的合成会被服务器静默丢弃），失败时重试一次，最后按背包增量校验产物；不足返回 `CRAFT_INCOMPLETE`（含 requested/crafted/produced），成功返回 `{item,requested,crafted,produced}`。实测：容器交互后客户端背包模型过期会导致 `bot.craft` 点错槽位（合成出按钮、数量错乱），`_syncWindow` 后恢复正常。
+- `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
+- `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`allowParkour=false`、`maxDropDown=3`、`allowSprinting=true`——导航不会挖方块、搭塔、跑酷或连续深降；挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。实测：4 格下落 + parkour 的旧配置曾在一次普通 `goto` 中把 bot 摔死，故收紧。
+- `forward`/`back`/`left`/`right`：`move` 的固定方向别名，参数只需 `durationMs`。
+- 控制独占：`DeclaredOpBroker` 默认只允许一个 active control；声明 `concurrent: true` 的 op（`jump`）可与一个独占控制共存，这是「跳跃中放置」搭柱的前提。`stop` 会先释放所有 active control。
+- `pillar`：跳跃并在脚下放方块，循环 `count` 次（1–8）；需要手持方块、下方有支撑。竖井脱困用 `pillar`，不要用 `jump`+`place` 手工拼时序。
+- `blocks` 的 `exposed:true`：只返回至少一面暴露于空气的方块（等价「玩家可见/可达」）；不带该参数时 `findBlocks` 会返回整块区块内的方块，包括埋藏矿石。
+- `consume` 与 `use`：`consume` 等服务端确认吃完/喝完（`bot.consume`），`use` 只是按住固定时长后释放；进食优先用 `consume`。
+- `drive` 需要先 `mount`，停止时把载具输入归零；`fish` 需要手持钓竿，超时按 `FISH_TIMEOUT` 失败并释放使用状态。
+- 能力门控：provider 声明 `capabilities`（`src/provider/mineflayer.ts` 的 `PROVIDER_CAPABILITIES`），`DeclaredOpBroker` 对未声明的能力返回 `CAPABILITY_MISSING`。capabilities 目前**未纳入 bindingId**（binding 仍由 body manifest 计算），这是已知缺口。
+- `status` 新增 `version`（bodyVersion）、真实 `connection`、`rescue:{enabled,tpRadius}`；run 进入终态后 `activeAct/activeNode/activeTarget/waiting` 置空。
+
+### 10.4 act 清单
+
+| act | 参数 | 声明 op |
+| --- | --- | --- |
+| `move-to` / `mine-one` / `stop` / `place-block` / `attack-one` / `equip-item` / `use-item` | 同 §3.3 | 不变 |
+| `craft` | `{item,count?,table?}` | `craft`,`stop` |
+| `furnace-load` | `{pos,input:{item,count},fuel:{item,count}}` | `container-transfer`,`stop` |
+| `furnace-take` | `{pos}` | `container-transfer`,`stop` |
+| `chest-transfer` | `{pos,action:'deposit'|'withdraw',item,count?}` | `container-transfer`,`stop` |
+| `toss-item` | `{item,count?}` | `toss`,`stop` |
+| `sleep` | `{pos?}` | `blocks`,`sleep`,`stop` |
+| `respawn` | — | `respawn`,`stop` |
+| `interact` | `{entityId,item?}` | `equip`,`interact`,`stop` |
+| `trade` | `{entityId,index,count?}` | `trade`,`stop` |
+| `mount` | `{entityId}` | `mount`,`stop` |
+| `dismount` | — | `dismount`,`stop` |
+| `look-at` | `{entityId?}` 或 `{x,y,z}` | `lookAt`,`stop` |
+| `walk-forward` / `walk-back` / `walk-left` / `walk-right` | `{durationMs?}` | 对应方向 op,`stop` |
+| `jump` | — | `jump`,`stop` |
+| `pillar` | `{count?}` | `pillar`,`stop` |
+| `goto` | `{x,y,z,range?,timeoutMs?}` | `goto`,`stop` |
+| `follow` | `{entityId,distance?,timeoutMs?}` | `follow`,`stop` |
+| `unequip` | `{destination?}` | `unequip`,`stop` |
+| `consume` | `{item?}` | `equip`,`consume`,`stop` |
+| `drive` | `{left,forward,durationMs?}` | `drive`,`stop` |
+| `place-entity` | `{x,y,z,face?}` | `place-entity`,`stop` |
+| `fish` | `{timeoutMs?}` | `fish`,`stop` |
+| `activate-block` | `{x,y,z}` | `activate`,`stop` |
+
+### 10.5 开发者模式：外部 op 模块（临时口子）
+
+> 仅开发期使用。正式实验必须关闭；它破坏 binding/epoch 身份假设，不是发布能力。
+
+- 开关：`.p2/config.json` 的 `experiment.devOps: true`，可配 `experiment.devOpsPath`（默认 `.p2/dev-ops.mjs`）。
+- 模块格式（ESM）：
+  ```js
+  export const operations = [
+    { id: 'scanArea', kind: 'query', capabilities: [], query: (args, ctx) => ({ status: 'ok', value, meta: ctx.meta('dev.scanArea') }) },
+    { id: 'digArea', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['dig'], start: (args, ctx) => ({ poll(), stop() }) },
+  ]
+  ```
+  `ctx = { bot, meta(scope), now() }`；query 返回 `QueryOutcome`，control 返回 `{ poll(), stop() }`。
+- 热重载：body 每 500ms 检查文件 mtime，变化后用新 generation 重新 import；**无需重打包、无需重装插件、无需重启 body**。加载失败保留上一代并在 `status.devOps.lastError` 报告。
+- 覆盖：外部 op 与内置 op 同名时**外部优先**，因此现有 op 也能搬进该文件迭代，不用重建 bundle。
+- 观测：`status.devOps = { enabled, path, generation, operations[], lastError }`；能力列表会合并外部 op 声明的 capability。
+- 收口：经过冒烟/实机验证的 op 应合并回 `src/operation/index.ts` + `src/provider/mineflayer.ts`（或明确作为 experiment-only 保留），并把 `devOps` 关掉。
+- 已知限制：外部 op 直接在 body 进程内执行，没有 runner 隔离；文件在 body cwd 下解析；热重载不会重放正在运行的行为。
+
+### 10.6 第三方 API 契约（provider 依赖的不变量）
+
+> 依据：`node_modules/mineflayer/docs/api.md` 与 `node_modules/prismarine-windows/API.md`（随包文档）。改 provider 前先核对这些条目，不要凭类型定义猜测行为。
+
+| 依赖点 | 文档事实 | 我们的用法与注意 |
+| --- | --- | --- |
+| `bot.craft(recipe, count, table)` | `count` 是**执行次数**（`null`=1）；Promise 在「合成完成且背包已更新」时 resolve | 仍逐次 `count=1` 执行。实测容器交互后背包模型会过期：合成前 `_syncWindow(bot.inventory)`，合成后等结果物品增长（≤800ms），两次之间留 400ms，最后按增量校验 |
+| `window.slots` | 是**整个窗口**的槽位，含玩家背包 | 容器查询不能直接返回全量；用 `window.containerItems()`（容器段），回退 `window.inventoryStart` 之前的槽；不要再猜 `containerSlots` 之类的字段 |
+| `window.containerItems()/containerCount()` | 文档化的「容器段」读取方法 | 容器快照的槽位来源；返回值是 `Item` 列表（Item 自带 `slot`） |
+| `window.count(itemType, metadata)` | 文档化的「背包段」计数 | `inventoryCountOfType()` 优先用它，回退 `items()` 过滤 |
+| `bot.findBlock({ matching })` | `matching` 是**方块类型 id**（`registry.blocksByName[name].id`） | 曾把物品 id 传进去导致「有工作台仍 `CRAFT_NO_TABLE`」 |
+| `bot.openVillager` / `villager.trades` | 交易窗口异步填充，需监听 `ready` 事件 | `offers` 查询与 `trade` 都先等 `ready`（有上限超时）再读 `trades` |
+| `furnace.fuel` / `furnace.progress` | `Furnace` 实例属性 | 容器快照里按数值透出，未燃烧时可能缺省 |
+| `bot.dig(block)` | 同一时刻只能挖一个方块；`stopDigging()` 中断 | `stop()` 调 `stopDigging()`；连续挖必须 await 上一个 |
+| `bot.mount(entity)` / `bot.dismount()` | 返回 `void`（不是 Promise） | 轮询 `bot.vehicle` 判断完成，不 await |
+| `bot.moveVehicle(left, forward)` | `left`：-1 右 / 1 左；`forward`：-1 后 / 1 前 | `drive` op 的参数直接映射 |
+| `bot.sleep(bed)` / `bot.wake()` | `wake()` 是文档化的下床方法 | `sleep` 的 `stop()` 必须调 `wake()`，否则会留在床上 |
+| `bot.look(yaw, pitch, force)` | yaw 从正东起、逆时针；pitch 0 平视 | 移动/挖掘用 `force` 时服务端才立刻知道朝向 |
+| `window` 事件 `updateSlot` | 合成等窗口事务依赖该事件推进 | 超时即窗口失步；不要靠盲重试，先关窗重开并重同步 |
+
+

@@ -84,12 +84,18 @@ export class BodyClient {
     })
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.command('check', {
       sourcePath,
       ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.artifactKind === undefined ? {} : { artifactKind: options.artifactKind }),
+      ...(options.format === undefined ? {} : { format: options.format }),
     })
+  }
+
+  rescue(params: JsonValue): Promise<JsonValue> {
+    return this.command('rescue', params as Record<string, JsonValue>)
   }
 
   activate(artifactId: string): Promise<JsonValue> {

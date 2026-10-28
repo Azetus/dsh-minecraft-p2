@@ -229,6 +229,8 @@ policy 的引入不改变「执行器只运行内建控制结构与受限表达�
 
 op 声明以静态文件随 provider 包发布，检查阶段只读它、不加载 provider、不连接游戏；连接握手时核验实际实现与静态声明一致，不一致返回 `CAPABILITY_MISMATCH`。声明摘要进入 bindingId，实现升级产生新 binding。
 
+> M5.5 现状（2026-10-28）：op 声明的**能力标记**已进入 `src/operation/index.ts` 并由 `DeclaredOpBroker` 在运行期校验（缺失返回 `CAPABILITY_MISSING`）；provider 通过 `PROVIDER_CAPABILITIES` 声明实际实现，`describe`/`hello`/`status` 会回报。但 `bindingId` 仍由 body manifest 计算，**尚未纳入 provider 能力摘要**——这是已知缺口，不影响 IR/JS 对照（两边共用同一基线）。
+
 ```ts
 type QueryReply<T> =
   | { kind: "ok"; value: T; observation: ObservationMeta }

@@ -1,5 +1,5 @@
 import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
-import type { LastRunSummary, ProviderRuntimeStatus } from '../contracts/protocol.ts'
+import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -79,6 +79,8 @@ export type BehaviorHostOptions = {
   newRunId?: () => string
   /** Load act/policy code in a sandbox to extract its manifest. */
   loadManifest?: (kind: 'act' | 'policy', code: string, artifactId: string) => Promise<JsonValue>
+  /** Experiment-only rescue channel; behavior/act cannot reach it. */
+  rescue?: (request: RescueParams, context: { owner: string }) => Promise<RescueResult>
 }
 
 /** Library-level behavior host used by M1 tests; body wiring remains separate. */
@@ -92,6 +94,7 @@ export class BehaviorHost {
   private readonly policy: PolicyPort
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
+  private readonly rescue: BehaviorHostOptions['rescue']
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined
@@ -113,6 +116,7 @@ export class BehaviorHost {
     }))
     this.providerStatus = options.providerStatus
     this.loadManifest = options.loadManifest
+    this.rescue = options.rescue
     this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
@@ -209,6 +213,16 @@ export class BehaviorHost {
 
   setOwner(owner: string): void {
     this.owner = owner
+  }
+
+  async rescueRun(request: RescueParams): Promise<RescueResult> {
+    if (this.run !== undefined && !isTerminal(this.run.status)) {
+      throw p2Error('RESCUE_BUSY', 'runtime', 'stop the active behavior before using rescue', { module: 'core.host' })
+    }
+    if (this.rescue === undefined) {
+      throw p2Error('RESCUE_UNAVAILABLE', 'capability', 'rescue is not configured for this body', { module: 'core.host' })
+    }
+    return this.rescue(request, { owner: this.owner })
   }
 
   observe(op: string, args: Record<string, JsonValue> = {}): QueryOutcome {
@@ -391,15 +405,18 @@ export class BehaviorHost {
   status(): HostStatus {
     const run = this.run
     if (run !== undefined && isTerminal(run.status)) this.rememberLastRun()
+    // A terminal run keeps its last progress report; only an active run may
+    // describe what is running now. Stale act/node/target fields read as残留控制.
+    const active = run !== undefined && !isTerminal(run.status) ? run : undefined
     return {
       bindingId: this.bindingId,
-      activeRun: run === undefined || isTerminal(run.status)
+      activeRun: active === undefined
         ? null
         : {
-            runId: run.runId,
-            status: run.status,
+            runId: active.runId,
+            status: active.status,
             artifactId: this.runArtifact ?? '',
-            completion: run.definition.completion?.kind ?? null,
+            completion: active.definition.completion?.kind ?? null,
           },
       pendingConfirmation: run?.confirmation?.status === 'pending'
         ? { id: run.confirmation.id, runId: run.runId }
@@ -407,11 +424,11 @@ export class BehaviorHost {
       lastRun: this.lastRun,
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
-      activeAct: run?.describe().activeAct ?? null,
-      activeNode: run?.describe().activeNode ?? null,
-      activeTarget: run?.describe().activeTarget ?? null,
-      waiting: run?.describe().waiting ?? null,
-      lastFailure: run?.describe().lastFailure ?? null,
+      activeAct: active?.describe().activeAct ?? null,
+      activeNode: active?.describe().activeNode ?? null,
+      activeTarget: active?.describe().activeTarget ?? null,
+      waiting: active?.describe().waiting ?? null,
+      lastFailure: active?.describe().lastFailure ?? null,
     }
   }
 

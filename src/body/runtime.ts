@@ -25,6 +25,7 @@ import type {
   ConfirmParams,
   ConfirmationResult,
   DescribeResult,
+  DevOpsStatus,
   HeartbeatParams,
   HelloParams,
   HelloResult,
@@ -59,6 +60,8 @@ export class BodyRuntime {
   private readonly heartbeatTimeoutMs: number | undefined
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
+  private readonly rescueState: { enabled: boolean; tpRadius: number } | undefined
+  private readonly devOpsState: (() => DevOpsStatus | null) | undefined
 
   constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota }) {
     this.body = options.body
@@ -70,6 +73,8 @@ export class BodyRuntime {
     this.initialized = this.owner !== null
     this.now = options.now ?? Date.now
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs
+    this.rescueState = options.rescue
+    this.devOpsState = options.devOps
     if (this.owner !== null) this.lastHeartbeatAt = this.now()
   }
 
@@ -136,7 +141,8 @@ export class BodyRuntime {
       && envelope.method !== 'switch'
       && envelope.method !== 'confirm'
       && envelope.method !== 'behavior.stop'
-      && envelope.method !== 'observe') {
+      && envelope.method !== 'observe'
+      && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
     }
 
@@ -161,10 +167,23 @@ export class BodyRuntime {
       const op = typeof params.op === 'string' ? params.op : undefined
       if (op === undefined) return { ...base, error: invalidMessageError('observe op is required') }
       const args = asRecord(params.args ?? {}) ?? {}
-      const observed = this.behavior.observe(op, args)
+      const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)
+        ? Math.min(10_000, Math.max(0, params.timeoutMs))
+        : 3000
+      let observed = this.behavior.observe(op, args)
+      const deadline = Date.now() + timeoutMs
+      // Container/villager queries open a window asynchronously; poll the same
+      // pending observation instead of failing the tool call outright.
+      while (observed.status === 'pending' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        observed = observed.poll()
+      }
       if (observed.status === 'failed') return { ...base, error: observed.error }
       if (observed.status === 'pending') {
-        return { ...base, error: p2Error('OBSERVE_PENDING', 'environment', 'observation is pending', { module: 'body.behavior' }) }
+        return {
+          ...base,
+          error: p2Error('OBSERVE_TIMEOUT', 'timeout', `observation did not finish within ${timeoutMs}ms`, { module: 'body.behavior' }),
+        }
       }
       return {
         ...base,
@@ -258,6 +277,11 @@ export class BodyRuntime {
           this.recordCommand(commandId, 'activate', result)
           return { ...base, result: result as unknown as JsonValue }
         }
+        case 'rescue': {
+          const rescued = await this.behavior.rescueRun(params as never)
+          this.recordCommand(commandId, 'rescue', rescued)
+          return { ...base, result: rescued as unknown as JsonValue }
+        }
         case 'switch': {
           const artifactId = typeof params.artifactId === 'string' ? params.artifactId : undefined
           if (artifactId === undefined) return { ...base, error: invalidMessageError('artifactId is required') }
@@ -350,24 +374,31 @@ export class BodyRuntime {
 
   status(): StatusResult {
     const behavior = this.behavior?.status()
+    const providerState = behavior?.providerState ?? null
+    const connected = providerState === null || providerState === undefined
+      ? this.behavior === undefined
+      : providerState.connected !== false
     return {
       bodyEpoch: this.bodyEpoch,
+      version: this.body.manifest.bodyVersion,
       owner: this.owner,
       health: this.closing ? 'faulted' : 'ready',
-      connection: 'connected',
+      connection: connected ? 'connected' : 'disconnected',
       activeRun: behavior?.activeRun ?? null,
       lastRun: behavior?.lastRun ?? null,
       pendingConfirmation: behavior?.pendingConfirmation ?? null,
       bindingId: this.body.bindingId,
       capabilities: this.body.capabilities,
       provider: this.body.provider,
-      providerState: behavior?.providerState ?? null,
+      providerState,
       commandCount: this.commands.size,
       activeAct: this.behavior?.status().activeAct ?? null,
       activeNode: this.behavior?.status().activeNode ?? null,
       activeTarget: this.behavior?.status().activeTarget ?? null,
       waiting: this.behavior?.status().waiting ?? null,
       lastFailure: this.behavior?.status().lastFailure ?? null,
+      rescue: this.rescueState ?? null,
+      devOps: this.devOpsState?.() ?? null,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,
         droppedLogCount: this.debugLog.droppedCount,

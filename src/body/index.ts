@@ -1,7 +1,8 @@
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createStdioTransport, p2Error } from '../contracts/index.ts'
-import type { BodyInfo } from '../contracts/index.ts'
+import type { BodyInfo, DevOpsStatus } from '../contracts/index.ts'
 import { BehaviorHost } from '../core/host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { RunnerActPort } from '../core/act-port.ts'
@@ -9,11 +10,15 @@ import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerClient } from '../core/runner-client.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
+import { DevOpsHost, createCompositeOpSource } from './dev-ops.ts'
 import { loadBodyInfo } from './manifest.ts'
 import { loadProviderConfig } from './provider-config.ts'
+import { executeRescue } from './rescue.ts'
 
 type HostBundle = {
   host: BehaviorHost
+  rescue?: { enabled: boolean; tpRadius: number }
+  devOps?: () => DevOpsStatus | null
   dispose: () => void
 }
 
@@ -32,6 +37,8 @@ async function main(): Promise<void> {
     body,
     behavior: bundle.host,
     heartbeatTimeoutMs: 10_000,
+    ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
+    ...(bundle.devOps === undefined ? {} : { devOps: bundle.devOps }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
   const server = new BodyServer(runtime, transport)
@@ -85,8 +92,28 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     })
     const provider = new providerModule.MineflayerProvider(bot, {
       serverIdleMs: loaded.config.serverIdleMs,
+      providerVersion: body.manifest.bodyVersion,
     })
-    const ops = new DeclaredOpBroker(provider)
+    // The provider is the only component that knows which capabilities it really
+    // implements; report them and let the op broker gate on the same list.
+    const capabilities = [...providerModule.PROVIDER_CAPABILITIES]
+    body.capabilities = capabilities
+    body.provider = {
+      id: providerModule.PROVIDER_ID,
+      version: body.manifest.bodyVersion,
+      capabilities,
+    }
+
+    // Developer mode: extra operations from a project file, hot-reloaded on edit.
+    const devHost = loaded.config.devOps
+      ? await DevOpsHost.create(join(process.cwd(), loaded.config.devOpsPath), bot)
+      : undefined
+    if (devHost !== undefined) {
+      process.stderr.write(`dsh-minecraft-p2 body: developer operations enabled (${loaded.config.devOpsPath})\n`)
+    }
+    const devOpsInfo = (): DevOpsStatus | null => devHost?.info() ?? null
+
+    const ops = new DeclaredOpBroker(createCompositeOpSource(provider, devHost, bot))
 
     const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
     let actPort: RunnerActPort | undefined
@@ -111,10 +138,19 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       },
       providerStatus: () => provider.liveStatus(),
       loadManifest: (kind, code, artifactId) => client.load(kind, artifactId, code),
+      rescue: (request, context) => executeRescue(provider, request, {
+        allowRescue: loaded.config.allowRescue,
+        tpRadius: loaded.config.rescueTpRadius,
+        auditPath: join(process.cwd(), '.m5-runs', 'rescue.jsonl'),
+        owner: context.owner,
+      }),
     })
     return {
       host,
+      rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
+      devOps: devOpsInfo,
       dispose: () => {
+        devHost?.dispose()
         host?.dispose()
         actPort?.dispose()
         client.dispose()

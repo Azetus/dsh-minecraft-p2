@@ -122,6 +122,7 @@ describe('protocol vocabulary', () => {
       'check',
       'activate',
       'switch',
+      'rescue',
       'confirm',
       'behavior.stop',
       'stop',

@@ -81,11 +81,13 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
 
   register({
     name: 'p2_check',
-    description: 'Check a behavior source file in the owner project without activating or running it.',
+    description: 'Check a behavior, act or policy source file in the owner project without activating or running it.',
     parameters: {
       type: 'object',
       properties: {
         sourcePath: { type: 'string', description: 'Path inside the owner project' },
+        artifactKind: { type: 'string', enum: ['behavior', 'act', 'policy'], description: 'Artifact kind; defaults to behavior' },
+        format: { type: 'string', enum: ['ir', 'js'], description: 'Behavior format; defaults to ir' },
         timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
       },
       required: ['sourcePath'],
@@ -93,7 +95,11 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     },
     output: jsonOutput(),
     execute: guarded(async args => {
+      const kind = args.artifactKind === 'act' || args.artifactKind === 'policy' || args.artifactKind === 'behavior' ? args.artifactKind : undefined
+      const format = args.format === 'js' || args.format === 'ir' ? args.format : undefined
       return manager.check(String(args.sourcePath), {
+        ...(kind === undefined ? {} : { artifactKind: kind }),
+        ...(format === undefined ? {} : { format }),
         ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
       })
     }),
@@ -183,6 +189,29 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
         dropped: drained.dropped,
       }
     }),
+  })
+
+  register({
+    name: 'p2_rescue',
+    description: 'Experiment-only rescue channel. Sends one allow-listed self command, records an audit entry, and refuses while a behavior is active.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['tp', 'effect', 'respawn'], description: 'Rescue action' },
+        x: { type: 'number', description: 'Teleport x' },
+        y: { type: 'number', description: 'Teleport y' },
+        z: { type: 'number', description: 'Teleport z' },
+        effect: { type: 'string', enum: ['instant_health', 'regeneration', 'saturation'], description: 'Allowed self effect' },
+        durationSeconds: { type: 'number', description: 'Effect duration in seconds (1-10)' },
+        amplifier: { type: 'number', description: 'Effect amplifier (0-1)' },
+        reason: { type: 'string', minLength: 3, description: 'Why rescue is needed; recorded in the audit log' },
+        category: { type: 'string', enum: ['stuck', 'trapped', 'death_loop', 'health', 'food', 'other'], description: 'Rescue category' },
+      },
+      required: ['action', 'reason', 'category'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.rescue(args as JsonValue)),
   })
 
   register({

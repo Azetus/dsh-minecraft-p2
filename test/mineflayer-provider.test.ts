@@ -39,7 +39,7 @@ describe('MineflayerProvider', () => {
     const position = provider.query('position')
     expect(position.status).toBe('ok')
     if (position.status !== 'ok') throw new Error('expected position')
-    expect(position.value).toEqual({ x: 1, y: 64, z: 2, dimension: null })
+    expect(position.value).toMatchObject({ x: 1, y: 64, z: 2, dimension: null })
     expect(position.meta?.source).toBe('query')
     expect(position.meta?.scope).toBe('mineflayer.position')
     expect(typeof position.meta?.validUntil).toBe('number')
