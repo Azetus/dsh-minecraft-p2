@@ -38,7 +38,7 @@ S4 的关键顺序满足规格：原移动被打断 → 收尾后拾取 → 重�
 
 反例的 harness 结论字段为 `ok:false` 是预期：`ok` 只表示「终态为 succeeded/cancelled」，反例的预期终态是 failed。
 
-## 4. 策略变体\n\n| 变体 | 结果 | 证据 |\n| --- | --- | --- |\n| V1 最远优先（只改 policy 指向） | **通过** | 终态 succeeded；最终位置距最远目标 0.07 格；途中顺带拾取 3 个 |\n| V2 往返巡逻 | **通过** | 到达 A,B,C,B,A 后 stop → cancelled；只改 policy 与方向状态 |\n| V3 达标后返程 | **通过** | succeeded；背包 4；距 home 0.65 格；返程分支在循环内幂等重复，由完成条件拦截 |\n| V4 目标失效即失败 | **未定论** | 生成后 200ms 内移除，guard 未捕捉到目标；行为继续巡逻并被 stop，说明「恢复巡逻」路径成立，但没有触发 TARGET_GONE。需要更精确的时序控制 |\n\n说明：由于 act/policy 引用是确切 artifact，替换 policy 需要新的 behavior artifact 指向它；这是 G2 观察到的一项真实成本，记录在此。\n\n## 5. G2 指标（初步）
+## 4. 策略变体\n\n| 变体 | 结果 | 证据 |\n| --- | --- | --- |\n| V1 最远优先（只改 policy 指向） | **通过** | 终态 succeeded；最终位置距最远目标 0.07 格；途中顺带拾取 3 个 |\n| V2 往返巡逻 | **通过** | 到达 A,B,C,B,A 后 stop → cancelled；只改 policy 与方向状态 |\n| V3 达标后返程 | **通过** | succeeded；背包 4；距 home 0.65 格；返程分支在循环内幂等重复，由完成条件拦截 |\n| V4 目标失效即失败 | **通过（确定性注入）** | 投放一个带超长 PickupDelay 的苹果：拾取分支会走过去但无法拾取，库存验证失败 → ailed / TARGET_GONE；全程无抢时间。 |\n\n说明：由于 act/policy 引用是确切 artifact，替换 policy 需要新的 behavior artifact 指向它；这是 G2 观察到的一项真实成本，记录在此。\n\n## 5. G2 指标（初步）
 
 | 指标 | 观察 |
 | --- | --- |
@@ -46,7 +46,7 @@ S4 的关键顺序满足规格：原移动被打断 → 收尾后拾取 → 重�
 | 策略归属 | 三个内置 act 都是单 op 包装（`move-to`、`mine-one`、`stop`），没有承包整个任务的 act；policy 只做选择与计数 |
 | 取消责任 | behavior/policy 中没有停止标志或取消轮询；取消由 body 与 act 契约完成（S2/S4 的 stop） |
 | 状态负担 | locals 均有业务含义（`leg`、`attempt`、`verdict`、`pick`），没有 `programCounter` 类状态 |
-| 可读性 | **未完成**：还没有让独立读者仅看计划、接口说明和 status 回答 4 个问题 |
+| 可读性 | 独立 agent 复核：扩展 status 前 2/4；加入 activeNode/activeTarget 后 4/4 |
 | 改动局部性 | **未完成**：四个策略变体 V1—V4 尚未运行 |
 
 ## 6. 与冻结集的偏差

@@ -69,7 +69,7 @@ subtree 是 builder 复用形式，构建后展开成独立节点路径，并保
 
 `forEach`、`call` 以及表达式内的集合算子不属于 v1 契约，作为候选记录在 [IR §9](IR.md#9-推迟的候选能力不属于-v1)；启用前需由验证结论支撑，不能因“可能有用”预先加入。
 
-v1 的 ValueExpr 只允许：`literal`、`param`、`local`、`member`、`record`、`array`、`not`，以及 `binary` 的比较、四则与逻辑运算（`eq/neq/lt/lte/gt/gte/and/or/add/sub/mul/div`）。动态游戏读取必须声明为 query/Condition 的 QueryOp 依赖，不能藏在表达式里。除数为零、空引用或类型不符返回 `EXPRESSION_ERROR`，不转换成 false。
+v1 的 ValueExpr 只允许：`literal`、`param`、`local`、`member`、`record`、`array`、`not`、`length`，以及 `binary` 的比较、四则与逻辑运算（`eq/neq/lt/lte/gt/gte/and/or/add/sub/mul/div`）。动态游戏读取必须声明为 query/Condition 的 QueryOp 依赖，不能藏在表达式里。除数为零、空引用或类型不符返回 `EXPRESSION_ERROR`，不转换成 false。
 
 集合筛选、排序、评分、距离与资源分配交给 policy（经 `decide` 调用一次），不翻译成新的表达式节点。`select`、`aggregate`、`length`、`unary` 数学与 policy 表达式都属于推迟的候选能力，见 [IR §9](IR.md#9-推迟的候选能力不属于-v1)。
 
@@ -83,7 +83,7 @@ CompletionRule 为 predicate 或 externalConfirmation。predicate 必须声明 Q
 
 D4 将环境 binding 与产物依赖分开。ActRef 至少携带用于定位的 definitionId 和确切 artifactId，并与产物依赖清单一致；revision 可用于源码诊断，不能单独选择运行内容。依赖清单锁定所用 act 产物、policy 产物、纯辅助库与构建依赖的内容摘要及传递闭包，不包含无关注册表条目。源码中的便捷名称必须在构建前解析并锁定，IR 内不保留运行时 latest 查找。
 
-分层约束在 IR 上也要能检查：behavior 可以出现 `query` 节点、QueryOp 条件与表达式，但**不得直接引用 ControlOp**；控制只能通过 `act` 节点引用 act 产物进入。`ActRef` 与 `PolicyRef` 都是确切产物引用，不允许写成裸名字。
+分层约束在 IR 上也要能检查：behavior 可以出现 `query` 节点、QueryOp 条件与表达式，但**不得直接引用 ControlOp**；控制只能通过 `act` 节点引用 act 产物进入。`ActRef` 与 `PolicyRef` 都是确切产物引用。源码可只写 definitionId，检查阶段按启用映射解析；写入产物的 IR 必须包含确切 artifactId，不允许写成裸名字。
 
 artifactId 由 artifactDigest 形成；产物摘要覆盖源码、依赖、构建工具、产物内容及目标 binding，排除自己的摘要字段与运行/检查元数据。完整输入、规范化和排除规则见[身份与摘要规则](OPERATIONS-AND-RELEASE.md#32-身份与摘要规则)。checker 凭据独立关联该产物与环境；启用及启动以 artifactId 为对象，不以源码 revision 代替。
 
@@ -357,7 +357,7 @@ hello 在专用父子管道上协商协议，绑定 bridge 从实际 DSH 上下�
 | hello | 协议集合、可信 OwnerContext | 协议、epoch、角色、binding、能力；不启动 behavior。 |
 | heartbeat | 递增 heartbeatSeq | 存活应答；同序号重发不重复延长存活期限。 |
 | describe | 可选目标 bindingId | 本地静态声明及限制，不加载 provider。 |
-| status | 无业务参数 | owner、health、connection、activeRun、阶段（declared progress 或当前节点名）、当前 act、等待原因（query/policy/act/confirmation）、最近失败、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
+| status | 无业务参数 | owner、health、connection、activeRun、阶段（declared progress 或当前节点名）、当前 act、当前节点 id 与目标坐标（activeNode/activeTarget，act 求值后的参数）、等待原因（query/policy/act/confirmation）、最近失败、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
 | observe | 查询声明、参数、时效要求 | 值及来源/年龄/作用域，或错误；零隐藏重试。 |
 | check | commandId、源路径、artifactKind、预期 sourceDigest、目标 binding、精确依赖 | 报告及通过时的 artifactId；源摘要不符返回 SOURCE_CHANGED；重复命令不重复构建。 |
 | activate | commandId、artifactId | 目标 binding 下的启用结果。 |

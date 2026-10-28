@@ -42,7 +42,7 @@ export class BehaviorExecutor {
   private cancelRequested = false
   private preparedForSuccess = false
   private completionRequested = false
-  private readonly report: RuntimeReport = { act: null, waiting: null }
+  private readonly report: RuntimeReport = { act: null, node: null, target: null, waiting: null }
   private readonly completion: ConditionEvaluator | undefined
 
   constructor(options: ExecutorOptions) {

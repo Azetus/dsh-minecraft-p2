@@ -56,6 +56,8 @@ export type ActPort = {
 
 export type RuntimeReport = {
   act: string | null
+  node: string | null
+  target: { x: number; z: number } | null
   waiting: 'query' | 'act' | 'policy' | 'wait' | null
 }
 
@@ -602,6 +604,10 @@ class ActRuntime extends BaseRuntime {
       try {
         this.handle = context.act.start(this.node.act, args)
         context.report.act = this.node.act.definitionId
+        context.report.node = this.node.id
+        context.report.target = typeof args.x === 'number' && typeof args.z === 'number'
+          ? { x: args.x, z: args.z }
+          : null
         context.report.waiting = 'act'
       } catch (error) {
         if (isP2Error(error)) {

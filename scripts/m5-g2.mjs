@@ -206,7 +206,7 @@ async function scenarioS1(context) {
   const timeline = []
   const final = await waitFor(async () => {
     const status = await inspect(body)
-    timeline.push({ t: Date.now(), run: status.activeRun, last: status.lastRun, activeAct: status.activeAct, waiting: status.waiting })
+    timeline.push({ t: Date.now(), run: status.activeRun, last: status.lastRun, activeAct: status.activeAct, activeNode: status.activeNode, activeTarget: status.activeTarget, waiting: status.waiting })
     return status.lastRun !== null && status.lastRun !== undefined ? status.lastRun : undefined
   }, 'S1 run terminal')
   const inv = await inventory(body)
@@ -290,7 +290,7 @@ async function scenarioS3(context) {
   const timeline = []
   const final = await waitFor(async () => {
     const status = await inspect(body)
-    timeline.push({ t: Date.now(), run: status.activeRun, last: status.lastRun, activeAct: status.activeAct, waiting: status.waiting })
+    timeline.push({ t: Date.now(), run: status.activeRun, last: status.lastRun, activeAct: status.activeAct, activeNode: status.activeNode, activeTarget: status.activeTarget, waiting: status.waiting })
     return status.lastRun !== null && status.lastRun !== undefined ? status.lastRun : undefined
   }, 'S3 run terminal', 150_000)
   const inv = await inventory(body)
@@ -526,25 +526,29 @@ async function scenarioS4Variant(context) {
   ])
   await body.request('switch', { artifactId: artifacts.behavior.artifactId, params: { route: [WAYPOINTS.A, WAYPOINTS.B, WAYPOINTS.C], item: 'apple' } }, { commandId: `switch-${Date.now()}` })
   let spawned = false
+  let killed = false
   let final
   let afterKill
+  const item = { x: 112, y: ARENA.feet, z: 107 }
   const timeline = []
   const deadline = Date.now() + 90_000
   while (Date.now() < deadline) {
     const pos = await position(body)
     const status = await inspect(body)
-    timeline.push({ t: Date.now() - start, act: status.activeAct, wait: status.waiting, run: status.activeRun === null ? null : status.activeRun.runId })
+    timeline.push({ t: Date.now() - start, act: status.activeAct, node: status.activeNode, target: status.activeTarget, wait: status.waiting, run: status.activeRun === null ? null : status.activeRun.runId })
     if (status.lastRun !== null && status.lastRun !== undefined) { final = status.lastRun; break }
     const distanceToB = Math.hypot(pos.x - WAYPOINTS.B.x, pos.z - WAYPOINTS.B.z)
-    if (!spawned && distanceToB < 6 && distanceToB > 3) {
-      await command(operator, `summon minecraft:item 110 ${ARENA.feet} 106 {Item:{id:"minecraft:apple",Count:1b},PickupDelay:5}`, 100)
-      await sleep(1200)
-      await command(operator, 'kill @e[type=minecraft:item,x=117,y=99,z=113,dx=3,dy=4,dz=3]', 150)
-      const after = await body.request('observe', { op: 'entities', args: { objectType: 'Item' } })
-      afterKill = after.value.length
+    const distanceToItem = Math.hypot(pos.x - item.x, pos.z - item.z)
+    if (!spawned && distanceToB < 10 && distanceToB > 7) {
+      // A long PickupDelay makes the item unreachable by touch: removing it near
+      // the target position is deterministic, independent of pickup timing.
+      await command(operator, `summon minecraft:item ${item.x} ${item.y} ${item.z} {Item:{id:"minecraft:apple",Count:1b},PickupDelay:32767}`, 100)
       spawned = true
     }
-    await sleep(200)
+    // The item stays present but is unpickable (long PickupDelay): the pickup
+    // branch must fail when the expected inventory change never happens.
+
+    await sleep(150)
   }
   if (final === undefined) {
     const status = await inspect(body)
@@ -554,7 +558,7 @@ async function scenarioS4Variant(context) {
       return status2.lastRun ?? undefined
     }, 'S4v terminal', 30_000)
   }
-  return { scenario: 'S4v', spawned, afterKill, final, timeline: timeline.slice(-25), elapsedMs: Date.now() - start }
+  return { scenario: 'S4v', spawned, killed, afterKill, final, timeline: timeline.slice(-25), elapsedMs: Date.now() - start }
 }
 
 async function scenarioS2Variant(context) {

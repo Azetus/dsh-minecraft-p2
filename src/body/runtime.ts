@@ -358,6 +358,8 @@ export class BodyRuntime {
       providerState: behavior?.providerState ?? null,
       commandCount: this.commands.size,
       activeAct: this.behavior?.status().activeAct ?? null,
+      activeNode: this.behavior?.status().activeNode ?? null,
+      activeTarget: this.behavior?.status().activeTarget ?? null,
       waiting: this.behavior?.status().waiting ?? null,
       lastFailure: this.behavior?.status().lastFailure ?? null,
       ...(this.debugLog === undefined ? {} : {

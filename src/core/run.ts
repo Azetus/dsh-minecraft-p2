@@ -92,10 +92,12 @@ export class BehaviorRun {
   }
 
   /** Diagnostic view: only the active act, the wait reason and the last failure. */
-  describe(): { activeAct: string | null; waiting: string | null; lastFailure: P2Error | undefined } {
+  describe(): { activeAct: string | null; activeNode: string | null; activeTarget: { x: number; z: number } | null; waiting: string | null; lastFailure: P2Error | undefined } {
     const report = this.executor.runtimeReport
     return {
       activeAct: report.act,
+      activeNode: report.node,
+      activeTarget: report.target,
       waiting: report.waiting,
       lastFailure: this.executor.lastFailure,
     }

@@ -58,6 +58,8 @@ export type HostStatus = {
   providerState: ProviderRuntimeStatus | null
   commandCount: number
   activeAct: string | null
+  activeNode: string | null
+  activeTarget: { x: number; z: number } | null
   waiting: string | null
   lastFailure: P2Error | null
 }
@@ -369,6 +371,8 @@ export class BehaviorHost {
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
       activeAct: run?.describe().activeAct ?? null,
+      activeNode: run?.describe().activeNode ?? null,
+      activeTarget: run?.describe().activeTarget ?? null,
       waiting: run?.describe().waiting ?? null,
       lastFailure: run?.describe().lastFailure ?? null,
     }

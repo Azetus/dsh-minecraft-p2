@@ -78,6 +78,7 @@ BehaviorDefinition
 | `array` | `items` | 构造数组。 |
 | `binary` | `op`、`left`、`right` | `eq/neq/lt/lte/gt/gte/and/or/add/sub/mul/div`。 |
 | `not` | `value` | 仅接受布尔。 |
+| `length` | `value` | 数组、字符串或对象的成员数；其他类型报 `EXPRESSION_ERROR`。 |
 
 求值规则：
 
@@ -105,7 +106,7 @@ type CompletionRule =
   | { kind: "externalConfirmation"; description: string };
 ```
 
-- 条件结果：`true`、`false`、`unknown`、`failed`。**unknown 不是 false**。
+- 条件结果：`true`、`false`、`unknown`、`failed`。**unknown 不是 false**。`query` 条件的 `test` 在一个绑定 `result`（本次查询值）的局部副本上求值，因此可以写 `local('result')`。
 - 查询条件在证据仍新鲜且参数未变时可复用；过期或参数变化才新建请求。
 - 有限 behavior 的完成条件在**进入时、根结束时、以及每次启动新 act 前**检查；达成后锁定「准备成功」，停止活动子树并收尾。
 - 这条检查是「循环到某种状态就停」的表达方式：`repeat` 不需要额外的 break 节点。
@@ -209,7 +210,7 @@ root = repeat(sequence(
 
 | 写法 | 问题 | 正确做法 |
 | --- | --- | --- |
-| `act` 里写 `"moveTo"` | op 名不是 act 产物引用 | 引用 act artifactId |
+| `act` 里写 `"moveTo"` | op 名不是 act 产物引用 | 引用 act 的 definitionId；源码可省略 artifactId，检查时按启用映射解析，产物中必须含确切 id |
 | behavior 里出现 ControlOp | 违反控制路径 | 把控制放进 act |
 | 用 `recover` 把“达标”伪装成循环出口 | 完成条件是出口，不是异常 | 用 completion，不用失败 |
 | 用表达式错误表示“无候选” | 业务失败不是程序错误 | 用 `fail` 节点 |
@@ -226,7 +227,7 @@ root = repeat(sequence(
 | `forEach` | 遍历快照并逐项执行动作 | 至少两个场景需要“快照枚举”，且无法用 `repeat` + `decide` 清楚表达 |
 | `call` | 引用另一个 behavior 产物 | 出现跨 behavior 的稳定复用需求；先与 `subtree` 语义合并 |
 | `select` | 在表达式内取集合极值 | 简单选择无法移到 policy，且反复出现在多数场景 |
-| `aggregate`／`length` | 聚合与长度 | 同上 |
+| `aggregate` | 聚合 | 同上 |
 | `unary` 数学（abs/floor/ceil/mod/min/max） | 数值计算 | 同上 |
 | policy 作为表达式 | 在表达式任意位置调用 | 已否决：跨进程调用不可放进同步表达式，且会把选择拆成多次调用 |
 
