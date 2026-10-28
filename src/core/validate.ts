@@ -224,6 +224,9 @@ export function validateBehavior(definition: BehaviorDefinition): void {
       case 'not':
         visitExpr(expr.value, `${path}.value`)
         return
+      case 'length':
+        visitExpr(expr.value, `${path}.value`)
+        return
       case 'binary':
         visitExpr(expr.left, `${path}.left`)
         visitExpr(expr.right, `${path}.right`)

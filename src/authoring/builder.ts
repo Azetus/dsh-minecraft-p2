@@ -185,6 +185,10 @@ export function not(value: ValueExpr): ValueExpr {
   return { kind: 'not', value }
 }
 
+export function length(value: ValueExpr): ValueExpr {
+  return { kind: 'length', value }
+}
+
 export const eq = (left: ValueExpr, right: ValueExpr): ValueExpr => binary('eq', left, right)
 export const neq = (left: ValueExpr, right: ValueExpr): ValueExpr => binary('neq', left, right)
 export const and = (left: ValueExpr, right: ValueExpr): ValueExpr => binary('and', left, right)

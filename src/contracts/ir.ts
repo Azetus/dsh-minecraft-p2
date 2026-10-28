@@ -16,6 +16,7 @@ export type ValueExpr =
       right: ValueExpr
     }
   | { kind: 'not'; value: ValueExpr }
+  | { kind: 'length'; value: ValueExpr }
 
 export type QueryRef = {
   op: string

@@ -227,7 +227,12 @@ export class MineflayerProvider implements ActPort {
           }
         }
         case 'entities': {
-          const entities = Object.values(this.bot.entities).map(entity => {
+          const objectTypeFilter = typeof args.objectType === 'string' ? args.objectType : undefined
+          const nameFilter = typeof args.name === 'string' ? args.name : undefined
+          const entities = Object.values(this.bot.entities)
+            .filter(entity => objectTypeFilter === undefined || (entity as unknown as { objectType?: string }).objectType === objectTypeFilter)
+            .filter(entity => nameFilter === undefined || entity.name === nameFilter)
+            .map(entity => {
             const metadataItem = (entity as unknown as { metadata?: Record<number, unknown> }).metadata?.[8]
             const item = typeof metadataItem === 'object' && metadataItem !== null
               && typeof (metadataItem as { itemId?: unknown }).itemId === 'number'

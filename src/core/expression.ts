@@ -48,6 +48,13 @@ export function evaluate(expr: ValueExpr, context: EvalContext): JsonValue {
       }
       return object[key] as JsonValue
     }
+    case 'length': {
+      const value = evaluate(expr.value, context)
+      if (Array.isArray(value)) return value.length
+      if (typeof value === 'string') return value.length
+      if (typeof value === 'object' && value !== null) return Object.keys(value).length
+      throw new EvalError('EXPRESSION_ERROR', 'length requires an array, string or object')
+    }
     case 'record': {
       const result: Record<string, JsonValue> = {}
       for (const [key, value] of Object.entries(expr.fields)) result[key] = evaluate(value, context)
