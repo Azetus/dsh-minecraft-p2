@@ -214,6 +214,7 @@ function errorMessage(error: unknown): string {
 /** Structural view of a container/villager window; only the fields we use. */
 type AnyWindow = {
   slots?: Array<{ name: string; count: number } | null>
+  containerSlots?: number
   fuel?: number
   progress?: number
   trades?: Array<{
@@ -450,13 +451,16 @@ export class MineflayerProvider implements ActPort {
 
   private snapshotWindow(kind: string, window: AnyWindow): JsonValue {
     const slots = Array.isArray(window.slots) ? window.slots : []
+    // Window slots include the player inventory; a container query must only
+    // report the container's own slots.
+    const containerSlots = typeof window.containerSlots === 'number' ? window.containerSlots : slots.length
     const items: JsonValue[] = []
-    for (let index = 0; index < slots.length; index += 1) {
+    for (let index = 0; index < Math.min(containerSlots, slots.length); index += 1) {
       const item = slots[index]
       if (item === null || item === undefined) continue
       items.push({ slot: index, name: item.name, count: item.count })
     }
-    const value: Record<string, JsonValue> = { kind, slots: items }
+    const value: Record<string, JsonValue> = { kind, containerSlots, slots: items }
     if (typeof window.fuel === 'number') value.fuel = window.fuel
     if (typeof window.progress === 'number') value.progress = window.progress
     if (Array.isArray(window.trades)) value.trades = this.snapshotTrades(window)
@@ -1707,6 +1711,7 @@ class MineflayerActHandle implements ActHandle {
     itemType: number,
     name: string,
   ): Promise<JsonValue> {
+    await this.syncInventoryWindow()
     const before = this.inventoryCountOfType(itemType)
     let crafted = 0
     let lastError: unknown
@@ -1742,7 +1747,21 @@ class MineflayerActHandle implements ActHandle {
 
   private async craftOnce(recipe: Parameters<Bot['craft']>[0], table: Parameters<Bot['craft']>[2]): Promise<void> {
     await this.closeCurrentWindow()
+    // After a container interaction mineflayer's inventory model can be stale,
+    // and bot.craft then clicks the wrong source slots (observed: a button
+    // instead of planks). Sync the window before every craft.
+    await this.syncInventoryWindow()
     await this.bot.craft(recipe, 1, table)
+  }
+
+  private async syncInventoryWindow(): Promise<void> {
+    const bot = this.bot as unknown as { _syncWindow?: (window: unknown) => Promise<void>; inventory: unknown }
+    if (typeof bot._syncWindow !== 'function') return
+    try {
+      await bot._syncWindow(bot.inventory)
+    } catch {
+      // Best effort: the caller verifies the produced item delta anyway.
+    }
   }
 
   private async closeCurrentWindow(): Promise<void> {
