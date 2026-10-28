@@ -284,14 +284,19 @@
 | `look` | `{yaw,pitch}` | none | |
 | `lookAt` | `{entityId}` 或 `{x,y,z}` | none | 实体取头部高度 |
 | `move` | `{direction,durationMs?}` | active | direction 含 `jump/sprint/sneak` |
+| `forward` / `back` / `left` / `right` | `{durationMs?}` | active | `move` 的固定方向别名 |
 | `jump` | — | none | 落地才完成，会占用控制位 |
-| `moveTo` | `{x,z,tolerance?,timeoutMs?,blockedMs?}` | active | 无进展时自动跳跃上一格台阶 |
+| `moveTo` | `{x,z,tolerance?,timeoutMs?,blockedMs?}` | active | 平地直线；无进展时自动跳一格台阶 |
+| `goto` | `{x,y,z,range?,timeoutMs?}` | active | pathfinder：可上下台阶、绕障、跳落 |
+| `follow` | `{entityId,distance?,timeoutMs?}` | active | pathfinder 动态跟随实体 |
 | `stop` | — | none | 清控制状态 |
 | `dig` | `{x,y,z}` | active | 无工具/掉落语义 |
 | `place` | `{x,y,z,face?}` | none | 需要手持方块 |
 | `attack` | `{entityId}` | none | 单次挥击，无射程检查 |
 | `equip` | `{item,destination?}` | none | |
+| `unequip` | `{destination?}` | none | |
 | `use` | `{offhand?,durationMs?}` | active | 按住时长由调用方给 |
+| `consume` | — | active | 吃/喝手持物，等服务端确认 |
 | `craft` | `{item,count?,table?}` | active | 就近工作台（4 格内）或显式坐标 |
 | `container-transfer` | `{x,y,z,action,item?,count?}` | none | action：`deposit/withdraw/load-input/load-fuel/take-input/take-fuel/take-output` |
 | `toss` | `{item,count?}` | none | |
@@ -300,6 +305,9 @@
 | `interact` | `{entityId}` | none | 右键实体（挤奶/剪羊毛/交互） |
 | `activate` | `{x,y,z}` | none | 右键方块（门/按钮/拉杆/床） |
 | `mount` / `dismount` | `{entityId}` / — | active / none | 船、马 |
+| `drive` | `{left,forward,durationMs?}` | active | 载具操控，-1..1 |
+| `place-entity` | `{x,y,z,face?}` | none | 放置船/矿车 |
+| `fish` | `{timeoutMs?}` | active | 钓鱼，需手持钓竿 |
 | `trade` | `{entityId,index,count?}` | none | 与村民成交 |
 
 ### 10.3 语义与限制
@@ -308,6 +316,10 @@
 - `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
 - `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。
 - `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
+- `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`maxDropDown=4`、`allowParkour/allowSprinting=true`——导航不会挖方块或搭塔，挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。
+- `forward`/`back`/`left`/`right`：`move` 的固定方向别名，参数只需 `durationMs`。
+- `consume` 与 `use`：`consume` 等服务端确认吃完/喝完（`bot.consume`），`use` 只是按住固定时长后释放；进食优先用 `consume`。
+- `drive` 需要先 `mount`，停止时把载具输入归零；`fish` 需要手持钓竿，超时按 `FISH_TIMEOUT` 失败并释放使用状态。
 - 能力门控：provider 声明 `capabilities`（`src/provider/mineflayer.ts` 的 `PROVIDER_CAPABILITIES`），`DeclaredOpBroker` 对未声明的能力返回 `CAPABILITY_MISSING`。capabilities 目前**未纳入 bindingId**（binding 仍由 body manifest 计算），这是已知缺口。
 - `status` 新增 `version`（bodyVersion）、真实 `connection`、`rescue:{enabled,tpRadius}`；run 进入终态后 `activeAct/activeNode/activeTarget/waiting` 置空。
 
@@ -326,4 +338,16 @@
 | `interact` | `{entityId,item?}` | `equip`,`interact`,`stop` |
 | `trade` | `{entityId,index,count?}` | `trade`,`stop` |
 | `mount` | `{entityId}` | `mount`,`stop` |
+| `dismount` | — | `dismount`,`stop` |
+| `look-at` | `{entityId?}` 或 `{x,y,z}` | `lookAt`,`stop` |
+| `walk-forward` / `walk-back` / `walk-left` / `walk-right` | `{durationMs?}` | 对应方向 op,`stop` |
+| `jump` | — | `jump`,`stop` |
+| `goto` | `{x,y,z,range?,timeoutMs?}` | `goto`,`stop` |
+| `follow` | `{entityId,distance?,timeoutMs?}` | `follow`,`stop` |
+| `unequip` | `{destination?}` | `unequip`,`stop` |
+| `consume` | `{item?}` | `equip`,`consume`,`stop` |
+| `drive` | `{left,forward,durationMs?}` | `drive`,`stop` |
+| `place-entity` | `{x,y,z,face?}` | `place-entity`,`stop` |
+| `fish` | `{timeoutMs?}` | `fish`,`stop` |
+| `activate-block` | `{x,y,z}` | `activate`,`stop` |
 

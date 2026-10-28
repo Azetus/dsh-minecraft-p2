@@ -49,13 +49,16 @@ describe('operation declarations', () => {
       'equipment', 'entity', 'players', 'recipe', 'container', 'offers', 'weather',
     ])
     expect(operationIds('control')).toEqual([
-      'look', 'lookAt', 'move', 'jump', 'moveTo', 'stop', 'dig', 'place', 'attack', 'equip', 'use',
-      'craft', 'container-transfer', 'toss', 'respawn', 'sleep', 'interact', 'activate', 'mount', 'dismount', 'trade',
+      'look', 'lookAt', 'move', 'forward', 'back', 'left', 'right', 'jump', 'moveTo', 'goto', 'follow', 'stop',
+      'dig', 'place', 'attack', 'equip', 'unequip', 'use', 'consume',
+      'craft', 'container-transfer', 'toss', 'respawn', 'sleep', 'interact', 'activate', 'mount', 'dismount',
+      'drive', 'place-entity', 'fish', 'trade',
     ])
     expect(operationContract('dig')).toMatchObject({ kind: 'control', effects: 'active', stop: 'poll' })
     expect(operationContract('craft')).toMatchObject({ kind: 'control', capabilities: ['craft'] })
     expect(operationContract('container')).toMatchObject({ kind: 'query', capabilities: ['container'] })
-    expect(OPERATION_CONTRACTS.length).toBe(35)
+    expect(operationContract('goto')).toMatchObject({ kind: 'control', capabilities: ['pathfind'] })
+    expect(OPERATION_CONTRACTS.length).toBe(46)
   })
 
   it('rejects unknown operations and kind mismatches', () => {

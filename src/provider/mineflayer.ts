@@ -1,5 +1,6 @@
 import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
+import { goals, Movements, pathfinder } from 'mineflayer-pathfinder'
 import { Vec3 } from 'vec3'
 
 import {
@@ -115,7 +116,26 @@ export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
   'mount',
   'trade',
   'respawn',
+  'pathfind',
 ])
+
+/** Load the pathfinder plugin and build conservative movement settings. */
+function createMovements(bot: Bot): Movements | undefined {
+  try {
+    const loadable = bot as unknown as { loadPlugin?: (plugin: unknown) => void }
+    loadable.loadPlugin?.(pathfinder)
+    const movements = new Movements(bot as never)
+    // Navigation must not dig or tower by itself: those are explicit acts.
+    movements.canDig = false
+    movements.allow1by1towers = false
+    movements.allowParkour = true
+    movements.allowSprinting = true
+    movements.maxDropDown = 4
+    return movements
+  } catch {
+    return undefined
+  }
+}
 
 /** Provider identity reported in hello/describe/status. */
 export const PROVIDER_ID = 'mineflayer'
@@ -208,6 +228,7 @@ export class MineflayerProvider implements ActPort {
   private lastServerAgeAt = 0
   private readonly pauseTimer: ReturnType<typeof setInterval>
   private readonly options: Required<MineflayerProviderOptions>
+  private readonly movements: Movements | undefined
 
   constructor(
     private readonly bot: Bot,
@@ -220,6 +241,7 @@ export class MineflayerProvider implements ActPort {
       providerVersion: options.providerVersion ?? '0',
     }
     this.providerVersion = this.options.providerVersion
+    this.movements = createMovements(this.bot)
     this.pauseTimer = setInterval(() => this.refreshPauseState(), 250)
     this.pauseTimer.unref?.()
     bot.once('end', reason => {
@@ -525,9 +547,26 @@ export class MineflayerProvider implements ActPort {
           if (position === undefined) {
             return { status: 'failed', error: p2Error('POSITION_UNAVAILABLE', 'environment', 'bot position is not available', { module: 'provider.mineflayer' }) }
           }
+          const entity = this.bot.entity as unknown as {
+            yaw?: number
+            pitch?: number
+            onGround?: boolean
+            isInWater?: boolean
+            isInLava?: boolean
+          }
           return {
             status: 'ok',
-            value: { x: position.x, y: position.y, z: position.z, dimension: this.bot.game?.dimension ?? null },
+            value: {
+              x: position.x,
+              y: position.y,
+              z: position.z,
+              dimension: this.bot.game?.dimension ?? null,
+              yaw: typeof entity.yaw === 'number' ? entity.yaw : null,
+              pitch: typeof entity.pitch === 'number' ? entity.pitch : null,
+              onGround: typeof entity.onGround === 'boolean' ? entity.onGround : null,
+              inWater: typeof entity.isInWater === 'boolean' ? entity.isInWater : null,
+              inLava: typeof entity.isInLava === 'boolean' ? entity.isInLava : null,
+            },
             meta: this.queryMeta('mineflayer.position', sampledAt),
           }
         }
@@ -808,7 +847,7 @@ export class MineflayerProvider implements ActPort {
     if (name !== 'stop' && this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })
     }
-    const handle = new MineflayerActHandle(name, args, this.bot, this.options)
+    const handle = new MineflayerActHandle(name, args, this.bot, this.options, this.movements)
     this.current = handle
     return handle
   }
@@ -840,6 +879,7 @@ class MineflayerActHandle implements ActHandle {
     private readonly args: Record<string, JsonValue>,
     private readonly bot: Bot,
     private readonly options: Required<MineflayerProviderOptions>,
+    private readonly movements: Movements | undefined,
   ) {
     this.run()
   }
@@ -890,6 +930,19 @@ class MineflayerActHandle implements ActHandle {
     if (this.name === 'use') {
       try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
     }
+    if (this.name === 'goto' || this.name === 'follow') {
+      try {
+        (this.bot as unknown as { pathfinder?: { stop(): void } }).pathfinder?.stop()
+      } catch {
+        // The pathfinder may already be detached; clearControlStates still runs.
+      }
+    }
+    if (this.name === 'drive') {
+      try { this.bot.moveVehicle(0, 0) } catch { /* the vehicle may be gone */ }
+    }
+    if (this.name === 'fish') {
+      try { this.bot.deactivateItem() } catch { /* the connection may be gone */ }
+    }
     this.bot.clearControlStates()
   }
 
@@ -918,10 +971,16 @@ class MineflayerActHandle implements ActHandle {
           })
           return
         }
-        case 'move': {
-          const direction = typeof this.args.direction === 'string'
-            ? this.args.direction
-            : 'forward'
+        case 'move':
+        case 'forward':
+        case 'back':
+        case 'left':
+        case 'right': {
+          // `move` takes an explicit direction; the four aliases exist so a
+          // behavior can express a plain walk without knowing the enum.
+          const direction = this.name === 'move'
+            ? (typeof this.args.direction === 'string' ? this.args.direction : 'forward')
+            : this.name
           if (!isControl(direction)) throw new Error(`unsupported move direction: ${direction}`)
           this.bot.setControlState(direction, true)
           const duration = typeof this.args.durationMs === 'number'
@@ -955,6 +1014,96 @@ class MineflayerActHandle implements ActHandle {
           this.lastProgressAt = Date.now()
           this.faceTarget()
           this.bot.setControlState('forward', true)
+          return
+        }
+        case 'goto': {
+          const nav = this.navigation()
+          const { x, y, z } = this.args
+          if (nav === undefined) {
+            this.failed = new Error('pathfinding is not available in this provider')
+            this.failedCode = 'GOTO_UNAVAILABLE'
+            return
+          }
+          if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+            this.failed = new Error('goto requires numeric x, y and z')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
+          const range = typeof this.args.range === 'number' ? Math.max(0, this.args.range) : 1
+          const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000
+          nav.pathfinder.setMovements(this.movements)
+          // GoalNear accepts a 3D target plus a radius; it walks, jumps and drops
+          // as needed instead of the flat-only `moveTo` walker.
+          nav.pathfinder.setGoal(new goals.GoalNear(x, y, z, range))
+          const started = Date.now()
+          let idleSince = 0
+          const check = (): void => {
+            if (this.cancelled || this.completed || this.failed !== undefined) return
+            const position = this.bot.entity?.position
+            if (position !== undefined
+              && Math.hypot(position.x - x, position.y - y, position.z - z) <= range + 0.5) {
+              nav.pathfinder.stop()
+              this.result = { x: position.x, y: position.y, z: position.z }
+              this.completed = true
+              return
+            }
+            if (!nav.pathfinder.isMoving()) {
+              if (idleSince === 0) idleSince = Date.now()
+              else if (Date.now() - idleSince > 1500) {
+                nav.pathfinder.stop()
+                this.failed = new Error(`no path to ${x},${y},${z}`)
+                this.failedCode = 'GOTO_NO_PATH'
+                return
+              }
+            } else {
+              idleSince = 0
+            }
+            if (Date.now() - started > timeout) {
+              nav.pathfinder.stop()
+              this.failed = new Error(`goto timed out after ${timeout}ms`)
+              this.failedCode = 'GOTO_TIMEOUT'
+              return
+            }
+            this.timer = setTimeout(check, 250)
+          }
+          this.timer = setTimeout(check, 250)
+          return
+        }
+        case 'follow': {
+          const nav = this.navigation()
+          if (nav === undefined) {
+            this.failed = new Error('pathfinding is not available in this provider')
+            this.failedCode = 'GOTO_UNAVAILABLE'
+            return
+          }
+          const entity = this.entityById(this.args.entityId)
+          if (entity === undefined) {
+            this.failed = new Error(`no entity with id ${String(this.args.entityId)}`)
+            this.failedCode = 'FOLLOW_NO_TARGET'
+            return
+          }
+          const distance = typeof this.args.distance === 'number' ? Math.max(1, this.args.distance) : 3
+          const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 60_000
+          nav.pathfinder.setMovements(this.movements)
+          nav.pathfinder.setGoal(new goals.GoalFollow(entity as never, distance), true)
+          const started = Date.now()
+          const check = (): void => {
+            if (this.cancelled || this.completed || this.failed !== undefined) return
+            if (this.bot.entities[entity.id] === undefined) {
+              nav.pathfinder.stop()
+              this.failed = new Error('follow target is no longer loaded')
+              this.failedCode = 'FOLLOW_TARGET_LOST'
+              return
+            }
+            if (Date.now() - started > timeout) {
+              nav.pathfinder.stop()
+              this.failed = new Error(`follow timed out after ${timeout}ms`)
+              this.failedCode = 'FOLLOW_TIMEOUT'
+              return
+            }
+            this.timer = setTimeout(check, 300)
+          }
+          this.timer = setTimeout(check, 300)
           return
         }
         case 'stop': {
@@ -1062,6 +1211,37 @@ class MineflayerActHandle implements ActHandle {
           })
           return
         }
+        case 'unequip': {
+          const destination = typeof this.args.destination === 'string' ? this.args.destination : 'hand'
+          if (!EQUIP_DESTINATIONS.includes(destination as EquipmentDestination)) {
+            throw new Error(`unsupported unequip destination: ${destination}`)
+          }
+          void this.bot.unequip(destination as EquipmentDestination).then(() => {
+            this.result = { destination }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'UNEQUIP_FAILED'
+          })
+          return
+        }
+        case 'fish': {
+          const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 60_000
+          void this.bot.fish().then(() => {
+            this.result = { caught: true }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'FISH_FAILED'
+          })
+          this.timer = setTimeout(() => {
+            if (this.completed || this.failed !== undefined) return
+            try { this.bot.deactivateItem() } catch { /* connection may be gone */ }
+            this.failed = new Error(`fishing timed out after ${timeout}ms`)
+            this.failedCode = 'FISH_TIMEOUT'
+          }, Math.max(1000, timeout))
+          return
+        }
         case 'use': {
           const offhand = this.args.offhand === true
           const held = offhand ? this.bot.inventory.slots[45] : this.bot.heldItem
@@ -1092,6 +1272,24 @@ class MineflayerActHandle implements ActHandle {
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))
             this.failedCode = 'LOOKAT_FAILED'
+          })
+          return
+        }
+        case 'consume': {
+          const held = this.bot.heldItem
+          if (held === null || held === undefined) {
+            this.failed = new Error('no item is held')
+            this.failedCode = 'USE_NO_ITEM'
+            return
+          }
+          // `consume` waits for the server to accept the food/drink, unlike the
+          // timed `use` act which can release the item too early.
+          void this.bot.consume().then(() => {
+            this.result = { item: held.name, food: this.bot.food ?? null }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'CONSUME_FAILED'
           })
           return
         }
@@ -1299,6 +1497,49 @@ class MineflayerActHandle implements ActHandle {
           this.timer = setTimeout(check, 200)
           return
         }
+        case 'drive': {
+          if (this.vehicle() === undefined) {
+            this.failed = new Error('drive requires a mounted vehicle')
+            this.failedCode = 'DRIVE_NOT_MOUNTED'
+            return
+          }
+          const left = typeof this.args.left === 'number' ? Math.max(-1, Math.min(1, this.args.left)) : 0
+          const forward = typeof this.args.forward === 'number' ? Math.max(-1, Math.min(1, this.args.forward)) : 0
+          const duration = typeof this.args.durationMs === 'number' ? Math.max(0, this.args.durationMs) : 1000
+          this.bot.moveVehicle(left, forward)
+          this.timer = setTimeout(() => {
+            this.bot.moveVehicle(0, 0)
+            this.result = { left, forward, durationMs: duration }
+            this.completed = true
+          }, duration)
+          return
+        }
+        case 'place-entity': {
+          const position = blockPosition(this.args)
+          if (position === undefined) {
+            this.failed = new Error('place-entity requires numeric x, y and z')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
+          const face = typeof this.args.face === 'string' ? this.args.face : 'up'
+          const vector = PLACE_FACES[face]
+          if (vector === undefined) throw new Error(`unsupported place face: ${face}`)
+          const reference = new Vec3(position.x - vector[0], position.y - vector[1], position.z - vector[2])
+          const referenceBlock = this.bot.blockAt(reference)
+          if (referenceBlock === null || isAirName(referenceBlock.name)) {
+            this.failed = new Error(`no support block at ${reference.x},${reference.y},${reference.z}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            return
+          }
+          void this.bot.placeEntity(referenceBlock, new Vec3(vector[0], vector[1], vector[2])).then(entity => {
+            this.result = { entityId: entity.id, name: entity.name ?? null }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'PLACE_FAILED'
+          })
+          return
+        }
         case 'trade': {
           const entity = this.entityById(this.args.entityId)
           const index = typeof this.args.index === 'number' ? Math.floor(this.args.index) : Number.NaN
@@ -1349,6 +1590,26 @@ class MineflayerActHandle implements ActHandle {
     const id = typeof value === 'number' ? Math.floor(value) : Number.NaN
     if (!Number.isFinite(id)) return undefined
     return this.bot.entities[id] as Parameters<Bot['attack']>[0] | undefined
+  }
+
+  private navigation(): {
+    pathfinder: {
+      setGoal(goal: unknown, dynamic?: boolean): void
+      setMovements(movements: unknown): void
+      stop(): void
+      isMoving(): boolean
+    }
+  } | undefined {
+    const pathfinderHandle = (this.bot as unknown as {
+      pathfinder?: {
+        setGoal(goal: unknown, dynamic?: boolean): void
+        setMovements(movements: unknown): void
+        stop(): void
+        isMoving(): boolean
+      }
+    }).pathfinder
+    if (pathfinderHandle === undefined || this.movements === undefined) return undefined
+    return { pathfinder: pathfinderHandle }
   }
 
   private vehicle(): unknown {

@@ -370,3 +370,223 @@ describe('P2 baseline act artifacts', () => {
       .toEqual({ kind: 'complete', result: { mounted: true, entityId: 31 } })
   })
 })
+
+const P3_ACTS = [
+  'look-at',
+  'walk-forward',
+  'walk-back',
+  'walk-left',
+  'walk-right',
+  'jump',
+  'goto',
+  'follow',
+  'unequip',
+  'consume',
+  'drive',
+  'place-entity',
+  'fish',
+  'dismount',
+  'activate-block',
+] as const
+
+const POSITION = { x: 1, y: 64, z: 2 }
+
+describe('P3 movement and interaction act artifacts', () => {
+  for (const name of P3_ACTS) {
+    it(`${name} has no forbidden syntax and loads its manifest`, () => {
+      const code = readAct(name)
+      expect(forbiddenToken(code)).toBeUndefined()
+      const { sandbox } = harness()
+      const manifest = sandbox.load('act', code) as { id: string }
+      expect(manifest.id).toBe(name)
+    })
+  }
+
+  it('look-at submits one lookAt for the entity and completes with its result', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('look-at'))
+    expect(sandbox.start({ entityId: 42 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'lookAt', args: { entityId: 42 }, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', { entityId: 42 }]])))
+      .toEqual({ kind: 'complete', result: { entityId: 42 } })
+  })
+
+  it('walk-forward submits one forward op and completes with the position', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('walk-forward'))
+    expect(sandbox.start({ durationMs: 800 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'forward', args: { durationMs: 800 }, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', POSITION]]))).toEqual({ kind: 'complete', result: POSITION })
+  })
+
+  it('walk-back submits one back op and completes with the position', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('walk-back'))
+    expect(sandbox.start({})).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'back', args: {}, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', POSITION]]))).toEqual({ kind: 'complete', result: POSITION })
+  })
+
+  it('walk-left submits one left op and completes with the position', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('walk-left'))
+    expect(sandbox.start({ durationMs: 400 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'left', args: { durationMs: 400 }, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', POSITION]]))).toEqual({ kind: 'complete', result: POSITION })
+  })
+
+  it('walk-right submits one right op and completes with the position', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('walk-right'))
+    expect(sandbox.start({ durationMs: 600 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'right', args: { durationMs: 600 }, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', POSITION]]))).toEqual({ kind: 'complete', result: POSITION })
+  })
+
+  it('jump submits one jump op and confirms the jump', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('jump'))
+    expect(sandbox.start({})).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'jump', args: {}, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', { jumped: true }]])))
+      .toEqual({ kind: 'complete', result: { jumped: true } })
+  })
+
+  it('goto submits one goto op with the target and optional range', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('goto'))
+    expect(sandbox.start({ x: 8, y: 65, z: -3, range: 1, timeoutMs: 20000 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([
+      { kind: 'control', name: 'goto', args: { x: 8, y: 65, z: -3, range: 1, timeoutMs: 20000 }, id: 1 },
+    ])
+    const arrival = { x: 8, y: 65, z: -3 }
+    expect(sandbox.update(handles([[1, 'ok', arrival]]))).toEqual({ kind: 'complete', result: arrival })
+  })
+
+  it('follow submits one follow op and completes when following starts', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('follow'))
+    expect(sandbox.start({ entityId: 7, distance: 3, timeoutMs: 12000 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([
+      { kind: 'control', name: 'follow', args: { entityId: 7, distance: 3, timeoutMs: 12000 }, id: 1 },
+    ])
+    expect(sandbox.update(handles([[1, 'ok', { entityId: 7 }]])))
+      .toEqual({ kind: 'complete', result: { followed: true, entityId: 7 } })
+  })
+
+  it('unequip submits one unequip op for the requested destination', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('unequip'))
+    expect(sandbox.start({ destination: 'offhand' })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'unequip', args: { destination: 'offhand' }, id: 1 }])
+    const cleared = { destination: 'offhand', empty: true }
+    expect(sandbox.update(handles([[1, 'ok', cleared]]))).toEqual({ kind: 'complete', result: cleared })
+  })
+
+  it('consume submits one consume op and completes with the consume result', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('consume'))
+    expect(sandbox.start({})).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'consume', args: {}, id: 1 }])
+    const eaten = { item: 'bread', count: 1 }
+    expect(sandbox.update(handles([[1, 'ok', eaten]]))).toEqual({ kind: 'complete', result: eaten })
+  })
+
+  it('consume equips the item to the hand before eating', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('consume'))
+    expect(sandbox.start({ item: 'bread' })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'equip', args: { item: 'bread', destination: 'hand' }, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', { item: 'bread' }]]))).toEqual({ kind: 'running' })
+    expect(ops).toEqual([
+      { kind: 'control', name: 'equip', args: { item: 'bread', destination: 'hand' }, id: 1 },
+      { kind: 'control', name: 'consume', args: {}, id: 2 },
+    ])
+    const eaten = { item: 'bread', count: 1 }
+    expect(sandbox.update(handles([[2, 'ok', eaten]]))).toEqual({ kind: 'complete', result: eaten })
+  })
+
+  it('drive submits one drive op with steering, throttle and duration', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('drive'))
+    expect(sandbox.start({ left: 0.5, forward: 1, durationMs: 400 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([
+      { kind: 'control', name: 'drive', args: { left: 0.5, forward: 1, durationMs: 400 }, id: 1 },
+    ])
+    const driven = { left: 0.5, forward: 1, durationMs: 400 }
+    expect(sandbox.update(handles([[1, 'ok', driven]]))).toEqual({ kind: 'complete', result: driven })
+  })
+
+  it('place-entity submits one place-entity op for the target position', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('place-entity'))
+    expect(sandbox.start({ x: 1, y: 64, z: 2, face: 'up' })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([
+      { kind: 'control', name: 'place-entity', args: { x: 1, y: 64, z: 2, face: 'up' }, id: 1 },
+    ])
+    const placed = { entity: 'boat', x: 1, y: 64, z: 2 }
+    expect(sandbox.update(handles([[1, 'ok', placed]]))).toEqual({ kind: 'complete', result: placed })
+  })
+
+  it('fish submits one fish op with the optional timeout', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('fish'))
+    expect(sandbox.start({ timeoutMs: 30000 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'fish', args: { timeoutMs: 30000 }, id: 1 }])
+    const caught = { item: 'cod', count: 1 }
+    expect(sandbox.update(handles([[1, 'ok', caught]]))).toEqual({ kind: 'complete', result: caught })
+  })
+
+  it('dismount submits one dismount op and completes with the result', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('dismount'))
+    expect(sandbox.start({})).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'dismount', args: {}, id: 1 }])
+    expect(sandbox.update(handles([[1, 'ok', { dismounted: true }]])))
+      .toEqual({ kind: 'complete', result: { dismounted: true } })
+  })
+
+  it('activate-block submits one activate op and completes with its result', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('activate-block'))
+    expect(sandbox.start({ x: 3, y: 64, z: 5 })).toEqual({ kind: 'running' })
+    expect(ops).toEqual([{ kind: 'control', name: 'activate', args: { x: 3, y: 64, z: 5 }, id: 1 }])
+    const activated = { x: 3, y: 64, z: 5, activated: true }
+    expect(sandbox.update(handles([[1, 'ok', activated]]))).toEqual({ kind: 'complete', result: activated })
+  })
+
+  it('look-at rejects a missing target with BAD_ARGS and submits no ops', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('look-at'))
+    expect(sandbox.start({})).toMatchObject({ kind: 'failed', error: { code: 'BAD_ARGS' } })
+    expect(ops).toEqual([])
+  })
+
+  it('drive rejects out-of-range input with BAD_ARGS', () => {
+    const { sandbox, ops } = harness()
+    sandbox.load('act', readAct('drive'))
+    expect(sandbox.start({ left: 2, forward: 0 })).toMatchObject({ kind: 'failed', error: { code: 'BAD_ARGS' } })
+    expect(ops).toEqual([])
+  })
+
+  it('consume reports a failed handle as a failed act', () => {
+    const { sandbox } = harness()
+    sandbox.load('act', readAct('consume'))
+    sandbox.start({})
+    expect(sandbox.update(handles([[1, 'failed']]))).toMatchObject({ kind: 'failed' })
+  })
+
+  it('goto reports a failed handle as a failed act', () => {
+    const { sandbox } = harness()
+    sandbox.load('act', readAct('goto'))
+    sandbox.start({ x: 1, y: 64, z: 2 })
+    expect(sandbox.update(handles([[1, 'failed']]))).toMatchObject({ kind: 'failed' })
+  })
+
+  it('follow reports a failed handle as a failed act', () => {
+    const { sandbox } = harness()
+    sandbox.load('act', readAct('follow'))
+    sandbox.start({ entityId: 5 })
+    expect(sandbox.update(handles([[1, 'failed']]))).toMatchObject({ kind: 'failed' })
+  })
+})

@@ -103,6 +103,14 @@ function fakeBot(options: {
     }),
     openVillager: async () => ({ trades: [], close: async () => {} }),
     trade: async () => {},
+    unequip: async (destination: string) => { calls.push({ name: 'unequip', args: { destination } }) },
+    moveVehicle: (left: number, forward: number) => { calls.push({ name: 'moveVehicle', args: { left, forward } }) },
+    placeEntity: async (block: { name: string }) => {
+      calls.push({ name: 'placeEntity', args: { block: block.name } })
+      return { id: 77, name: 'boat' }
+    },
+    fish: async () => { calls.push({ name: 'fish', args: {} }) },
+    consume: async () => { calls.push({ name: 'consume', args: {} }) },
   })
   return { bot: bot as unknown as Bot, raw: bot, controls, calls }
 }
@@ -122,6 +130,14 @@ async function settle(query: QueryOutcome, timeoutMs = 1000): Promise<QueryOutco
 }
 
 describe('baseline query operations', () => {
+  it('reports movement flags with the position', () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    expect(provider.query('position')).toMatchObject({
+      status: 'ok',
+      value: { x: 0, y: 64, z: 0, onGround: true, yaw: null },
+    })
+  })
   it('filters entities by maxDistance and reports distance', () => {
     const { bot, raw } = fakeBot()
     ;(raw.entities as Record<number, unknown>)[1] = { id: 1, name: 'cow', type: 'animal', position: { x: 2, y: 64, z: 0 } }
@@ -268,5 +284,74 @@ describe('baseline control operations', () => {
     }
     expect(jumped).toBe(true)
     handle.stop()
+  })
+
+  it('walks forward through the direction alias', async () => {
+    const { bot, controls } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('forward', { durationMs: 10 })
+    expect(controls.get('forward')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(handle.poll().status).toBe('succeeded')
+    expect(controls.get('forward')).toBe(false)
+  })
+
+  it('unequips a slot', async () => {
+    const { bot, calls } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('unequip', { destination: 'head' })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll().status).toBe('succeeded')
+    expect(calls).toContainEqual({ name: 'unequip', args: { destination: 'head' } })
+  })
+
+  it('refuses to drive without a vehicle and drives with one', async () => {
+    const { bot, raw, calls } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    expect(provider.start('drive', { left: 0, forward: 1 }).poll())
+      .toMatchObject({ status: 'failed', error: { code: 'DRIVE_NOT_MOUNTED' } })
+    ;(raw as unknown as { vehicle: unknown }).vehicle = { id: 5 }
+    const handle = provider.start('drive', { left: 0.5, forward: 1, durationMs: 20 })
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(handle.poll()).toMatchObject({ status: 'succeeded' })
+    expect(calls.filter(call => call.name === 'moveVehicle').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('places an entity on a support block', async () => {
+    const blocks = new Map<string, string>([['1,63,0', 'stone']])
+    const { bot, calls } = fakeBot({ blocks })
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('place-entity', { x: 1, y: 64, z: 0 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll()).toMatchObject({ status: 'succeeded', result: { entityId: 77 } })
+    expect(calls.some(call => call.name === 'placeEntity')).toBe(true)
+  })
+
+  it('fishes until the op resolves', async () => {
+    const { bot, calls } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('fish', { timeoutMs: 500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(handle.poll()).toMatchObject({ status: 'succeeded' })
+    expect(calls.some(call => call.name === 'fish')).toBe(true)
+  })
+
+  it('fails consume without a held item and succeeds with one', async () => {
+    const empty = fakeBot()
+    expect(new MineflayerProvider(empty.bot).start('consume', {}).poll())
+      .toMatchObject({ status: 'failed', error: { code: 'USE_NO_ITEM' } })
+
+    const fed = fakeBot()
+    ;(fed.raw as unknown as { heldItem: { name: string; count: number } }).heldItem = { name: 'bread', count: 2 }
+    const handle = new MineflayerProvider(fed.bot).start('consume', {})
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll()).toMatchObject({ status: 'succeeded', result: { item: 'bread' } })
+  })
+
+  it('reports pathfinding as unavailable without the plugin', () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    expect(provider.start('goto', { x: 4, y: 64, z: 4 }).poll())
+      .toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
   })
 })

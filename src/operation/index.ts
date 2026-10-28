@@ -26,7 +26,7 @@ export type OperationContract = {
   capabilities: string[]
 }
 
-export const OPERATION_CONTRACT_VERSION = '2'
+export const OPERATION_CONTRACT_VERSION = '3'
 
 export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   // Queries: read-only observations. They never change world state.
@@ -49,14 +49,22 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'look', kind: 'control', effects: 'none', stop: 'none', capabilities: ['look'] },
   { id: 'lookAt', kind: 'control', effects: 'none', stop: 'none', capabilities: ['look'] },
   { id: 'move', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
+  { id: 'forward', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
+  { id: 'back', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
+  { id: 'left', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
+  { id: 'right', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'jump', kind: 'control', effects: 'none', stop: 'none', capabilities: ['move'] },
   { id: 'moveTo', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
+  { id: 'goto', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['pathfind'] },
+  { id: 'follow', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['pathfind'] },
   { id: 'stop', kind: 'control', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'dig', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['dig'] },
   { id: 'place', kind: 'control', effects: 'none', stop: 'none', capabilities: ['place'] },
   { id: 'attack', kind: 'control', effects: 'none', stop: 'none', capabilities: ['attack'] },
   { id: 'equip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },
+  { id: 'unequip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },
   { id: 'use', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['use'] },
+  { id: 'consume', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['use'] },
   { id: 'craft', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['craft'] },
   { id: 'container-transfer', kind: 'control', effects: 'none', stop: 'none', capabilities: ['container'] },
   { id: 'toss', kind: 'control', effects: 'none', stop: 'none', capabilities: ['toss'] },
@@ -66,6 +74,9 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'activate', kind: 'control', effects: 'none', stop: 'none', capabilities: ['interact'] },
   { id: 'mount', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['mount'] },
   { id: 'dismount', kind: 'control', effects: 'none', stop: 'none', capabilities: ['mount'] },
+  { id: 'drive', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['mount'] },
+  { id: 'place-entity', kind: 'control', effects: 'none', stop: 'none', capabilities: ['place'] },
+  { id: 'fish', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['use'] },
   { id: 'trade', kind: 'control', effects: 'none', stop: 'none', capabilities: ['trade'] },
 ])
 
