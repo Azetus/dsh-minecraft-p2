@@ -241,8 +241,9 @@ describe('baseline query operations', () => {
     slots[81] = { name: 'torch', count: 1 }
     ;(raw as unknown as { openContainer: unknown }).openContainer = async () => ({
       slots,
-      // The real window object reports a total slot count here, not the container size.
-      containerSlots: 90,
+      // Documented prismarine-windows properties the provider relies on.
+      inventoryStart: 27,
+      containerItems: () => [{ slot: 0, name: 'raw_iron', count: 61 }],
       close: async () => {},
     })
     const provider = new MineflayerProvider(bot)

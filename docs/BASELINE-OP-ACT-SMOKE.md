@@ -314,7 +314,7 @@
 
 - `entities`：`maxDistance` 按到 bot 的欧氏距离过滤；结果带 `distance`，按距离升序，默认上限 64（最大 256）。`objectType` 是 mineflayer 精确值（`Pig`），`type` 才是宽类（`animal`/`hostile`）。
 - `blocks`：`findBlocks` 只返回最近 N 个候选，y 过滤是**候选集内过滤**；带 y 条件时候选集扩大到 256–2048。文档不再暗示“按 y 搜索”。
-- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。`p2_observe` 现在也在 body 内轮询同一 pending 结果（默认 3s，可用 `timeoutMs` 调整），超时返回 `OBSERVE_TIMEOUT`。快照只返回容器自身槽位（`containerSlots` 之内），不再混入玩家背包。
+- `container`/`offers`：打开窗口是异步的，查询以 `pending` 返回并由执行器轮询；3s 未打开窗口返回 `CONTAINER_TIMEOUT`/`OFFERS_TIMEOUT`。`p2_observe` 现在也在 body 内轮询同一 pending 结果（默认 3s，可用 `timeoutMs` 调整），超时返回 `OBSERVE_TIMEOUT`。快照只返回容器自身槽位（`window.containerItems()`，回退 `inventoryStart` 之前的槽），`containerSlots` 为容器段槽位数，不再混入玩家背包。
 - `craft`：逐次执行（每次 `count=1`），每次合成前关闭遗留窗口并 `_syncWindow(inventory)`，合成后等待背包内结果物品增长（最长 800ms），两次合成之间间隔 400ms（实测紧跟其后的合成会被服务器静默丢弃），失败时重试一次，最后按背包增量校验产物；不足返回 `CRAFT_INCOMPLETE`（含 requested/crafted/produced），成功返回 `{item,requested,crafted,produced}`。实测：容器交互后客户端背包模型过期会导致 `bot.craft` 点错槽位（合成出按钮、数量错乱），`_syncWindow` 后恢复正常。
 - `moveTo`：`blockedMs` 内无进展时每 300ms 脉冲一次 `jump`（forward 保持按住），可上一格台阶；更高的墙仍按 `MOVE_TO_BLOCKED` 失败。
 - `goto`/`follow`：基于 `mineflayer-pathfinder`（依赖已加入 package.json）。movements 配置为 `canDig=false`、`allow1by1towers=false`、`allowParkour=false`、`maxDropDown=3`、`allowSprinting=true`——导航不会挖方块、搭塔、跑酷或连续深降；挖/搭必须走 `dig`/`place`。无路径 1.5s 后 `GOTO_NO_PATH`，超时 `GOTO_TIMEOUT`，跟随目标消失 `FOLLOW_TARGET_LOST`；停止时调用 `pathfinder.stop()`。实测：4 格下落 + parkour 的旧配置曾在一次普通 `goto` 中把 bot 摔死，故收紧。
@@ -370,4 +370,25 @@
 - 观测：`status.devOps = { enabled, path, generation, operations[], lastError }`；能力列表会合并外部 op 声明的 capability。
 - 收口：经过冒烟/实机验证的 op 应合并回 `src/operation/index.ts` + `src/provider/mineflayer.ts`（或明确作为 experiment-only 保留），并把 `devOps` 关掉。
 - 已知限制：外部 op 直接在 body 进程内执行，没有 runner 隔离；文件在 body cwd 下解析；热重载不会重放正在运行的行为。
+
+### 10.6 第三方 API 契约（provider 依赖的不变量）
+
+> 依据：`node_modules/mineflayer/docs/api.md` 与 `node_modules/prismarine-windows/API.md`（随包文档）。改 provider 前先核对这些条目，不要凭类型定义猜测行为。
+
+| 依赖点 | 文档事实 | 我们的用法与注意 |
+| --- | --- | --- |
+| `bot.craft(recipe, count, table)` | `count` 是**执行次数**（`null`=1）；Promise 在「合成完成且背包已更新」时 resolve | 仍逐次 `count=1` 执行。实测容器交互后背包模型会过期：合成前 `_syncWindow(bot.inventory)`，合成后等结果物品增长（≤800ms），两次之间留 400ms，最后按增量校验 |
+| `window.slots` | 是**整个窗口**的槽位，含玩家背包 | 容器查询不能直接返回全量；用 `window.containerItems()`（容器段），回退 `window.inventoryStart` 之前的槽；不要再猜 `containerSlots` 之类的字段 |
+| `window.containerItems()/containerCount()` | 文档化的「容器段」读取方法 | 容器快照的槽位来源；返回值是 `Item` 列表（Item 自带 `slot`） |
+| `window.count(itemType, metadata)` | 文档化的「背包段」计数 | `inventoryCountOfType()` 优先用它，回退 `items()` 过滤 |
+| `bot.findBlock({ matching })` | `matching` 是**方块类型 id**（`registry.blocksByName[name].id`） | 曾把物品 id 传进去导致「有工作台仍 `CRAFT_NO_TABLE`」 |
+| `bot.openVillager` / `villager.trades` | 交易窗口异步填充，需监听 `ready` 事件 | `offers` 查询与 `trade` 都先等 `ready`（有上限超时）再读 `trades` |
+| `furnace.fuel` / `furnace.progress` | `Furnace` 实例属性 | 容器快照里按数值透出，未燃烧时可能缺省 |
+| `bot.dig(block)` | 同一时刻只能挖一个方块；`stopDigging()` 中断 | `stop()` 调 `stopDigging()`；连续挖必须 await 上一个 |
+| `bot.mount(entity)` / `bot.dismount()` | 返回 `void`（不是 Promise） | 轮询 `bot.vehicle` 判断完成，不 await |
+| `bot.moveVehicle(left, forward)` | `left`：-1 右 / 1 左；`forward`：-1 后 / 1 前 | `drive` op 的参数直接映射 |
+| `bot.sleep(bed)` / `bot.wake()` | `wake()` 是文档化的下床方法 | `sleep` 的 `stop()` 必须调 `wake()`，否则会留在床上 |
+| `bot.look(yaw, pitch, force)` | yaw 从正东起、逆时针；pitch 0 平视 | 移动/挖掘用 `force` 时服务端才立刻知道朝向 |
+| `window` 事件 `updateSlot` | 合成等窗口事务依赖该事件推进 | 超时即窗口失步；不要靠盲重试，先关窗重开并重同步 |
+
 

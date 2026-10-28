@@ -217,22 +217,40 @@ function delay(ms: number): Promise<void> {
   })
 }
 
-/** Container blocks and the number of slots that belong to the container itself. */
-const CONTAINER_SLOT_COUNT: Record<string, number> = {
-  chest: 27,
-  trapped_chest: 27,
-  barrel: 27,
-  furnace: 3,
-  blast_furnace: 3,
-  smoker: 3,
-  dispenser: 9,
-  dropper: 9,
+/**
+ * The trading window fills its offers asynchronously; mineflayer documents a
+ * `ready` event for that. Wait for it (bounded) before reading trades.
+ */
+async function waitVillagerReady(window: AnyWindow, timeoutMs = 2000): Promise<void> {
+  if (Array.isArray(window.trades) && window.trades.length > 0) return
+  if (typeof window.once !== 'function') return
+  await new Promise<void>(resolve => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    try {
+      window.once?.('ready', finish)
+    } catch {
+      finish()
+      return
+    }
+    setTimeout(finish, timeoutMs)
+  })
 }
 
 /** Structural view of a container/villager window; only the fields we use. */
 type AnyWindow = {
-  slots?: Array<{ name: string; count: number } | null>
-  containerSlots?: number
+  slots?: Array<{ slot?: number; name: string; count: number } | null>
+  /** Documented prismarine-windows helper: items of the container (top) section. */
+  containerItems?: () => Array<{ slot?: number; name: string; count: number }>
+  /** Documented prismarine-windows helper: item count in the inventory section. */
+  count?: (itemType: number, metadata?: number | null) => number
+  /** Documented prismarine-windows property: first slot of the player inventory. */
+  inventoryStart?: number
+  once?: (event: string, listener: () => void) => void
   fuel?: number
   progress?: number
   trades?: Array<{
@@ -469,15 +487,23 @@ export class MineflayerProvider implements ActPort {
 
   private snapshotWindow(kind: string, window: AnyWindow): JsonValue {
     const slots = Array.isArray(window.slots) ? window.slots : []
-    // Window slots include the player inventory; a container query must only
-    // report the container's own slots.
-    const containerSlots = CONTAINER_SLOT_COUNT[kind]
-      ?? (typeof window.containerSlots === 'number' ? window.containerSlots : slots.length)
+    // `window.containerItems()` is the documented prismarine-windows helper for
+    // the container (top) section; fall back to slicing at `inventoryStart`.
+    const containerItems = typeof window.containerItems === 'function' ? window.containerItems() : undefined
     const items: JsonValue[] = []
-    for (let index = 0; index < Math.min(containerSlots, slots.length); index += 1) {
-      const item = slots[index]
-      if (item === null || item === undefined) continue
-      items.push({ slot: index, name: item.name, count: item.count })
+    let containerSlots = typeof window.inventoryStart === 'number' ? window.inventoryStart : slots.length
+    if (Array.isArray(containerItems)) {
+      for (const item of containerItems) {
+        const slot = typeof item.slot === 'number' ? item.slot : -1
+        items.push({ slot, name: item.name, count: item.count })
+      }
+    } else {
+      containerSlots = Math.min(containerSlots, slots.length)
+      for (let index = 0; index < containerSlots; index += 1) {
+        const item = slots[index]
+        if (item === null || item === undefined) continue
+        items.push({ slot: index, name: item.name, count: item.count })
+      }
     }
     const value: Record<string, JsonValue> = { kind, containerSlots, slots: items }
     if (typeof window.fuel === 'number') value.fuel = window.fuel
@@ -549,6 +575,7 @@ export class MineflayerProvider implements ActPort {
       try {
         const window = await this.bot.openVillager(entity as Parameters<Bot['openVillager']>[0]) as unknown as AnyWindow
         try {
+          await waitVillagerReady(window)
           outcome = { status: 'ok', value: this.snapshotTrades(window), meta: this.queryMeta('mineflayer.offers', sampledAt) }
         } finally {
           await this.closeWindow(window)
@@ -1001,6 +1028,10 @@ class MineflayerActHandle implements ActHandle {
     }
     if (this.name === 'fish') {
       try { this.bot.deactivateItem() } catch { /* the connection may be gone */ }
+    }
+    if (this.name === 'sleep') {
+      // Documented way out of a bed; stop() must not leave the bot asleep.
+      try { void this.bot.wake() } catch { /* the connection may be gone */ }
     }
     this.bot.clearControlStates()
   }
@@ -1617,6 +1648,7 @@ class MineflayerActHandle implements ActHandle {
           void (async () => {
             const window = await this.bot.openVillager(entity as Parameters<Bot['openVillager']>[0])
             try {
+              await waitVillagerReady(window as unknown as AnyWindow)
               await this.bot.trade(window, index, times)
             } finally {
               await window.close()
@@ -1801,6 +1833,10 @@ class MineflayerActHandle implements ActHandle {
   }
 
   private inventoryCountOfType(itemType: number): number {
+    const window = this.bot.inventory as unknown as AnyWindow
+    // `window.count(itemType, metadata)` is the documented prismarine-windows
+    // helper for counting items in the inventory section.
+    if (typeof window.count === 'function') return window.count(itemType, null)
     return this.bot.inventory.items()
       .filter(item => item.type === itemType)
       .reduce((total, item) => total + item.count, 0)
