@@ -136,7 +136,8 @@ export class BodyRuntime {
       && envelope.method !== 'switch'
       && envelope.method !== 'confirm'
       && envelope.method !== 'behavior.stop'
-      && envelope.method !== 'observe') {
+      && envelope.method !== 'observe'
+      && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
     }
 
@@ -251,6 +252,11 @@ export class BodyRuntime {
           const result: ActivateResult = activated
           this.recordCommand(commandId, 'activate', result)
           return { ...base, result: result as unknown as JsonValue }
+        }
+        case 'rescue': {
+          const rescued = await this.behavior.rescueRun(params as never)
+          this.recordCommand(commandId, 'rescue', rescued)
+          return { ...base, result: rescued as unknown as JsonValue }
         }
         case 'switch': {
           const artifactId = typeof params.artifactId === 'string' ? params.artifactId : undefined

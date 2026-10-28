@@ -152,6 +152,10 @@ export class BodyManager {
     return this.activeClient().check(sourcePath, options)
   }
 
+  rescue(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().rescue(params)
+  }
+
   activate(artifactId: string): Promise<JsonValue> {
     return this.activeClient().activate(artifactId)
   }

@@ -1,5 +1,5 @@
 import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
-import type { LastRunSummary, ProviderRuntimeStatus } from '../contracts/protocol.ts'
+import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -75,6 +75,8 @@ export type BehaviorHostOptions = {
   newRunId?: () => string
   /** Load act/policy code in a sandbox to extract its manifest. */
   loadManifest?: (kind: 'act' | 'policy', code: string, artifactId: string) => Promise<JsonValue>
+  /** Experiment-only rescue channel; behavior/act cannot reach it. */
+  rescue?: (request: RescueParams, context: { owner: string }) => Promise<RescueResult>
 }
 
 /** Library-level behavior host used by M1 tests; body wiring remains separate. */
@@ -88,6 +90,7 @@ export class BehaviorHost {
   private readonly policy: PolicyPort
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
+  private readonly rescue: BehaviorHostOptions['rescue']
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | undefined
@@ -109,6 +112,7 @@ export class BehaviorHost {
     }))
     this.providerStatus = options.providerStatus
     this.loadManifest = options.loadManifest
+    this.rescue = options.rescue
     this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
@@ -186,6 +190,16 @@ export class BehaviorHost {
 
   setOwner(owner: string): void {
     this.owner = owner
+  }
+
+  async rescueRun(request: RescueParams): Promise<RescueResult> {
+    if (this.run !== undefined && !isTerminal(this.run.status)) {
+      throw p2Error('RESCUE_BUSY', 'runtime', 'stop the active behavior before using rescue', { module: 'core.host' })
+    }
+    if (this.rescue === undefined) {
+      throw p2Error('RESCUE_UNAVAILABLE', 'capability', 'rescue is not configured for this body', { module: 'core.host' })
+    }
+    return this.rescue(request, { owner: this.owner })
   }
 
   observe(op: string, args: Record<string, JsonValue> = {}): QueryOutcome {

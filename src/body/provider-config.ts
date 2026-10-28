@@ -8,6 +8,9 @@ export type MinecraftProviderConfig = {
   version: string
   connectTimeoutMs: number
   serverIdleMs: number
+  /** Experiment-only rescue channel; disabled unless explicitly enabled. */
+  allowRescue: boolean
+  rescueTpRadius: number
 }
 
 export type ProviderConfigSource = 'file' | 'env' | 'file+env'
@@ -25,6 +28,7 @@ const DEFAULTS = {
   version: '1.21.1',
   connectTimeoutMs: 15_000,
   serverIdleMs: 1500,
+  rescueTpRadius: 32,
 } as const
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -74,6 +78,7 @@ export async function loadProviderConfig(
 ): Promise<LoadedProviderConfig | undefined> {
   const path = join(cwd, '.p2', 'config.json')
   let file: UnknownRecord | undefined
+  let experiment: UnknownRecord = {}
   let source: ProviderConfigSource = 'env'
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
@@ -83,6 +88,10 @@ export async function loadProviderConfig(
       if (!isRecord(minecraft)) throw new Error('provider config: minecraft must be an object')
       file = minecraft
       source = 'file'
+    }
+    if (parsed.experiment !== undefined) {
+      if (!isRecord(parsed.experiment)) throw new Error('provider config: experiment must be an object')
+      experiment = parsed.experiment
     }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
@@ -115,9 +124,12 @@ export async function loadProviderConfig(
     DEFAULTS.serverIdleMs,
   )
 
+  const allowRescue = experiment.allowRescue === true
+  const rescueTpRadius = Math.min(64, asPositive(experiment.rescueTpRadius, 'rescueTpRadius', DEFAULTS.rescueTpRadius))
+
   if (envHost !== undefined) source = file === undefined ? 'env' : 'file+env'
   return {
-    config: { host, port, username, version, connectTimeoutMs, serverIdleMs },
+    config: { host, port, username, version, connectTimeoutMs, serverIdleMs, allowRescue, rescueTpRadius },
     source,
   }
 }

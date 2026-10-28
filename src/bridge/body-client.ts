@@ -94,6 +94,10 @@ export class BodyClient {
     })
   }
 
+  rescue(params: JsonValue): Promise<JsonValue> {
+    return this.command('rescue', params as Record<string, JsonValue>)
+  }
+
   activate(artifactId: string): Promise<JsonValue> {
     return this.command('activate', { artifactId })
   }

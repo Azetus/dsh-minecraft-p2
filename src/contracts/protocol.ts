@@ -22,6 +22,7 @@ export const METHODS = [
   'check',
   'activate',
   'switch',
+  'rescue',
   'confirm',
   'behavior.stop',
   'stop',
@@ -187,6 +188,28 @@ export type ActivateResult = {
 export type SwitchParams = {
   artifactId: string
   params: Record<string, JsonValue>
+}
+
+export type RescueAction = 'tp' | 'effect' | 'respawn'
+
+export type RescueParams = {
+  action: RescueAction
+  x?: number
+  y?: number
+  z?: number
+  effect?: 'instant_health' | 'regeneration' | 'saturation'
+  durationSeconds?: number
+  amplifier?: number
+  reason: string
+  category: 'stuck' | 'trapped' | 'death_loop' | 'health' | 'food' | 'other'
+}
+
+export type RescueResult = {
+  auditId: string
+  command: string
+  sent: true
+  before: { position: JsonValue; health: JsonValue }
+  note: string
 }
 
 export type SwitchResult = {

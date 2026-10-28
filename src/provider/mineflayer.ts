@@ -201,6 +201,17 @@ export class MineflayerProvider implements ActPort {
     }
   }
 
+  /** Operator rescue channel; commands are normalized and allow-listed by the body. */
+  sendCommand(command: string): void {
+    if (this.disconnected !== undefined) {
+      throw p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' })
+    }
+    if (!command.startsWith('/') || command.length > 200 || /[\r\n]/u.test(command)) {
+      throw p2Error('RESCUE_COMMAND_INVALID', 'validation', 'rescue command is not a single chat command', { module: 'provider.mineflayer' })
+    }
+    this.bot.chat(command)
+  }
+
   queryPort(): QueryPort {
     return (ref, args) => this.query(ref.op, args)
   }

@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createStdioTransport, p2Error } from '../contracts/index.ts'
@@ -11,6 +12,7 @@ import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { loadBodyInfo } from './manifest.ts'
 import { loadProviderConfig } from './provider-config.ts'
+import { executeRescue } from './rescue.ts'
 
 type HostBundle = {
   host: BehaviorHost
@@ -111,6 +113,12 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       },
       providerStatus: () => provider.liveStatus(),
       loadManifest: (kind, code, artifactId) => client.load(kind, artifactId, code),
+      rescue: (request, context) => executeRescue(provider, request, {
+        allowRescue: loaded.config.allowRescue,
+        tpRadius: loaded.config.rescueTpRadius,
+        auditPath: join(process.cwd(), '.m5-runs', 'rescue.jsonl'),
+        owner: context.owner,
+      }),
     })
     return {
       host,
