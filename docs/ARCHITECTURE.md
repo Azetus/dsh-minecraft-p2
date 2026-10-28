@@ -21,6 +21,7 @@
 | [M5-VALIDATION.md](M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
 | [BEHAVIOR-JS.md](BEHAVIOR-JS.md) | 实验草案：behavior 作为受限 JS 协程的初版架构、ctx API、生命周期与取舍。 |
 | [EXPERIMENT-BEHAVIOR-SUBSTRATE.md](EXPERIMENT-BEHAVIOR-SUBSTRATE.md) | 实验计划：IR vs 受限 JS 的共享基线、分支、安装、协议与判定。 |
+| [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md) | 共享基线：基本 op/act 清单、smoke 清单与冻结条件。 |
 | [WS-FUTURE.md](WS-FUTURE.md) | 保留的 WebSocket、独立常驻 body、鉴权/租约与重连方案，后续实现，不是首版门槛。 |
 
 ## 目录
@@ -319,7 +320,8 @@ revision 表示源码版本，artifactId 表示确切可执行内容；同源码
 
 ### 4.5 仓库组织与包管理（初版单包，后续可拆）
 
-**初版采用一个 npm 包交付：bridge、body、内置 Mineflayer provider、operation 声明、authoring 子路径、共享契约与预设 behavior／act／policy 同包；后续验证可行后再拆包/拆仓。** 包管理器用于开发和构建；`npm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装，初版不发布 registry。
+**初版采用一个 npm 包交付：bridge、body、内置 Mineflayer provider、operation 声明、authoring 子路径、共享契约与预设 behavior／act／policy 同包；后续验证可行后再拆包/拆仓。** 包管理器用于开发和构建；
+pm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装，初版不发布 registry。
 
 包内按目录分层：contracts、authoring、operation、core、acts、behaviors、body、bridge、provider。模块名不等于发行包，依赖方向仍按 §1：bridge 不 import core/body/provider；core／acts／behaviors 不 import provider，只依赖 operation 的声明；provider 实现 operation 契约。初版用一个轻量 import-boundary 检查维持这些方向。
 

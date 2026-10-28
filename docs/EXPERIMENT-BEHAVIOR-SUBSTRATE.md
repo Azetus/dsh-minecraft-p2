@@ -30,7 +30,7 @@ M5 的 G3 判定为“继续采用小 IR”，但那只证明了四个简单场�
 | 0 | 写实验协议与判定标准（本文）；写 JS 架构草案（BEHAVIOR-JS.md） | 两份文档可评审；问题/证据/边界固定 |
 | 1 | JS 架构初值已确认（完成证据、时效、取消、policy 内联、artifact 形态），见 [BEHAVIOR-JS.md §10](BEHAVIOR-JS.md) | 初值记录为“实验期决定”，不是最终契约 |
 | 2 | 完成共享基线：op、provider、broker、act/policy runner、body/bridge、status/observability | 基线功能清单；`npm run check` 绿 |
-| 3 | 冻结基线：打 tag `m5-baseline`；写 smoke 清单与日志模板 | 基线 tag；smoke 脚本/清单 |
+| 3 | 冻结基线：打 tag `m5-baseline`；确认 smoke 清单与日志模板 | 基线 tag；smoke 脚本/清单 |
 | 4 | 从基线拉两个分支：`exp/behavior-ir`、`exp/behavior-js` | 两分支都能 build/check/跑 smoke |
 | 5 | 两边 bundle 安装验证：同包名、不同版本、一次装一个 | 桌面 DSH 中工具可见、body 可连、smoke 通过 |
 | 6 | 生存实验：真实世界、基本 behavior/act 起步、过程中写新策略 | 每分支至少两组 session；日志与证据 |
@@ -38,7 +38,7 @@ M5 的 G3 判定为“继续采用小 IR”，但那只证明了四个简单场�
 
 ## 4. 共享基线
 
-**共享（两分支一致）**
+**共享（两分支一致）** —— 基本 op/act 与 smoke 的具体清单见 [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md)。
 
 - `src/contracts`：IR/act/policy/op/错误/摘要/协议（JS 分支只加 behavior artifact 形态）。
 - `src/operation`：QueryOp / ControlOp 声明与契约。
@@ -136,7 +136,7 @@ M5 的 G3 判定为“继续采用小 IR”，但那只证明了四个简单场�
 | --- | --- |
 | 实验协议 | 本文（草案） |
 | JS 架构 | [BEHAVIOR-JS.md](BEHAVIOR-JS.md)（草案；§10 初值已确认） |
-| 共享基线 | 未开始 |
+| 共享基线 | 清单已整理（[BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md)）；实现未开始 |
 | 基线 tag | 未创建 |
 | 两分支 | 未创建 |
 | 桌面 bundle 安装 | 未验证 |
@@ -145,7 +145,7 @@ M5 的 G3 判定为“继续采用小 IR”，但那只证明了四个简单场�
 ## 11. 下一步
 
 1. ~~评审并确定 BEHAVIOR-JS.md 的待定问题（§10）~~（已确认，2026-10-28）。
-2. 完成共享基线与基本模块清单，跑通现有测试。
+2. 按 [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md) 完成共享基线与基本模块，跑通现有测试。
 3. 打 `m5-baseline` tag，写 smoke 清单与日志模板。
 4. 创建两分支，分别实现 IR 扩展与 JS 驱动。
 5. 两边 bundle 安装到桌面 DSH，验证工具面与 smoke。

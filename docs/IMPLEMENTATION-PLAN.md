@@ -128,7 +128,7 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 步骤：
 
 1. 固定实验协议与判定标准（[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)），评审 JS 架构草案（[BEHAVIOR-JS.md](BEHAVIOR-JS.md)）。
-2. 完成共享基线：op、provider、broker、act/policy runner、body/bridge、status/observability；补齐基本 act。
+2. 完成共享基线：op、provider、broker、act/policy runner、body/bridge、status/observability；补齐基本 act（清单见 [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md)）。
 3. 冻结基线：`m5-baseline` tag；smoke 清单与日志模板。
 4. 从基线拉 `exp/behavior-ir` 与 `exp/behavior-js`；各自实现 behavior 层，共享其余部分。
 5. 两分支分别打包为同包名、不同版本的 bundle，在桌面 DSH 一次装一个，验证工具面与 smoke。
