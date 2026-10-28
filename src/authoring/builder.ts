@@ -85,6 +85,18 @@ export function actRef(
     : { kind: 'act', id, act: ref, args, output }
 }
 
+export function decide(
+  id: string,
+  policy: { definitionId: string; artifactId?: string },
+  inputs: Record<string, ValueExpr>,
+  output: string,
+  timeoutMs?: number,
+): Node {
+  return timeoutMs === undefined
+    ? { kind: 'decide', id, policy, inputs, output }
+    : { kind: 'decide', id, policy, inputs, output, timeoutMs }
+}
+
 export function wait(id: string, durationMs: number): Node {
   return { kind: 'wait', id, durationMs }
 }

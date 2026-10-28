@@ -120,6 +120,9 @@ export type StatusResult = {
   provider: ProviderSummary | null
   providerState?: ProviderRuntimeStatus | null
   commandCount: number
+  activeAct?: string | null
+  waiting?: string | null
+  lastFailure?: P2Error | null
   loggingUnavailable?: boolean
   droppedLogCount?: number
 }

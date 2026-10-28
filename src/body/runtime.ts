@@ -357,6 +357,9 @@ export class BodyRuntime {
       provider: this.body.provider,
       providerState: behavior?.providerState ?? null,
       commandCount: this.commands.size,
+      activeAct: this.behavior?.status().activeAct ?? null,
+      waiting: this.behavior?.status().waiting ?? null,
+      lastFailure: this.behavior?.status().lastFailure ?? null,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,
         droppedLogCount: this.debugLog.droppedCount,

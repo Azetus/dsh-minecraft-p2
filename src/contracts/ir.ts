@@ -1,5 +1,5 @@
 import type { JsonValue } from './types.ts'
-import type { ArtifactManifest } from './types.ts'
+import type { ArtifactManifest, P2ErrorCategory } from './types.ts'
 
 /** Serializable behavior IR shared by the builder, checker and executor. */
 export type ValueExpr =
@@ -47,6 +47,8 @@ export type Node =
   | { kind: 'assign'; id: string; target: string; value: ValueExpr }
   | { kind: 'query'; id: string; query: QueryRef; output: string }
   | { kind: 'act'; id: string; act: ArtifactRef; args: Record<string, ValueExpr>; output?: string }
+  | { kind: 'decide'; id: string; policy: ArtifactRef; inputs: Record<string, ValueExpr>; output: string; timeoutMs?: number }
+  | { kind: 'fail'; id: string; code: string; message: string; category?: P2ErrorCategory }
   | { kind: 'wait'; id: string; durationMs: number }
   | {
       kind: 'recover'
@@ -121,4 +123,16 @@ export type ActArtifact = {
   sourceDigest: string
 }
 
-export type ContentArtifact = BehaviorArtifact | ActArtifact
+export type ContentArtifact = BehaviorArtifact | ActArtifact | PolicyArtifact
+
+/** Immutable policy artifact: single-file pure decision code. */
+export type PolicyArtifact = {
+  kind: 'policy'
+  definitionId: string
+  code: string
+  manifest: ArtifactManifest
+  artifactId: string
+  artifactDigest: string
+  bindingId: string
+  sourceDigest: string
+}

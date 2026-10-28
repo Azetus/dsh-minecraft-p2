@@ -46,7 +46,7 @@ function executor(
   })
 }
 
-function finite(root: BehaviorDefinition['root'], condition = when(eq(lit(1), lit(1)))): BehaviorDefinition {
+function finite(root: BehaviorDefinition['root'], condition = when(eq(lit(0), lit(1)))): BehaviorDefinition {
   return defineBehavior({
     id: 'test',
     description: 'test',
@@ -403,7 +403,7 @@ describe('behavior executor query and act ports', () => {
         { when: when(eq(local('mode'), lit('idle'))), child: act('idle', 'idle') },
       ])),
       locals: { mode: { type: 'string', initial: 'attack' } },
-      completion: { kind: 'predicate', condition: when(eq(local('mode'), lit('idle'))) },
+      completion: { kind: 'predicate', condition: when(lit(false)) },
     }), { act: actPort })
     expect(run.tick(0)).toBe('running')
     expect(starts).toEqual(['attack'])

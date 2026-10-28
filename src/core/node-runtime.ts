@@ -26,6 +26,15 @@ export type QueryOutcome =
 
 export type QueryPort = (ref: QueryRef, args: Record<string, JsonValue>) => QueryOutcome
 
+export type PolicyOutcome =
+  | { status: 'ok'; value: JsonValue; meta?: ValueMeta }
+  | { status: 'failed'; error: P2Error }
+  | { status: 'pending'; poll(): PolicyOutcome }
+
+export type PolicyPort = {
+  call(ref: ArtifactRef, inputs: Record<string, JsonValue>): PolicyOutcome
+}
+
 export type ActPoll =
   | { status: 'running' }
   | { status: 'succeeded'; result?: JsonValue; meta?: ValueMeta }
@@ -45,12 +54,23 @@ export type ActPort = {
   start(ref: ActRefLike, args: Record<string, JsonValue>): ActHandle
 }
 
+export type RuntimeReport = {
+  act: string | null
+  waiting: 'query' | 'act' | 'policy' | 'wait' | null
+}
+
 export type NodeContext = {
   params: Record<string, JsonValue>
   frame: LocalFrame
   query: QueryPort
   act: ActPort
+  policy: PolicyPort
   now: number
+  report: RuntimeReport
+  /** True when the finite completion predicate is already satisfied. */
+  completionReady?: () => boolean
+  /** Ask the executor to prepare success before starting a new act. */
+  requestCompletion?: () => void
 }
 
 export type ConditionOutcome =
@@ -76,6 +96,8 @@ export function createNodeRuntime(node: Node): NodeRuntime {
     case 'reactivePriority': return new ReactiveRuntime(node)
     case 'query': return new QueryRuntime(node)
     case 'act': return new ActRuntime(node)
+    case 'decide': return new DecideRuntime(node)
+    case 'fail': return new FailRuntime(node)
     case 'recover': return new RecoverRuntime(node)
     default: throw new Error('unknown node kind')
   }
@@ -181,6 +203,7 @@ class WaitRuntime extends BaseRuntime {
   }
 
   tick(context: NodeContext): NodeResult {
+    context.report.waiting = 'wait'
     this.endAt ??= context.now + this.durationMs
     if (context.now >= this.endAt) return this.success()
     return { status: 'running' }
@@ -318,6 +341,7 @@ class SubtreeRuntime extends BaseRuntime {
 class ReactiveRuntime extends BaseRuntime {
   private branchIndex: number | undefined
   private child: NodeRuntime | undefined
+  private pendingSwitch: number | undefined
   private readonly conditions: ConditionEvaluator[]
 
   constructor(private readonly node: Extract<Node, { kind: 'reactivePriority' }>) {
@@ -326,6 +350,16 @@ class ReactiveRuntime extends BaseRuntime {
   }
 
   tick(context: NodeContext): NodeResult {
+    // A pending switch waits for the old branch to confirm its cleanup before
+    // the new branch may start: only one control owner at a time.
+    if (this.pendingSwitch !== undefined) {
+      const cancelled = this.child?.cancel(context)
+      if (cancelled?.status === 'running') return { status: 'running' }
+      if (cancelled?.status === 'failed') return this.failure(requireError(cancelled))
+      this.startBranch(this.pendingSwitch, context)
+      this.pendingSwitch = undefined
+    }
+
     let selected: number | undefined
     let unknown = false
     for (const [index, condition] of this.conditions.entries()) {
@@ -352,9 +386,15 @@ class ReactiveRuntime extends BaseRuntime {
     }
 
     if (this.branchIndex !== selected) {
-      this.child?.cancel(context)
-      this.child = createNodeRuntime(this.node.branches[selected]?.child as Node)
-      this.branchIndex = selected
+      if (this.child !== undefined) {
+        const cancelled = this.child.cancel(context)
+        if (cancelled.status === 'running') {
+          this.pendingSwitch = selected
+          return { status: 'running' }
+        }
+        if (cancelled.status === 'failed') return this.failure(requireError(cancelled))
+      }
+      this.startBranch(selected, context)
     }
 
     const child = this.child
@@ -371,13 +411,102 @@ class ReactiveRuntime extends BaseRuntime {
     if (result?.status === 'failed') return this.failure(requireError(result))
     return this.cancelled()
   }
+
+  private startBranch(index: number, context: NodeContext): void {
+    void context
+    this.child = createNodeRuntime(this.node.branches[index]?.child as Node)
+    this.branchIndex = index
+    context.report.waiting = null
+  }
+}
+
+class DecideRuntime extends BaseRuntime {
+  private started = false
+  private pending: (() => PolicyOutcome) | undefined
+
+  constructor(private readonly node: Extract<Node, { kind: 'decide' }>) {
+    super()
+  }
+
+  tick(context: NodeContext): NodeResult {
+    if (!this.started) {
+      this.started = true
+      context.report.waiting = 'policy'
+      const inputs: Record<string, JsonValue> = {}
+      try {
+        for (const [name, expr] of Object.entries(this.node.inputs)) {
+          inputs[name] = evaluate(expr, evalContext(context))
+        }
+      } catch (error) {
+        return this.failure(expressionError(error, this.node.id))
+      }
+      try {
+        return this.consume(context.policy.call(this.node.policy, inputs), context)
+      } catch (error) {
+        return this.failure(p2Error(
+          'POLICY_FAILED',
+          'runtime',
+          error instanceof Error ? error.message : String(error),
+          { module: 'core.decide', nodePath: this.node.id },
+        ))
+      }
+    }
+    if (this.pending !== undefined) {
+      const outcome = this.pending()
+      if (outcome.status === 'pending') {
+        this.pending = outcome.poll
+        return { status: 'running' }
+      }
+      this.pending = undefined
+      return this.consume(outcome, context)
+    }
+    return this.success()
+  }
+
+  cancel(): NodeResult {
+    this.pending = undefined
+    return this.cancelled()
+  }
+
+  private consume(outcome: PolicyOutcome, context: NodeContext): NodeResult {
+    if (outcome.status === 'pending') {
+      this.pending = outcome.poll
+      return { status: 'running' }
+    }
+    if (outcome.status === 'failed') return this.failure(outcome.error)
+    context.frame.set(this.node.output, outcome.value, outcome.meta ?? {
+      source: 'policy',
+      scope: this.node.policy.definitionId,
+      sampledAt: context.now,
+    })
+    return this.success()
+  }
+}
+
+class FailRuntime extends BaseRuntime {
+  constructor(private readonly node: Extract<Node, { kind: 'fail' }>) {
+    super()
+  }
+
+  tick(): NodeResult {
+    return this.failure(p2Error(
+      this.node.code,
+      this.node.category ?? 'runtime',
+      this.node.message,
+      { module: 'core.fail', nodePath: this.node.id },
+    ))
+  }
+
+  cancel(): NodeResult {
+    return this.cancelled()
+  }
 }
 
 class QueryRuntime extends BaseRuntime {
   private started = false
   private pending: (() => QueryOutcome) | undefined
   private startedAt: number | undefined
-  private timeoutMs = 5000
+  private timeoutMs = 1000
 
   constructor(private readonly node: Extract<Node, { kind: 'query' }>) {
     super()
@@ -412,11 +541,12 @@ class QueryRuntime extends BaseRuntime {
     } catch (error) {
       return this.failure(expressionError(error, this.node.id))
     }
+    context.report.waiting = 'query'
     const outcome = context.query(this.node.query, args)
     if (outcome.status === 'pending') {
       this.pending = outcome.poll
       this.startedAt = context.now
-      this.timeoutMs = this.node.query.timeoutMs ?? 5000
+      this.timeoutMs = this.node.query.timeoutMs ?? 1000
       return { status: 'running' }
     }
     return this.finish(outcome, context)
@@ -424,6 +554,14 @@ class QueryRuntime extends BaseRuntime {
 
   private finish(outcome: Exclude<QueryOutcome, { status: 'pending' }>, context: NodeContext): NodeResult {
     if (outcome.status === 'failed') return this.failure(outcome.error)
+    const freshness = this.node.query.freshnessMs
+    const sampledAt = outcome.meta?.sampledAt
+    if (freshness !== undefined && sampledAt !== undefined && context.now - sampledAt > freshness) {
+      return this.failure(p2Error('STALE_OBSERVATION', 'environment', 'query result is older than its freshness bound', { module: 'core.query', nodePath: this.node.id }, { ageMs: context.now - sampledAt, freshnessMs: freshness }))
+    }
+    if (outcome.meta?.validUntil !== undefined && context.now > outcome.meta.validUntil) {
+      return this.failure(p2Error('STALE_OBSERVATION', 'environment', 'query result is past its validity window', { module: 'core.query', nodePath: this.node.id }))
+    }
     context.frame.set(this.node.output, outcome.value, outcome.meta ?? {
       source: 'query',
       scope: this.node.query.op,
@@ -449,6 +587,10 @@ class ActRuntime extends BaseRuntime {
 
   tick(context: NodeContext): NodeResult {
     if (this.handle === undefined) {
+      if (context.completionReady?.() === true) {
+        context.requestCompletion?.()
+        return { status: 'running' }
+      }
       const args: Record<string, JsonValue> = {}
       try {
         for (const [name, expr] of Object.entries(this.node.args)) {
@@ -459,6 +601,8 @@ class ActRuntime extends BaseRuntime {
       }
       try {
         this.handle = context.act.start(this.node.act, args)
+        context.report.act = this.node.act.definitionId
+        context.report.waiting = 'act'
       } catch (error) {
         if (isP2Error(error)) {
           return this.failure({
@@ -604,6 +748,7 @@ class RecoverRuntime extends BaseRuntime {
 export class ConditionEvaluator {
   private pending: (() => QueryOutcome) | undefined
   private pendingArgs: string | undefined
+  private last: { argsKey: string; value: JsonValue; validUntil: number } | undefined
   private evaluation = 0
 
   constructor(private readonly condition: Condition) {}
@@ -628,14 +773,20 @@ export class ConditionEvaluator {
       this.pending = undefined
       this.pendingArgs = undefined
     }
-    if (this.pending !== undefined) return this.consume(this.pending(), context)
+    if (this.pending !== undefined) return this.consume(this.pending(), context, argsKey)
+
+    // Reuse fresh evidence for the same query arguments; a new request is only
+    // issued when the observation expired or the arguments changed.
+    if (this.last !== undefined && this.last.argsKey === argsKey && context.now <= this.last.validUntil) {
+      return evaluateQueryTest(this.condition as Extract<Condition, { kind: 'query' }>, this.last.value, context)
+    }
 
     this.evaluation += 1
     this.pendingArgs = argsKey
-    return this.consume(context.query(this.condition.query, args), context)
+    return this.consume(context.query(this.condition.query, args), context, argsKey)
   }
 
-  private consume(outcome: QueryOutcome, context: NodeContext): ConditionOutcome {
+  private consume(outcome: QueryOutcome, context: NodeContext, argsKey: string): ConditionOutcome {
     if (outcome.status === 'pending') {
       this.pending = outcome.poll
       return { status: 'unknown' }
@@ -643,10 +794,12 @@ export class ConditionEvaluator {
     this.pending = undefined
     this.pendingArgs = undefined
     if (outcome.status === 'failed') return { status: 'failed', error: outcome.error }
-    if (outcome.meta?.validUntil !== undefined && context.now > outcome.meta.validUntil) {
+    const validUntil = outcome.meta?.validUntil
+    if (validUntil !== undefined && context.now > validUntil) {
       // Fresh evidence is required; the next evaluation starts a new request.
       return { status: 'unknown' }
     }
+    if (validUntil !== undefined) this.last = { argsKey, value: outcome.value, validUntil }
     return evaluateQueryTest(this.condition as Extract<Condition, { kind: 'query' }>, outcome.value, context)
   }
 }

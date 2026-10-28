@@ -5,6 +5,7 @@ import type { BodyInfo } from '../contracts/index.ts'
 import { BehaviorHost } from '../core/host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { RunnerActPort } from '../core/act-port.ts'
+import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerClient } from '../core/runner-client.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
@@ -89,6 +90,7 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
 
     const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
     let actPort: RunnerActPort | undefined
+    let policyPort: RunnerPolicyPort | undefined
     let host: BehaviorHost | undefined
     const client = new RunnerClient({
       entry: runnerEntry,
@@ -96,10 +98,17 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       onLog: line => process.stderr.write(`[runner] ${line}\n`),
     })
     actPort = new RunnerActPort(client, ops, artifactId => host?.actSource(artifactId))
+    policyPort = new RunnerPolicyPort(client, artifactId => host?.policySource(artifactId))
     host = new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
       query: ops.queryPort(),
       act: actPort,
+      policy: {
+        call: (ref, inputs) => policyPort?.call(ref, inputs) ?? {
+          status: 'failed',
+          error: p2Error('POLICY_UNAVAILABLE', 'capability', 'policy runner is not ready', { module: 'body.policy' }),
+        },
+      },
       providerStatus: () => provider.liveStatus(),
       loadManifest: (kind, code, artifactId) => client.load(kind, artifactId, code),
     })

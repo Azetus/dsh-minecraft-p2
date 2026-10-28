@@ -120,7 +120,7 @@ export type ArtifactManifest = {
 
 /** Provenance carried by a local slot or a query/act output. */
 export type ValueMeta = {
-  source: 'initial' | 'assign' | 'query' | 'act' | 'subtree'
+  source: 'initial' | 'assign' | 'query' | 'act' | 'subtree' | 'policy'
   scope: string
   sampledAt: number
   validUntil?: number

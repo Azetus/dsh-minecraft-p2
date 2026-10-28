@@ -172,7 +172,7 @@ describe('BehaviorRun external confirmation', () => {
         parameters: {},
         locals: {},
         root: sequence('root', actNode('a', 'fake')),
-        completion: { kind: 'predicate', condition: when(lit(true)) },
+        completion: { kind: 'predicate', condition: when(lit(false)) },
       }),
       params: {},
       query,

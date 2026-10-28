@@ -12,7 +12,9 @@ import type {
   NodeContext,
   NodeRuntime,
   NodeStatus,
+  PolicyPort,
   QueryPort,
+  RuntimeReport,
 } from './node-runtime.ts'
 
 export type ExecutorStatus = 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
@@ -22,6 +24,7 @@ export type ExecutorOptions = {
   params: Record<string, JsonValue>
   query: QueryPort
   act: ActPort
+  policy?: PolicyPort
 }
 
 /** One behavior instance; one tick advances at most one bounded scheduling pass. */
@@ -32,11 +35,14 @@ export class BehaviorExecutor {
   private readonly params: Record<string, JsonValue>
   private readonly query: QueryPort
   private readonly act: ActPort
+  private readonly policy: PolicyPort
   private status: ExecutorStatus = 'running'
   private error: P2Error | undefined
   private lastFailureValue: P2Error | undefined
   private cancelRequested = false
   private preparedForSuccess = false
+  private completionRequested = false
+  private readonly report: RuntimeReport = { act: null, waiting: null }
   private readonly completion: ConditionEvaluator | undefined
 
   constructor(options: ExecutorOptions) {
@@ -44,6 +50,7 @@ export class BehaviorExecutor {
     this.params = options.params
     this.query = options.query
     this.act = options.act
+    this.policy = options.policy ?? { call: () => ({ status: 'failed', error: p2Error('POLICY_UNAVAILABLE', 'capability', 'no policy runner is configured', { module: 'core.executor' }) }) }
     this.frame = frameFrom(options.definition.locals)
     this.root = createNodeRuntime(options.definition.root)
     this.completion = options.definition.completion?.kind === 'predicate'
@@ -61,6 +68,10 @@ export class BehaviorExecutor {
 
   get lastFailure(): P2Error | undefined {
     return this.lastFailureValue
+  }
+
+  get runtimeReport(): RuntimeReport {
+    return { ...this.report }
   }
 
   tick(now = Date.now()): ExecutorStatus {
@@ -97,6 +108,12 @@ export class BehaviorExecutor {
     }
 
     const result = this.root.tick(this.context(now))
+    if (result.status === 'running' && this.completionRequested) {
+      // A new act was blocked by the completion predicate: prepare success.
+      this.completionRequested = false
+      this.preparedForSuccess = true
+      return this.status
+    }
     if (result.status === 'running') return this.status
     if (result.status === 'cancelled') {
       this.status = 'cancelled'
@@ -215,14 +232,26 @@ export class BehaviorExecutor {
     ))
   }
 
-  private context(now: number): NodeContext {
+  private context(now: number, withCompletion = true): NodeContext {
     return {
       params: this.params,
       frame: this.frame,
       query: this.query,
       act: this.act,
+      policy: this.policy,
       now,
+      report: this.report,
+      ...(withCompletion ? {
+        completionReady: () => this.completionReady(now),
+        requestCompletion: () => { this.completionRequested = true },
+      } : {}),
     }
+  }
+
+  /** The finite completion predicate is the loop exit before a new act starts. */
+  private completionReady(now: number): boolean {
+    if (this.definition.mode !== 'finite' || this.completion === undefined) return false
+    return this.completion.evaluate(this.context(now, false)).status === 'true'
   }
 
   private fail(error: P2Error): void {

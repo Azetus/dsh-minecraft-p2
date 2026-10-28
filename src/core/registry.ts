@@ -89,6 +89,18 @@ export class ArtifactRegistry {
     return record.artifact
   }
 
+  /** Any checked artifact for one definition; policy artifacts are never enabled. */
+  find(kind: 'behavior' | 'act' | 'policy', definitionId: string): ContentArtifact | undefined {
+    let fallback: ContentArtifact | undefined
+    for (const record of this.records.values()) {
+      if (record.artifact.kind !== kind || record.retired) continue
+      if (definitionIdOf(record.artifact) !== definitionId) continue
+      if (record.enabled) return record.artifact
+      fallback = record.artifact
+    }
+    return fallback
+  }
+
   resolve(): BehaviorArtifact | undefined {
     for (const record of this.records.values()) {
       if (record.artifact.kind === 'behavior' && record.enabled && !record.retired) return record.artifact

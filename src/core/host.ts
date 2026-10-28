@@ -5,12 +5,14 @@ import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
 import type { CheckerCredential } from './checker.ts'
 import { checkAct } from './act-checker.ts'
+import { checkPolicy } from './policy-checker.ts'
 import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
-import type { ActPort, QueryOutcome, QueryPort } from './node-runtime.ts'
+import type { ActPort, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 import type { ActSource } from './act-port.ts'
+import type { PolicySource } from './policy-port.ts'
 
 export type CheckHostRequest = {
   sourcePath: string
@@ -55,12 +57,16 @@ export type HostStatus = {
   lastRun: LastRunSummary | null
   providerState: ProviderRuntimeStatus | null
   commandCount: number
+  activeAct: string | null
+  waiting: string | null
+  lastFailure: P2Error | null
 }
 
 export type BehaviorHostOptions = {
   bindingId: string
   query: QueryPort
   act: ActPort
+  policy?: PolicyPort
   owner?: string
   builtinsDigest?: string
   providerStatus?: () => ProviderRuntimeStatus
@@ -77,6 +83,7 @@ export class BehaviorHost {
   private readonly ledger = new CommandLedger<SwitchResult | ConfirmResult | { artifactId: string }>()
   private readonly query: QueryPort
   private readonly act: ActPort
+  private readonly policy: PolicyPort
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
   private owner: string
@@ -94,6 +101,10 @@ export class BehaviorHost {
     })
     this.query = options.query
     this.act = options.act
+    this.policy = options.policy ?? (() => ({
+      status: 'failed',
+      error: p2Error('POLICY_UNAVAILABLE', 'capability', 'no policy runner is configured', { module: 'core.host' }),
+    }))
     this.providerStatus = options.providerStatus
     this.loadManifest = options.loadManifest
     this.owner = options.owner ?? 'host'
@@ -103,7 +114,7 @@ export class BehaviorHost {
   async check(request: CheckHostRequest): Promise<CheckHostResult> {
     const kind = request.artifactKind ?? 'behavior'
     if (kind === 'act') return this.checkAct(request)
-    if (kind === 'policy') throw new CheckerError('POLICY_UNSUPPORTED', 'policy artifacts are not implemented yet')
+    if (kind === 'policy') return this.checkPolicy(request)
     return this.checkBehavior(request)
   }
 
@@ -114,6 +125,7 @@ export class BehaviorHost {
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
       bindingId: this.bindingId,
       resolveAct: definitionId => this.registry.resolveDefault('act', definitionId)?.artifactId,
+      resolvePolicy: definitionId => this.registry.find('policy', definitionId)?.artifactId,
     })
     this.credentials.set(result.artifact.artifactId, result.credential)
     this.registry.add(result.artifact, result.credential)
@@ -148,6 +160,28 @@ export class BehaviorHost {
     }
   }
 
+  private async checkPolicy(request: CheckHostRequest): Promise<CheckHostResult> {
+    if (this.loadManifest === undefined) {
+      throw new CheckerError('POLICY_CHECK_UNAVAILABLE', 'this host cannot load policy artifacts')
+    }
+    const loadManifest = this.loadManifest
+    const result = await checkPolicy({
+      sourcePath: request.sourcePath,
+      ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
+      bindingId: this.bindingId,
+      loadManifest: (code, artifactId) => loadManifest('policy', code, artifactId),
+    })
+    this.credentials.set(result.artifact.artifactId, result.credential)
+    this.registry.add(result.artifact, result.credential)
+    return {
+      artifactId: result.artifact.artifactId,
+      definitionId: result.artifact.definitionId,
+      sourceDigest: result.artifact.sourceDigest,
+      kind: 'policy',
+      artifact: result.artifact,
+    }
+  }
+
   setOwner(owner: string): void {
     this.owner = owner
   }
@@ -157,12 +191,16 @@ export class BehaviorHost {
   }
 
   activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true; kind: 'behavior' | 'act' | 'policy' } {
+    const record = this.registry.get(artifactId)
+    if (record !== undefined && record.artifact.kind === 'policy') {
+      throw new RegistryError('POLICY_NOT_ACTIVATABLE', 'policy artifacts are dependencies and are not enabled separately')
+    }
     const credential = this.credentials.get(artifactId)
     if (credential === undefined) {
       throw new RegistryError('CHECKER_CREDENTIAL_MISSING', `no checker credential for ${artifactId}`)
     }
-    const record = this.registry.enable(artifactId, credential)
-    return { artifactId, bindingId: this.bindingId, enabled: true, kind: record.artifact.kind }
+    const enabled = this.registry.enable(artifactId, credential)
+    return { artifactId, bindingId: this.bindingId, enabled: true, kind: enabled.artifact.kind }
   }
 
   /** Exact act source for the runner, or undefined when it is not registered. */
@@ -176,6 +214,13 @@ export class BehaviorHost {
       ops: record.artifact.ops,
       ...(record.artifact.limits === undefined ? {} : { limits: record.artifact.limits }),
     }
+  }
+
+  /** Exact policy source for the runner, or undefined when it is not registered. */
+  policySource(artifactId: string): PolicySource | undefined {
+    const record = this.registry.get(artifactId)
+    if (record === undefined || record.artifact.kind !== 'policy') return undefined
+    return { artifactId: record.artifact.artifactId, code: record.artifact.code }
   }
 
   switch(input: SwitchInput): SwitchResult {
@@ -252,6 +297,7 @@ export class BehaviorHost {
       params,
       query: this.query,
       act: this.act,
+      policy: this.policy,
     })
     this.runArtifact = input.artifactId
     const result: SwitchResult = { accepted: true, runId, status: 'running' }
@@ -322,6 +368,9 @@ export class BehaviorHost {
       lastRun: this.lastRun,
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
+      activeAct: run?.describe().activeAct ?? null,
+      waiting: run?.describe().waiting ?? null,
+      lastFailure: run?.describe().lastFailure ?? null,
     }
   }
 

@@ -122,6 +122,29 @@ export function validateBehavior(definition: BehaviorDefinition): void {
         }
         for (const [name, value] of Object.entries(node.args)) visitExpr(value, `${path}.args.${name}`)
         break
+      case 'decide':
+        if (node.policy === null
+          || typeof node.policy !== 'object'
+          || typeof node.policy.definitionId !== 'string'
+          || node.policy.definitionId.length === 0) {
+          throw new BehaviorValidationError('INVALID_DECIDE', path, 'decide requires a policy reference')
+        }
+        if (node.policy.artifactId !== undefined && (typeof node.policy.artifactId !== 'string' || node.policy.artifactId.length === 0)) {
+          throw new BehaviorValidationError('INVALID_DECIDE', path, 'decide artifactId must be a non-empty string when present')
+        }
+        if (typeof node.output !== 'string' || node.output.length === 0) {
+          throw new BehaviorValidationError('INVALID_DECIDE', path, 'decide output is required')
+        }
+        for (const [name, value] of Object.entries(node.inputs)) visitExpr(value, `${path}.inputs.${name}`)
+        break
+      case 'fail':
+        if (typeof node.code !== 'string' || node.code.length === 0) {
+          throw new BehaviorValidationError('INVALID_FAIL', path, 'fail requires a non-empty code')
+        }
+        if (typeof node.message !== 'string') {
+          throw new BehaviorValidationError('INVALID_FAIL', path, 'fail requires a message')
+        }
+        break
       case 'wait':
         if (!Number.isFinite(node.durationMs) || node.durationMs < 0) {
           throw new BehaviorValidationError('INVALID_WAIT', path, 'wait duration must be non-negative')

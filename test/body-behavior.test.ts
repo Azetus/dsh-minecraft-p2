@@ -62,7 +62,7 @@ function stuckSource(): string {
 export default {
   id: 'body-stuck', description: 'stuck act', mode: 'finite', parameters: {}, locals: { done: { type: 'boolean' } },
   root: { kind: 'sequence', id: 'root', children: [{ kind: 'act', id: 'stuck', act: { definitionId: 'stuck', artifactId: 'p2:act:test' }, args: {} }] },
-  completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
+  completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: false } } },
 }
 `)
   return path

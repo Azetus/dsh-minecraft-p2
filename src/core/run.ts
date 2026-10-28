@@ -4,7 +4,7 @@ import { p2Error } from '../contracts/protocol.ts'
 import { BehaviorExecutor } from './executor.ts'
 import type { ExecutorStatus } from './executor.ts'
 import type { IngressEvent } from './ingress.ts'
-import type { ActPort, QueryPort } from './node-runtime.ts'
+import type { ActPort, PolicyPort, QueryPort } from './node-runtime.ts'
 
 export type RunStatus = 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -48,6 +48,7 @@ export type BehaviorRunOptions = {
   params: Record<string, JsonValue>
   query: QueryPort
   act: ActPort
+  policy?: PolicyPort
 }
 
 /**
@@ -74,6 +75,7 @@ export class BehaviorRun {
       params: options.params,
       query: options.query,
       act: options.act,
+      ...(options.policy === undefined ? {} : { policy: options.policy }),
     })
   }
 
@@ -87,6 +89,16 @@ export class BehaviorRun {
 
   get confirmation(): ConfirmationRequest | undefined {
     return this.confirmationValue
+  }
+
+  /** Diagnostic view: only the active act, the wait reason and the last failure. */
+  describe(): { activeAct: string | null; waiting: string | null; lastFailure: P2Error | undefined } {
+    const report = this.executor.runtimeReport
+    return {
+      activeAct: report.act,
+      waiting: report.waiting,
+      lastFailure: this.executor.lastFailure,
+    }
   }
 
   tick(now = Date.now()): RunStatus {

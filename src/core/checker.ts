@@ -30,6 +30,8 @@ export type CheckRequest = {
   builtinsDigest?: string
   /** Resolve an act definitionId to the enabled artifactId for this binding. */
   resolveAct?: (definitionId: string) => string | undefined
+  /** Resolve a policy definitionId to its checked artifactId. */
+  resolvePolicy?: (definitionId: string) => string | undefined
 }
 
 export type CheckResult = {
@@ -86,7 +88,7 @@ export async function checkBehavior(request: CheckRequest): Promise<CheckResult>
   const loaded = await loadModule(sourcePath, request.timeoutMs ?? 1000)
   // Work on a private copy: resolution mutates the IR and the module cache must not leak it.
   const definition = JSON.parse(JSON.stringify(loaded)) as BehaviorDefinition
-  resolveActRefs(definition, request.resolveAct)
+  resolveActRefs(definition, request.resolveAct, request.resolvePolicy)
   try {
     validateBehavior(definition)
   } catch (error) {
@@ -129,8 +131,12 @@ export async function checkBehavior(request: CheckRequest): Promise<CheckResult>
   }
 }
 
-/** Fill exact act artifact ids into every act node before validation. */
-function resolveActRefs(definition: BehaviorDefinition, resolveAct: CheckRequest['resolveAct']): void {
+/** Fill exact act/policy artifact ids into the IR before validation. */
+function resolveActRefs(
+  definition: BehaviorDefinition,
+  resolveAct: CheckRequest['resolveAct'],
+  resolvePolicy: CheckRequest['resolvePolicy'],
+): void {
   const visit = (node: Node): void => {
     switch (node.kind) {
       case 'sequence':
@@ -163,6 +169,18 @@ function resolveActRefs(definition: BehaviorDefinition, resolveAct: CheckRequest
           )
         }
         node.act = { definitionId: node.act.definitionId, artifactId: artifactIdValue }
+        return
+      }
+      case 'decide': {
+        if (node.policy.artifactId !== undefined && node.policy.artifactId.length > 0) return
+        const artifactIdValue = resolvePolicy?.(node.policy.definitionId)
+        if (artifactIdValue === undefined) {
+          throw new CheckerError(
+            'POLICY_NOT_RESOLVED',
+            `policy ${node.policy.definitionId} has not been checked in this binding; check it first`,
+          )
+        }
+        node.policy = { definitionId: node.policy.definitionId, artifactId: artifactIdValue }
         return
       }
       default:
