@@ -192,6 +192,29 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   })
 
   register({
+    name: 'p2_rescue',
+    description: 'Experiment-only rescue channel. Sends one allow-listed self command, records an audit entry, and refuses while a behavior is active.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['tp', 'effect', 'respawn'], description: 'Rescue action' },
+        x: { type: 'number', description: 'Teleport x' },
+        y: { type: 'number', description: 'Teleport y' },
+        z: { type: 'number', description: 'Teleport z' },
+        effect: { type: 'string', enum: ['instant_health', 'regeneration', 'saturation'], description: 'Allowed self effect' },
+        durationSeconds: { type: 'number', description: 'Effect duration in seconds (1-10)' },
+        amplifier: { type: 'number', description: 'Effect amplifier (0-1)' },
+        reason: { type: 'string', minLength: 3, description: 'Why rescue is needed; recorded in the audit log' },
+        category: { type: 'string', enum: ['stuck', 'trapped', 'death_loop', 'health', 'food', 'other'], description: 'Rescue category' },
+      },
+      required: ['action', 'reason', 'category'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.rescue(args as JsonValue)),
+  })
+
+  register({
     name: 'p2_command',
     description: 'Query an accepted/terminal command by commandId. Unknown is not proof it never ran.',
     parameters: {
