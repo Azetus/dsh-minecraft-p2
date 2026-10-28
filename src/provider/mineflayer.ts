@@ -27,6 +27,8 @@ export type MineflayerProviderOptions = {
   moveDurationMs?: number
   /** How long the server age must stay unchanged before the provider treats it as paused. */
   serverIdleMs?: number
+  /** Reported provider version; the body passes its own bodyVersion. */
+  providerVersion?: string
 }
 
 export type MineflayerConnectionOptions = {
@@ -96,6 +98,40 @@ const PLACE_FACES: Record<string, readonly [number, number, number]> = {
 
 const EQUIP_DESTINATIONS: readonly EquipmentDestination[] = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']
 
+/** Capabilities this provider actually implements; the op broker gates on them. */
+export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
+  'look',
+  'move',
+  'dig',
+  'place',
+  'attack',
+  'equip',
+  'use',
+  'craft',
+  'container',
+  'toss',
+  'sleep',
+  'interact',
+  'mount',
+  'trade',
+  'respawn',
+])
+
+/** Provider identity reported in hello/describe/status. */
+export const PROVIDER_ID = 'mineflayer'
+
+/** Container block names the `container` operations understand. */
+const CONTAINER_NAMES: readonly string[] = Object.freeze([
+  'chest',
+  'trapped_chest',
+  'barrel',
+  'furnace',
+  'blast_furnace',
+  'smoker',
+  'dispenser',
+  'crafting_table',
+])
+
 function meta(source: ValueMeta['source'], scope: string, sampledAt = Date.now()): ValueMeta {
   return { source, scope, sampledAt, validUntil: sampledAt + 1000 }
 }
@@ -109,11 +145,65 @@ function clampNumber(value: JsonValue | undefined, fallback: number, min: number
   return Math.min(max, Math.max(min, number))
 }
 
+function blockPosition(args: Record<string, JsonValue>): { x: number; y: number; z: number } | undefined {
+  const { x, y, z } = args
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return undefined
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined
+  return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Structural view of a container/villager window; only the fields we use. */
+type AnyWindow = {
+  slots?: Array<{ name: string; count: number } | null>
+  fuel?: number
+  progress?: number
+  trades?: Array<{
+    inputItem1?: { name: string; count: number } | null
+    inputItem2?: { name: string; count: number } | null
+    outputItem?: { name: string; count: number } | null
+    tradeDisabled?: boolean
+    nbTradeUses?: number
+    maximumNbTradeUses?: number
+  }>
+  deposit?: (itemType: number, metadata: number | null, count: number | null) => Promise<void>
+  withdraw?: (itemType: number, metadata: number | null, count: number | null) => Promise<void>
+  putInput?: (itemType: number, metadata: number | null, count: number) => Promise<void>
+  putFuel?: (itemType: number, metadata: number | null, count: number) => Promise<void>
+  takeInput?: () => Promise<unknown>
+  takeFuel?: () => Promise<unknown>
+  takeOutput?: () => Promise<unknown>
+  close?: () => Promise<void>
+}
+
+function openContainerWindow(bot: Bot, block: Parameters<Bot['openFurnace']>[0]): Promise<AnyWindow> {
+  if (block.name === 'furnace' || block.name === 'blast_furnace' || block.name === 'smoker') {
+    return bot.openFurnace(block) as unknown as Promise<AnyWindow>
+  }
+  return bot.openContainer(block) as unknown as Promise<AnyWindow>
+}
+
+async function closeWindowQuietly(window: AnyWindow | null | undefined): Promise<void> {
+  try {
+    await window?.close?.()
+  } catch {
+    // The server may already have closed the window; that is not a failure here.
+  }
+}
+
 /** Query/act adapter over one connected Mineflayer bot. */
 export class MineflayerProvider implements ActPort {
+  readonly capabilities = PROVIDER_CAPABILITIES
+  readonly providerId = PROVIDER_ID
+  readonly providerVersion: string
+
   private current: ActHandle | undefined
   private disconnected: Error | undefined
   private paused = false
+  private lastDeath: { at: number; position: { x: number; y: number; z: number } | null } | undefined
   private lastServerAge: number | undefined
   private lastServerAgeAt = 0
   private readonly pauseTimer: ReturnType<typeof setInterval>
@@ -127,7 +217,9 @@ export class MineflayerProvider implements ActPort {
       actionTimeoutMs: options.actionTimeoutMs ?? 600_000,
       moveDurationMs: options.moveDurationMs ?? 700,
       serverIdleMs: options.serverIdleMs ?? 1500,
+      providerVersion: options.providerVersion ?? '0',
     }
+    this.providerVersion = this.options.providerVersion
     this.pauseTimer = setInterval(() => this.refreshPauseState(), 250)
     this.pauseTimer.unref?.()
     bot.once('end', reason => {
@@ -136,6 +228,16 @@ export class MineflayerProvider implements ActPort {
       this.bot.clearControlStates()
       const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
       current?.abort?.(this.disconnected, 'CONNECTION_LOST')
+    })
+    bot.on('death', () => {
+      this.bot.clearControlStates()
+      const position = this.bot.entity?.position
+      this.lastDeath = {
+        at: Date.now(),
+        position: position === undefined ? null : { x: position.x, y: position.y, z: position.z },
+      }
+      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+      current?.abort?.(new Error('the bot died'), 'DEATH')
     })
     bot.on('error', error => {
       clearInterval(this.pauseTimer)
@@ -157,9 +259,11 @@ export class MineflayerProvider implements ActPort {
   liveStatus(): ProviderRuntimeStatus {
     const serverAge = this.serverAge()
     return {
+      connected: this.disconnected === undefined,
       paused: this.paused,
       serverAge,
       idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
+      lastDeathAt: this.lastDeath?.at ?? null,
     }
   }
 
@@ -210,6 +314,183 @@ export class MineflayerProvider implements ActPort {
       throw p2Error('RESCUE_COMMAND_INVALID', 'validation', 'rescue command is not a single chat command', { module: 'provider.mineflayer' })
     }
     this.bot.chat(command)
+  }
+
+  private entityView(entity: unknown, origin: { x: number; y: number; z: number } | undefined): {
+    id: number
+    name: string | null
+    displayName: string | null
+    type: string | null
+    objectType: string | null
+    item: { itemId: number; count: number } | null
+    position: { x: number; y: number; z: number } | null
+    distance: number | null
+  } {
+    const record = entity as {
+      id?: number
+      name?: string
+      displayName?: string
+      type?: string
+      objectType?: string
+      position?: { x: number; y: number; z: number }
+      metadata?: Record<number, unknown>
+    }
+    const metadataItem = record.metadata?.[8]
+    const item = typeof metadataItem === 'object' && metadataItem !== null
+      && typeof (metadataItem as { itemId?: unknown }).itemId === 'number'
+      ? {
+          itemId: (metadataItem as { itemId: number }).itemId,
+          count: typeof (metadataItem as { itemCount?: unknown }).itemCount === 'number'
+            ? (metadataItem as { itemCount: number }).itemCount
+            : 1,
+        }
+      : null
+    const position = record.position
+    return {
+      id: record.id ?? -1,
+      name: record.name ?? null,
+      displayName: record.displayName ?? null,
+      type: record.type ?? null,
+      objectType: record.objectType ?? null,
+      item,
+      position: position === undefined ? null : { x: position.x, y: position.y, z: position.z },
+      distance: position === undefined || origin === undefined
+        ? null
+        : Math.hypot(origin.x - position.x, origin.y - position.y, origin.z - position.z),
+    }
+  }
+
+  private itemName(id: number): string {
+    const registry = this.bot.registry as unknown as { items?: Record<number, { name?: string }> }
+    return registry.items?.[id]?.name ?? `item:${id}`
+  }
+
+  private itemTypeId(name: string): number | undefined {
+    const registry = this.bot.registry as unknown as { itemsByName?: Record<string, { id?: number }> }
+    return registry.itemsByName?.[name]?.id
+  }
+
+  private inventoryCount(name: string): number {
+    return this.bot.inventory.items()
+      .filter(item => item.name === name)
+      .reduce((total, item) => total + item.count, 0)
+  }
+
+  private openWindowFor(block: Parameters<Bot['openFurnace']>[0]): Promise<AnyWindow> {
+    return openContainerWindow(this.bot, block)
+  }
+
+  private async closeWindow(window: AnyWindow): Promise<void> {
+    await closeWindowQuietly(window)
+  }
+
+  private closeOpenWindow(): void {
+    const current = this.bot.currentWindow as unknown as AnyWindow | null
+    if (current === null) return
+    void this.closeWindow(current)
+  }
+
+  private snapshotWindow(kind: string, window: AnyWindow): JsonValue {
+    const slots = Array.isArray(window.slots) ? window.slots : []
+    const items: JsonValue[] = []
+    for (let index = 0; index < slots.length; index += 1) {
+      const item = slots[index]
+      if (item === null || item === undefined) continue
+      items.push({ slot: index, name: item.name, count: item.count })
+    }
+    const value: Record<string, JsonValue> = { kind, slots: items }
+    if (typeof window.fuel === 'number') value.fuel = window.fuel
+    if (typeof window.progress === 'number') value.progress = window.progress
+    if (Array.isArray(window.trades)) value.trades = this.snapshotTrades(window)
+    return value
+  }
+
+  private snapshotTrades(window: AnyWindow): JsonValue {
+    const trades = Array.isArray(window.trades) ? window.trades : []
+    const item = (value: { name: string; count: number } | null | undefined): JsonValue =>
+      value === null || value === undefined ? null : { name: value.name, count: value.count }
+    return trades.map((trade, index) => ({
+      index,
+      input1: item(trade.inputItem1),
+      input2: item(trade.inputItem2),
+      output: item(trade.outputItem),
+      disabled: trade.tradeDisabled === true,
+      uses: typeof trade.nbTradeUses === 'number' ? trade.nbTradeUses : null,
+      maxUses: typeof trade.maximumNbTradeUses === 'number' ? trade.maximumNbTradeUses : null,
+    }))
+  }
+
+  /**
+   * Open a container window for a read-only snapshot. Window opening is async,
+   * so the query resolves as `pending` and is polled by the executor.
+   */
+  private pendingWindowQuery(
+    block: Parameters<Bot['openFurnace']>[0],
+    snapshot: (window: AnyWindow) => JsonValue,
+  ): QueryOutcome {
+    const sampledAt = Date.now()
+    const deadline = sampledAt + 3000
+    let outcome: QueryOutcome | undefined
+    void (async () => {
+      try {
+        const window = await this.openWindowFor(block)
+        try {
+          outcome = { status: 'ok', value: snapshot(window), meta: this.queryMeta('mineflayer.container', sampledAt) }
+        } finally {
+          await this.closeWindow(window)
+        }
+      } catch (error) {
+        outcome = {
+          status: 'failed',
+          error: p2Error('CONTAINER_FAILED', 'environment', errorMessage(error), { module: 'provider.mineflayer' }),
+        }
+      }
+    })()
+    const poll = (): QueryOutcome => {
+      if (outcome !== undefined) return outcome
+      if (Date.now() > deadline) {
+        this.closeOpenWindow()
+        return {
+          status: 'failed',
+          error: p2Error('CONTAINER_TIMEOUT', 'timeout', 'container window did not open in time', { module: 'provider.mineflayer' }),
+        }
+      }
+      return { status: 'pending', poll }
+    }
+    return poll()
+  }
+
+  private pendingVillagerQuery(entity: unknown): QueryOutcome {
+    const sampledAt = Date.now()
+    const deadline = sampledAt + 3000
+    let outcome: QueryOutcome | undefined
+    void (async () => {
+      try {
+        const window = await this.bot.openVillager(entity as Parameters<Bot['openVillager']>[0]) as unknown as AnyWindow
+        try {
+          outcome = { status: 'ok', value: this.snapshotTrades(window), meta: this.queryMeta('mineflayer.offers', sampledAt) }
+        } finally {
+          await this.closeWindow(window)
+        }
+      } catch (error) {
+        outcome = {
+          status: 'failed',
+          error: p2Error('OFFERS_FAILED', 'environment', errorMessage(error), { module: 'provider.mineflayer' }),
+        }
+      }
+    })()
+    const poll = (): QueryOutcome => {
+      if (outcome !== undefined) return outcome
+      if (Date.now() > deadline) {
+        this.closeOpenWindow()
+        return {
+          status: 'failed',
+          error: p2Error('OFFERS_TIMEOUT', 'timeout', 'villager window did not open in time', { module: 'provider.mineflayer' }),
+        }
+      }
+      return { status: 'pending', poll }
+    }
+    return poll()
   }
 
   queryPort(): QueryPort {
@@ -280,32 +561,20 @@ export class MineflayerProvider implements ActPort {
         case 'entities': {
           const objectTypeFilter = typeof args.objectType === 'string' ? args.objectType : undefined
           const nameFilter = typeof args.name === 'string' ? args.name : undefined
+          const typeFilter = typeof args.type === 'string' ? args.type : undefined
+          const maxDistance = typeof args.maxDistance === 'number' && Number.isFinite(args.maxDistance)
+            ? Math.max(0, args.maxDistance)
+            : undefined
+          const limit = clampNumber(args.count, 64, 1, 256)
+          const origin = this.bot.entity?.position
           const entities = Object.values(this.bot.entities)
             .filter(entity => objectTypeFilter === undefined || (entity as unknown as { objectType?: string }).objectType === objectTypeFilter)
+            .filter(entity => typeFilter === undefined || entity.type === typeFilter)
             .filter(entity => nameFilter === undefined || entity.name === nameFilter)
-            .map(entity => {
-            const metadataItem = (entity as unknown as { metadata?: Record<number, unknown> }).metadata?.[8]
-            const item = typeof metadataItem === 'object' && metadataItem !== null
-              && typeof (metadataItem as { itemId?: unknown }).itemId === 'number'
-              ? {
-                  itemId: (metadataItem as { itemId: number }).itemId,
-                  count: typeof (metadataItem as { itemCount?: unknown }).itemCount === 'number'
-                    ? (metadataItem as { itemCount: number }).itemCount
-                    : 1,
-                }
-              : null
-            return {
-              id: entity.id,
-              name: entity.name ?? null,
-              displayName: (entity as unknown as { displayName?: string }).displayName ?? null,
-              type: entity.type ?? null,
-              objectType: (entity as unknown as { objectType?: string }).objectType ?? null,
-              item,
-              position: entity.position === undefined
-                ? null
-                : { x: entity.position.x, y: entity.position.y, z: entity.position.z },
-            }
-          })
+            .map(entity => this.entityView(entity, origin))
+            .filter(entry => maxDistance === undefined || entry.distance === null || entry.distance <= maxDistance)
+            .sort((left, right) => (left.distance ?? Number.POSITIVE_INFINITY) - (right.distance ?? Number.POSITIVE_INFINITY))
+            .slice(0, limit)
           return {
             status: 'ok',
             value: entities,
@@ -332,7 +601,12 @@ export class MineflayerProvider implements ActPort {
             return { status: 'ok', value: [], meta: this.queryMeta('mineflayer.blocks', sampledAt) }
           }
           const matching = ids.length > 0 ? ids : (block: { name: string }) => !isAirName(block.name)
-          const found = this.bot.findBlocks({ matching, maxDistance: radius, count: Math.min(128, count * 2) })
+          // findBlocks only returns the nearest N candidates, so a y filter needs a
+          // wider candidate window before the (post-)filter; otherwise the layer the
+          // caller asked for is silently missing.
+          const yBounded = yMin !== undefined || yMax !== undefined
+          const candidateCount = yBounded ? Math.min(2048, Math.max(256, count * 32)) : Math.min(256, Math.max(64, count * 4))
+          const found = this.bot.findBlocks({ matching, maxDistance: radius, count: candidateCount })
           const position = this.bot.entity?.position
           const blocks = found
             .filter(point => (yMin === undefined || point.y >= yMin) && (yMax === undefined || point.y <= yMax))
@@ -379,6 +653,128 @@ export class MineflayerProvider implements ActPort {
             status: 'ok',
             value: block === null ? null : { name: block.name, x: block.position.x, y: block.position.y, z: block.position.z },
             meta: this.queryMeta('mineflayer.block', sampledAt),
+          }
+        }
+        case 'equipment': {
+          const slots = this.bot.inventory.slots ?? []
+          const describe = (slot: number): { slot: number; name: string; count: number } | null => {
+            const item = slots[slot]
+            return item === null || item === undefined ? null : { slot, name: item.name, count: item.count }
+          }
+          const armor = [5, 6, 7, 8].map(describe).filter((entry): entry is { slot: number; name: string; count: number } => entry !== null)
+          const held = this.bot.heldItem
+          const offhand = describe(45)
+          return {
+            status: 'ok',
+            value: {
+              held: held === null || held === undefined ? null : { name: held.name, count: held.count },
+              offhand,
+              armor,
+              quickBarSlot: typeof this.bot.quickBarSlot === 'number' ? this.bot.quickBarSlot : null,
+            },
+            meta: this.queryMeta('mineflayer.equipment', sampledAt),
+          }
+        }
+        case 'entity': {
+          const entityId = typeof args.id === 'number' ? Math.floor(args.id) : Number.NaN
+          const entity = Number.isFinite(entityId) ? this.bot.entities[entityId] : undefined
+          return {
+            status: 'ok',
+            value: entity === undefined ? null : this.entityView(entity, this.bot.entity?.position),
+            meta: this.queryMeta('mineflayer.entity', sampledAt),
+          }
+        }
+        case 'players': {
+          const origin = this.bot.entity?.position
+          const maxDistance = typeof args.maxDistance === 'number' && Number.isFinite(args.maxDistance)
+            ? Math.max(0, args.maxDistance)
+            : undefined
+          const players = Object.entries(this.bot.players ?? {}).map(([username, player]) => {
+            const entity = (player as unknown as { entity?: { position?: { x: number; y: number; z: number } } }).entity
+            const position = entity?.position
+            const value = position === undefined
+              ? null
+              : { x: position.x, y: position.y, z: position.z }
+            return {
+              name: username,
+              uuid: (player as unknown as { uuid?: string }).uuid ?? null,
+              position: value,
+              dimension: this.bot.game?.dimension ?? null,
+              distance: value === null || origin === undefined
+                ? null
+                : Math.hypot(origin.x - value.x, origin.y - value.y, origin.z - value.z),
+            }
+          })
+            .filter(entry => maxDistance === undefined || entry.distance === null || entry.distance <= maxDistance)
+            .sort((left, right) => (left.distance ?? Number.POSITIVE_INFINITY) - (right.distance ?? Number.POSITIVE_INFINITY))
+          return { status: 'ok', value: players, meta: this.queryMeta('mineflayer.players', sampledAt) }
+        }
+        case 'recipe': {
+          const name = typeof args.item === 'string' ? args.item.replace(/^minecraft:/u, '') : ''
+          const itemType = name.length === 0 ? undefined : this.itemTypeId(name)
+          if (itemType === undefined) {
+            return {
+              status: 'failed',
+              error: p2Error('RECIPE_UNKNOWN_ITEM', 'validation', `unknown item: ${String(args.item)}`, { module: 'provider.mineflayer' }),
+            }
+          }
+          const recipes = this.bot.recipesAll(itemType, null, true).map(recipe => {
+            const ingredients = recipe.delta
+              .filter(entry => entry.count < 0)
+              .map(entry => ({ item: this.itemName(entry.id), count: -entry.count }))
+            return {
+              result: { item: this.itemName(recipe.result.id), count: recipe.result.count },
+              requiresTable: recipe.requiresTable,
+              ingredients,
+              craftable: ingredients.every(entry => this.inventoryCount(entry.item) >= entry.count),
+            }
+          })
+          const value = args.craftableOnly === true ? recipes.filter(entry => entry.craftable) : recipes
+          return { status: 'ok', value, meta: this.queryMeta('mineflayer.recipe', sampledAt) }
+        }
+        case 'container': {
+          const position = blockPosition(args)
+          if (position === undefined) {
+            return {
+              status: 'failed',
+              error: p2Error('CONTAINER_NO_POSITION', 'validation', 'container requires numeric x, y and z', { module: 'provider.mineflayer' }),
+            }
+          }
+          const block = this.bot.blockAt(new Vec3(position.x, position.y, position.z))
+          if (block === null || isAirName(block.name)) {
+            return {
+              status: 'failed',
+              error: p2Error('CONTAINER_NO_BLOCK', 'environment', `no container block at ${position.x},${position.y},${position.z}`, { module: 'provider.mineflayer' }),
+            }
+          }
+          if (!CONTAINER_NAMES.includes(block.name)) {
+            return {
+              status: 'failed',
+              error: p2Error('CONTAINER_UNSUPPORTED', 'validation', `${block.name} is not a supported container`, { module: 'provider.mineflayer' }),
+            }
+          }
+          return this.pendingWindowQuery(block, window => this.snapshotWindow(block.name, window))
+        }
+        case 'offers': {
+          const entityId = typeof args.entityId === 'number' ? Math.floor(args.entityId) : Number.NaN
+          const entity = Number.isFinite(entityId) ? this.bot.entities[entityId] : undefined
+          if (entity === undefined) {
+            return {
+              status: 'failed',
+              error: p2Error('OFFERS_NO_ENTITY', 'environment', `no entity with id ${String(args.entityId)}`, { module: 'provider.mineflayer' }),
+            }
+          }
+          return this.pendingVillagerQuery(entity)
+        }
+        case 'weather': {
+          return {
+            status: 'ok',
+            value: {
+              raining: typeof this.bot.isRaining === 'boolean' ? this.bot.isRaining : null,
+              thundering: typeof this.bot.thunderState === 'number' ? this.bot.thunderState > 0 : null,
+              thunderState: typeof this.bot.thunderState === 'number' ? this.bot.thunderState : null,
+            },
+            meta: this.queryMeta('mineflayer.weather', sampledAt),
           }
         }
         default:
@@ -437,6 +833,7 @@ class MineflayerActHandle implements ActHandle {
   private lastDistance = Number.POSITIVE_INFINITY
   private lastProgressAt = Date.now()
   private lastLookAt = 0
+  private lastJumpAt = 0
 
   constructor(
     private readonly name: string,
@@ -682,6 +1079,252 @@ class MineflayerActHandle implements ActHandle {
           }, duration)
           return
         }
+        case 'lookAt': {
+          const point = this.lookTarget()
+          if (point === undefined) {
+            this.failed = new Error('lookAt requires numeric x/y/z or a loaded entityId')
+            this.failedCode = 'LOOKAT_NO_TARGET'
+            return
+          }
+          void this.bot.lookAt(point, true).then(() => {
+            this.result = { x: point.x, y: point.y, z: point.z }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'LOOKAT_FAILED'
+          })
+          return
+        }
+        case 'craft': {
+          const name = typeof this.args.item === 'string' ? this.args.item.replace(/^minecraft:/u, '') : ''
+          const itemType = name.length === 0 ? undefined : this.itemTypeId(name)
+          if (itemType === undefined) {
+            this.failed = new Error(`unknown item: ${String(this.args.item)}`)
+            this.failedCode = 'CRAFT_UNKNOWN_RECIPE'
+            return
+          }
+          const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : 1
+          const table = this.craftTable()
+          const recipes = this.bot.recipesFor(itemType, null, count, table ?? null)
+          const recipe = recipes[0]
+          if (recipe === undefined) {
+            const needsTable = this.bot.recipesAll(itemType, null, true).some(entry => entry.requiresTable)
+            this.failed = new Error(needsTable && table === undefined
+              ? `crafting ${name} requires a crafting table`
+              : `no craftable recipe for ${name}`)
+            this.failedCode = needsTable && table === undefined ? 'CRAFT_NO_TABLE' : 'CRAFT_NO_INGREDIENTS'
+            return
+          }
+          void this.bot.craft(recipe, count, table).then(() => {
+            this.result = { item: name, count }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'CRAFT_FAILED'
+          })
+          return
+        }
+        case 'container-transfer': {
+          const position = blockPosition(this.args)
+          const block = position === undefined ? null : this.bot.blockAt(new Vec3(position.x, position.y, position.z))
+          if (block === null || isAirName(block.name) || !CONTAINER_NAMES.includes(block.name)) {
+            this.failed = new Error(`no supported container at ${JSON.stringify(position ?? null)}`)
+            this.failedCode = 'CONTAINER_NO_BLOCK'
+            return
+          }
+          void this.transferContainer(block).then(result => {
+            this.result = result
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'CONTAINER_FAILED'
+          })
+          return
+        }
+        case 'toss': {
+          const name = typeof this.args.item === 'string' ? this.args.item.replace(/^minecraft:/u, '') : ''
+          const itemType = name.length === 0 ? undefined : this.itemTypeId(name)
+          if (itemType === undefined) {
+            this.failed = new Error(`unknown item: ${String(this.args.item)}`)
+            this.failedCode = 'TOSS_NO_ITEM'
+            return
+          }
+          const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : 1
+          void this.bot.toss(itemType, null, count).then(() => {
+            this.result = { item: name, count }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'TOSS_FAILED'
+          })
+          return
+        }
+        case 'respawn': {
+          if ((this.bot.health ?? 0) > 0) {
+            this.result = this.position()
+            this.completed = true
+            return
+          }
+          this.bot.respawn()
+          const started = Date.now()
+          const check = (): void => {
+            if (this.cancelled || this.completed) return
+            if ((this.bot.health ?? 0) > 0) {
+              this.result = this.position()
+              this.completed = true
+              return
+            }
+            if (Date.now() - started > 15_000) {
+              this.failed = new Error('respawn did not complete')
+              this.failedCode = 'RESPAWN_FAILED'
+              return
+            }
+            this.timer = setTimeout(check, 250)
+          }
+          this.timer = setTimeout(check, 250)
+          return
+        }
+        case 'sleep': {
+          const position = blockPosition(this.args)
+          const bed = position === undefined ? null : this.bot.blockAt(new Vec3(position.x, position.y, position.z))
+          if (bed === null || !this.bot.isABed(bed)) {
+            this.failed = new Error(`no bed at ${JSON.stringify(position ?? null)}`)
+            this.failedCode = 'SLEEP_NO_BED'
+            return
+          }
+          const started = Date.now()
+          let slept = false
+          void this.bot.sleep(bed).catch((error: unknown) => {
+            const message = errorMessage(error)
+            this.failed = new Error(message)
+            this.failedCode = /night|day/iu.test(message) ? 'SLEEP_NOT_NIGHT' : 'SLEEP_FAILED'
+          })
+          const check = (): void => {
+            if (this.cancelled || this.completed || this.failed !== undefined) return
+            if (this.bot.isSleeping === true) slept = true
+            if (slept && this.bot.isSleeping !== true) {
+              const timeOfDay = this.timeOfDay()
+              this.result = { slept: true, ...(timeOfDay === null ? {} : { timeOfDay }) }
+              this.completed = true
+              return
+            }
+            if (Date.now() - started > 60_000) {
+              this.failed = new Error('sleep did not finish')
+              this.failedCode = 'SLEEP_TIMEOUT'
+              return
+            }
+            this.timer = setTimeout(check, 200)
+          }
+          this.timer = setTimeout(check, 200)
+          return
+        }
+        case 'interact': {
+          const entity = this.entityById(this.args.entityId)
+          if (entity === undefined) {
+            this.failed = new Error(`no entity with id ${String(this.args.entityId)}`)
+            this.failedCode = 'INTERACT_NO_TARGET'
+            return
+          }
+          void this.bot.activateEntity(entity).then(() => {
+            this.result = { entityId: entity.id, name: entity.name ?? null }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'INTERACT_FAILED'
+          })
+          return
+        }
+        case 'activate': {
+          const position = blockPosition(this.args)
+          const block = position === undefined ? null : this.bot.blockAt(new Vec3(position.x, position.y, position.z))
+          if (block === null || isAirName(block.name) || position === undefined) {
+            this.failed = new Error(`no block at ${JSON.stringify(position ?? null)}`)
+            this.failedCode = 'ACTIVATE_NO_BLOCK'
+            return
+          }
+          void this.bot.activateBlock(block).then(() => {
+            this.result = { name: block.name, x: position.x, y: position.y, z: position.z }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'ACTIVATE_FAILED'
+          })
+          return
+        }
+        case 'mount': {
+          const entity = this.entityById(this.args.entityId)
+          if (entity === undefined) {
+            this.failed = new Error(`no entity with id ${String(this.args.entityId)}`)
+            this.failedCode = 'MOUNT_NO_TARGET'
+            return
+          }
+          this.bot.mount(entity)
+          const started = Date.now()
+          const check = (): void => {
+            if (this.cancelled || this.completed) return
+            if (this.vehicle() !== undefined) {
+              this.result = { entityId: entity.id, name: entity.name ?? null }
+              this.completed = true
+              return
+            }
+            if (Date.now() - started > 5000) {
+              this.failed = new Error('mount did not complete')
+              this.failedCode = 'MOUNT_FAILED'
+              return
+            }
+            this.timer = setTimeout(check, 200)
+          }
+          this.timer = setTimeout(check, 200)
+          return
+        }
+        case 'dismount': {
+          this.bot.dismount()
+          const started = Date.now()
+          const check = (): void => {
+            if (this.cancelled || this.completed) return
+            if (this.vehicle() === undefined) {
+              this.result = this.position()
+              this.completed = true
+              return
+            }
+            if (Date.now() - started > 5000) {
+              this.failed = new Error('dismount did not complete')
+              this.failedCode = 'DISMOUNT_FAILED'
+              return
+            }
+            this.timer = setTimeout(check, 200)
+          }
+          this.timer = setTimeout(check, 200)
+          return
+        }
+        case 'trade': {
+          const entity = this.entityById(this.args.entityId)
+          const index = typeof this.args.index === 'number' ? Math.floor(this.args.index) : Number.NaN
+          if (entity === undefined || !Number.isFinite(index)) {
+            this.failed = new Error('trade requires numeric entityId and index')
+            this.failedCode = 'TRADE_INVALID'
+            return
+          }
+          const times = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : 1
+          void (async () => {
+            const window = await this.bot.openVillager(entity as Parameters<Bot['openVillager']>[0])
+            try {
+              await this.bot.trade(window, index, times)
+            } finally {
+              await window.close()
+            }
+            return { entityId: entity.id, index, count: times }
+          })().then(result => {
+            this.result = result
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'TRADE_FAILED'
+          })
+          return
+        }
         default:
           throw new Error(`unsupported act: ${this.name}`)
       }
@@ -693,6 +1336,92 @@ class MineflayerActHandle implements ActHandle {
   private position(): JsonValue {
     const position = this.bot.entity?.position
     return position === undefined ? null : { x: position.x, y: position.y, z: position.z }
+  }
+
+  /** Normalized entity view shared by `entities` and `entity`. */
+
+  private itemTypeId(name: string): number | undefined {
+    const registry = this.bot.registry as unknown as { itemsByName?: Record<string, { id?: number }> }
+    return registry.itemsByName?.[name]?.id
+  }
+
+  private entityById(value: JsonValue | undefined): Parameters<Bot['attack']>[0] | undefined {
+    const id = typeof value === 'number' ? Math.floor(value) : Number.NaN
+    if (!Number.isFinite(id)) return undefined
+    return this.bot.entities[id] as Parameters<Bot['attack']>[0] | undefined
+  }
+
+  private vehicle(): unknown {
+    return (this.bot as unknown as { vehicle?: unknown }).vehicle
+  }
+
+  private timeOfDay(): number | null {
+    const value = this.bot.time?.timeOfDay
+    if (typeof value === 'number') return value
+    if (typeof value === 'bigint') return Number(value)
+    return null
+  }
+
+  private lookTarget(): Vec3 | undefined {
+    const entity = this.entityById(this.args.entityId)
+    const position = (entity as unknown as { position?: { x: number; y: number; z: number } } | undefined)?.position
+    if (position !== undefined) return new Vec3(position.x, position.y + 1.6, position.z)
+    const { x, y, z } = this.args
+    if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') return new Vec3(x, y, z)
+    return undefined
+  }
+
+  private craftTable(): Parameters<Bot['craft']>[2] {
+    const table = this.args.table
+    if (typeof table === 'object' && table !== null && !Array.isArray(table)) {
+      const point = blockPosition(table as Record<string, JsonValue>)
+      if (point === undefined) return undefined
+      return this.bot.blockAt(new Vec3(point.x, point.y, point.z)) ?? undefined
+    }
+    const tableId = this.itemTypeId('crafting_table')
+    if (tableId === undefined) return undefined
+    return this.bot.findBlock({ matching: tableId, maxDistance: 4 }) ?? undefined
+  }
+
+  private async transferContainer(block: Parameters<Bot['openFurnace']>[0]): Promise<JsonValue> {
+    const action = typeof this.args.action === 'string' ? this.args.action : ''
+    const name = typeof this.args.item === 'string' ? this.args.item.replace(/^minecraft:/u, '') : ''
+    const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : null
+    const itemType = name.length === 0 ? undefined : this.itemTypeId(name)
+    if (name.length > 0 && itemType === undefined) {
+      throw Object.assign(new Error(`unknown item: ${name}`), { code: 'CONTAINER_NO_ITEM' })
+    }
+    const window = await openContainerWindow(this.bot, block)
+    try {
+      switch (action) {
+        case 'deposit':
+          await window.deposit?.(itemType as number, null, count)
+          break
+        case 'withdraw':
+          await window.withdraw?.(itemType as number, null, count)
+          break
+        case 'load-input':
+          await window.putInput?.(itemType as number, null, count ?? 1)
+          break
+        case 'load-fuel':
+          await window.putFuel?.(itemType as number, null, count ?? 1)
+          break
+        case 'take-input':
+          await window.takeInput?.()
+          break
+        case 'take-fuel':
+          await window.takeFuel?.()
+          break
+        case 'take-output':
+          await window.takeOutput?.()
+          break
+        default:
+          throw Object.assign(new Error(`unsupported container action: ${action}`), { code: 'CONTAINER_UNSUPPORTED' })
+      }
+    } finally {
+      await closeWindowQuietly(window)
+    }
+    return { action, kind: block.name, item: name.length === 0 ? null : name, count }
   }
 
   private faceTarget(): void {
@@ -743,6 +1472,19 @@ class MineflayerActHandle implements ActHandle {
       return
     }
     if (now - this.lastLookAt > 100) this.faceTarget()
+    // A flat walker cannot climb a one-block step. Pulse jump while forward stays
+    // held; the blockedMs watchdog still fires if the step is genuinely too high.
+    if (now - this.lastProgressAt > 300 && now - this.lastJumpAt > 300) {
+      this.lastJumpAt = now
+      this.bot.setControlState('jump', true)
+      setTimeout(() => {
+        try {
+          this.bot.setControlState('jump', false)
+        } catch {
+          // The connection may be gone; clearControlStates runs on end anyway.
+        }
+      }, 120)
+    }
     this.bot.setControlState('forward', true)
   }
 }

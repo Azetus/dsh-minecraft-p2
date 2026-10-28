@@ -1,10 +1,12 @@
 import type { JsonValue } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type { ActHandle, ActPoll, QueryOutcome, QueryPort } from './node-runtime.ts'
-import { requireOperation } from '../operation/index.ts'
+import { requireCapability, requireOperation } from '../operation/index.ts'
 
 /** A concrete operation implementation, normally the Minecraft provider. */
 export type OpSource = {
+  /** Capabilities the provider actually implements; omitted means "trust the declaration". */
+  capabilities?: readonly string[]
   start(name: string, args: Record<string, JsonValue>): ActHandle
   query(op: string, args: Record<string, JsonValue>): QueryOutcome
 }
@@ -33,7 +35,10 @@ export class DeclaredOpBroker {
   }
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
-    requireOperation(name, 'control', 'core.op-broker')
+    const contract = requireOperation(name, 'control', 'core.op-broker')
+    if (this.source.capabilities !== undefined) {
+      requireCapability(contract, this.source.capabilities, 'core.op-broker')
+    }
     if (name !== 'stop' && this.active !== undefined && this.active.handle.poll().status === 'running') {
       throw p2Error('OP_BUSY', 'runtime', `control operation ${this.active.name} is still active`, {
         module: 'core.op-broker',
@@ -67,7 +72,10 @@ export class DeclaredOpBroker {
   }
 
   query(op: string, args: Record<string, JsonValue>): QueryOutcome {
-    requireOperation(op, 'query', 'core.op-broker')
+    const contract = requireOperation(op, 'query', 'core.op-broker')
+    if (this.source.capabilities !== undefined) {
+      requireCapability(contract, this.source.capabilities, 'core.op-broker')
+    }
     return this.source.query(op, args)
   }
 

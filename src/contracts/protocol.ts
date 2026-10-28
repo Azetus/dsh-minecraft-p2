@@ -91,9 +91,12 @@ export type ProviderSummary = {
 
 /** Live server-observation state maintained by the provider. */
 export type ProviderRuntimeStatus = {
+  connected: boolean
   paused: boolean
   serverAge: number | null
   idleMs: number
+  /** Wall-clock time of the last observed bot death, when any. */
+  lastDeathAt?: number | null
 }
 
 export type DescribeResult = {
@@ -110,6 +113,8 @@ export type DescribeResult = {
 
 export type StatusResult = {
   bodyEpoch: BodyEpoch
+  /** Package/body version from body.manifest.json, e.g. 0.3.2-exp-ir.1. */
+  version: string
   owner: OwnerContext | null
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
@@ -126,6 +131,8 @@ export type StatusResult = {
   activeTarget?: { x: number; z: number } | null
   waiting?: string | null
   lastFailure?: P2Error | null
+  /** Experiment-only rescue channel state; null when the body has no provider. */
+  rescue?: { enabled: boolean; tpRadius: number } | null
   loggingUnavailable?: boolean
   droppedLogCount?: number
 }
@@ -282,6 +289,8 @@ export type BodyRuntimeOptions = {
   newEpoch?: () => string
   newCommandId?: () => string
   shutdownGraceMs?: number
+  /** Experiment-only rescue channel state, reported in status. */
+  rescue?: { enabled: boolean; tpRadius: number }
 }
 
 export function p2Error(

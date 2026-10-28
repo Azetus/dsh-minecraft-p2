@@ -1,9 +1,10 @@
 /**
  * Operation declarations owned by the P2 core.
  *
- * Names, kinds, effects and stop semantics are the contract; a provider only
- * implements them. The first version declares the operations the executor and
- * the M5 validation scenarios need; new operations are added by maintainers.
+ * Names, kinds, effects, stop semantics and capabilities are the contract; a
+ * provider only implements them. The M5.5 baseline extends the M5 set with the
+ * operations a survival experiment needs (crafting, containers, trading,
+ * sleeping, respawn) so that content can be written without touching core.
  */
 
 import { p2Error } from '../contracts/protocol.ts'
@@ -25,17 +26,28 @@ export type OperationContract = {
   capabilities: string[]
 }
 
-export const OPERATION_CONTRACT_VERSION = '1'
+export const OPERATION_CONTRACT_VERSION = '2'
 
 export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
+  // Queries: read-only observations. They never change world state.
   { id: 'position', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'inventory', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'health', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'entities', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'blocks', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
-  { id: 'time', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'block', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'time', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'equipment', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'entity', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'players', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'recipe', kind: 'query', effects: 'none', stop: 'none', capabilities: ['craft'] },
+  { id: 'container', kind: 'query', effects: 'none', stop: 'none', capabilities: ['container'] },
+  { id: 'offers', kind: 'query', effects: 'none', stop: 'none', capabilities: ['trade'] },
+  { id: 'weather', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+
+  // Controls: actions. At most one is active at a time in one run.
   { id: 'look', kind: 'control', effects: 'none', stop: 'none', capabilities: ['look'] },
+  { id: 'lookAt', kind: 'control', effects: 'none', stop: 'none', capabilities: ['look'] },
   { id: 'move', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'jump', kind: 'control', effects: 'none', stop: 'none', capabilities: ['move'] },
   { id: 'moveTo', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
@@ -45,6 +57,16 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'attack', kind: 'control', effects: 'none', stop: 'none', capabilities: ['attack'] },
   { id: 'equip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },
   { id: 'use', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['use'] },
+  { id: 'craft', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['craft'] },
+  { id: 'container-transfer', kind: 'control', effects: 'none', stop: 'none', capabilities: ['container'] },
+  { id: 'toss', kind: 'control', effects: 'none', stop: 'none', capabilities: ['toss'] },
+  { id: 'respawn', kind: 'control', effects: 'none', stop: 'poll', capabilities: [] },
+  { id: 'sleep', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['sleep'] },
+  { id: 'interact', kind: 'control', effects: 'none', stop: 'none', capabilities: ['interact'] },
+  { id: 'activate', kind: 'control', effects: 'none', stop: 'none', capabilities: ['interact'] },
+  { id: 'mount', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['mount'] },
+  { id: 'dismount', kind: 'control', effects: 'none', stop: 'none', capabilities: ['mount'] },
+  { id: 'trade', kind: 'control', effects: 'none', stop: 'none', capabilities: ['trade'] },
 ])
 
 const CONTRACTS = new Map(OPERATION_CONTRACTS.map(contract => [contract.id, contract]))
@@ -75,6 +97,19 @@ export function requireOperation(id: string, kind: OperationKind, module: string
     )
   }
   return contract
+}
+
+/** Fail closed when the connected provider never declared an operation capability. */
+export function requireCapability(contract: OperationContract, available: readonly string[], module: string): void {
+  const missing = contract.capabilities.filter(capability => !available.includes(capability))
+  if (missing.length === 0) return
+  throw p2Error(
+    'CAPABILITY_MISSING',
+    'capability',
+    `provider does not declare ${missing.join(', ')} for operation ${contract.id}`,
+    { module, opId: contract.id },
+    { operation: contract.id, missing },
+  )
 }
 
 export function asP2Error(error: unknown, module: string): P2Error {

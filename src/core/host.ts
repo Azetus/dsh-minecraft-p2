@@ -368,15 +368,18 @@ export class BehaviorHost {
   status(): HostStatus {
     const run = this.run
     if (run !== undefined && isTerminal(run.status)) this.rememberLastRun()
+    // A terminal run keeps its last progress report; only an active run may
+    // describe what is running now. Stale act/node/target fields read as残留控制.
+    const active = run !== undefined && !isTerminal(run.status) ? run : undefined
     return {
       bindingId: this.bindingId,
-      activeRun: run === undefined || isTerminal(run.status)
+      activeRun: active === undefined
         ? null
         : {
-            runId: run.runId,
-            status: run.status,
+            runId: active.runId,
+            status: active.status,
             artifactId: this.runArtifact ?? '',
-            completion: run.definition.completion?.kind ?? null,
+            completion: active.definition.completion?.kind ?? null,
           },
       pendingConfirmation: run?.confirmation?.status === 'pending'
         ? { id: run.confirmation.id, runId: run.runId }
@@ -384,11 +387,11 @@ export class BehaviorHost {
       lastRun: this.lastRun,
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
-      activeAct: run?.describe().activeAct ?? null,
-      activeNode: run?.describe().activeNode ?? null,
-      activeTarget: run?.describe().activeTarget ?? null,
-      waiting: run?.describe().waiting ?? null,
-      lastFailure: run?.describe().lastFailure ?? null,
+      activeAct: active?.describe().activeAct ?? null,
+      activeNode: active?.describe().activeNode ?? null,
+      activeTarget: active?.describe().activeTarget ?? null,
+      waiting: active?.describe().waiting ?? null,
+      lastFailure: active?.describe().lastFailure ?? null,
     }
   }
 

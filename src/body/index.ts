@@ -16,6 +16,7 @@ import { executeRescue } from './rescue.ts'
 
 type HostBundle = {
   host: BehaviorHost
+  rescue?: { enabled: boolean; tpRadius: number }
   dispose: () => void
 }
 
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     body,
     behavior: bundle.host,
     heartbeatTimeoutMs: 10_000,
+    ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
   const server = new BodyServer(runtime, transport)
@@ -87,7 +89,17 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     })
     const provider = new providerModule.MineflayerProvider(bot, {
       serverIdleMs: loaded.config.serverIdleMs,
+      providerVersion: body.manifest.bodyVersion,
     })
+    // The provider is the only component that knows which capabilities it really
+    // implements; report them and let the op broker gate on the same list.
+    const capabilities = [...providerModule.PROVIDER_CAPABILITIES]
+    body.capabilities = capabilities
+    body.provider = {
+      id: providerModule.PROVIDER_ID,
+      version: body.manifest.bodyVersion,
+      capabilities,
+    }
     const ops = new DeclaredOpBroker(provider)
 
     const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
@@ -122,6 +134,7 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     })
     return {
       host,
+      rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
       dispose: () => {
         host?.dispose()
         actPort?.dispose()

@@ -59,6 +59,7 @@ export class BodyRuntime {
   private readonly heartbeatTimeoutMs: number | undefined
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
+  private readonly rescueState: { enabled: boolean; tpRadius: number } | undefined
 
   constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota }) {
     this.body = options.body
@@ -70,6 +71,7 @@ export class BodyRuntime {
     this.initialized = this.owner !== null
     this.now = options.now ?? Date.now
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs
+    this.rescueState = options.rescue
     if (this.owner !== null) this.lastHeartbeatAt = this.now()
   }
 
@@ -350,24 +352,30 @@ export class BodyRuntime {
 
   status(): StatusResult {
     const behavior = this.behavior?.status()
+    const providerState = behavior?.providerState ?? null
+    const connected = providerState === null || providerState === undefined
+      ? this.behavior === undefined
+      : providerState.connected !== false
     return {
       bodyEpoch: this.bodyEpoch,
+      version: this.body.manifest.bodyVersion,
       owner: this.owner,
       health: this.closing ? 'faulted' : 'ready',
-      connection: 'connected',
+      connection: connected ? 'connected' : 'disconnected',
       activeRun: behavior?.activeRun ?? null,
       lastRun: behavior?.lastRun ?? null,
       pendingConfirmation: behavior?.pendingConfirmation ?? null,
       bindingId: this.body.bindingId,
       capabilities: this.body.capabilities,
       provider: this.body.provider,
-      providerState: behavior?.providerState ?? null,
+      providerState,
       commandCount: this.commands.size,
       activeAct: this.behavior?.status().activeAct ?? null,
       activeNode: this.behavior?.status().activeNode ?? null,
       activeTarget: this.behavior?.status().activeTarget ?? null,
       waiting: this.behavior?.status().waiting ?? null,
       lastFailure: this.behavior?.status().lastFailure ?? null,
+      rescue: this.rescueState ?? null,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,
         droppedLogCount: this.debugLog.droppedCount,
