@@ -1,6 +1,7 @@
 import { createStdioTransport, p2Error } from '../contracts/index.ts'
 import type { BodyInfo } from '../contracts/index.ts'
 import { BehaviorHost } from '../core/host.ts'
+import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { loadBodyInfo } from './manifest.ts'
@@ -73,10 +74,11 @@ async function createBehaviorHost(body: BodyInfo): Promise<BehaviorHost> {
     const provider = new providerModule.MineflayerProvider(bot, {
       serverIdleMs: loaded.config.serverIdleMs,
     })
+    const ops = new DeclaredOpBroker(provider)
     return new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
-      query: provider.queryPort(),
-      act: provider,
+      query: ops.queryPort(),
+      act: ops,
       providerStatus: () => provider.liveStatus(),
     })
   } catch (error) {

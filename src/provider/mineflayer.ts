@@ -227,14 +227,29 @@ export class MineflayerProvider implements ActPort {
           }
         }
         case 'entities': {
-          const entities = Object.values(this.bot.entities).map(entity => ({
-            id: entity.id,
-            name: entity.name ?? null,
-            type: entity.type ?? null,
-            position: entity.position === undefined
-              ? null
-              : { x: entity.position.x, y: entity.position.y, z: entity.position.z },
-          }))
+          const entities = Object.values(this.bot.entities).map(entity => {
+            const metadataItem = (entity as unknown as { metadata?: Record<number, unknown> }).metadata?.[8]
+            const item = typeof metadataItem === 'object' && metadataItem !== null
+              && typeof (metadataItem as { itemId?: unknown }).itemId === 'number'
+              ? {
+                  itemId: (metadataItem as { itemId: number }).itemId,
+                  count: typeof (metadataItem as { itemCount?: unknown }).itemCount === 'number'
+                    ? (metadataItem as { itemCount: number }).itemCount
+                    : 1,
+                }
+              : null
+            return {
+              id: entity.id,
+              name: entity.name ?? null,
+              displayName: (entity as unknown as { displayName?: string }).displayName ?? null,
+              type: entity.type ?? null,
+              objectType: (entity as unknown as { objectType?: string }).objectType ?? null,
+              item,
+              position: entity.position === undefined
+                ? null
+                : { x: entity.position.x, y: entity.position.y, z: entity.position.z },
+            }
+          })
           return {
             status: 'ok',
             value: entities,
@@ -376,6 +391,9 @@ class MineflayerActHandle implements ActHandle {
     if (this.cancelled || this.completed) return
     this.cancelled = true
     if (this.timer !== undefined) clearTimeout(this.timer)
+    if (this.name === 'dig') {
+      try { this.bot.stopDigging() } catch { /* the connection may already be gone */ }
+    }
     this.bot.clearControlStates()
   }
 
@@ -444,6 +462,28 @@ class MineflayerActHandle implements ActHandle {
           this.bot.clearControlStates()
           this.result = this.position()
           this.completed = true
+          return
+        }
+        case 'dig': {
+          const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const y = typeof this.args.y === 'number' ? this.args.y : undefined
+          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+          if (x === undefined || y === undefined || z === undefined) {
+            throw new Error('dig requires numeric x, y and z')
+          }
+          const block = this.bot.blockAt(new Vec3(x, y, z))
+          if (block === null || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') {
+            this.failed = new Error(`no diggable block at ${x},${y},${z}`)
+            this.failedCode = 'DIG_NO_BLOCK'
+            return
+          }
+          void this.bot.dig(block).then(() => {
+            this.result = { name: block.name, x: block.position.x, y: block.position.y, z: block.position.z }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'DIG_FAILED'
+          })
           return
         }
         default:
