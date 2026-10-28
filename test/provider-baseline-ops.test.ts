@@ -82,7 +82,7 @@ function fakeBot(options: {
     toss: async (itemType: number, _metadata: unknown, count: number) => {
       calls.push({ name: 'toss', args: { itemType, count } })
     },
-    craft: async (recipe: unknown, count: number) => { calls.push({ name: 'craft', args: { recipe, count } }) },
+    craft: async (recipe: unknown, count: number, table?: unknown) => { calls.push({ name: 'craft', args: { recipe, count, table } }) },
     recipesAll: () => options.recipes ?? [],
     recipesFor: () => options.recipes ?? [],
     isABed: () => true,
@@ -353,5 +353,23 @@ describe('baseline control operations', () => {
     const provider = new MineflayerProvider(bot)
     expect(provider.start('goto', { x: 4, y: 64, z: 4 }).poll())
       .toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
+  })
+
+  it('finds a crafting table by block id, not item id', async () => {
+    const recipes = [{ result: { id: 5, count: 4 }, requiresTable: true, delta: [{ id: 17, count: -3 }] }]
+    const { bot, raw, calls } = fakeBot({ inventory: [{ name: 'oak_log', count: 4 }], recipes })
+    const registry = (raw as unknown as { registry: Record<string, unknown> }).registry
+    registry.blocksByName = { crafting_table: { id: 58 } }
+    registry.itemsByName = { ...(registry.itemsByName as Record<string, unknown>), crafting_table: { id: 999 } }
+    ;(raw as unknown as { findBlock: (options: { matching: number | number[] }) => unknown }).findBlock = (options) => {
+      const matching = Array.isArray(options.matching) ? options.matching : [options.matching]
+      return matching.includes(58) ? { name: 'crafting_table', position: { x: 1, y: 63, z: 0 } } : null
+    }
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll()).toMatchObject({ status: 'succeeded' })
+    const craftCall = calls.find(call => call.name === 'craft') as { args: { table?: { name?: string } } }
+    expect(craftCall.args.table).toMatchObject({ name: 'crafting_table' })
   })
 })

@@ -1674,9 +1674,15 @@ class MineflayerActHandle implements ActHandle {
       if (point === undefined) return undefined
       return this.bot.blockAt(new Vec3(point.x, point.y, point.z)) ?? undefined
     }
-    const tableId = this.itemTypeId('crafting_table')
+    const tableId = this.blockTypeId('crafting_table') ?? this.itemTypeId('crafting_table')
     if (tableId === undefined) return undefined
     return this.bot.findBlock({ matching: tableId, maxDistance: 4 }) ?? undefined
+  }
+
+  /** findBlock matches block type ids; item ids are a different registry. */
+  private blockTypeId(name: string): number | undefined {
+    const registry = this.bot.registry as unknown as { blocksByName?: Record<string, { id?: number }> }
+    return registry.blocksByName?.[name]?.id
   }
 
   private async transferContainer(block: Parameters<Bot['openFurnace']>[0]): Promise<JsonValue> {
