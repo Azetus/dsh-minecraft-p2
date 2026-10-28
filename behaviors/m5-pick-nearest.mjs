@@ -80,6 +80,20 @@ export default {
         },
         output: 'verdict',
       },
+      {
+        kind: 'if',
+        id: 'verify',
+        when: {
+          kind: 'expr',
+          expr: {
+            kind: 'binary', op: 'eq',
+            left: { kind: 'member', object: { kind: 'local', name: 'verdict' }, key: { kind: 'literal', value: 'have' } },
+            right: { kind: 'literal', value: true },
+          },
+        },
+        then: { kind: 'wait', id: 'settled', durationMs: 1 },
+        else: { kind: 'fail', id: 'gone', code: 'TARGET_GONE', message: 'the selected item never reached the inventory' },
+      },
     ],
   },
   completion: {

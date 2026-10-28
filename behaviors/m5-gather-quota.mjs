@@ -91,7 +91,7 @@ export default {
                   timeoutMs: { kind: 'literal', value: 10000 },
                 },
               },
-              { kind: 'wait', id: 'settle', durationMs: 500 },
+              { kind: 'wait', id: 'settle', durationMs: 900 },
               {
                 kind: 'assign',
                 id: 'advance',

@@ -31,3 +31,6 @@ node_modules/
 
 # 本地 Minecraft provider 配置
 /.p2/config.json
+
+# M5 验证运行证据（本机）
+/.m5-runs/
