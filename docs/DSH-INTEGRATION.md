@@ -83,7 +83,9 @@ bridge 不创建/恢复用户 agent，不改 session header，不自动 fork/mov
 
 ## 5. 模型工具与界面反馈
 
-工具只在 active 的 owner agent 可见：observe、status、check、activate、switch、stop、confirm 等，名称以最终 SDK 为准。源码编辑复用 DSH 工作区能力；进程启动、shutdown、operation 安装和驱动原始调用不暴露给模型。
+工具只在 active 的 owner agent 可见：observe、status、check、activate、switch、stop、confirm 等，名称以最终 SDK 为准。check 需要显式区分 `artifactKind`（behavior／act／policy），policy 不单独 activate；启用 `imported` 来源的 act 或 policy 属于人工操作，不提供模型工具入口。源码编辑复用 DSH 工作区能力；进程启动、shutdown、operation 安装和驱动原始调用不暴露给模型。
+
+当前阶段限制必须对 agent 明示：哪些内容类型允许编写与检查、哪些允许启用、隔离引擎门槛是否已通过、`imported` 是否允许。能力清单与阶段限制随 status/describe 返回，不能只写在文档里而让 agent 试探。
 
 工具声明参数与输出schema，输出同时包含结构化结果和可读摘要。switch返回accepted+commandId，不能渲染为“已开始/已完成”。停止超时展示控制权未释放，不能用一个普通失败卡片掩盖。
 
@@ -109,11 +111,11 @@ P2策略统一叫behavior，DSH job保留为宿主后台事务。检查编译等
 
 首版每次游玩人工选择现有 session，显式 start 后固定该 body 的 owner。会话交流及显式目标文件仍可由宿主/项目保存，运行记录和通知仅在内存管理，调试日志不作为恢复依据；换 session 先关闭旧 body，再人工启动新 body。长期目标与偏好存项目文件，session 承载本次交流与工作上下文。
 
-AGENTS.md只放简短身份、工作目录与边界，编写behavior/act的长参考可放项目skill。具体DSH skill扫描范围在实施时复查，不把整份架构文档每轮注入。
+AGENTS.md只放简短身份、工作目录与边界，编写behavior／act／policy的长参考可放项目skill。具体DSH skill扫描范围在实施时复查，不把整份架构文档每轮注入。
 
 ## 8. bundle 与依赖发布
 
-首版采用单包交付：一个 npm 包同时包含 DSH bridge（Cordis 入口）、body（stdio 子进程入口）、内置 Mineflayer provider、authoring 子路径和预设 behavior。包内按目录分层；bridge 不 import core/body/provider，body 仍是独立进程。`package.json` 保留 `dsh.bundle.patch` 字段并指向包根的 `cordis.patch.yml`；`files` 只包含构建产物、manifest、patch 和显示元数据，不发布 `src` 或测试。初版使用本地私有包名，发布前再定 scope，不假称官方 `@deepseek-ai` 包。
+首版采用单包交付：一个 npm 包同时包含 DSH bridge（Cordis 入口）、body（stdio 子进程入口）、内置 Mineflayer provider、operation 声明、authoring 子路径和预设 behavior／act／policy。包内按目录分层；bridge 不 import core/body/provider，body 仍是独立进程。`package.json` 保留 `dsh.bundle.patch` 字段并指向包根的 `cordis.patch.yml`；`files` 只包含构建产物、manifest、patch 和显示元数据，不发布 `src` 或测试。初版使用本地私有包名，发布前再定 scope，不假称官方 `@deepseek-ai` 包。
 
 bundle patch 新增插件必须写在 `insert:` 下；顶层带 `id` 的行用于覆盖已有 entry，直接写会报 `entry not found`。当前 patch 形如 `- insert: - id: dsh-minecraft-p2 / name: dsh-minecraft-p2`。
 

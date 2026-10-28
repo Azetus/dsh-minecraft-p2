@@ -4,7 +4,7 @@
 
 ## 1. 设计基线与适用范围
 
-首版为本机、一个 body 控制一个角色、一个 owner session。人工 start 后由 DSH bridge 创建并持有独立 body 子进程，使用 stdio；插件安装/加载/重载不自动创建进程。body 生命周期跟随插件，调度仍不等待模型。**初版全部合并为一个 npm 包**：bridge、body、内置 provider、authoring 子路径与预设 behavior 同包交付；bridge 仍是 Cordis 入口，body 仍是独立子进程。behavior/act 可由 agent 扩展，operation 只经基础库维护发布；单线程树无 Parallel，一个 act 可协调多个底层效果。
+首版为本机、一个 body 控制一个角色、一个 owner session。人工 start 后由 DSH bridge 创建并持有独立 body 子进程，使用 stdio；插件安装/加载/重载不自动创建进程。body 生命周期跟随插件，调度仍不等待模型。**初版全部合并为一个 npm 包**：bridge、body、内置 provider、operation 声明、authoring 子路径与预设 behavior／act／policy 同包交付，provider 与核心分目录；bridge 仍是 Cordis 入口，body 仍是独立子进程。behavior／act／policy 可由 agent 扩展，operation 只经基础库维护发布；单线程树无 Parallel，一个 act 可协调多个底层效果。
 
 首版不承诺硬实时生存、跨游戏版本行为自动正确、全量世界记忆、整局确定性回放、任意代码安全证明、多人多角色调度或运行中provider热替换。上述边界不是待补接口，而是明确控制项目范围。
 
@@ -13,7 +13,7 @@
 | 编号 | 决定 | 依据/细节 |
 | --- | --- | --- |
 | A01 | 模型不在动作关键路径，既有behavior继续由代码推进 | [运行时](RUNTIME.md) |
-| A02 | behavior/act/op三层；query读取可供多个上层使用 | [主架构](ARCHITECTURE.md) |
+| A02 | behavior/act/op 三层；query 读取可供多个上层使用；policy 属于 behavior 层，不构成第四级 | [主架构](ARCHITECTURE.md) |
 | A03 | 一棵活动树、一个控制act，先确认停止再接管 | [状态与控制权](RUNTIME.md) |
 | A04 | 代码构建数据IR，执行器不运行作者任意树回调 | [契约](CONTRACTS.md) |
 | A05 | 检测器被动，无真实或模拟游戏测试 | [扩展生命周期](BEHAVIOR-LIFECYCLE.md) |
@@ -22,7 +22,7 @@
 | A08 | body 独立调度、生命周期由插件托管；人工 start，stdio 关闭或存活超时清理退出 | [DSH 接入](DSH-INTEGRATION.md)；独立常驻 body 与 WS 保留为后续方案。 |
 | A09 | 不可变artifact、精确binding、运行中版本不变 | [发布设计](OPERATIONS-AND-RELEASE.md) |
 | A10 | 初版单包交付：bridge、body、内置 provider、authoring 子路径同包；内部按目录分层，后续再拆 | [主架构4.5](ARCHITECTURE.md#45-仓库组织与包管理初版单包后续可拆) |
-| A11 | 生成代码不持游戏连接，隔离runner与可信broker分开 | [扩展生命周期4](BEHAVIOR-LIFECYCLE.md#4-构建及-act-的代码隔离) |
+| A11 | 生成代码不持游戏连接，隔离runner与可信broker分开 | [扩展生命周期4](BEHAVIOR-LIFECYCLE.md#4-构建act-与-policy-的代码隔离) |
 | A12 | 采用独立客户端路线，初版用 Mineflayer 验证；服务器角色不作为当前方向 | [接入决策](MINECRAFT-INTEGRATION-OPTIONS.md#11-接入路线决策) |
 | A13 | Mineflayer 仅为 operation 实现依赖，core、观测层及行为内容不直接依赖其对象或接口 | [依赖边界](MINECRAFT-INTEGRATION-OPTIONS.md#12-mineflayer-与-p2-的依赖边界) |
 | A14 | D1 已确认：显式赋值、成功输出绑定和独立局部作用域；观测传递不刷新时效 | [数据契约](CONTRACTS.md#31-数据归属与寿命)、[运行规则](RUNTIME.md#43-局部状态与结果写入)；第一版沿用 locals 保存查询快照，保留后续评估空间。 |
@@ -31,6 +31,9 @@
 | A17 | D4 已确认：binding 固定环境，artifact 锁定实际依赖，run 按 artifactId 固定内容 | [发布设计 §3](OPERATIONS-AND-RELEASE.md#3-不可变-binding)、[生命周期 §5—6](BEHAVIOR-LIFECYCLE.md#5-artifact-与检查凭据)；新增 act 不改变全局环境，明确摘要、检查范围、候选并存及退休规则。 |
 | A18 | D5 首版方案已确认：stdio 子进程、协议与传输解耦、固定单 owner、显式生命周期 | [首版协议](CONTRACTS.md#8-bridgebody-消息协议)、[接入流程](DSH-INTEGRATION.md#4-启动与关闭状态机)；已讨论 WS 设计保存在 [WS-FUTURE.md](WS-FUTURE.md)，以后实现。 |
 | A19 | D6 首版已确认：日志只服务开发调试，业务不等落盘，队列有界且停止优先 | [反馈设计 §3](FEEDBACK-AND-RECOVERY.md#3-当前状态日志与内存预算)；仅内存去重与通知，持久索引/可靠投递/崩溃恢复延期。 |
+| A20 | 三层职责纠正：op 是原子能力（声明归 P2 核心、实现归 provider），act 是唯一控制层，behavior 不得直接引用 ControlOp | [主架构 §3](ARCHITECTURE.md#3-核心概念)、[运行时 §5](RUNTIME.md#5-act-与操作控制权)；现有 provider 动作下沉为 op。 |
+| A21 | behavior = 计划（v1 小内核 IR）+ 决策（`decide` 调用的 policy）+ 状态；集合算子、`forEach`、`call` 为候选，由 [M5 验证](M5-VALIDATION.md) 的结论决定是否加入 | [IR](IR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；先证明小内核够用，再按证据扩展。 |
+| A22 | 安全口径只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全，不为第三方来源背书 | [隔离设计](ISOLATION.md)；`imported` 产物默认不启用。 |
 
 这些是当前架构基线，新增部分仍是可复审的设计决定，不是源码实现事实。修改长期约束时应更新关联文档与验收，而不是只改示例代码。
 
@@ -84,11 +87,33 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 退出条件：目标完成证据明确；失败可定位到revision/op；会话记录实际结果；停止时间测量支持调整配置；游戏行为问题进入反馈循环而不是被checker“测通过”。
 
-### M5：agent自定义act与候选晋升
+> 实施记录：M4 的“act”实现落在 op 层（provider 的 look/move/jump/moveTo/stop），behavior 直接调用了控制 op；按 A20 的纠正，真正的 act 层在 M5 补齐。该段历史证据保留不改，M5 验收包含 M4 链路等价性回归。
 
-隔离执行引擎须先完成加载、内存、CPU中断、消息边界、无宿主能力逃逸的实现验证。再开放agent写act、检查、启用。构建通过不等于批准任意第三方代码取得OS权限。
+### M5：三层补齐与验证
 
-退出条件：恶意/错误示例无法直接访问宿主文件、网络或游戏连接；runner失控时broker仍清理；已有行为不因候选检查失败受影响；失败修复回合有上限。
+M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架构结论。完整规格见 [M5 验证计划](M5-VALIDATION.md)；本节只列阶段与门槛。
+
+**G1 基础设施（冻结集）**
+
+1. 分层与目录：provider 的 look/move/jump/moveTo/stop 下沉为 op；`operation` 声明归核心，`provider` 只实现；`acts`／`behaviors`／`policies` 分目录；behavior 引用 ControlOp 在检查阶段拒绝。
+2. op 最小契约与 broker：静态声明、握手核验、按 act 声明默认拒绝、效果预算、清理与对账接线；补 `dig`／`pickup` 与验证所需查询。
+3. act 层：单文件、op 强制声明、不可变产物、`ActRef`、共享 runner（`role` 预留拆分）。
+4. `decide` 与 policy：单一决策调用点、异步等待、纯桥、有界预算。
+5. 运行时冻结项 F1—F8（见验证计划 §3.4）：分支切换等收尾、act 前完成检查、`fail` 节点、查询时效与复用、查询期限、status 可读性、参数校验、取消期间拒绝新 act。
+6. 冻结内核：G2 开始后不再增加节点、表达式或执行器分支。
+
+**G2 验证**
+
+- 四个场景：S1 拾取最近掉落物、S2 持续巡逻、S3 有限采集、S4 巡逻途中拾取再继续。
+- 四个策略变体：最远优先、往返巡逻、达标后返程、目标失效即失败。
+- 一组公共扰动：policy 等待中取消、取消与成功同批、unknown/过期、活动分支 policy 失败、清理失败。
+- 指标与结论规则见验证计划 §7—§8。
+
+**G3 结论**
+
+按验证计划 §8 判定「继续小 IR / 收缩后重试 / 转替代方案」。**G3 之前不实现集合算子、`forEach`、`call`，也不拆独立 policy runner。**
+
+退出条件：G1 的冻结集实现并通过测试；G2 的四个场景、四个变体、公共扰动都有明确结论且证据可复核；G3 结论与依据写入验证计划；M4 链路在分层后回归通过；恶意/错误示例无法直接访问宿主能力（朴素攻击集），runner 失控时 broker 仍清理并拒绝未声明 op。
 
 ### M6：可复现发行与体验验收
 
@@ -101,6 +126,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 | 层 | 必测故障 | 不能借此声称 |
 | --- | --- | --- |
 | builder/checker | 语法/类型错、非法引用、循环构建、超预算、变更源码 | 策略合理、游戏一定成功。 |
+| IR/policy | 空集合、类型错误、未知值、`decide` 超时或非法返回、`fail` 传播 | 策略合理、目标可达。 |
 | runtime | unknown guard、迟到响应、停止超时、冲突切换、旧epoch | 真实游戏驱动的停止已可靠。 |
 | broker/provider | 未确认控制、部分成功、重复取消、连接丢失、thread延迟 | 玩家目标一定达成。 |
 | bridge | scope清理、session错配、重复事件、DSH退出/重载 | 模型一定及时响应。 |
@@ -113,7 +139,8 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 | 待验证项 | 当前方案 | 完成所需证据 |
 | --- | --- | --- |
 | Minecraft客户端接入 | Mineflayer首版验证已选；真实客户端为后续方向 | 固定测试版本、连接与授权条件，取得G0—G6证据；真实客户端另测驱动、模组交互与运行资源。 |
-| 生成代码执行引擎 | 独立进程+受限JS上下文，候选需核验 | 中断/内存/能力桥原型与逃逸面审查；未完成不开放自动act。 |
+| 生成代码执行引擎 | 独立进程+受限JS上下文（act 走 op 桥，policy 走纯桥），候选需核验 | 中断/内存/能力桥原型与逃逸面审查；只承诺宿主能力、资源、账本三项，见[隔离设计](ISOLATION.md)；未完成不开放自定义 act／policy。 |
+| IR 与 policy 表达力 | v1 小内核 + `decide` 调用的 policy；集合算子与 `forEach`/`call` 为候选 | 按 [M5 验证计划](M5-VALIDATION.md) 执行四个场景、四个变体与公共扰动；记录核心修改次数、策略归属、取消责任与可读性，G3 给出结论。 |
 | 具体超时与数据年龄 | RUNTIME配置初值 | Windows及选定游戏组合的分位数和卡顿数据。 |
 | DSH新版本兼容 | 源码核验 0.2.1-rc.2；安装端为 0.2.1-rc.3（卸载器版本），M0 以实际 runtime 为准 | 实际安装、命令、工具、session和HMR测试。 |
 | Windows 托管进程生命周期 | 人工 start 后由插件持有 body，stdio 通信 | 正常 stop、热重载、DSH 异常退出、管道失效、runner 卡住和进程树回收实验。 |

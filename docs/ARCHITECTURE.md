@@ -9,13 +9,16 @@
 | 文档 | 内容 |
 | --- | --- |
 | [RUNTIME.md](RUNTIME.md) | 完整状态传播、调度、控制权、收尾、查询时效、失联及配置初值。 |
-| [CONTRACTS.md](CONTRACTS.md) | 模块接口、behavior IR、act/op契约、错误、body命令与桥协议。 |
+| [CONTRACTS.md](CONTRACTS.md) | 模块接口、behavior IR、act/policy/op 契约、错误、body命令与桥协议。 |
+| [IR.md](IR.md) | behavior IR 参考：节点、表达式、求值语义、空集与未知及示例。 |
 | [BEHAVIOR-LIFECYCLE.md](BEHAVIOR-LIFECYCLE.md) | 代码检查、隔离、不可变产物、启用、回滚与实际反馈迭代。 |
+| [ISOLATION.md](ISOLATION.md) | 隔离威胁模型、引擎验证门槛与实测证据；只保证宿主能力、资源与账本三项。 |
 | [FEEDBACK-AND-RECOVERY.md](FEEDBACK-AND-RECOVERY.md) | 当前进程执行反馈、简单调试日志、有界队列、长期目标及后续恢复边界。 |
 | [DSH-INTEGRATION.md](DSH-INTEGRATION.md) | 本地DSH源码核验、调查修正、插件/会话生命周期与发布接口。 |
 | [OPERATIONS-AND-RELEASE.md](OPERATIONS-AND-RELEASE.md) | 包、能力清单、精确binding、安装升级及独立发行。 |
 | [MINECRAFT-INTEGRATION-OPTIONS.md](MINECRAFT-INTEGRATION-OPTIONS.md) | 客户端路线决策、Mineflayer 首版验证与解耦边界、真实客户端方向、历史方案及验证门槛。 |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | 决策索引、M0—M6实施阶段、验收矩阵与未验证项。 |
+| [M5-VALIDATION.md](M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
 | [WS-FUTURE.md](WS-FUTURE.md) | 保留的 WebSocket、独立常驻 body、鉴权/租约与重连方案，后续实现，不是首版门槛。 |
 
 ## 目录
@@ -46,15 +49,15 @@ agent 的控制方式类似策略游戏或 RTS：为角色选择和调整持续�
 
 ### 2.1 系统组成
 
-agent 是调度者与 behavior／act 作者。P2 的运行机制包含以下三个部分，它们依赖独立维护的 operation 基础库对接游戏：
+agent 是调度者与 behavior／act／policy 作者。P2 的运行机制包含以下三个部分，它们依赖独立维护的 operation 基础库对接游戏：
 
 | 部分 | 职责 |
 | --- | --- |
 | 观测层 | 基于查询 operation 提供当前事实，并用纯函数整理查询结果与生成摘要，供 agent 及执行中的行为使用。 |
-| 行为系统（behavior 系统） | 保存、描述和管理可用的行动策略，包括预设 behavior 与自定义 behavior。 |
+| 行为系统（behavior 系统） | 保存、描述和管理可用的行动策略，包括预设 behavior、自定义 behavior 及其附属 policy。 |
 | 执行器 | 驱动当前 behavior 及其 act 的执行，落实具体动作与行为切换。 |
 
-系统初始提供一组预设 behavior。人类开发者与 agent 都可以添加新的自定义 behavior；agent 根据目标和情况选择适用的 behavior，在现有 behavior 无法表达所需行为时编写新的 behavior。
+系统初始提供一组预设 behavior。人类开发者与 agent 都可以添加新的自定义 behavior；agent 根据目标和情况选择适用的 behavior，在现有 behavior 无法表达所需行为时编写新的 behavior。policy 是 behavior 层内部的纯计算决策单元，不是第四级控制层，详见 §3.6。
 
 operation 库统一提供游戏查询与控制的基础接口及对应实现。观测层不另行维护一套直接对接游戏的查询实现，act 也不自行绕过该库调用游戏接入接口。
 
@@ -104,7 +107,7 @@ session 中的历史信息不替代 behavior、执行器与 act 对当前数据�
 | --- | --- |
 | operation 库 | 将统一的查询与控制契约落实到对应游戏版本或发行版。 |
 | P2 核心 | 构建、检查和执行行为定义，管理控制权，提供当前事实与执行反馈。 |
-| agent／LLM | 理解游戏特性，判断策略是否适用，选择、修改或编写 behavior／act。 |
+| agent／LLM | 理解游戏特性，判断策略是否适用，选择、修改或编写 behavior／act／policy。 |
 
 agent 编写的 behavior／act 是由 P2 执行的可替换行为内容，不等同于 P2 核心机制。为适应游戏版本而重写行为，不代表核心执行架构需要适配。
 
@@ -119,11 +122,13 @@ P2 核心不内置 Java 版或基岩版的策略分支，不负责保证同一�
               ↕ 消息协议／stdio传输适配器
           插件持有的独立body子进程
           ├─ 可信树执行器、状态与事件
-          ├─ 隔离的构建／act runner
+          ├─ 隔离的构建／act·policy runner
           └─ operation broker → 选定provider → 游戏连接/驱动
 ```
 
-DSH不逐tick操控角色。body的串行调度器控制唯一活动act，隔离runner只承载其代码；辅助进程不产生第二个控制者。broker持有实际游戏操作的账本与清理能力，生成代码不持原始连接。
+DSH不逐tick操控角色。body的串行调度器控制唯一活动act，隔离runner只承载其代码；辅助进程不产生第二个控制者。broker持有实际游戏操作的账本与清理能力，生成代码不持原始连接。act 通过 op 桥提交控制与查询请求；policy 只通过纯桥接收输入并返回值，不能提交 op。
+
+policy 不是独立的控制层或调度单位：它由 behavior 的 `decide` 节点调用一次，异步等待并返回一个受限 JSON 值，由计划决定如何使用。执行器始终持有调度权与控制权。
 
 首版人工 /p2 start 后，bridge 为正确项目的现有会话创建并持有一个 body，通过 stdio 通信。初版 bridge、body 与内置 provider 同包交付；body 仍是独立子进程。安装、加载或热重载不自动创建 P2 进程；启动 body 不自动启动 behavior。body 独立调度但生命周期跟随插件，插件释放时收尾并回收 body/辅助进程，不销毁用户 agent。模型 stop 只停 behavior，人工 stop 关闭托管 body；换 session 先关闭旧 body 再人工启动。
 
@@ -133,7 +138,15 @@ DSH不逐tick操控角色。body的串行调度器控制唯一活动act，隔离
 
 ### 3.1 behavior：持续行动策略
 
-**behavior 是一段持续生效的行动策略，其本质是交给执行器运行的程序。**
+**behavior 是一段持续生效的行动策略，由计划、决策与状态三部分组成，其本质是交给执行器运行的程序。**
+
+| 组成 | 形式 | 职责 |
+| --- | --- | --- |
+| 计划 | 可序列化的 IR 节点树 | 组织顺序、条件、循环、反应式选择、恢复与 act 调用；决定何时开始、何时停止、失败怎么办。 |
+| 决策 | 受限纯函数（policy），由 `decide` 节点调用 | 在明确的决策点做有限计算：选哪个目标、走哪个分支键、下一个目标是什么。异步等待，没有副作用，不提交 op。 |
+| 状态 | locals 与子行为局部帧 | 保存跨轮次的策略状态与执行证据；不构成世界副本。 |
+
+三者都在 behavior 层内，policy 不是独立的第四级控制层（见 §3.6）。计划决定「做什么」，决策决定「用哪个值」，act 决定「怎么做」。
 
 为避免与 DSH 内部事务的 `job` 命名混淆，P2 原称 `job` 的概念统一改为 `behavior`（行为策略），原 `jobTree` 改为 `behaviorTree`（行为树）。这次调整只改变命名，保留原有运行契约、状态与职责边界；`job` 留作 DSH 自身的事务术语。
 
@@ -158,7 +171,9 @@ behavior 通过条件、循环、顺序和切换等控制结构组织 act，并�
 
 act 的粒度不按代码量、耗时或引擎原子操作划分。移动 act 可以持续较长时间，并在内部处理寻路与局部调整；behavior 无需重复实现这些细节。
 
-条件判断、循环和优先选择属于 behavior 的控制结构，不与具体动作混为一谈。控制结构可以由统一语法或接口提供，暂不单独增加业务层级。
+act 是可执行代码，运行在独立的隔离 runner 中，通过消息向 broker 提交 op 并读取结果；它不持有游戏连接，也不直接调用 provider。每个 act 产物必须在 manifest 中强制声明使用的 QueryOp 与 ControlOp（`stop` 作为撤回原语隐式授予），运行期提交未声明的 op 立即失败。
+
+act 的边界由两件事判定：**需要 op 副作用，或者需要中断与收尾契约**。因此「选哪个目标」「要不要改策略」不属于 act，属于 behavior 的决策层；act 只接收已经确定的参数，把这一件事做完并如实报告结果。控制结构（条件、循环、优先选择）属于 behavior，不与具体动作混为一谈。控制结构可以由统一语法或接口提供，暂不单独增加业务层级。
 
 ### 3.3 operation：游戏基础操作
 
@@ -170,6 +185,10 @@ act 的粒度不按代码量、耗时或引擎原子操作划分。移动 act �
 | ControlOp | 发起动作，设置或清除控制状态。 | 只有当前持有角色控制权的 act 可以调用。 |
 
 “原子化”表示基础操作的粒度，不承诺瞬间完成、不可中断、事务原子性或自动回滚。部分 op 的效果会持续生效，需要 act 协调和清理。op 不拥有独立策略，也不复制一套 behaviorTree 调度机制；底层完成或错误结果由 act 接收并形成行为反馈。
+
+**op 的声明与实现分开归属**：名称、类别、参数与结果契约、持续效果、停止语义与能力标记由 P2 核心维护；具体实现由可替换的 provider 包提供。初版两者同包但分目录，后续把 provider 整包拆出，核心不需要知道底层是 Mineflayer 还是其他客户端。检查阶段只读取静态声明，不连接游戏；连接后再核验实际能力与声明一致。
+
+`QueryOp` 与 `ControlOp` 作为 `Operation` 的两个类别继续沿用；类别是结构维度，具体 op 名是裸标识（例如 `position`、`moveTo`），不在名字里编码类别。
 
 ```text
 动作控制路径：behavior → act → ControlOp → 游戏
@@ -186,6 +205,8 @@ act 的粒度不按代码量、耗时或引擎原子操作划分。移动 act �
 同一时刻至多一个 act 持有角色控制权，不意味着角色只能产生一种底层动作效果。一个 act 可以在短暂更新中依次计算并提交多个 op，协调移动、朝向、交互等效果；具体游戏行为留待后续设计。
 
 这些协调可以分解为 act 内部的可复用函数，不要求实现为一个巨大函数，也不构成 behaviorTree 的并行子树。控制权始终归属于同一个 act。
+
+首版对同一 act 内的并发约定为：**多个只读查询可以并发在途，至多一个持续控制效果生效**。需要「边移动边攻击」这类组合时，先由效果槽位或明确的组合 op 表达，不在 act 内制造第二个控制者。
 
 停止 act 时，必须清理它留下的持续控制、未结束操作及相关回调；未确认停止前不能移交控制权。已发生的世界变化不会被取消操作自动回滚。
 
@@ -213,13 +234,33 @@ op 报告基础操作结果，act 解释其对当前行为的影响，behavior �
 
 上述要求是行为契约，方法与字段的设计见[接口文档](CONTRACTS.md)；瞬时查询不必套用持续动作的完整生命周期。契约应说明执行如何完成、失败或进入可识别的故障状态，不承诺穷举所有游戏异常，也不要求每个行为都能自行恢复。
 
+### 3.6 policy：behavior 内部的决策单元
+
+**policy 是 behavior 的附属纯函数，用来在计划执行期间计算值，不是独立的控制层，也不是第四级。**
+
+引入 policy 的原因：behavior 若只有可序列化的节点树，就无法表达「从一组候选里选一个」「按多个因素打分」「构造下一次调用的参数」这类计算。缺了这些，作者只能把决策塞进 act，使 act 同时承担执行与决策，破坏三层分工。
+
+| 特性 | 约定 |
+| --- | --- |
+| 形态 | 单文件可执行代码，在隔离 runner 中以纯桥运行；无 op、无 I/O、无宿主对象。 |
+| 调用方式 | 只能由 `decide` 节点调用一次；结果写入 local，供后续分支使用。不能内联在 guard、assign 或 act 参数中。 |
+| 输入输出 | 输入与输出都是受限 JSON；结果不直接产生控制效果。 |
+| 生命周期 | 一次调用一次返回，异步等待、不阻塞 tick，不保存跨调用状态；不参与 act 的 start/update/stop/cleanup。 |
+| 失败语义 | 抛错、超时或返回非法值时 `decide` 节点失败，不是控制故障，也不触发 act 清理。 |
+| 作用域 | act 不能调用 policy，policy 也不能调用 act 或 op。 |
+| 复用 | 作为内容产物按 digest 锁定，可被多个 behavior 引用并进入依赖闭包。 |
+
+policy 可以复用，但复用发生在产物层，不新增调度层级：它回答「值/决策是什么」，计划仍决定「下一步做什么」。因此「行为由 policy 决定」的准确表述是：**policy 在明确的决策点给出结果，IR 依据该结果选择已声明的分支**。
+
+「在明确决策点调用一次」是刻意的限制：它让跨进程等待只有一种形态（`decide` 节点），不必让整个表达式求值器支持挂起与恢复，也避免一次选择被拆成多次隔离调用。完整求值时机、预算与失败分类见[运行时](RUNTIME.md)，接口与产物格式见[接口契约](CONTRACTS.md#4-act-与-policy-作者接口)。
+
 ## 4. 职责与扩展边界
 
 ### 4.1 三条职责边界
 
-1. **behavior 只通过 act 操作角色。** behavior 可以读取观测、计算、判断和保存策略状态；实际动作通过统一的 act 接口执行。
-2. **act 不替 behavior 决定长期策略。** act 可以处理完成当前动作所需的局部变化，例如绕路，但不自行决定改去采矿、返家或更换长期目标。
-3. **允许组合行为复用，不为组合形式增加额外业务层级。** 多个 behavior 共用的行为组合可以提取为辅助函数或子程序，也不要求 behavior 只能展开成一层 act。act 下方明确设立 operation 基础层，隔离可复用的游戏接入操作。
+1. **behavior 只通过 act 操作角色。** behavior 可以读取观测、计算、判断和保存策略状态；纯计算可以由附属 policy 完成，实际动作通过统一的 act 接口执行。behavior 不得直接引用 ControlOp。
+2. **act 不替 behavior 决定长期策略。** act 可以处理完成当前动作所需的局部变化，例如绕路，但不自行决定改去采矿、返家或更换长期目标，也不承担「选哪个目标」这类决策。
+3. **允许组合行为复用，不为组合形式增加额外业务层级。** 多个 behavior 共用的行为组合可以通过 `call` 引用另一个 behavior 产物，纯计算可以提取为 policy 产物；这两者都是内容产物复用，不新增调度层级。act 下方明确设立 operation 基础层，隔离可复用的游戏接入操作。
 
 agent 编写新 behavior 时使用已有 act 编排策略；需要新的完整行为时，可以通过已有 op 编写新 act。新增 act 与编写 behavior 是不同层次的行为开发，新增 op 则属于基础库维护。
 
@@ -236,6 +277,7 @@ operation 作为独立维护的基础库，统一提供名称、类型定义、�
 | 层级 | 游戏中的 agent 的扩展方式 |
 | --- | --- |
 | behavior | 使用已有控制结构、查询和 act 编写策略。 |
+| policy | 用纯函数做有限计算，由 behavior 表达式引用；不能提交 op，也不能决定控制流。 |
 | act | 使用已发布的 QueryOp／ControlOp 协调完整行为。 |
 | operation | 查询现有能力、提出缺失能力需求；候选实现进入基础库的开发维护流程。 |
 
@@ -269,27 +311,31 @@ P2 核心及可替换的 behavior／act
 
 检测结论对应具体接口版本与可用能力集合，更换不兼容的库后不能直接沿用旧结论；精确binding及产物摘要见[发布设计](OPERATIONS-AND-RELEASE.md)。
 
-D4 将环境 binding、产物依赖与运行实例分开：binding 固定 body/IR、契约、provider、驱动及影响执行的配置，不包含 act 集合；每个 artifact 锁定实际使用的确切 act 产物与依赖闭包；run 固定 artifactId、binding 和参数。新增 act 不改变环境或已有运行，采用新依赖的候选才重新检查；provider/环境变更仍需人类管理、停止清理和重新核验。
+D4 将环境 binding、产物依赖与运行实例分开：binding 固定 body/IR、契约、provider、驱动及影响执行的配置，不包含内容产物集合（act／policy／被 `call` 的 behavior）；每个 artifact 锁定实际使用的确切依赖与闭包；run 固定 artifactId、binding 和参数。新增 act 或 policy 不改变环境或已有运行，采用新依赖的候选才重新检查；provider/环境变更仍需人类管理、停止清理和重新核验。
 
 revision 表示源码版本，artifactId 表示确切可执行内容；同源码在不同依赖或 binding 下可以生成不同产物。启用与 switch 指定 artifactId，运行时不追随默认版本。候选可以面向其他 binding 静态检查并启用，但仅与当前加载环境一致且实际能力满足时才能启动。退休依赖阻止新 run，不替换已有 run 的后续节点。摘要输入、规范化与变更范围见[发布设计 §3](OPERATIONS-AND-RELEASE.md#3-不可变-binding)，启用状态见[生命周期 §5](BEHAVIOR-LIFECYCLE.md#5-artifact-与检查凭据)。
 
 ### 4.5 仓库组织与包管理（初版单包，后续可拆）
 
-**初版采用一个 npm 包交付：bridge、body、内置 Mineflayer provider、authoring 子路径、共享契约与预设 behavior 同包；后续验证可行后再拆包/拆仓。** 包管理器用于开发和构建；`npm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装，初版不发布 registry。
+**初版采用一个 npm 包交付：bridge、body、内置 Mineflayer provider、operation 声明、authoring 子路径、共享契约与预设 behavior／act／policy 同包；后续验证可行后再拆包/拆仓。** 包管理器用于开发和构建；`npm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装，初版不发布 registry。
 
-包内按目录分层：contracts、authoring、core、body、bridge、provider-minecraft、presets。模块名不等于发行包，依赖方向仍按 §1：bridge 不 import core/body/provider；core 不 import Mineflayer；authoring 只依赖 contracts/op-contracts。初版用一个轻量 import-boundary 检查维持这些方向。
+包内按目录分层：contracts、authoring、operation、core、acts、behaviors、body、bridge、provider。模块名不等于发行包，依赖方向仍按 §1：bridge 不 import core/body/provider；core／acts／behaviors 不 import provider，只依赖 operation 的声明；provider 实现 operation 契约。初版用一个轻量 import-boundary 检查维持这些方向。
 
 ```text
 主仓库
-└─ 单包
-   ├─ src/contracts
-   ├─ src/authoring
-   ├─ src/core
-   ├─ src/body
-   ├─ src/bridge
-   ├─ src/provider-minecraft
-   └─ src/presets
+└─ 单包（初版）
+   ├─ src/contracts      # IR、消息、错误、摘要
+   ├─ src/authoring      # behavior 构建接口
+   ├─ src/operation      # QueryOp / ControlOp 的声明与契约，P2 核心保留
+   ├─ src/core           # 执行器、树运行时、注册表、broker
+   ├─ src/acts           # 内置 act（单 op 包装，后续增强）
+   ├─ src/behaviors      # 预设 behavior 与 policy
+   ├─ src/body           # body 进程入口
+   ├─ src/bridge         # DSH 插件
+   └─ src/provider       # 初版同包分目录；后续整包拆出
 ```
+
+`operation` 的声明留在主包，`provider` 是唯一直接接触游戏库的目录。初版即便同包提供，也要求二者不在同一目录、不互相 import 反向依赖，这样后续把 `provider` 拆成独立包时不需要改动核心。
 
 同一个 tarball 安装到 DSH profile 获得运行时；项目以 devDependency 安装同一 tarball 获得 authoring，`/p2 setup` 校验版本一致。body 仍是独立子进程，provider 仍通过接口加载，act runner 仍隔离；合并的是交付物，不是进程或依赖方向。
 
@@ -312,6 +358,13 @@ revision 表示源码版本，artifactId 表示确切可执行内容；同源码
 
 产物是可序列化的节点图及有界表达式，不含需要body执行的作者任意闭包。自定义act代码通过隔离runner使用受控op能力，构建与运行隔离的要求见[扩展生命周期](BEHAVIOR-LIFECYCLE.md)。
 
+要区分两种「计算」：
+
+- **构建期计算**：用宿主语言（如 TypeScript）写循环、函数与常量展开，生成静态节点图。它影响的是图长什么样，不读取游戏状态。
+- **运行期计算**：图的节点在执行时读取 query 结果、locals 与参数，做有限求值。v1 由内建表达式（比较、四则、逻辑、字段读取）与 `decide` 调用的 policy 承担。
+
+只有运行期计算能影响「这一次运行怎么走」。v1 的内建表达式保持很小，筛选、排序、评分与分配交给 policy；集合算子（`select`/`aggregate`/`forEach`/`call`）属于候选，是否加入由 [M5 验证](M5-VALIDATION.md) 的结论决定，不预先补齐。
+
 省去 XML 的解析与映射，不代表省去 behaviorTree 执行器。
 
 ### 5.3 选择理由与能力范围
@@ -329,6 +382,8 @@ behavior 参数在实例内只读，behavior locals 跨循环与树内分支切�
 策略计数、当前观测与历史执行证据有不同含义。当前观测经计算、赋值或子树传递仍保留来源、时效及世界作用域，赋值不刷新观测时间；累计成功动作次数也不能直接作为当前物品数量。第一版允许 locals 保存查询快照，但这一存储选择保留后续评估空间；locals 不随游戏自动同步，不构成 P2 世界副本。详细约定见[数据契约](CONTRACTS.md#31-数据归属与寿命)和[运行规则](RUNTIME.md#43-局部状态与结果写入)。
 
 D2 采用执行器内部按顺序写入、后续节点同轮立即可读；启动新 act 和提交终态前通过[统一检查点](RUNTIME.md#31-新动作与终态的统一检查点)。相关 local 更新使旧条件判定失效；未知或过期的必要条件不能放行新动作。单次赋值原子更新，整个 tick 不回滚；轮末只汇总状态和事件。
+
+policy 只能读取传入的输入快照，不能读到 locals 的引用或修改它们；它的返回值仍按普通表达式结果参与求值，不能绕过 assign、query/act 输出与子树输出的写入规则。观测元数据不因经过 policy 计算而变新，纯计算沿用输入中最保守的年龄。
 
 ## 6. behavior 运行契约与完成判定
 
@@ -391,6 +446,8 @@ behavior 作者不自行实现定时器、取消流程或并发管理。
 | `repeat` | 子树成功后，在后续调度中开始下一轮；失败默认向上传播，不默认无限重试，也不在一次更新中无限循环。 |
 | `assign` | 完整求值并校验受限表达式后写入目标 local；失败保留原值，不执行游戏动作。 |
 | 子树引用 | 复用定义，每次进入捕获只读输入并初始化独立 locals，成功后发布声明输出；取消后重入不复用旧帧。 |
+| `decide` | 提交一次 policy 请求并异步等待，结果写入 local；失败、超时或非法结果使节点失败。 |
+| `fail` | 以声明的业务码主动失败，可被 `recover` 捕获，不可被目标证据掩盖。 |
 
 普通流程推进与持续重新决策必须明确区分，不将所有节点都解释为“每次更新从头运行”。节点技术状态见第 7.7 节，不等同于业务目标完成或向 agent 汇报成功；完整规则及wait/recover结构见[运行时](RUNTIME.md)。
 
@@ -671,6 +728,8 @@ D6 首版只提供异步 JSONL 调试日志和当前进程内的状态/去重/�
 
 检测器只负责语法、类型与构建检查，定位类似 `cargo check` / `cargo build`，不负责行为测试。behavior 的结构与运行契约要求尽量通过类型定义和构建接口表达，不另行分析策略意图。
 
+检查范围覆盖三类内容产物：behavior（IR 结构与引用）、act（代码结构、声明的 op 与封闭模块）、policy（纯函数结构、声明的输入输出、无 op 与无副作用语法）。三者的检查都不连接游戏、不试运行、不模拟环境。
+
 通过检测意味着 behaviorTree 在对应版本的执行器、act 接口及已声明的 operation 能力下合法，可以被接受并执行，不意味着动作一定成功。检测器不依赖真实 Minecraft 环境，也不模拟游戏环境或接口。本章后续小节说明完整职责。
 
 ### 9.2 检查流程与契约依赖
@@ -750,7 +809,7 @@ export default defineBehavior({
 - `parameters` 声明实例内只读参数；`locals` 声明每个 behavior 实例独有的局部状态，`completedHarvests` 显式初始化为 0 并跨 repeat 轮次保留。
 - `build` 构建并返回行为树，不执行采集流程，也不是每次更新时重新调用的行动函数。
 - `params.area`、`locals.target` 等在构建阶段是数据引用；执行器运行节点时，才读取对应实例中的实际值。
-- `queryResources` 构建 QueryOp 查询节点，将合格结果写入 `candidates`；`selectResource` 是作者的受限集合选择表达式构建辅助函数，`assign` 将结果写入 `target`。这些调用不在构建阶段查询游戏，也不把任意回调交给执行器运行。
+- `queryResources` 构建 QueryOp 查询节点，将合格结果写入 `candidates`；`selectResource` 在 v1 需要候选的 `select` 表达式，当前版本改用 `decide` 调用 policy 完成同样的选择，`assign` 将结果写入 `target`。这些调用不在构建阶段查询游戏，也不把任意回调交给执行器运行。
 - `harvestResult` 仅在采集 act 业务成功且收尾完成后获得本次输出；后续 assign 记录一次成功完成的采集。新一轮调用不能用上一轮输出代替本轮结果，失败或取消也不增加成功次数。
 - `completedHarvests` 表示成功完成采集的次数，不代表捡到的物品数量；若目标是背包拥有指定数量的资源，须另用当前背包查询定义完成条件。采集过程中已发生的世界变化不会因失败或取消自动回滚。
 - `candidates` 及其派生的当前事实保留观测元数据；长动作后如需目标的最新状态，应重新查询，不能因 target 仍保存在 local 中就认为事实一直新鲜。
@@ -770,7 +829,8 @@ export default defineBehavior({
 | QueryOp异步等待、有效性与失败 | [运行时](RUNTIME.md)：一次请求、unknown、跨进程观测年龄、取消与晚到结果处理。 |
 | operation发布、兼容、版本与能力集合绑定 | [发布设计](OPERATIONS-AND-RELEASE.md)：精确binding、静态声明与连接核验、非热更新、发布验收。 |
 | 默认恢复、受阻与agent调度 | [生命周期](BEHAVIOR-LIFECYCLE.md)及[反馈](FEEDBACK-AND-RECOVERY.md)：零默认行为重试、显式恢复、合并与预算。 |
-| behavior/act检查、启用 | [生命周期](BEHAVIOR-LIFECYCLE.md)：不可变源码快照、检查产物、启用与启动分离、隔离门槛。 |
+| behavior/act/policy 检查、启用 | [生命周期](BEHAVIOR-LIFECYCLE.md)：不可变源码快照、检查产物、启用与启动分离、隔离门槛。 |
+| behavior 表达力与决策 | [IR](IR.md)及[运行时](RUNTIME.md)：v1 小内核（控制结构 + 受限表达式）、`decide` 调用的 policy、`fail` 业务失败；集合算子与子行为调用为候选，由 [M5 验证](M5-VALIDATION.md)决定。 |
 | 游戏内反馈与agent迭代 | [生命周期](BEHAVIOR-LIFECYCLE.md)：运行诊断→新revision→检查→启用，独立于checker。 |
 | DSH 会话与托管 body | [DSH 接入](DSH-INTEGRATION.md)：人工 start、固定 owner、stdio 子进程、局部工具、存活检测与插件释放；body 调度独立于模型。 |
 | D1：局部状态与数据流 | [接口契约](CONTRACTS.md#31-数据归属与寿命)及[运行规则](RUNTIME.md#43-局部状态与结果写入)：显式 assign、query/act 成功输出、独立子树帧与输入/输出、观测元数据传播。 |
@@ -785,7 +845,7 @@ export default defineBehavior({
 [接口文档](CONTRACTS.md)定义控制结构、IR与数据引用、act hook、op结果、错误、body命令、事件及版本绑定。代码片段是契约草案，不是可以直接运行的完整SDK。
 
 - 查询/收尾期限、调度周期及数据年龄已有起始配置，需用运行测量调整，不能当SLA。
-- 自定义act的受限JS引擎需要中断、内存与宿主能力隔离验证；未完成前先用维护者act，不把生成代码直接放进body。
+- 自定义act/policy的受限JS引擎需要中断、内存与宿主能力隔离验证；未完成前先用维护者act与内建算子，不把生成代码直接放进body。隔离只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全或第三方代码可信，见[隔离设计](ISOLATION.md)。
 - checker、日志、消息去重与生命周期仍需软件实现和测试；checker不因此增加模拟游戏职责。
 - 初版单包交付已定；bridge/body/provider/authoring 的内部边界仍须通过 import-boundary 检查。首版须实测 `bundles/` tarball 干净安装、项目 authoring 版本一致、托管进程树回收、依赖闭包和离线安装；拆包与独立 launcher 后续验证。
 - 崩溃时持续控制能否可靠释放由provider验证；P2不能仅凭进程退出宣称游戏已停止。

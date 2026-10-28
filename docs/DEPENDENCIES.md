@@ -21,11 +21,13 @@
 
 ## 3. 运行时依赖
 
-当前 `dependencies` 为空，这是有意的：
+截至 M4，`dependencies` 只有 provider 的三项（`mineflayer`、`minecraft-protocol`、`minecraft-data`），其余为零：
 
 - bridge 只使用宿主提供的 Cordis/DSH 服务，不把宿主核心打进包。
-- body 与 authoring 目前是骨架，不需要第三方运行时库。
-- Mineflayer 及其插件属于 provider 的实现依赖，计划在 M3 引入；优先把 provider/body 打成自包含文件，避免把依赖树装进 DSH profile。若无法完整 bundle，则在 `dependencies` 中记录并在干净环境验证依赖闭包。
+- body 与 authoring 目前不需要第三方运行时库。
+- Mineflayer 及其插件属于 provider 的实现依赖；优先把 provider/body 打成自包含文件，避免把依赖树装进 DSH profile。若无法完整 bundle，则在 `dependencies` 中记录并在干净环境验证依赖闭包。
+
+**待定：隔离引擎。** M5 的 act／policy runner 需要一个能限制内存、中断执行且默认不含宿主能力的 JS 引擎；具体实现（QuickJS/WASM 变体等）由隔离 spike 决定，见[隔离设计](ISOLATION.md)。确定后它属于**运行时依赖**：必须随 tarball 打包（含 WASM 或其他二进制资产）并验证离线加载，不能依赖运行期下载；引入前需在本文记录版本、打包方式与离线验证结果。在 spike 结论出来前不添加该依赖。
 
 ## 4. 常用命令
 

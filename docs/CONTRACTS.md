@@ -9,9 +9,9 @@
 | 模块 | 对外提供 | 不负责 |
 | --- | --- | --- |
 | contracts | behavior IR、消息、错误、版本及运行状态类型/运行时解析器 | 加载 DSH 或游戏 |
-| op-contracts | 操作描述、参数/结果 schema、停止语义 | 某版 MC 实现 |
+| op-contracts | QueryOp／ControlOp 的声明：名称、类别、参数/结果契约、持续效果、停止语义与能力标记 | 某版 MC 实现 |
 | builder-sdk | 带类型的构建函数，输出可序列化 behavior IR | 游戏 I/O、执行树 |
-| checker | 请求式语法/类型/构建检查，产出 artifact 与报告 | 游戏行为测试、自动调用模型 |
+| checker | 请求式语法/类型/构建检查，覆盖 behavior、act 与 policy，产出 artifact 与报告 | 游戏行为测试、自动调用模型 |
 | registry | 不可变 artifact、源码 revision、校验凭据、按目标 binding 区分的启用记录与精确依赖 | 在游戏中验证策略正确性 |
 | body | 树调度、act 生命周期、控制权、操作 broker、状态/执行事件 | LLM 会话和自然语言策略 |
 | observation | QueryOp 调用门面及纯摘要函数 | 世界副本、历史差分、环境变化事件 |
@@ -22,7 +22,7 @@
 
 ## 2. 标识、时间与边界校验
 
-所有对外 ID 为不透明字符串，在 TypeScript 内使用不同品牌类型防混用。至少区分 definitionId、revision、artifactId、runId、nodeRunId、actEpoch、requestId、commandId、confirmationId、bodyEpoch、connectionEpoch、bindingId、eventSeq、ownerSessionId。revision 是定义的源码版本，首版采用 sourceDigest；artifactId 才标识确切可执行产物，同一 revision 可以有不同依赖或 binding 的多个 artifact。
+所有对外 ID 为不透明字符串，在 TypeScript 内使用不同品牌类型防混用。至少区分 definitionId、revision、artifactId、runId、nodeRunId、actEpoch、requestId、commandId、confirmationId、bodyEpoch、connectionEpoch、bindingId、eventSeq、ownerSessionId。revision 是定义的源码版本，首版采用 sourceDigest；artifactId 才标识确切可执行产物，同一 revision 可以有不同依赖或 binding 的多个 artifact。产物类型（behavior／act／policy）计入摘要，三种类型之间不能互相替代。
 
 - 跨进程值只能是受限 JSON：禁止函数、原型对象、NaN、Infinity、循环对象和游戏内部对象。
 - schema 最小子集：有限数值、字符串/枚举、布尔、nullable、受限数组、封闭对象和判别联合。拒绝未知必需字段，扩展字段必须声明。
@@ -56,13 +56,22 @@ type Node =
       output: LocalRef; freshness: FreshnessPolicy }
   | { kind: "act"; id: string; act: ActRef; args: ValueExpr;
       output?: LocalRef }
+  | { kind: "decide"; id: string; policy: PolicyRef;
+      inputs: Record<string, ValueExpr>; output: LocalRef;
+      timeoutMs?: number }
+  | { kind: "fail"; id: string; code: string; message: string;
+      category?: P2ErrorCategory }
   | { kind: "wait"; id: string; durationMs: number }
   | { kind: "recover"; id: string; child: Node; rules: RecoveryRule[] };
 ```
 
-subtree 是 builder 复用形式，构建后展开成独立节点路径，并保留局部帧声明及输入/输出映射；展开不消除数据作用域。禁止递归引用环、重复节点 id、共享可变节点对象。runtime repeat 是有限图中的循环节点，不等于图结构含引用环。节点数初值上限 10000、深度 64，超限返回构建错误，不执行游戏。
+subtree 是 builder 复用形式，构建后展开成独立节点路径，并保留局部帧声明及输入/输出映射；展开不消除数据作用域。`decide` 每次运行只提交一次 policy 请求，结果写入声明的 local；它不占控制权，也不进入 act 生命周期。`fail` 以给定业务码结束节点，`recover` 可按码捕获。禁止递归引用环、重复节点 id、共享可变节点对象。runtime repeat 是有限图中的循环节点，不等于图结构含引用环。节点数初值上限 10000、深度 64，超限返回构建错误，不执行游戏。
 
-ValueExpr 只允许 literal、参数引用、局部引用、成员读取、记录构造及声明的纯运算（比较、算术、逻辑、受限集合选择与聚合）。动态游戏读取必须声明为 query/Condition 的 QueryOp 依赖，不能藏在纯表达式回调。除数为零、空引用或类型不符返回 EXPRESSION_ERROR，不转换成 false。选择目标、加一等辅助函数生成上述表达式 IR，不为每种计算新增节点，也不把作者任意 JavaScript 回调交给 body 执行。
+`forEach`、`call` 以及表达式内的集合算子不属于 v1 契约，作为候选记录在 [IR §9](IR.md#9-推迟的候选能力不属于-v1)；启用前需由验证结论支撑，不能因“可能有用”预先加入。
+
+v1 的 ValueExpr 只允许：`literal`、`param`、`local`、`member`、`record`、`array`、`not`，以及 `binary` 的比较、四则与逻辑运算（`eq/neq/lt/lte/gt/gte/and/or/add/sub/mul/div`）。动态游戏读取必须声明为 query/Condition 的 QueryOp 依赖，不能藏在表达式里。除数为零、空引用或类型不符返回 `EXPRESSION_ERROR`，不转换成 false。
+
+集合筛选、排序、评分、距离与资源分配交给 policy（经 `decide` 调用一次），不翻译成新的表达式节点。`select`、`aggregate`、`length`、`unary` 数学与 policy 表达式都属于推迟的候选能力，见 [IR §9](IR.md#9-推迟的候选能力不属于-v1)。
 
 Condition 由查询声明和布尔表达式组成，运行时求值为 true、false、pending 或 error。query 输出提交到对应局部帧；guard 查询只放入当前 evaluation 帧。未写入 local 的读取可被类型/构建约束发现；无法静态排除的情况运行时返回 UNINITIALIZED_VALUE。
 
@@ -72,7 +81,9 @@ CompletionRule 为 predicate 或 externalConfirmation。predicate 必须声明 Q
 
 构建产物包含 irVersion、definitionId、revision、sourceDigest、artifactDigest、节点到源位置映射、参数 schema、局部帧声明与子树输入/输出映射、依赖闭包及 bindingId。保留这些信息才能定位错误；源位置映射不改变运行逻辑。
 
-D4 将环境 binding 与产物依赖分开。ActRef 至少携带用于定位的 definitionId 和确切 artifactId，并与产物依赖清单一致；revision 可用于源码诊断，不能单独选择运行内容。依赖清单锁定所用 act 产物、纯辅助库与构建依赖的内容摘要及传递闭包，不包含无关注册表条目。源码中的便捷名称必须在构建前解析并锁定，IR 内不保留运行时 latest 查找。
+D4 将环境 binding 与产物依赖分开。ActRef 至少携带用于定位的 definitionId 和确切 artifactId，并与产物依赖清单一致；revision 可用于源码诊断，不能单独选择运行内容。依赖清单锁定所用 act 产物、policy 产物、纯辅助库与构建依赖的内容摘要及传递闭包，不包含无关注册表条目。源码中的便捷名称必须在构建前解析并锁定，IR 内不保留运行时 latest 查找。
+
+分层约束在 IR 上也要能检查：behavior 可以出现 `query` 节点、QueryOp 条件与表达式，但**不得直接引用 ControlOp**；控制只能通过 `act` 节点引用 act 产物进入。`ActRef` 与 `PolicyRef` 都是确切产物引用，不允许写成裸名字。
 
 artifactId 由 artifactDigest 形成；产物摘要覆盖源码、依赖、构建工具、产物内容及目标 binding，排除自己的摘要字段与运行/检查元数据。完整输入、规范化和排除规则见[身份与摘要规则](OPERATIONS-AND-RELEASE.md#32-身份与摘要规则)。checker 凭据独立关联该产物与环境；启用及启动以 artifactId 为对象，不以源码 revision 代替。
 
@@ -84,6 +95,7 @@ artifactId 由 artifactDigest 形成；产物摘要覆盖源码、依赖、构�
 | behavior locals | 执行器维护，每个实例独有；按声明初始化，跨 repeat 轮次和树内分支切换保留，显式写入或输出槽更新除外。新实例重新初始化。 |
 | 子树参数与 locals | 每次进入子树创建独立局部帧；输入在进入时求值并成为只读参数，locals 按声明初始化。等待及推进期间保留，结束后不供下一次调用复用。 |
 | act 内部状态 | 属于本次 act 运行，由 act 自己维护；对 behavior 只提供声明的结果，不直接持有或修改 behavior 的 LocalRef。 |
+| policy 输入与返回值 | 每次调用独立：输入是按值传入的只读 JSON 快照，返回的决策值由 `decide` 写入声明的 local；不保留跨调用状态，不写 locals，不产生副作用。 |
 
 LocalRef 标识所属局部帧和槽位。普通 assign、query/act 输出绑定只能写入当前帧声明的可写 local，不能写参数或越过子树作用域修改调用者状态；子树结果由执行器按显式映射写回。值按受限 JSON 的值语义传递，不暴露跨帧共享的可变对象。
 
@@ -128,7 +140,7 @@ act 的普通结果按其声明契约解释，不自动获得当前观测的可�
 
 例如，成功完成一次采集 act 后将计数加一，只表示“成功完成的采集次数”。“背包拥有 32 个原木”仍须查询背包；累计实际交付量也须有对应动作契约和确认依据。失败或取消不写成功输出，不意味着此前没有改变游戏世界；实际变化应按当前查询及已确认执行证据处理。
 
-## 4. act 作者接口
+## 4. act 与 policy 作者接口
 
 act 是代码，允许基于当前查询和已登记的控制结果进行局部调整；它不能调用 behavior 切换、安装包、触发 LLM 或直接打开游戏连接。
 
@@ -147,23 +159,75 @@ type HookResult =
   | { kind: "running"; progress?: JsonValue }
   | { kind: "complete"; result: JsonValue }
   | { kind: "failed"; error: P2Error };
+
+type ActManifest = {
+  id: string;
+  description?: string;
+  queryOps: string[];        // 必须逐项列出，裸名字
+  controlOps: string[];      // 必须逐项列出；stop 隐式授予，可不列
+  limits?: { totalMs?: number; hookMs?: number };
+};
 ```
+
+act 声明规则：
+
+- `queryOps`／`controlOps` 强制声明，**默认拒绝**：运行期提交未声明的 op 立即失败（`OP_NOT_DECLARED`）；把控制 op 写进 `queryOps`（或相反）在检查阶段返回 `OP_KIND_MISMATCH`。
+- `stop` 是撤回原语，隐式授予；它只能撤销已登记效果，不能发起新动作。
+- 声明列表进入产物摘要：修改声明即产生新 artifactId，不会静默扩大已启用产物的能力。
+- 检查阶段用目标 binding 的静态 op 声明校验每个名字；连接后再核验实际能力，缺失返回 `CAPABILITY_MISSING`。
+- 首版 act 源为**单文件、无 `import`／`require`／`eval`／`Function`／`WebAssembly`**，由注入的 `defineAct` 装配；运行时不从工作区或 `node_modules` 加载任何模块。
 
 hook 的一次执行必须有界并返回；异步 op 使用 handle 发起，后续 update 从输入读取结果，不让一个 await 挂住生命周期。正常结束、失败或取消都调用一次stop发起收尾，reason分别携带completed、failed或cancelled及原始结果。stop返回running时后续仅调用cleanup，不再调用具有普通控制权限的update；未提供cleanup时作者stop必须同步结束自身工作，其余持续op仍由broker收敛。反复停止请求不重复调用stop，所有hook仍受同一个收尾期限约束。
 
 cleanup返回complete只确认作者侧清理完成，不替代broker确认；cleanup返回failed或超时导致控制故障。业务预期结果与清理结果分开保存，不能用一次成功清理把业务失败改成成功。
 
-start/update 的 complete.result 是业务候选结果，由执行器校验 manifest 的结果 schema，并按[成功输出规则](#32-显式赋值与成功输出)在成功收尾后写入节点绑定的 output。stop/cleanup 的 complete 只表示作者侧收尾完成，其 result 不替换业务结果。running.progress 用于进度诊断，不隐式写入 behavior locals；act 内部变量也不能绕过输出绑定写回。
+start/update 的 complete.result 是业务候选结果，由执行器校验为受限 JSON，并按[成功输出规则](#32-显式赋值与成功输出)在成功收尾后写入节点绑定的 output；首版不做完整结果 schema 校验，声明仅用于诊断，后续补全。stop/cleanup 的 complete 只表示作者侧收尾完成，其 result 不替换业务结果。running.progress 用于进度诊断，不隐式写入 behavior locals；act 内部变量也不能绕过输出绑定写回。
 
-ActContext 暴露当前 run 信息、受限时钟/随机源、query.submit/result、control.submit/result、progress；不提供 Node 全局、任意导入、文件、网络或 DSH 对象。manifest 声明参数/结果 schema、所需 op 契约、业务超时与能力说明。仅声明不保证逻辑正确。
+ActContext 暴露当前 run 信息、受限时钟/随机源、query.submit/result、control.submit/result、progress；不提供 Node 全局、任意导入、文件、网络或 DSH 对象。manifest 声明 op、业务超时与能力说明；参数/结果 schema 在后续版本补全，首版仅作诊断性声明。仅声明不保证逻辑正确。
 
 CleanupContext 只暴露本 act 已登记操作的状态、stop/release 和必要只读查询。broker 也执行已登记的标准清理；作者 stop 成功后仍须等待 broker 确认。若作者无响应，broker 继续执行可信清理。runner 内部状态是临时的，崩溃不做代码栈恢复。
+
+### 4.1 policy 作者接口
+
+policy 是 behavior 的附属纯决策单元，不是第四级控制层：它不持有控制权、不提交 op、不进入 act 的生命周期。
+
+```ts
+type PolicyModule = {
+  manifest: PolicyManifest;
+  run(inputs: JsonValue): JsonValue;
+};
+type PolicyManifest = {
+  id: string;
+  description?: string;
+  inputs: string[];          // 声明的输入字段名
+  outputs: string[];         // 返回值中承诺提供的字段名（可为空，表示单值）
+  limits?: { callMs?: number };
+};
+```
+
+约定：
+
+| 项 | 规则 |
+| --- | --- |
+| 能力 | 无。不提供 op 桥、文件、网络、宿主对象；只注入数学与纯辅助函数。 |
+| 调用方式 | 只能由 `decide` 节点调用：一次提交、异步等待、结果写入 local；不能出现在 guard、assign、act 参数等表达式位置。 |
+| 生命周期 | 一次调用一次返回，无 start/update/stop/cleanup，不保存跨调用状态；等待期间不阻塞 tick，取消可立即推进。 |
+| 失败语义 | 抛错、超时或返回值不合法使 `decide` 节点失败；不进入 act 清理流程，也不记为控制故障。 |
+| 结果校验 | 只接受受限 JSON；函数、Promise、循环对象、超限尺寸一律拒绝（`POLICY_RESULT_INVALID`）。 |
+| 复用 | 作为内容产物锁定 digest，可被多个 behavior 引用并进入依赖闭包；不单独 enable。 |
+| 禁止 | 不能调用 policy／act／op，不能读写 locals，不能修改 query 结果或观测元数据。 |
+
+policy 的引入不改变「执行器只运行内建控制结构与受限表达式」这一约束：执行器仍是唯一调度者，policy 只是取值来源之一。运行期预算、失败分类与调用时机见[运行时 §3](RUNTIME.md#3-每轮调度与资源上限)。
 
 ## 5. operation provider 契约
 
 每个 provider 暴露描述、连接、查询、控制提交、结果读取、停止/对账、关闭等能力；具体方法名可调整，但职责不能省略。连接/断连是管理面，不伪装成 agent 自由调用的游戏 op。
 
-每个 op 描述至少含：标识、契约版本、query/control 类型、参数/结果 schema、允许的世界作用域、部分结果政策、成功语义、失败码、持续效果、停止方式、幂等性与可重试错误范围。
+每个 op 描述最终应含：标识、契约版本、query/control 类型、参数/结果 schema、允许的世界作用域、部分结果政策、成功语义、失败码、持续效果、停止方式、幂等性与可重试错误范围。
+
+首版实现最小集（C 档）：**标识、类别（query/control）、持续效果、停止方式、能力标记**；参数/结果 schema、部分结果政策、幂等性与可重试范围在后续补齐。最小集已足以支撑三件事：检查期校验 act 声明的 op 是否存在且类别正确、启用前判定能力是否满足、运行期拒绝未声明调用。
+
+op 声明以静态文件随 provider 包发布，检查阶段只读它、不加载 provider、不连接游戏；连接握手时核验实际实现与静态声明一致，不一致返回 `CAPABILITY_MISMATCH`。声明摘要进入 bindingId，实现升级产生新 binding。
 
 ```ts
 type QueryReply<T> =
@@ -200,6 +264,9 @@ type P2Error = {
 | 类别／示例 | 默认处理 |
 | --- | --- |
 | SCHEMA_INVALID、UNKNOWN_ACT、BINDING_MISMATCH | 检查/启用阶段拒绝；候选不能打断当前运行。 |
+| UNKNOWN_OP、OP_KIND_MISMATCH、OP_NOT_DECLARED、CAPABILITY_MISSING、CAPABILITY_MISMATCH | 检查/启用阶段拒绝候选；运行期未声明调用使该 act 失败（失败关闭），不转移控制权。 |
+| FORBIDDEN_SYNTAX、INVALID_ACT_MANIFEST、POLICY_RESULT_INVALID、SOURCE_CHANGED | 检查阶段拒绝；不生成凭据，不影响已启用产物与当前运行。 |
+| ACT_TIMEOUT、POLICY_TIMEOUT、BUDGET_EXCEEDED | 结束相关运行并完成收尾；属于执行预算耗尽，不按普通环境失败处理。 |
 | QUERY_TIMEOUT、QUERY_INCOMPLETE、STALE_OBSERVATION | 查询节点失败；不自动重试。 |
 | PATH_UNREACHABLE、MATERIAL_MISSING 等游戏错误 | act 解释，默认失败传播或显式恢复；若同时已有有效目标达成证据，按运行时结束裁决准备成功，不改写 act 的失败事实。 |
 | GOAL_NOT_MET、NO_BRANCH、RECOVERY_EXHAUSTED | 业务失败，结构化上报。 |
@@ -219,8 +286,8 @@ error.retry 是允许范围，不自动触发 retry。调用者不得把 never �
 | describe | 协议、body、绑定版本和能力，不执行游戏。 |
 | hello / heartbeat / shutdown | 首版专用管道上的 owner 绑定、存活与退出管理；不是模型工具。attach/renew/detach 保留在后续 WS 方案。 |
 | observe | 一次 QueryOp 或有限查询组；返回结构化事实及可选纯摘要。 |
-| status | 当前运行、控制权/健康、待确认记录、pending命令及最近结果。 |
-| check | 检测候选文件，返回报告/artifact，不启用、不试运行。 |
+| status | 当前运行、控制权/健康、阶段与当前 act、等待原因、最近失败、待确认记录、pending命令及最近结果。 |
+| check | 检测候选（behavior／act／policy），返回报告/artifact，不启用、不试运行。 |
 | activate | 指定 artifactId，复核凭据与依赖后在其目标 binding 下启用；不加载 provider、不立即启动。 |
 | switch | 指定 artifactId、params 和 commandId；核验当前环境、依赖及实际能力后接受串行切换，不能用 revision/latest 隐式选择产物。 |
 | stop | 请求停止并返回 commandId；响应不是停止完成证明。 |
@@ -290,9 +357,9 @@ hello 在专用父子管道上协商协议，绑定 bridge 从实际 DSH 上下�
 | hello | 协议集合、可信 OwnerContext | 协议、epoch、角色、binding、能力；不启动 behavior。 |
 | heartbeat | 递增 heartbeatSeq | 存活应答；同序号重发不重复延长存活期限。 |
 | describe | 可选目标 bindingId | 本地静态声明及限制，不加载 provider。 |
-| status | 无业务参数 | owner、health、connection、activeRun、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
+| status | 无业务参数 | owner、health、connection、activeRun、阶段（declared progress 或当前节点名）、当前 act、等待原因（query/policy/act/confirmation）、最近失败、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
 | observe | 查询声明、参数、时效要求 | 值及来源/年龄/作用域，或错误；零隐藏重试。 |
-| check | commandId、源路径/sourceDigest、目标 binding、精确依赖 | 报告及通过时的 artifactId；重复命令不重复构建。 |
+| check | commandId、源路径、artifactKind、预期 sourceDigest、目标 binding、精确依赖 | 报告及通过时的 artifactId；源摘要不符返回 SOURCE_CHANGED；重复命令不重复构建。 |
 | activate | commandId、artifactId | 目标 binding 下的启用结果。 |
 | switch | commandId、artifactId、params | 受理及最终 started/rejected/superseded；不等于 behavior 成功。 |
 | stop | commandId、runId | 仅停止该 behavior；当前 run 的有效 stop 清空 pending switch，旧终态返回 alreadyTerminal 且不影响新 run；body 保留。 |
@@ -314,10 +381,10 @@ heartbeat 由 bridge 独立于模型回合维护，body 用单调时钟检查。
 ## 9. 设计级交互示例
 
 ```text
-agent 写候选 behavior 文件
-  → check(sourceDigest, bindingId, exactDependencies)
+agent 写候选 behavior／act／policy 文件
+  → check(artifactKind, sourceDigest, bindingId, exactDependencies)
   ← report + artifactId
-  → activate(artifactId)
+  → activate(artifactId)            // 仅 behavior 与 act；policy 作为依赖随 behavior 检查
   ← enabledArtifactId + targetBindingId
   → switch(artifactId, params, commandId)
   ← accepted（当前行为可能仍在停止）
@@ -325,5 +392,7 @@ agent 写候选 behavior 文件
   ← event: newRun.started
   ← event: newRun.blocked / failed / succeeded
 ```
+
+依靠 `call` 组合时，被引用的 behavior 先通过检查；依靠 act 或 policy 时，依赖产物必须已在同一目标 binding 下通过检查，act 还需已启用。
 
 accepted、activated和started是不同事实。模型会话不能因为工具返回 accepted 就向玩家宣布任务已完成。

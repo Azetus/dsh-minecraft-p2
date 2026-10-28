@@ -21,13 +21,16 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | --- | --- |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 长期约束、术语、职责与系统边界。 |
 | [RUNTIME.md](docs/RUNTIME.md) | 状态传播、调度、控制权、查询、停止及故障恢复。 |
-| [CONTRACTS.md](docs/CONTRACTS.md) | 数据 IR、模块接口、act/op 与 body 消息契约。 |
-| [BEHAVIOR-LIFECYCLE.md](docs/BEHAVIOR-LIFECYCLE.md) | 构建检查、隔离、产物、启用与反馈迭代。 |
+| [CONTRACTS.md](docs/CONTRACTS.md) | 数据 IR、模块接口、act/policy/op 与 body 消息契约。 |
+| [IR.md](docs/IR.md) | behavior IR 参考：节点、表达式、求值语义、空集与未知。 |
+| [BEHAVIOR-LIFECYCLE.md](docs/BEHAVIOR-LIFECYCLE.md) | 构建检查、隔离、产物、启用与反馈迭代（behavior／act／policy）。 |
+| [ISOLATION.md](docs/ISOLATION.md) | 隔离威胁模型、引擎验证门槛与实测证据。 |
 | [FEEDBACK-AND-RECOVERY.md](docs/FEEDBACK-AND-RECOVERY.md) | 当前进程反馈、调试日志、有界队列、长期目标与后续恢复边界。 |
 | [DSH-INTEGRATION.md](docs/DSH-INTEGRATION.md) | bridge、会话归属、工具与插件生命周期。 |
 | [OPERATIONS-AND-RELEASE.md](docs/OPERATIONS-AND-RELEASE.md) | 能力声明、精确绑定、依赖与发行。 |
 | [MINECRAFT-INTEGRATION-OPTIONS.md](docs/MINECRAFT-INTEGRATION-OPTIONS.md) | 已选客户端路线、适配边界与接入验收。 |
 | [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | M0—M6 实施顺序与验收门槛。 |
+| [M5-VALIDATION.md](docs/M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
 | [DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖、构建工具、版本选择与包管理约定。 |
 | [M0-ACCEPTANCE.md](docs/M0-ACCEPTANCE.md) | M0 实施与验收记录。 |
 | [M1-ACCEPTANCE.md](docs/M1-ACCEPTANCE.md) | M1 软件核心实施与边界记录。 |
@@ -44,7 +47,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。
 
-当前仓库已有单包骨架、构建脚本和依赖清单，但 P2 协议、执行器、provider 尚未实现；接口代码是设计草案，不能当成已实现 SDK。后续以实际工作区为准，不复用过时的完成状态。
+当前仓库已完成 M0—M4：单包骨架、协议、执行器、provider 与两个预设 behavior 已实现并通过各阶段验收。**act 层尚未实现**——现有 `act` 节点直接指向 op，真正的 act（代码、隔离 runner、强制 op 声明）与 policy 属于 M5 范围；接口代码与文档中的“暂定”仍属设计，不能当成已实现 SDK。后续以实际工作区为准，不复用过时的完成状态。
 
 `scripts/dsh-task.ps1` 会启动 DSH 任务；其只读模式也可能写入宿主自己的会话数据，不把运行该脚本当作普通文件阅读或默认检查。
 
@@ -52,32 +55,34 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 
 ### 职责与接入
 
-- 统一使用 behavior（策略）、act（完整动作）、operation/op（基础操作）；job 留给 DSH 内部事务。控制路径为 behavior → act → ControlOp；QueryOp 可直接供观测层、behavior 条件和 act 使用。
+- 统一使用 behavior（策略）、act（完整动作）、operation/op（基础操作）；job 留给 DSH 内部事务。控制路径为 behavior → act → ControlOp；behavior 不得直接引用 ControlOp。QueryOp 可直接供观测层、behavior 条件和 act 使用。
+- policy 是 behavior 层内部的纯决策单元（纯函数、无 op、无生命周期），由 `decide` 节点调用一次，不是第四级控制层；它只返回一个值，由 IR 决定如何使用，不单独启用。
 - 首版本机一个 body、一个角色、一个固定 owner session。人工 /p2 start 后由 bridge 创建 stdio body 子进程；body 调度独立于模型，生命周期跟随插件，不接管用户 agent。安装/加载/热重载不自动创建 P2 进程。
 - 已选独立客户端路线，首版使用 Mineflayer 验证。真实客户端及其有窗口／无头方式为后续方向；服务器假玩家是历史方案，不能未经讨论切换到该路线。
-- Mineflayer 及其插件属于 operation 实现依赖，不向 core、观测层、公共契约、behavior 或 act 泄漏对象、类型、事件或控制句柄。
-- operation 由基础库维护发布。游戏内 agent 可扩展 behavior/act、提出缺失能力，不得现场生成并自动安装 op，也不得绕过 broker 直接访问游戏。
+- Mineflayer 及其插件属于 operation 实现依赖，不向 core、观测层、公共契约、behavior/act/policy 泄漏对象、类型、事件或控制句柄。op 的声明留在 P2 核心，实现归 provider；v1 同包但分目录，后续 provider 可整包拆出。
+- operation 由基础库维护发布。游戏内 agent 可扩展 behavior/act/policy、提出缺失能力，不得现场生成并自动安装 op，也不得绕过 broker 直接访问游戏。
 - 观测层查询当前事实并通过纯函数生成摘要；不建立 P2 世界副本、不保存全量历史观测、不产生环境变化事件。底层协议缓存与执行反馈有各自职责，不与这些限制混淆。
 
 ### 执行与控制权
 
-- behavior 通过带类型代码构建可序列化 IR，可信执行器运行内置控制结构和有界表达式，不直接运行作者任意树回调。
-- behaviorTree 长期采用单线程、非阻塞调度，不提供通用 Parallel 节点。一棵主动树，同一时刻至多一个 act 持有控制权；一个 act 可以协调多个 op。
+- behavior 通过带类型代码构建可序列化 IR，可信执行器运行内置控制结构和有界表达式，不直接运行作者任意树回调。运行期计算由 IR 内建算子（集合选择/聚合/有界迭代）与 policy 纯函数承担；两者都不能提交 op 或改写控制流。
+- behaviorTree 长期采用单线程、非阻塞调度，不提供通用 Parallel 节点。一棵主动树，同一时刻至多一个 act 持有控制权；一个 act 可以协调多个 op。v1 约定同一 act 内多个只读 query 可并发、至多一个持续控制效果。
 - 切换采用先停止、确认收尾、再接管。正常成功、失败和取消均须完成清理；停止超时是控制故障，不能假作停止成功并启动新 act。
 - broker 登记持续效果、拒绝旧运行控制、负责收尾与对账。杀死 runner/body 或清空引用不能代替游戏侧停止证据；取消也不回滚已经发生的世界变化。
 - QueryOp 一次调用一次请求，零自动重试。pending、过期、失败和部分可见不等于 false 或没有目标；消费时校验归属及新鲜度。
 - 未声明恢复规则时，行为失败传播、零默认重试；显式 recover 才执行有界恢复。收尾 op 的最多一次追加重试是独立预算，不能在多层重复叠加或重置期限。
 - 分清节点状态、behavior 业务状态、执行器健康和连接状态。accepted、enabled、started、succeeded 是不同事实；有限目标须有完成依据，持续行为不因一个 act 完成就成功。
-- 参数、artifactId、确切 act 产物及依赖闭包、环境 binding 在一次运行中固定。revision 标识源码，不能代替确切产物启动；编辑或依赖升级产生新候选，经检查、启用和显式切换生效，不热改运行对象。
-- 局部状态由执行器通过 assign、query/act 成功输出和子树输出统一写入。behavior locals 跨轮次保留，子树每次进入使用独立帧；新调用不沿用旧输出，act 成功结果须等收尾确认，观测赋值不刷新时效。第一版允许保存查询快照，保留后续评估空间，不将 locals 扩为同步世界副本。
+- 参数、artifactId、确切 act/policy 产物及依赖闭包、环境 binding 在一次运行中固定。revision 标识源码，不能代替确切产物启动；编辑或依赖升级产生新候选，经检查、启用和显式切换生效，不热改运行对象。
+- 局部状态由执行器通过 assign、query/act 成功输出和子树输出统一写入。behavior locals 跨轮次保留，子树每次进入使用独立帧；新调用不沿用旧输出，act 成功结果须等收尾确认，观测赋值不刷新时效。policy 只读输入快照、不持 locals 引用，其返回值仍按普通表达式结果参与写入。第一版允许保存查询快照，保留后续评估空间，不将 locals 扩为同步世界副本。
 - 顺序写入后同轮立即可读；新 act 启动与终态提交前统一检查条件与结束原因。取消优先，程序错误不被目标成立掩盖，有效目标证据可优先于普通环境失败；控制故障阻止终态提交。条件依赖变化须重评，整个 tick 不回滚已成功写入。
 - externalConfirmation 仅在有限 behavior 根成功且收尾后请求验收。确认或否定结束原 run，补做工作新建 run；使用 bodyEpoch、runId、confirmationId 明确对象，来源由可信通道确定，模型不能自报玩家身份。重复决定不重复生效，取消优先，终态不可改写；等待受首版存活期限及授权约束，管道关闭不恢复旧请求。
-- binding 只固定环境，不包含 act 集合；artifact 锁定实际依赖，启用按目标 binding 记录，启动明确指定 artifactId。新增 act 不重绑环境或重查无关内容；退休依赖阻止新 run，已有 run 仍按原闭包结束。摘要规则统一见发布设计，不能把检查时间、默认映射或运行标识纳入内容身份。
+- binding 只固定环境，不包含内容产物集合；artifact 锁定实际依赖（act、policy、`call` 引用的 behavior），启用按目标 binding 记录，启动明确指定 artifactId。新增 act/policy 不重绑环境或重查无关内容；退休依赖阻止新 run，已有 run 仍按原闭包结束。摘要规则统一见发布设计，不能把检查时间、默认映射或运行标识纳入内容身份。
+- act 的 `queryOps`/`controlOps` 必须强制声明（`stop` 隐式），运行期拒绝未声明 op；policy 只能做纯计算。隔离只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全或第三方来源可信。
 
 ### 检查、隔离与会话
 
-- checker 是被动的语法、类型和构建检查工具，不调用真实 QueryOp/ControlOp，不模拟游戏，不自行修复代码或启动模型。
-- 生成代码使用独立进程、受限 JS 上下文和显式能力桥。隔离引擎未通过中断、内存与宿主能力限制验证前，先用维护者 act；不得用 body 内 eval 代替隔离。
+- checker 是被动的语法、类型和构建检查工具，不调用真实 QueryOp/ControlOp，不模拟游戏，不自行修复代码或启动模型。检查覆盖 behavior、act 与 policy。
+- 生成代码使用独立进程、受限 JS 上下文和显式能力桥。隔离引擎未通过中断、内存与宿主能力限制验证前，先用维护者 act 与 IR 内建算子；不得用 body 内 eval 代替隔离。act 走 op 桥，policy 走纯桥。
 - 构建通过只说明产物在对应契约下可接受，不证明策略正确、目标可达、游戏兼容或代码绝对安全。
 - 插件安装/加载不创建 P2 子进程或连接游戏；人工 start 创建 body，不自动启动 behavior。模型 stop 只停止行为，人工 stop/插件释放关闭整个托管进程树；强制结束不证明游戏停止。重启创建新 epoch，不重放旧控制命令。
 - 首版协议与传输解耦：仅实现 stdio 和内存测试传输，stdout 只输出协议、stderr 日志。WS、配对鉴权、跨连接租约与独立 launcher 保存在后续设计，不作为首版要求。
@@ -114,7 +119,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 - 一个边界或一组性质只建一个套件；新增 case 放进现有用例表，不另建测试体系。同一性质只在一个层级测试，同一上游只留一条真实绊线。
 - 契约、状态和数据测试进入快速套件；上游绊线、隔离与游戏验收单独运行。执行频率分组不构成新增测试类别。
 - 不设覆盖率目标；不测试第三方库自身、类型系统、简单转发/取值等无独立风险的代码，或策略正确性与体验。上游绊线只验证本项目依赖的假设。
-- 用户 behavior 的检查归 checker，不属于单测。核心执行器的受控输入测试不能扩展成游戏模拟器。
+- 用户 behavior/act/policy 的检查归 checker，不属于单测。核心执行器的受控输入测试不能扩展成游戏模拟器。
 - 一个测试需要 3 个以上 mock 时，先检查是否在测试内部实现，并收缩到边界。
 - 一组已声明性质覆盖完就停，不为增加数量继续扩展。bug 修复向所属套件补回归 case；契约消失时删除或合并对应测试。
 

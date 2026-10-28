@@ -12,7 +12,7 @@
 
 所有接入实现均遵守以下边界：
 
-- DSH 中的 agent 选择和编写 behavior／act；P2 body 执行行为，不等待模型完成每个动作决策。
+- DSH 中的 agent 选择和编写 behavior／act／policy；P2 body 执行行为，不等待模型完成每个动作决策。
 - operation 库对外提供统一的 QueryOp／ControlOp 契约，隔离游戏版本、加载器和接入实现。游戏内部对象、原始网络包及模组特有类不泄漏到 behavior。
 - 一个角色同一时刻至多一个 act 持有控制权；游戏驱动可以处理多个底层控制效果，但不能另外运行一套竞争性的 behavior 调度器。
 - P2 查询当前事实，不复制完整世界、不保存环境变化历史、不向 agent 自动广播每个游戏事件。执行结果反馈与环境事件追踪分开。
@@ -32,10 +32,10 @@
 
 ### 1.2 Mineflayer 与 P2 的依赖边界
 
-**Mineflayer 是首套 operation 实现使用的底层依赖，不是 P2 的公共接口。** P2 core 的执行器与观测层仅依赖统一 operation 契约，behavior／act 同样不能直接调用 Mineflayer 或其插件。
+**Mineflayer 是首套 operation 实现使用的底层依赖，不是 P2 的公共接口。** P2 core 的执行器与观测层仅依赖统一 operation 契约，behavior／act／policy 同样不能直接调用 Mineflayer 或其插件。
 
 ```text
-P2 core：执行器、观测层；behavior／act
+P2 core：执行器、观测层；behavior／act／policy
                    ↓
            统一 operation 契约
                    ↓
@@ -48,7 +48,7 @@ P2 core：执行器、观测层；behavior／act
 - 数据：对外返回契约定义的数据，不泄漏 Mineflayer 的 bot、实体对象、类型、事件或插件句柄。观测摘要只处理规范化查询结果。
 - 控制：启动、完成、失败、取消、停止确认和旧请求失效由适配层映射到 P2 契约；不把底层方法返回直接视为动作完成或控制权释放。
 - 能力：各实现声明实际支持的 operation 集合、版本与限制，缺失能力明确反馈，不要求所有实现功能完全相同。
-- 替换：后续主要替换 operation 实现及驱动，保留核心调度和观测机制；behavior／act 是否适用取决于能力与游戏规则，必要时重新检查、调整。此处不承诺运行中热替换。
+- 替换：后续主要替换 operation 实现及驱动，保留核心调度和观测机制；behavior／act／policy 是否适用取决于能力与游戏规则，必要时重新检查、调整。此处不承诺运行中热替换。
 
 ## 2. 方案 A：独立协议客户端（Mineflayer，首版验证已选）
 
