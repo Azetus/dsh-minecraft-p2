@@ -34,3 +34,6 @@ node_modules/
 
 # M5 验证运行证据（本机）
 /.m5-runs/
+
+# 基线 smoke 临时行为
+/.m5-smoke/

@@ -241,7 +241,7 @@
 | 控制 op：`place`、`attack`、`equip`、`use` | 已实现 |
 | act：`place-block`、`attack-one`、`equip-item`、`use-item` | 已实现 |
 | 单元测试 | 173 passed / 1 skipped（`npm run check`）；离线时 body 流程测试跳过 |
-| 真实游戏 smoke | **未执行**：Minecraft LAN 25575 当前未开启 |
+| 真实游戏 smoke | **PASS 19/19**（2026-10-28，超平坦世界，LAN 25575）；证据 .m5-runs/baseline-smoke-2026-10-28T08-12-24-390Z.json |
 | `m5-baseline` tag | 代码基线已可打 tag；真实 smoke 作为实验开始前的门槛 |
 
 ## 9. 已确定的边界
