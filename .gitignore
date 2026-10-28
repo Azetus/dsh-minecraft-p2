@@ -37,3 +37,4 @@ node_modules/
 
 # 基线 smoke 临时行为
 /.m5-smoke/
+/.p2/dev-ops.mjs
