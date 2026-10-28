@@ -101,6 +101,15 @@ export type ProviderRuntimeStatus = {
   lastDeathPosition?: { x: number; y: number; z: number } | null
 }
 
+/** Developer-mode external operation hook state. */
+export type DevOpsStatus = {
+  enabled: boolean
+  path: string
+  generation: number
+  operations: string[]
+  lastError: string | null
+}
+
 export type DescribeResult = {
   protocolVersion: number
   body: {
@@ -135,6 +144,8 @@ export type StatusResult = {
   lastFailure?: P2Error | null
   /** Experiment-only rescue channel state; null when the body has no provider. */
   rescue?: { enabled: boolean; tpRadius: number } | null
+  /** Developer-mode external operations; null when the hook is disabled. */
+  devOps?: DevOpsStatus | null
   loggingUnavailable?: boolean
   droppedLogCount?: number
 }
@@ -293,6 +304,8 @@ export type BodyRuntimeOptions = {
   shutdownGraceMs?: number
   /** Experiment-only rescue channel state, reported in status. */
   rescue?: { enabled: boolean; tpRadius: number }
+  /** Developer-mode operation hook, read fresh on every status call. */
+  devOps?: () => DevOpsStatus | null
 }
 
 export function p2Error(

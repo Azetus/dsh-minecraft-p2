@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createStdioTransport, p2Error } from '../contracts/index.ts'
-import type { BodyInfo } from '../contracts/index.ts'
+import type { BodyInfo, DevOpsStatus } from '../contracts/index.ts'
 import { BehaviorHost } from '../core/host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { RunnerActPort } from '../core/act-port.ts'
@@ -10,6 +10,7 @@ import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerClient } from '../core/runner-client.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
+import { DevOpsHost, createCompositeOpSource } from './dev-ops.ts'
 import { loadBodyInfo } from './manifest.ts'
 import { loadProviderConfig } from './provider-config.ts'
 import { executeRescue } from './rescue.ts'
@@ -17,6 +18,7 @@ import { executeRescue } from './rescue.ts'
 type HostBundle = {
   host: BehaviorHost
   rescue?: { enabled: boolean; tpRadius: number }
+  devOps?: () => DevOpsStatus | null
   dispose: () => void
 }
 
@@ -36,6 +38,7 @@ async function main(): Promise<void> {
     behavior: bundle.host,
     heartbeatTimeoutMs: 10_000,
     ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
+    ...(bundle.devOps === undefined ? {} : { devOps: bundle.devOps }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
   const server = new BodyServer(runtime, transport)
@@ -100,7 +103,17 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       version: body.manifest.bodyVersion,
       capabilities,
     }
-    const ops = new DeclaredOpBroker(provider)
+
+    // Developer mode: extra operations from a project file, hot-reloaded on edit.
+    const devHost = loaded.config.devOps
+      ? await DevOpsHost.create(join(process.cwd(), loaded.config.devOpsPath), bot)
+      : undefined
+    if (devHost !== undefined) {
+      process.stderr.write(`dsh-minecraft-p2 body: developer operations enabled (${loaded.config.devOpsPath})\n`)
+    }
+    const devOpsInfo = (): DevOpsStatus | null => devHost?.info() ?? null
+
+    const ops = new DeclaredOpBroker(createCompositeOpSource(provider, devHost, bot))
 
     const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
     let actPort: RunnerActPort | undefined
@@ -135,7 +148,9 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     return {
       host,
       rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
+      devOps: devOpsInfo,
       dispose: () => {
+        devHost?.dispose()
         host?.dispose()
         actPort?.dispose()
         client.dispose()

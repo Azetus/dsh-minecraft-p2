@@ -11,6 +11,9 @@ export type MinecraftProviderConfig = {
   /** Experiment-only rescue channel; disabled unless explicitly enabled. */
   allowRescue: boolean
   rescueTpRadius: number
+  /** Developer mode: load extra operations from a project file and hot-reload it. */
+  devOps: boolean
+  devOpsPath: string
 }
 
 export type ProviderConfigSource = 'file' | 'env' | 'file+env'
@@ -126,10 +129,25 @@ export async function loadProviderConfig(
 
   const allowRescue = experiment.allowRescue === true
   const rescueTpRadius = Math.min(64, asPositive(experiment.rescueTpRadius, 'rescueTpRadius', DEFAULTS.rescueTpRadius))
+  const devOps = experiment.devOps === true
+  const devOpsPath = typeof experiment.devOpsPath === 'string' && experiment.devOpsPath.trim().length > 0
+    ? experiment.devOpsPath
+    : '.p2/dev-ops.mjs'
 
   if (envHost !== undefined) source = file === undefined ? 'env' : 'file+env'
   return {
-    config: { host, port, username, version, connectTimeoutMs, serverIdleMs, allowRescue, rescueTpRadius },
+    config: {
+      host,
+      port,
+      username,
+      version,
+      connectTimeoutMs,
+      serverIdleMs,
+      allowRescue,
+      rescueTpRadius,
+      devOps,
+      devOpsPath,
+    },
     source,
   }
 }

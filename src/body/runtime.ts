@@ -25,6 +25,7 @@ import type {
   ConfirmParams,
   ConfirmationResult,
   DescribeResult,
+  DevOpsStatus,
   HeartbeatParams,
   HelloParams,
   HelloResult,
@@ -60,6 +61,7 @@ export class BodyRuntime {
   private lastHeartbeatSeq = -1
   private lastHeartbeatAt = 0
   private readonly rescueState: { enabled: boolean; tpRadius: number } | undefined
+  private readonly devOpsState: (() => DevOpsStatus | null) | undefined
 
   constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota }) {
     this.body = options.body
@@ -72,6 +74,7 @@ export class BodyRuntime {
     this.now = options.now ?? Date.now
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs
     this.rescueState = options.rescue
+    this.devOpsState = options.devOps
     if (this.owner !== null) this.lastHeartbeatAt = this.now()
   }
 
@@ -376,6 +379,7 @@ export class BodyRuntime {
       waiting: this.behavior?.status().waiting ?? null,
       lastFailure: this.behavior?.status().lastFailure ?? null,
       rescue: this.rescueState ?? null,
+      devOps: this.devOpsState?.() ?? null,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,
         droppedLogCount: this.debugLog.droppedCount,

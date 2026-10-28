@@ -351,3 +351,22 @@
 | `fish` | `{timeoutMs?}` | `fish`,`stop` |
 | `activate-block` | `{x,y,z}` | `activate`,`stop` |
 
+### 10.5 开发者模式：外部 op 模块（临时口子）
+
+> 仅开发期使用。正式实验必须关闭；它破坏 binding/epoch 身份假设，不是发布能力。
+
+- 开关：`.p2/config.json` 的 `experiment.devOps: true`，可配 `experiment.devOpsPath`（默认 `.p2/dev-ops.mjs`）。
+- 模块格式（ESM）：
+  ```js
+  export const operations = [
+    { id: 'scanArea', kind: 'query', capabilities: [], query: (args, ctx) => ({ status: 'ok', value, meta: ctx.meta('dev.scanArea') }) },
+    { id: 'digArea', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['dig'], start: (args, ctx) => ({ poll(), stop() }) },
+  ]
+  ```
+  `ctx = { bot, meta(scope), now() }`；query 返回 `QueryOutcome`，control 返回 `{ poll(), stop() }`。
+- 热重载：body 每 500ms 检查文件 mtime，变化后用新 generation 重新 import；**无需重打包、无需重装插件、无需重启 body**。加载失败保留上一代并在 `status.devOps.lastError` 报告。
+- 覆盖：外部 op 与内置 op 同名时**外部优先**，因此现有 op 也能搬进该文件迭代，不用重建 bundle。
+- 观测：`status.devOps = { enabled, path, generation, operations[], lastError }`；能力列表会合并外部 op 声明的 capability。
+- 收口：经过冒烟/实机验证的 op 应合并回 `src/operation/index.ts` + `src/provider/mineflayer.ts`（或明确作为 experiment-only 保留），并把 `devOps` 关掉。
+- 已知限制：外部 op 直接在 body 进程内执行，没有 runner 隔离；文件在 body cwd 下解析；热重载不会重放正在运行的行为。
+

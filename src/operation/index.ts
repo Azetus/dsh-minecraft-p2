@@ -82,8 +82,23 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
 
 const CONTRACTS = new Map(OPERATION_CONTRACTS.map(contract => [contract.id, contract]))
 
+/**
+ * Developer-mode operations (see `src/body/dev-ops.ts`). They live outside the
+ * compiled bundle so a new operation can be added without a rebuild. Released
+ * builds never register any, and the list stays empty by default.
+ */
+let externalOperations: readonly OperationContract[] = []
+
+export function setExternalOperations(contracts: readonly OperationContract[]): void {
+  externalOperations = [...contracts]
+}
+
+export function externalOperationIds(): string[] {
+  return externalOperations.map(contract => contract.id)
+}
+
 export function operationContract(id: string): OperationContract | undefined {
-  return CONTRACTS.get(id)
+  return CONTRACTS.get(id) ?? externalOperations.find(contract => contract.id === id)
 }
 
 export function operationIds(kind?: OperationKind): string[] {

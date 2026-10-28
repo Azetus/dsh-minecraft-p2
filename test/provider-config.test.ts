@@ -43,6 +43,8 @@ describe('provider config', () => {
         serverIdleMs: 1500,
         allowRescue: false,
         rescueTpRadius: 32,
+        devOps: false,
+        devOpsPath: '.p2/dev-ops.mjs',
       },
     })
   })
