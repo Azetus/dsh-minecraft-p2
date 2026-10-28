@@ -1248,19 +1248,34 @@ class MineflayerActHandle implements ActHandle {
             this.failedCode = 'PLACE_UNSUPPORTED'
             return
           }
-          const held = this.bot.heldItem
-          if (held === null || held === undefined) {
-            this.failed = new Error('no item is held for placement')
-            this.failedCode = 'PLACE_NO_ITEM'
-            return
-          }
-          void this.bot.placeBlock(referenceBlock, new Vec3(vector[0], vector[1], vector[2])).then(() => {
+          void (async () => {
+            // The client inventory model can lag behind the server; refresh it
+            // before trusting `heldItem` or the placement will be refused.
+            await this.syncInventoryWindow()
+            const feet = this.bot.entity.position
+            const bodyX = Math.floor(feet.x)
+            const bodyZ = Math.floor(feet.z)
+            if (x === bodyX && z === bodyZ && (y === Math.floor(feet.y) || y === Math.floor(feet.y + 1))) {
+              throw Object.assign(new Error(`target ${x},${y},${z} is inside the bot's own body`), { code: 'PLACE_BLOCKED_BY_SELF' })
+            }
+            const held = this.bot.heldItem
+            if (held === null || held === undefined) {
+              throw Object.assign(new Error('no item is held for placement'), { code: 'PLACE_NO_ITEM' })
+            }
+            await this.bot.placeBlock(referenceBlock, new Vec3(vector[0], vector[1], vector[2]))
             const placed = this.bot.blockAt(target)
-            this.result = { name: placed?.name ?? held.name, x, y, z }
+            if (placed === null || isAirName(placed.name) || placed.name !== held.name) {
+              throw Object.assign(new Error(`server did not place ${held.name} at ${x},${y},${z}`), { code: 'PLACE_FAILED' })
+            }
+            return { name: placed.name, x, y, z }
+          })().then(result => {
+            this.result = result
             this.completed = true
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = 'PLACE_FAILED'
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'PLACE_FAILED'
           })
           return
         }
@@ -1288,18 +1303,24 @@ class MineflayerActHandle implements ActHandle {
           if (!EQUIP_DESTINATIONS.includes(destination as EquipmentDestination)) {
             throw new Error(`unsupported equip destination: ${destination}`)
           }
-          const item = this.bot.inventory.items().find(entry => entry.name === itemName)
-          if (item === undefined) {
-            this.failed = new Error(`no ${itemName} in inventory`)
-            this.failedCode = 'EQUIP_NO_ITEM'
-            return
-          }
-          void this.bot.equip(item, destination as EquipmentDestination).then(() => {
-            this.result = { item: item.name, destination }
+          void (async () => {
+            await this.syncInventoryWindow()
+            const item = this.bot.inventory.items().find(entry => entry.name === itemName)
+            if (item === undefined) {
+              throw Object.assign(new Error(`no ${itemName} in inventory`), { code: 'EQUIP_NO_ITEM' })
+            }
+            await this.bot.equip(item, destination as EquipmentDestination)
+            await this.syncInventoryWindow()
+            const held = this.bot.heldItem
+            return { item: item.name, destination, held: held === null || held === undefined ? null : held.name }
+          })().then(result => {
+            this.result = result
             this.completed = true
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = 'EQUIP_FAILED'
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'EQUIP_FAILED'
           })
           return
         }
