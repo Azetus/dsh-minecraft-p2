@@ -55,7 +55,7 @@ if (existsSync(join(root, 'src/provider/index.ts'))) {
     providerVersion: pkg.version,
     opContractVersion: '1',
     protocolVersion: 1,
-    capabilities: ['query.position', 'query.inventory', 'query.entities', 'query.time', 'query.block', 'control.look', 'control.move', 'control.moveTo', 'control.jump', 'control.stop', 'control.dig'],
+    capabilities: ['query.position', 'query.inventory', 'query.health', 'query.entities', 'query.blocks', 'query.time', 'query.block', 'control.look', 'control.move', 'control.moveTo', 'control.jump', 'control.stop', 'control.dig', 'control.place', 'control.attack', 'control.equip', 'control.use'],
     gameCompatibility: ['1.21.1'],
     entry: 'minecraft.mjs',
     files: { 'minecraft.mjs': sha256(provider) },

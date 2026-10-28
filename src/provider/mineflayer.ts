@@ -1,4 +1,4 @@
-import type { Bot } from 'mineflayer'
+import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
 import { Vec3 } from 'vec3'
 
@@ -85,8 +85,28 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
 
 type BotControl = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'sneak'
 
+const PLACE_FACES: Record<string, readonly [number, number, number]> = {
+  up: [0, 1, 0],
+  down: [0, -1, 0],
+  north: [0, 0, -1],
+  south: [0, 0, 1],
+  east: [1, 0, 0],
+  west: [-1, 0, 0],
+}
+
+const EQUIP_DESTINATIONS: readonly EquipmentDestination[] = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']
+
 function meta(source: ValueMeta['source'], scope: string, sampledAt = Date.now()): ValueMeta {
   return { source, scope, sampledAt, validUntil: sampledAt + 1000 }
+}
+
+function isAirName(name: string): boolean {
+  return name === 'air' || name === 'cave_air' || name === 'void_air'
+}
+
+function clampNumber(value: JsonValue, fallback: number, min: number, max: number): number {
+  const number = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback
+  return Math.min(max, Math.max(min, number))
 }
 
 /** Query/act adapter over one connected Mineflayer bot. */
@@ -399,6 +419,9 @@ class MineflayerActHandle implements ActHandle {
     if (this.name === 'dig') {
       try { this.bot.stopDigging() } catch { /* the connection may already be gone */ }
     }
+    if (this.name === 'use') {
+      try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
+    }
     this.bot.clearControlStates()
   }
 
@@ -407,6 +430,9 @@ class MineflayerActHandle implements ActHandle {
     this.failed = error
     this.failedCode = code
     if (this.timer !== undefined) clearTimeout(this.timer)
+    if (this.name === 'use') {
+      try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
+    }
     this.bot.clearControlStates()
   }
 
@@ -491,6 +517,100 @@ class MineflayerActHandle implements ActHandle {
           })
           return
         }
+        case 'place': {
+          const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const y = typeof this.args.y === 'number' ? this.args.y : undefined
+          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+          if (x === undefined || y === undefined || z === undefined) throw new Error('place requires numeric x, y and z')
+          const face = typeof this.args.face === 'string' ? this.args.face : 'up'
+          const vector = PLACE_FACES[face]
+          if (vector === undefined) throw new Error(`unsupported place face: ${face}`)
+          const target = new Vec3(x, y, z)
+          const occupied = this.bot.blockAt(target)
+          if (occupied !== null && !isAirName(occupied.name)) {
+            this.failed = new Error(`target position is occupied by ${occupied.name}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            return
+          }
+          const reference = new Vec3(x - vector[0], y - vector[1], z - vector[2])
+          const referenceBlock = this.bot.blockAt(reference)
+          if (referenceBlock === null || isAirName(referenceBlock.name)) {
+            this.failed = new Error(`no support block at ${reference.x},${reference.y},${reference.z}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            return
+          }
+          const held = this.bot.heldItem
+          if (held === null) {
+            this.failed = new Error('no item is held for placement')
+            this.failedCode = 'PLACE_NO_ITEM'
+            return
+          }
+          void this.bot.placeBlock(referenceBlock, new Vec3(vector[0], vector[1], vector[2])).then(() => {
+            const placed = this.bot.blockAt(target)
+            this.result = { name: placed?.name ?? held.name, x, y, z }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'PLACE_FAILED'
+          })
+          return
+        }
+        case 'attack': {
+          const entityId = typeof this.args.entityId === 'number' ? Math.floor(this.args.entityId) : Number.NaN
+          const entity = Number.isFinite(entityId) ? this.bot.entities[entityId] : undefined
+          if (entity === undefined || entity === this.bot.entity) {
+            this.failed = new Error(`no attackable entity for id ${String(this.args.entityId)}`)
+            this.failedCode = 'ATTACK_NO_TARGET'
+            return
+          }
+          this.bot.attack(entity)
+          this.result = { entityId, name: entity.name ?? null }
+          this.completed = true
+          return
+        }
+        case 'equip': {
+          const itemName = typeof this.args.item === 'string' ? this.args.item.replace(/^minecraft:/u, '') : ''
+          if (itemName.length === 0) {
+            this.failed = new Error('equip requires an item name')
+            this.failedCode = 'EQUIP_NO_ITEM'
+            return
+          }
+          const destination = typeof this.args.destination === 'string' ? this.args.destination : 'hand'
+          if (!EQUIP_DESTINATIONS.includes(destination as EquipmentDestination)) {
+            throw new Error(`unsupported equip destination: ${destination}`)
+          }
+          const item = this.bot.inventory.items().find(entry => entry.name === itemName)
+          if (item === undefined) {
+            this.failed = new Error(`no ${itemName} in inventory`)
+            this.failedCode = 'EQUIP_NO_ITEM'
+            return
+          }
+          void this.bot.equip(item, destination as EquipmentDestination).then(() => {
+            this.result = { item: item.name, destination }
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'EQUIP_FAILED'
+          })
+          return
+        }
+        case 'use': {
+          const offhand = this.args.offhand === true
+          const held = offhand ? this.bot.inventory.slots[45] : this.bot.heldItem
+          if (held === null || held === undefined) {
+            this.failed = new Error(offhand ? 'no item in the off hand' : 'no item is held')
+            this.failedCode = 'USE_NO_ITEM'
+            return
+          }
+          const duration = typeof this.args.durationMs === 'number' ? Math.max(0, this.args.durationMs) : 1000
+          this.bot.activateItem(offhand)
+          this.timer = setTimeout(() => {
+            this.bot.deactivateItem()
+            this.result = { item: held.name, offhand }
+            this.completed = true
+          }, duration)
+          return
+        }
         default:
           throw new Error(`unsupported act: ${this.name}`)
       }
@@ -563,6 +683,7 @@ function isControl(value: string): value is BotControl {
 
 function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
   if (code === 'GAME_PAUSED' || code === 'CONNECTION_LOST' || code === 'MOVE_TO_BLOCKED') return 'environment'
+  if (code === 'PLACE_NO_ITEM' || code === 'PLACE_UNSUPPORTED' || code === 'ATTACK_NO_TARGET' || code === 'EQUIP_NO_ITEM' || code === 'USE_NO_ITEM') return 'environment'
   if (code === 'ACT_TIMEOUT' || code === 'MOVE_TO_TIMEOUT') return 'timeout'
   return 'runtime'
 }

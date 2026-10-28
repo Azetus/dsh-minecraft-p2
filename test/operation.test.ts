@@ -44,10 +44,10 @@ function fakeSource(): OpSource & { started: string[]; queries: string[] } {
 
 describe('operation declarations', () => {
   it('declares the query and control operations needed by M5', () => {
-    expect(operationIds('query')).toEqual(['position', 'inventory', 'entities', 'time', 'block'])
-    expect(operationIds('control')).toEqual(['look', 'move', 'jump', 'moveTo', 'stop', 'dig'])
+    expect(operationIds('query')).toEqual(['position', 'inventory', 'health', 'entities', 'blocks', 'time', 'block'])
+    expect(operationIds('control')).toEqual(['look', 'move', 'jump', 'moveTo', 'stop', 'dig', 'place', 'attack', 'equip', 'use'])
     expect(operationContract('dig')).toMatchObject({ kind: 'control', effects: 'active', stop: 'poll' })
-    expect(OPERATION_CONTRACTS.length).toBe(11)
+    expect(OPERATION_CONTRACTS.length).toBe(17)
   })
 
   it('rejects unknown operations and kind mismatches', () => {

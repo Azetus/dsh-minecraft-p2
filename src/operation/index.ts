@@ -30,7 +30,9 @@ export const OPERATION_CONTRACT_VERSION = '1'
 export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'position', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'inventory', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'health', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'entities', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
+  { id: 'blocks', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'time', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'block', kind: 'query', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'look', kind: 'control', effects: 'none', stop: 'none', capabilities: ['look'] },
@@ -39,6 +41,10 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'moveTo', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['move'] },
   { id: 'stop', kind: 'control', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'dig', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['dig'] },
+  { id: 'place', kind: 'control', effects: 'none', stop: 'none', capabilities: ['place'] },
+  { id: 'attack', kind: 'control', effects: 'none', stop: 'none', capabilities: ['attack'] },
+  { id: 'equip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },
+  { id: 'use', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['use'] },
 ])
 
 const CONTRACTS = new Map(OPERATION_CONTRACTS.map(contract => [contract.id, contract]))
