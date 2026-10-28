@@ -24,6 +24,16 @@ export type QueryRef = {
   timeoutMs?: number
 }
 
+/**
+ * Reference to another content artifact. `artifactId` is optional at authoring
+ * time and is filled by the check step from the registry default mapping; the
+ * stored artifact always carries the exact id.
+ */
+export type ArtifactRef = {
+  definitionId: string
+  artifactId?: string
+}
+
 export type Condition =
   | { kind: 'expr'; expr: ValueExpr }
   | { kind: 'query'; query: QueryRef; test: ValueExpr }
@@ -36,7 +46,7 @@ export type Node =
   | { kind: 'subtree'; id: string; tree: Node; inputs: Record<string, ValueExpr>; outputs: Record<string, string> }
   | { kind: 'assign'; id: string; target: string; value: ValueExpr }
   | { kind: 'query'; id: string; query: QueryRef; output: string }
-  | { kind: 'act'; id: string; act: string; args: Record<string, ValueExpr>; output?: string }
+  | { kind: 'act'; id: string; act: ArtifactRef; args: Record<string, ValueExpr>; output?: string }
   | { kind: 'wait'; id: string; durationMs: number }
   | {
       kind: 'recover'
@@ -75,6 +85,7 @@ export type BehaviorDefinition = {
 }
 
 export type BehaviorArtifact = {
+  kind: 'behavior'
   definition: BehaviorDefinition
   manifest: ArtifactManifest
   artifactId: string
@@ -82,3 +93,32 @@ export type BehaviorArtifact = {
   bindingId: string
   sourceDigest: string
 }
+
+export type ActLimits = {
+  totalMs?: number
+  hookMs?: number
+}
+
+export type ActManifestInfo = {
+  id: string
+  description?: string
+  queryOps: string[]
+  controlOps: string[]
+  limits?: ActLimits
+}
+
+/** Immutable act artifact: single-file code plus its declared operations. */
+export type ActArtifact = {
+  kind: 'act'
+  definitionId: string
+  code: string
+  ops: { query: string[]; control: string[] }
+  limits?: ActLimits
+  manifest: ArtifactManifest
+  artifactId: string
+  artifactDigest: string
+  bindingId: string
+  sourceDigest: string
+}
+
+export type ContentArtifact = BehaviorArtifact | ActArtifact

@@ -96,7 +96,7 @@ export type BindingManifest = {
   config: JsonValue
 }
 
-export type ArtifactKind = 'behavior' | 'act'
+export type ArtifactKind = 'behavior' | 'act' | 'policy'
 
 export type ArtifactManifest = {
   schemaVersion: 1
@@ -113,6 +113,9 @@ export type ArtifactManifest = {
     id: string
     digest: string
   }>
+  /** Declared operations for an act artifact. */
+  ops?: { query: string[]; control: string[] }
+  limits?: { totalMs?: number; hookMs?: number; callMs?: number }
 }
 
 /** Provenance carried by a local slot or a query/act output. */

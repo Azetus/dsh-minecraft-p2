@@ -70,9 +70,19 @@ export function act(
   args: Record<string, ValueExpr> = {},
   output?: string,
 ): Node {
+  return actRef(id, { definitionId: name }, args, output)
+}
+
+/** Reference an exact act artifact, optionally letting the checker resolve it. */
+export function actRef(
+  id: string,
+  ref: { definitionId: string; artifactId?: string },
+  args: Record<string, ValueExpr> = {},
+  output?: string,
+): Node {
   return output === undefined
-    ? { kind: 'act', id, act: name, args }
-    : { kind: 'act', id, act: name, args, output }
+    ? { kind: 'act', id, act: ref, args }
+    : { kind: 'act', id, act: ref, args, output }
 }
 
 export function wait(id: string, durationMs: number): Node {

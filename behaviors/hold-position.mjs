@@ -25,7 +25,7 @@ export default {
         {
           kind: 'act',
           id: 'approach',
-          act: 'moveTo',
+          act: { definitionId: 'move-to' },
           args: {
             x: { kind: 'param', name: 'x' },
             z: { kind: 'param', name: 'z' },
@@ -34,7 +34,7 @@ export default {
             blockedMs: { kind: 'literal', value: 1500 },
           },
         },
-        { kind: 'act', id: 'stop', act: 'stop', args: {} },
+        { kind: 'act', id: 'stop', act: { definitionId: 'stop' }, args: {} },
         { kind: 'wait', id: 'settle', durationMs: 500 },
       ],
     },

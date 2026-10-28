@@ -396,7 +396,7 @@ describe('behavior executor query and act ports', () => {
         stop: () => { stops.push(name) },
       }
     }
-    const actPort: ActPort = { start: name => makeHandle(name) }
+    const actPort: ActPort = { start: ref => makeHandle(typeof ref === 'string' ? ref : ref.definitionId) }
     const run = executor(defineBehavior({
       ...finite(reactivePriority('select', [
         { when: when(eq(local('mode'), lit('attack'))), child: act('attack', 'attack') },

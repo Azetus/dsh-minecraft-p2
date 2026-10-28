@@ -5,6 +5,7 @@ import type {
   ActHandle,
   ActPoll,
   ActPort,
+  ActRefLike,
   QueryOutcome,
   QueryPort,
 } from './node-runtime.ts'
@@ -35,7 +36,10 @@ export class ActBroker implements ActPort {
     return this.active?.done === false ? this.active.name : undefined
   }
 
-  start(name: string, args: Record<string, JsonValue>): ActHandle {
+  start(ref: ActRefLike, args: Record<string, JsonValue>): ActHandle {
+    // Legacy in-process runners are keyed by definitionId; the real act port
+    // uses the exact artifact id.
+    const name = typeof ref === 'string' ? ref : ref.definitionId
     if (this.active !== undefined && !this.active.done) {
       throw p2Error(
         'ACT_BUSY',

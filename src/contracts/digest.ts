@@ -160,6 +160,13 @@ export function normalizeArtifactManifest(manifest: ArtifactManifest): ArtifactM
     dependencies: [...manifest.dependencies]
       .map(dependency => ({ kind: dependency.kind, id: dependency.id, digest: dependency.digest }))
       .sort((left, right) => compareKeys(`${left.kind}:${left.id}`, `${right.kind}:${right.id}`)),
+    ...(manifest.ops === undefined ? {} : {
+      ops: {
+        query: [...new Set(manifest.ops.query)].sort(compareKeys),
+        control: [...new Set(manifest.ops.control)].sort(compareKeys),
+      },
+    }),
+    ...(manifest.limits === undefined ? {} : { limits: manifest.limits }),
   }
 }
 

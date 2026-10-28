@@ -146,6 +146,7 @@ export type CheckParams = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
+  artifactKind?: 'behavior' | 'act' | 'policy'
 }
 
 export type ObserveParams = {
@@ -164,6 +165,7 @@ export type CheckResult = {
   definitionId: string
   sourceDigest: string
   bindingId: string
+  kind: 'behavior' | 'act' | 'policy'
   enabled: false
 }
 

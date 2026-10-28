@@ -33,6 +33,7 @@ function sha256(buffer) {
 
 compile('src/bridge/index.ts', 'lib/bridge.js', ['--packages=external'])
 compile('src/body/index.ts', 'lib/body/body.mjs')
+compile('src/runner/main.ts', 'lib/runner.js')
 compile('src/authoring/index.ts', 'lib/authoring/index.js')
 
 const body = await readFile(join(root, 'lib/body/body.mjs'))
@@ -54,7 +55,7 @@ if (existsSync(join(root, 'src/provider/index.ts'))) {
     providerVersion: pkg.version,
     opContractVersion: '1',
     protocolVersion: 1,
-    capabilities: ['query.position', 'query.inventory', 'query.entities', 'query.time', 'query.block', 'act.look', 'act.move', 'act.moveTo', 'act.jump', 'act.stop'],
+    capabilities: ['query.position', 'query.inventory', 'query.entities', 'query.time', 'query.block', 'control.look', 'control.move', 'control.moveTo', 'control.jump', 'control.stop', 'control.dig'],
     gameCompatibility: ['1.21.1'],
     entry: 'minecraft.mjs',
     files: { 'minecraft.mjs': sha256(provider) },

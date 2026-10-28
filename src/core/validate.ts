@@ -111,8 +111,14 @@ export function validateBehavior(definition: BehaviorDefinition): void {
         }
         break
       case 'act':
-        if (typeof node.act !== 'string' || node.act.length === 0) {
-          throw new BehaviorValidationError('INVALID_ACT', path, 'act name is required')
+        if (node.act === null
+          || typeof node.act !== 'object'
+          || typeof node.act.definitionId !== 'string'
+          || node.act.definitionId.length === 0) {
+          throw new BehaviorValidationError('INVALID_ACT', path, 'act reference requires a definitionId')
+        }
+        if (node.act.artifactId !== undefined && (typeof node.act.artifactId !== 'string' || node.act.artifactId.length === 0)) {
+          throw new BehaviorValidationError('INVALID_ACT', path, 'act artifactId must be a non-empty string when present')
         }
         for (const [name, value] of Object.entries(node.args)) visitExpr(value, `${path}.args.${name}`)
         break

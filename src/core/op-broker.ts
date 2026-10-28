@@ -1,6 +1,6 @@
 import type { JsonValue } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
-import type { ActHandle, ActPoll, ActPort, QueryOutcome, QueryPort } from './node-runtime.ts'
+import type { ActHandle, ActPoll, QueryOutcome, QueryPort } from './node-runtime.ts'
 import { requireOperation } from '../operation/index.ts'
 
 /** A concrete operation implementation, normally the Minecraft provider. */
@@ -19,7 +19,7 @@ export type OpBrokerOptions = {
  * active control effect and counts budgeted operations. The trusted provider
  * stays behind this seam; generated code never talks to it directly.
  */
-export class DeclaredOpBroker implements ActPort {
+export class DeclaredOpBroker {
   private active: { name: string; handle: ActHandle } | undefined
   private readonly used = new Map<string, number>()
   private readonly budgets: Record<string, number>
@@ -34,7 +34,7 @@ export class DeclaredOpBroker implements ActPort {
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
     requireOperation(name, 'control', 'core.op-broker')
-    if (this.active !== undefined && this.active.handle.poll().status === 'running') {
+    if (name !== 'stop' && this.active !== undefined && this.active.handle.poll().status === 'running') {
       throw p2Error('OP_BUSY', 'runtime', `control operation ${this.active.name} is still active`, {
         module: 'core.op-broker',
       }, { operation: this.active.name })

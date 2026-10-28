@@ -313,7 +313,7 @@ export class MineflayerProvider implements ActPort {
         { serverAge: this.serverAge(), idleMs: this.liveStatus().idleMs },
       )
     }
-    if (this.current !== undefined && this.current.poll().status === 'running') {
+    if (name !== 'stop' && this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })
     }
     const handle = new MineflayerActHandle(name, args, this.bot, this.options)

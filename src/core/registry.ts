@@ -1,9 +1,9 @@
 import { artifactDigest, artifactId } from '../contracts/digest.ts'
-import type { BehaviorArtifact } from '../contracts/ir.ts'
+import type { BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
 import type { CheckerCredential } from './checker.ts'
 
 export type ArtifactRecord = {
-  artifact: BehaviorArtifact
+  artifact: ContentArtifact
   enabled: boolean
   retired: boolean
 }
@@ -18,10 +18,18 @@ export class RegistryError extends Error {
   }
 }
 
+function definitionIdOf(artifact: ContentArtifact): string {
+  return artifact.kind === 'behavior' ? artifact.definition.id : artifact.definitionId
+}
+
+function defaultKey(artifact: ContentArtifact): string {
+  return `${artifact.kind}:${definitionIdOf(artifact)}`
+}
+
 /** In-memory, per-binding registry; artifacts are immutable once added. */
 export class ArtifactRegistry {
   private readonly records = new Map<string, ArtifactRecord>()
-  private defaultId: string | undefined
+  private readonly defaults = new Map<string, string>()
   private readonly bindingId: string
   private readonly builtinsDigest: string
 
@@ -30,7 +38,7 @@ export class ArtifactRegistry {
     this.builtinsDigest = options.builtinsDigest ?? 'none'
   }
 
-  add(artifact: BehaviorArtifact, credential: CheckerCredential): ArtifactRecord {
+  add(artifact: ContentArtifact, credential: CheckerCredential): ArtifactRecord {
     this.checkCredential(credential)
     if (artifact.bindingId !== this.bindingId) {
       throw new RegistryError('BINDING_MISMATCH', 'artifact belongs to a different binding')
@@ -60,7 +68,7 @@ export class ArtifactRegistry {
     const record = this.require(id)
     if (record.retired) throw new RegistryError('ARTIFACT_RETIRED', `artifact ${id} is retired`)
     record.enabled = true
-    this.defaultId = id
+    this.defaults.set(defaultKey(record.artifact), id)
     return record
   }
 
@@ -68,14 +76,24 @@ export class ArtifactRegistry {
     const record = this.require(id)
     record.retired = true
     record.enabled = false
-    if (this.defaultId === id) this.defaultId = undefined
+    const key = defaultKey(record.artifact)
+    if (this.defaults.get(key) === id) this.defaults.delete(key)
+  }
+
+  /** Resolve the enabled default for one definition, if any. */
+  resolveDefault(kind: 'behavior' | 'act' | 'policy', definitionId: string): ContentArtifact | undefined {
+    const id = this.defaults.get(`${kind}:${definitionId}`)
+    if (id === undefined) return undefined
+    const record = this.records.get(id)
+    if (record === undefined || record.retired || !record.enabled) return undefined
+    return record.artifact
   }
 
   resolve(): BehaviorArtifact | undefined {
-    if (this.defaultId === undefined) return undefined
-    const record = this.records.get(this.defaultId)
-    if (record === undefined || record.retired || !record.enabled) return undefined
-    return record.artifact
+    for (const record of this.records.values()) {
+      if (record.artifact.kind === 'behavior' && record.enabled && !record.retired) return record.artifact
+    }
+    return undefined
   }
 
   get(id: string): ArtifactRecord | undefined {
@@ -86,11 +104,11 @@ export class ArtifactRegistry {
     return [...this.records.values()]
   }
 
-  closure(id: string): BehaviorArtifact[] {
+  closure(id: string): ContentArtifact[] {
     const root = this.require(id).artifact
-    const result: BehaviorArtifact[] = []
+    const result: ContentArtifact[] = []
     const seen = new Set<string>()
-    const visit = (artifact: BehaviorArtifact): void => {
+    const visit = (artifact: ContentArtifact): void => {
       if (seen.has(artifact.artifactId)) return
       seen.add(artifact.artifactId)
       for (const dependency of artifact.manifest.dependencies) {

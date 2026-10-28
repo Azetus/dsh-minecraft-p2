@@ -217,10 +217,16 @@ export class BodyRuntime {
             })
             return { ...base, error: quotaError }
           }
+          const rawKind = params.artifactKind
+          if (rawKind !== undefined && rawKind !== 'behavior' && rawKind !== 'act' && rawKind !== 'policy') {
+            return { ...base, error: invalidMessageError('artifactKind must be behavior, act or policy') }
+          }
+          const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | undefined
           let checked
           try {
             checked = await this.behavior.check({
               sourcePath,
+              ...(artifactKind === undefined ? {} : { artifactKind }),
               ...(typeof params.sourceRoot === 'string' ? { sourceRoot: params.sourceRoot } : {}),
               ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
             })
@@ -229,9 +235,10 @@ export class BodyRuntime {
           }
           const result: CheckResult = {
             artifactId: checked.artifactId,
-            definitionId: checked.artifact.definition.id,
-            sourceDigest: checked.artifact.sourceDigest,
+            definitionId: checked.definitionId,
+            sourceDigest: checked.sourceDigest,
             bindingId: checked.artifact.bindingId,
+            kind: checked.kind,
             enabled: false,
           }
           this.recordCommand(commandId, 'check', result)

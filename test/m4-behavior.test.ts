@@ -11,14 +11,14 @@ const holdSourcePath = join(process.cwd(), 'behaviors', 'hold-position.mjs')
 
 describe('M4 approach-target behavior', () => {
   it('checks and executes moveTo followed by stop', async () => {
-    const checked = await checkBehavior({ sourcePath, bindingId: 'binding-m4' })
+    const checked = await checkBehavior({ sourcePath, bindingId: 'binding-m4', resolveAct: () => 'p2:act:test' })
     expect(checked.artifact.definition.id).toBe('m4-approach-target')
     expect(checked.artifact.definition.mode).toBe('finite')
 
     const called: string[] = []
     const act: ActPort = {
-      start: (name): ActHandle => {
-        called.push(name)
+      start: (ref): ActHandle => {
+        called.push(typeof ref === 'string' ? ref : ref.definitionId)
         return { poll: () => ({ status: 'succeeded' }), stop: () => {} }
       },
     }
@@ -42,11 +42,11 @@ describe('M4 approach-target behavior', () => {
       executor.tick(tick)
     }
     expect(executor.currentStatus).toBe('succeeded')
-    expect(called).toEqual(['moveTo', 'stop'])
+    expect(called).toEqual(['move-to', 'stop'])
   })
 
   it('checks and runs the continuous hold-position behavior until stopped', async () => {
-    const checked = await checkBehavior({ sourcePath: holdSourcePath, bindingId: 'binding-m4' })
+    const checked = await checkBehavior({ sourcePath: holdSourcePath, bindingId: 'binding-m4', resolveAct: () => 'p2:act:test' })
     expect(checked.artifact.definition.id).toBe('m4-hold-position')
     expect(checked.artifact.definition.mode).toBe('continuous')
 
@@ -65,15 +65,15 @@ describe('M4 approach-target behavior', () => {
         },
       }),
       act: {
-        start: (name): ActHandle => {
-          called.push(name)
+        start: (ref): ActHandle => {
+          called.push(typeof ref === 'string' ? ref : ref.definitionId)
           return { poll: () => ({ status: 'succeeded' }), stop: () => {} }
         },
       },
     })
     for (let tick = 0; tick < 20; tick += 1) executor.tick(tick * 1000)
     expect(executor.currentStatus).toBe('running')
-    expect(called.filter(name => name === 'moveTo').length).toBeGreaterThan(1)
+    expect(called.filter(name => name === 'move-to').length).toBeGreaterThan(1)
     executor.stop()
     executor.tick(30_000)
     expect(executor.currentStatus).toBe('cancelled')

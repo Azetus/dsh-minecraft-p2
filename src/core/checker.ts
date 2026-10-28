@@ -9,7 +9,7 @@ import {
   digest,
   sourceDigest,
 } from '../contracts/digest.ts'
-import type { BehaviorDefinition, BehaviorArtifact } from '../contracts/ir.ts'
+import type { BehaviorDefinition, BehaviorArtifact, Node } from '../contracts/ir.ts'
 import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
 import { BehaviorValidationError, validateBehavior } from './validate.ts'
 
@@ -28,6 +28,8 @@ export type CheckRequest = {
   sourceRoot?: string
   timeoutMs?: number
   builtinsDigest?: string
+  /** Resolve an act definitionId to the enabled artifactId for this binding. */
+  resolveAct?: (definitionId: string) => string | undefined
 }
 
 export type CheckResult = {
@@ -82,7 +84,9 @@ export async function checkBehavior(request: CheckRequest): Promise<CheckResult>
   const sourceHash = sourceDigest([{ path: normalizedRelative, bytes }])
 
   const loaded = await loadModule(sourcePath, request.timeoutMs ?? 1000)
-  const definition = loaded as BehaviorDefinition
+  // Work on a private copy: resolution mutates the IR and the module cache must not leak it.
+  const definition = JSON.parse(JSON.stringify(loaded)) as BehaviorDefinition
+  resolveActRefs(definition, request.resolveAct)
   try {
     validateBehavior(definition)
   } catch (error) {
@@ -108,6 +112,7 @@ export async function checkBehavior(request: CheckRequest): Promise<CheckResult>
   const id = artifactId(manifest)
   return {
     artifact: {
+      kind: 'behavior',
       definition,
       manifest,
       artifactId: id,
@@ -122,6 +127,49 @@ export async function checkBehavior(request: CheckRequest): Promise<CheckResult>
       builtinsDigest: request.builtinsDigest ?? 'none',
     },
   }
+}
+
+/** Fill exact act artifact ids into every act node before validation. */
+function resolveActRefs(definition: BehaviorDefinition, resolveAct: CheckRequest['resolveAct']): void {
+  const visit = (node: Node): void => {
+    switch (node.kind) {
+      case 'sequence':
+        for (const child of node.children) visit(child)
+        return
+      case 'if':
+        visit(node.then)
+        if (node.else !== undefined) visit(node.else)
+        return
+      case 'reactivePriority':
+        for (const branch of node.branches) visit(branch.child)
+        return
+      case 'repeat':
+        visit(node.child)
+        return
+      case 'subtree':
+        visit(node.tree)
+        return
+      case 'recover':
+        visit(node.child)
+        for (const rule of node.rules) if (rule.fallback !== undefined) visit(rule.fallback)
+        return
+      case 'act': {
+        if (node.act.artifactId !== undefined && node.act.artifactId.length > 0) return
+        const artifactIdValue = resolveAct?.(node.act.definitionId)
+        if (artifactIdValue === undefined) {
+          throw new CheckerError(
+            'ACT_NOT_RESOLVED',
+            `act ${node.act.definitionId} has no enabled artifact in this binding; check and activate it first`,
+          )
+        }
+        node.act = { definitionId: node.act.definitionId, artifactId: artifactIdValue }
+        return
+      }
+      default:
+        return
+    }
+  }
+  visit(definition.root)
 }
 
 function loadModule(sourcePath: string, timeoutMs: number): Promise<unknown> {

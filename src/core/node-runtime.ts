@@ -1,4 +1,5 @@
 import type {
+  ArtifactRef,
   Condition,
   Node,
   QueryRef,
@@ -37,8 +38,11 @@ export type ActHandle = {
   cleanup?(): ActPoll
 }
 
+/** Act references are exact artifacts; the string form is only a legacy test input. */
+export type ActRefLike = ArtifactRef | string
+
 export type ActPort = {
-  start(name: string, args: Record<string, JsonValue>): ActHandle
+  start(ref: ActRefLike, args: Record<string, JsonValue>): ActHandle
 }
 
 export type NodeContext = {
@@ -489,7 +493,7 @@ class ActRuntime extends BaseRuntime {
       if (this.node.output !== undefined) {
         context.frame.set(this.node.output, result.result, result.meta ?? {
           source: 'act',
-          scope: this.node.act,
+          scope: this.node.act.definitionId,
           sampledAt: context.now,
         })
       }
