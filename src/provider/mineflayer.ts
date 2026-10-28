@@ -1129,20 +1129,42 @@ class MineflayerActHandle implements ActHandle {
               if (held === null || held === undefined) {
                 throw Object.assign(new Error('pillar requires a held block'), { code: 'PILLAR_NO_ITEM' })
               }
-              this.bot.setControlState('jump', true)
-              try {
-                const deadline = Date.now() + 1200
-                while (this.bot.entity.position.y < startY + 0.2 && Date.now() < deadline) await delay(20)
-              } finally {
-                this.bot.setControlState('jump', false)
+              let lifted = false
+              let lastError: unknown
+              for (let attempt = 0; attempt < 3 && !lifted; attempt += 1) {
+                // Place only once the feet are a full block above the start: below
+                // that the target cell intersects the player box and the server
+                // refuses the placement.
+                try {
+                  await this.bot.lookAt(new Vec3(x + 0.5, startY - 0.5, z + 0.5), true)
+                } catch {
+                  // Best effort; placeBehind still forces the aim.
+                }
+                this.bot.setControlState('jump', true)
+                try {
+                  const deadline = Date.now() + 1200
+                  while (this.bot.entity.position.y < startY + 1.05 && Date.now() < deadline) await delay(10)
+                } finally {
+                  this.bot.setControlState('jump', false)
+                }
+                if (this.bot.entity.position.y < startY + 1.0) {
+                  await this.waitUntilGrounded()
+                  continue
+                }
+                try {
+                  await this.placeBehind(support)
+                } catch (error) {
+                  lastError = error
+                }
+                const targetBlock = this.bot.blockAt(new Vec3(x, startY, z))
+                if (targetBlock !== null && !isAirName(targetBlock.name)) lifted = true
+                await this.waitUntilGrounded()
               }
-              if (this.bot.entity.position.y < startY + 0.1) {
-                throw Object.assign(new Error('jump did not lift the bot'), { code: 'PILLAR_JUMP_FAILED' })
+              if (!lifted) {
+                const message = lastError === undefined ? 'pillar failed to place a block' : errorMessage(lastError)
+                throw Object.assign(new Error(message), { code: 'PILLAR_FAILED' })
               }
-              await this.bot.placeBlock(support, new Vec3(0, 1, 0))
               placed += 1
-              const landDeadline = Date.now() + 2000
-              while (this.bot.entity.onGround !== true && Date.now() < landDeadline) await delay(20)
             }
             return { placed }
           })().then(result => {
@@ -1834,16 +1856,25 @@ class MineflayerActHandle implements ActHandle {
     return registry.blocksByName?.[name]?.id
   }
 
-  /** True when at least one of the six neighbours of a block is air. */
-  private isExposedBlock(x: number, y: number, z: number): boolean {
-    const offsets: ReadonlyArray<readonly [number, number, number]> = [
-      [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
-    ]
-    for (const [dx, dy, dz] of offsets) {
-      const neighbor = this.bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
-      if (neighbor !== null && isAirName(neighbor.name)) return true
+  /**
+   * Place on the top face of `support`. The internal options let the placement
+   * skip the smooth head turn; a pillar jump only lasts a few ticks.
+   */
+  private async placeBehind(support: unknown): Promise<void> {
+    const bot = this.bot as unknown as {
+      _placeBlockWithOptions?: (reference: unknown, face: unknown, options: { forceLook: boolean; swingArm: string }) => Promise<void>
     }
-    return false
+    const face = new Vec3(0, 1, 0)
+    if (typeof bot._placeBlockWithOptions === 'function') {
+      await bot._placeBlockWithOptions(support, face, { forceLook: true, swingArm: 'right' })
+      return
+    }
+    await this.bot.placeBlock(support as Parameters<Bot['placeBlock']>[0], face)
+  }
+
+  private async waitUntilGrounded(timeoutMs = 2000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (this.bot.entity.onGround !== true && Date.now() < deadline) await delay(10)
   }
 
   /**
