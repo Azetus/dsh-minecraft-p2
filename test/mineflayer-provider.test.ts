@@ -13,7 +13,8 @@ function fakeBot() {
       onGround: true,
       velocity: { x: 0, y: 0, z: 0 },
     },
-    inventory: { items: () => [{ name: 'stone', count: 2 }] },
+    inventory: { items: () => [{ name: 'stone', count: 2 }], slots: [] },
+    heldItem: null,
     entities: {
       1: { id: 1, name: 'P2_Bot', type: 'player', position: { x: 1, y: 64, z: 2 } },
       2: { id: 2, name: 'cow', type: 'animal', position: { x: 4, y: 64, z: 2 } },
@@ -38,12 +39,13 @@ describe('MineflayerProvider', () => {
     const position = provider.query('position')
     expect(position.status).toBe('ok')
     if (position.status !== 'ok') throw new Error('expected position')
-    expect(position.value).toEqual({ x: 1, y: 64, z: 2 })
+    expect(position.value).toEqual({ x: 1, y: 64, z: 2, dimension: null })
     expect(position.meta?.source).toBe('query')
     expect(position.meta?.scope).toBe('mineflayer.position')
     expect(typeof position.meta?.validUntil).toBe('number')
 
     expect(provider.query('inventory').status).toBe('ok')
+    expect(provider.query('health').status).toBe('ok')
     expect(provider.query('time').status).toBe('ok')
     expect(provider.query('block', { x: 1, y: 63, z: 2 }).status).toBe('ok')
     expect(provider.query('missing').status).toBe('failed')

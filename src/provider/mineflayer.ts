@@ -104,7 +104,7 @@ function isAirName(name: string): boolean {
   return name === 'air' || name === 'cave_air' || name === 'void_air'
 }
 
-function clampNumber(value: JsonValue, fallback: number, min: number, max: number): number {
+function clampNumber(value: JsonValue | undefined, fallback: number, min: number, max: number): number {
   const number = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback
   return Math.min(max, Math.max(min, number))
 }
@@ -235,7 +235,7 @@ export class MineflayerProvider implements ActPort {
           }
           return {
             status: 'ok',
-            value: { x: position.x, y: position.y, z: position.z },
+            value: { x: position.x, y: position.y, z: position.z, dimension: this.bot.game?.dimension ?? null },
             meta: this.queryMeta('mineflayer.position', sampledAt),
           }
         }
@@ -244,6 +244,26 @@ export class MineflayerProvider implements ActPort {
             status: 'ok',
             value: this.bot.inventory.items().map(item => ({ name: item.name, count: item.count })),
             meta: this.queryMeta('mineflayer.inventory', sampledAt),
+          }
+        }
+        case 'health': {
+          const slots = this.bot.inventory.slots ?? []
+          const armor = [5, 6, 7, 8]
+            .map(slot => {
+              const item = slots[slot]
+              return item === null || item === undefined ? null : { slot, name: item.name, count: item.count }
+            })
+            .filter((entry): entry is { slot: number; name: string; count: number } => entry !== null)
+          return {
+            status: 'ok',
+            value: {
+              health: this.bot.health ?? null,
+              food: this.bot.food ?? null,
+              saturation: this.bot.foodSaturation ?? null,
+              oxygen: this.bot.oxygenLevel ?? null,
+              armor,
+            },
+            meta: this.queryMeta('mineflayer.health', sampledAt),
           }
         }
         case 'entities': {
@@ -280,6 +300,46 @@ export class MineflayerProvider implements ActPort {
             value: entities,
             meta: this.queryMeta('mineflayer.entities', sampledAt),
           }
+        }
+        case 'blocks': {
+          const namesArg = args.names
+          const rawNames = Array.isArray(namesArg)
+            ? namesArg.filter((name): name is string => typeof name === 'string')
+            : typeof namesArg === 'string'
+              ? [namesArg]
+              : []
+          const names = rawNames.map(name => name.replace(/^minecraft:/u, ''))
+          const radius = clampNumber(args.radius, 16, 1, 32)
+          const count = clampNumber(args.count, 16, 1, 64)
+          const yMin = typeof args.yMin === 'number' ? args.yMin : undefined
+          const yMax = typeof args.yMax === 'number' ? args.yMax : undefined
+          const registry = (this.bot.registry?.blocksByName ?? {}) as unknown as Record<string, { id: number } | undefined>
+          const ids = names
+            .map(name => registry[name]?.id)
+            .filter((id): id is number => typeof id === 'number')
+          if (names.length > 0 && ids.length === 0) {
+            return { status: 'ok', value: [], meta: this.queryMeta('mineflayer.blocks', sampledAt) }
+          }
+          const matching = ids.length > 0 ? ids : (block: { name: string }) => !isAirName(block.name)
+          const found = this.bot.findBlocks({ matching, maxDistance: radius, count: Math.min(128, count * 2) })
+          const position = this.bot.entity?.position
+          const blocks = found
+            .filter(point => (yMin === undefined || point.y >= yMin) && (yMax === undefined || point.y <= yMax))
+            .map(point => {
+              const block = this.bot.blockAt(point)
+              if (block === null) return null
+              return {
+                name: block.name,
+                x: point.x,
+                y: point.y,
+                z: point.z,
+                distance: position === undefined ? 0 : Math.hypot(position.x - point.x, position.y - point.y, position.z - point.z),
+              }
+            })
+            .filter((entry): entry is { name: string; x: number; y: number; z: number; distance: number } => entry !== null)
+            .sort((left, right) => left.distance - right.distance)
+            .slice(0, count)
+          return { status: 'ok', value: blocks, meta: this.queryMeta('mineflayer.blocks', sampledAt) }
         }
         case 'time': {
           return {
@@ -540,7 +600,7 @@ class MineflayerActHandle implements ActHandle {
             return
           }
           const held = this.bot.heldItem
-          if (held === null) {
+          if (held === null || held === undefined) {
             this.failed = new Error('no item is held for placement')
             this.failedCode = 'PLACE_NO_ITEM'
             return

@@ -233,7 +233,18 @@
 - 世界备份完成；日志目录与模板就绪；
 - 打 `m5-baseline` tag，记录 commit 与能力清单。
 
-## 8. 已确定的边界
+## 8. 实现记录（2026-10-28）
+
+| 项 | 状态 |
+| --- | --- |
+| 查询 op：`health`、`blocks`、`position.dimension` | 已实现（provider + 契约 + build 能力声明） |
+| 控制 op：`place`、`attack`、`equip`、`use` | 已实现 |
+| act：`place-block`、`attack-one`、`equip-item`、`use-item` | 已实现 |
+| 单元测试 | 173 passed / 1 skipped（`npm run check`）；离线时 body 流程测试跳过 |
+| 真实游戏 smoke | **未执行**：Minecraft LAN 25575 当前未开启 |
+| `m5-baseline` tag | 代码基线已可打 tag；真实 smoke 作为实验开始前的门槛 |
+
+## 9. 已确定的边界
 
 | 问题 | 决定 |
 | --- | --- |
