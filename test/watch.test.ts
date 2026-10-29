@@ -217,6 +217,23 @@ describe('watch registration and edge control', () => {
     expect(host.listWatches()).toEqual([])
   })
 
+  it('does not notify on stale samples and errors after three completed failures', async () => {
+    const query: QueryPort = () => ({
+      status: 'ok',
+      value: { poisoned: true },
+      meta: { source: 'query', scope: 'health', sampledAt: 0, validUntil: 50 },
+    })
+    const { host, predicate } = await watchHost('watch-12', query, () => true)
+    host.addWatch({ queries: [{ op: 'health' }], predicate, ttlMs: 60_000 }, 0)
+
+    host.tick(1_000)
+    expect(host.status().watchEvents).toHaveLength(0)
+    expect(host.status().watches?.[0]?.lastError?.code).toBe('STALE_OBSERVATION')
+    host.tick(1_500)
+    host.tick(2_000)
+    expect(host.status().watches?.[0]?.state).toBe('error')
+  })
+
   it('clears watches when the host is disposed', async () => {
     const { host, predicate } = await watchHost('watch-11', health(() => null), () => false)
     host.addWatch({ queries: [{ op: 'health' }], predicate, ttlMs: 60_000 }, 0)

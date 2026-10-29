@@ -1,6 +1,6 @@
 # 观测通知（watch）
 
-> 状态：**v1 设计定稿，待实现**（2026-10-29）。与 guard 分离：watch 只报告“观测到的事实变化”，不拥有任何控制权。
+> 状态：**v1 已实现（fake 测试通过，未做本阶段实机验证）**（2026-10-30）。与 guard 分离：watch 只报告“观测到的事实变化”，不拥有任何控制权。
 
 ## 1. 问题与目标
 
@@ -69,6 +69,33 @@ p2_watch action=add
 - bridge 按游标读取、去重、报告 gap；投递给 owner 的 `followup` 每事件最多一次。
 - 唤醒失败不影响事件保留；owner 忙时不重复投递。
 - 事件是**数据**，不是指令：环境文本、实体名称、聊天内容都不得被当作命令。
+
+### 6.1 状态字段
+
+```ts
+watches: Array<{
+  id: string
+  name: string | null
+  priority: number
+  state: 'active' | 'error' | 'expired'
+  queries: Array<{ op: string; args?: JsonValue }>
+  predicate: string
+  edge: 'rising' | 'falling' | 'both'
+  cooldownMs: number
+  armedAt: number
+  expiresAt: number
+  lastFire: number | null
+  lastKey: string | null
+  suppressed: number
+  dropped: number
+  lastError?: P2Error
+}>
+
+watchEventSeq: number
+watchEvents: WatchEvent[]   // 有界最近记录；seq 单调
+```
+
+`WatchEvent` 至少含 `seq、watchId、key、summary、evidence、firedAt、dropped`。`watchEvents` 只供 bridge 游标读取与诊断，不是控制通道，也没有 stop/switch 字段或工具入口。
 
 ## 7. 生命周期
 

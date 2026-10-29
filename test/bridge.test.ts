@@ -656,6 +656,12 @@ describe('P2 commands', () => {
       await statusTool.execute({}, { agent })
       expect(followups).toHaveLength(2)
 
+      const eventsTool = tools.find(tool => tool.name === 'p2_events') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<{ events: Array<{ kind: string }> }>
+      }
+      const drained = await eventsTool.execute({}, { agent })
+      expect(drained.events.some(event => event.kind === 'watch')).toBe(true)
+
       const listed = await watchTool.execute({ action: 'list' }, { agent }) as { watches: unknown[] }
       expect(listed.watches).toHaveLength(1)
       expect(await watchTool.execute({ action: 'remove', watchId: added.id }, { agent }))
