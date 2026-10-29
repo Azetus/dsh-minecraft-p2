@@ -167,6 +167,47 @@ describe('DeclaredOpBroker control ledger and release', () => {
     expect(broker.pollRelease(5000)).toBe('unconfirmed')
   })
 
+  it('keeps polling a handle whose stop threw instead of trusting idle', () => {
+    const source: OpSource = {
+      start: () => ({
+        poll: () => ({ status: 'running' }),
+        stop: () => { throw new Error('stop failed') },
+      }),
+      query: () => ({ status: 'ok', value: null }),
+      controlState: () => 'idle',
+    }
+    const broker = new DeclaredOpBroker(source, { settleMs: 300, stopTimeoutMs: 2000 })
+    broker.start('move', {}, ID)
+    expect(broker.controlState()).toBe('active')
+    broker.stopRun(0)
+    expect(broker.controlState()).toBe('active')
+    expect(broker.pollRelease(0)).toBe('stopping')
+    expect(broker.pollRelease(2000)).toBe('unconfirmed')
+    expect(broker.pollRelease(5000)).toBe('unconfirmed')
+  })
+
+  it('releases a stop-unconfirmed handle only after it really stops', () => {
+    let running = true
+    const source: OpSource = {
+      start: () => ({
+        poll: () => (running ? { status: 'running' } : { status: 'succeeded' }),
+        stop: () => { throw new Error('stop failed') },
+      }),
+      query: () => ({ status: 'ok', value: null }),
+      controlState: () => 'idle',
+    }
+    const broker = new DeclaredOpBroker(source, { settleMs: 300, stopTimeoutMs: 2000 })
+    broker.start('move', {}, ID)
+    broker.stopRun(0)
+    expect(broker.pollRelease(0)).toBe('stopping')
+    expect(broker.pollRelease(2000)).toBe('unconfirmed')
+    expect(broker.pollRelease(2100)).toBe('unconfirmed')
+
+    running = false
+    expect(broker.pollRelease(2400)).toBe('unconfirmed')
+    expect(broker.pollRelease(2700)).toBe('released')
+  })
+
   it('reports provider active and unknown through controlState', () => {
     let provider: ProviderControlState = 'active'
     const { source } = ledgerSource(undefined, () => provider)

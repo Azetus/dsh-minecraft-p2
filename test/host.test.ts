@@ -216,6 +216,10 @@ describe('BehaviorHost stop and takeover', () => {
     control.release('released')
     host.tick(10)
     expect(host.status().activeRun).toBeNull()
+
+    const takeover = host.switch({ artifactId: nextArtifact, params: {}, commandId: 'after-release' })
+    expect(takeover.accepted).toBe(true)
+    expect(host.tick(11)).toBe('succeeded')
   })
 
   it('clears a pending switch when the old run is stopped by the user', async () => {

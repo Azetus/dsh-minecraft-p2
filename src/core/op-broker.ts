@@ -170,16 +170,29 @@ export class DeclaredOpBroker {
 
   /** Aggregate control state from tracked handles and the provider. */
   controlState(): ProviderControlState {
+    let unknownIntent = false
     for (const entry of this.entries) {
-      if (entry.phase === 'unknown') return 'unknown'
-    }
-    for (const entry of this.entries) {
+      if (entry.phase === 'unknown') {
+        if (entry.handle === undefined) {
+          unknownIntent = true
+          continue
+        }
+        try {
+          if (entry.handle.poll().status === 'running') return 'active'
+          this.entries.delete(entry)
+        } catch {
+          unknownIntent = true
+        }
+        continue
+      }
       if (entry.phase === 'active' && entry.handle === undefined) return 'active'
       if (entry.handle === undefined) continue
       if (entry.handle.poll().status === 'running') return 'active'
       this.entries.delete(entry)
     }
-    return this.source.controlState?.() ?? 'idle'
+    const provider = this.source.controlState?.()
+    if (unknownIntent) return 'unknown'
+    return provider ?? 'idle'
   }
 
   /**
@@ -244,7 +257,21 @@ export class DeclaredOpBroker {
     let unknownIntent = false
     for (const entry of this.entries) {
       if (entry.phase === 'unknown') {
-        unknownIntent = true
+        if (entry.handle === undefined) {
+          unknownIntent = true
+          continue
+        }
+        // A handle whose stop threw may still be running; poll it instead of
+        // trusting the cancel flag or an idle provider verdict.
+        try {
+          if (entry.handle.poll().status === 'running') {
+            running = true
+          } else {
+            this.entries.delete(entry)
+          }
+        } catch {
+          unknownIntent = true
+        }
         continue
       }
       if (entry.handle === undefined) continue
