@@ -63,6 +63,8 @@ export class JsBehaviorRun {
   private ready = false
   private stepInFlight = false
   private cleanupPending = false
+  private driverReleased = false
+  private driverReleasePending = false
   private budget = 0
   private resumeSlot: ResumeSlot | undefined
   private statusValue: RunStatus = 'running'
@@ -105,7 +107,8 @@ export class JsBehaviorRun {
   }
 
   get allowsTakeover(): boolean {
-    return this.stopControl.allowsNewRun
+    if (this.driverReleasePending || this.cleanupPending) return false
+    return this.stopControl.allowsNewRun || this.isTerminal()
   }
 
   get confirmation(): undefined {
@@ -150,6 +153,8 @@ export class JsBehaviorRun {
   runnerExited(message: string): void {
     if (this.isTerminal()) return
     const now = Date.now()
+    this.driverReleased = true
+    this.driverReleasePending = false
     const error = p2Error('RUNNER_EXITED', 'runtime', message, { module: 'core.js-run' })
     if (this.stopControl.controlOpen) {
       this.failureIntent = error
@@ -287,6 +292,7 @@ export class JsBehaviorRun {
   }
 
   private beginCleanup(): void {
+    this.driverReleased = true
     const identity: DriverIdentity = { runId: this.runId, generation: this.stopControl.generation }
     let result: { yielded: boolean } | Promise<{ yielded: boolean }>
     try {
@@ -351,6 +357,7 @@ export class JsBehaviorRun {
       }
       this.currentStep = null
       this.statusValue = 'succeeded'
+      this.releaseDriver()
       return
     }
     if (value.type === 'fail') {
@@ -604,6 +611,31 @@ export class JsBehaviorRun {
     return true
   }
 
+  /** Release the sandbox generator slot after a terminal run. */
+  private releaseDriver(): void {
+    if (this.driverReleased || this.driverReleasePending) return
+    this.driverReleased = true
+    let result: { yielded: boolean } | Promise<{ yielded: boolean }>
+    try {
+      result = this.driver.stop({ runId: this.runId, generation: this.stopControl.generation })
+    } catch (error) {
+      this.recordCleanupError(error)
+      return
+    }
+    if (!isPromise(result)) return
+    this.driverReleasePending = true
+    void result.then(() => {
+      this.driverReleasePending = false
+    }).catch((error: unknown) => {
+      this.driverReleasePending = false
+      this.recordCleanupError(error)
+    })
+  }
+
+  private recordCleanupError(error: unknown): void {
+    if (this.currentError === undefined) this.currentError = toP2Error(error, 'cleanup')
+  }
+
   private fail(error: P2Error): void {
     if (this.isTerminal()) return
     this.currentError = error
@@ -611,6 +643,7 @@ export class JsBehaviorRun {
     this.pending = undefined
     this.waitUntil = undefined
     this.resumeSlot = undefined
+    this.releaseDriver()
   }
 
   private isTerminal(): boolean {

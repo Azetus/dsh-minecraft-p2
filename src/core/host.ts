@@ -371,6 +371,14 @@ export class BehaviorHost {
       }
     }
 
+    if (this.run !== undefined && !this.run.allowsTakeover) {
+      // A terminal JS run may still be releasing its runner slot.
+      this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId }
+      const result: SwitchResult = { accepted: true, runId: this.run.runId, status: 'stopping' }
+      this.ledger.record(input.commandId, result)
+      return result
+    }
+
     const runId = this.startRun(record, params)
     const result: SwitchResult = { accepted: true, runId, status: 'running' }
     this.ledger.record(input.commandId, result)
@@ -420,7 +428,7 @@ export class BehaviorHost {
   private activatePending(): void {
     const pending = this.pendingSwitch
     if (pending === undefined) return
-    if (this.run !== undefined && !isTerminal(this.run.status)) return
+    if (this.run !== undefined && !this.run.allowsTakeover) return
     this.pendingSwitch = undefined
     const record = this.registry.get(pending.artifactId)
     // A candidate that retired while the old run was stopping must not take over.

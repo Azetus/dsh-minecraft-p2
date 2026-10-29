@@ -192,6 +192,9 @@ function handle(request: RunnerRequest): void {
           ...(request.input.value === undefined ? {} : { value: request.input.value }),
           thrown: request.input.thrown,
         })
+        // A finished or uncaught-throwing generator can never be resumed; free
+        // the behavior slot so the next switch is not rejected as busy.
+        if (result.kind === 'done' || result.kind === 'threw') currentBehavior = undefined
         send({ type: 'behaviorResult', id: request.id, runId: request.runId, generation: request.generation, result })
       } catch (error) {
         fail(request.id, error)
@@ -199,11 +202,16 @@ function handle(request: RunnerRequest): void {
       return
     }
     case 'behavior.stop': {
-      if (currentBehavior === undefined || currentBehavior.runId !== request.runId) {
+      if (currentBehavior === undefined) {
+        // The generator already completed; stop is idempotent.
+        send({ type: 'behaviorResult', id: request.id, runId: request.runId, generation: request.generation, result: { kind: 'stopped' } })
+        return
+      }
+      if (currentBehavior.runId !== request.runId) {
         send({ type: 'error', id: request.id, code: 'STALE_BEHAVIOR', message: 'behavior stop does not belong to the active run' })
         return
       }
-      const entry = currentBehavior === undefined ? undefined : loaded.get(currentBehavior.artifactId)
+      const entry = loaded.get(currentBehavior.artifactId)
       currentBehavior = undefined
       if (entry === undefined) {
         send({ type: 'behaviorResult', id: request.id, runId: request.runId, generation: request.generation, result: { kind: 'stopped' } })

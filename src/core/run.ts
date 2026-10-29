@@ -100,7 +100,7 @@ export class BehaviorRun {
   }
 
   get allowsTakeover(): boolean {
-    return this.stopControl.allowsNewRun
+    return this.isTerminalStatus() || this.stopControl.allowsNewRun
   }
 
   get confirmation(): ConfirmationRequest | undefined {
@@ -260,6 +260,10 @@ export class BehaviorRun {
     this.confirmationValue.status = 'denied'
     this.statusValue = 'failed'
     return this.outcomes.get(input.commandId) as ConfirmResult
+  }
+
+  private isTerminalStatus(): boolean {
+    return this.statusValue === 'succeeded' || this.statusValue === 'failed' || this.statusValue === 'cancelled'
   }
 
   private advanceStop(now: number): void {

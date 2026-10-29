@@ -257,6 +257,14 @@ describe('runner process behavior binding', () => {
       expect(await client.behaviorResume('run-1', 0, { value: { value: { x: 7 }, meta: {} }, thrown: false }))
         .toEqual({ kind: 'done', value: { type: 'succeed', evidence: { x: 7 } } })
       expect(await client.behaviorStop('run-1', 0)).toEqual({ kind: 'stopped' })
+
+      // A finished generator must free the slot for the next run.
+      await client.behaviorStart('p2:behavior:process', 'run-2', 'act-2', 0, {})
+      expect(await client.behaviorResume('run-2', 0, { thrown: false })).toEqual({
+        kind: 'yield',
+        command: { type: 'query', op: 'position', args: {} },
+      })
+      expect(await client.behaviorStop('run-2', 0)).toEqual({ kind: 'stopped' })
     } finally {
       client.dispose()
     }
@@ -288,13 +296,32 @@ describe('body host with sandbox behavior driver', () => {
     try {
       const checked = await host.check({ sourcePath: path, format: 'js' })
       host.activate(checked.artifactId)
-      host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'runner-switch' })
+      const first = host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'runner-switch' })
       for (let index = 0; index < 50 && host.status().lastRun === null; index += 1) {
         host.tick(index)
         await new Promise(resolve => setTimeout(resolve, 10))
       }
       const status = host.status()
       expect(status.lastRun).toMatchObject({ status: 'succeeded', evidence: { x: 7 } })
+
+      // Terminal JS runs release the runner slot; a second switch must work.
+      const second = host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'runner-switch-2' })
+      expect(second.accepted).toBe(true)
+      let secondRunId: string | undefined
+      for (let index = 0; index < 50; index += 1) {
+        host.tick(100 + index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const current = host.status()
+        if (current.activeRun !== null && current.activeRun.runId !== first.runId) {
+          secondRunId = current.activeRun.runId
+        }
+        if (current.lastRun !== null && current.lastRun.runId !== first.runId && current.lastRun.status === 'succeeded') {
+          secondRunId = current.lastRun.runId
+          break
+        }
+      }
+      expect(secondRunId).toBeDefined()
+      expect(host.status().lastRun).toMatchObject({ runId: secondRunId, status: 'succeeded', evidence: { x: 7 } })
     } finally {
       host.dispose()
       client.dispose()
