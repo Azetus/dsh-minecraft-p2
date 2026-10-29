@@ -200,6 +200,14 @@ function clampNumber(value: JsonValue | undefined, fallback: number, min: number
   return Math.min(max, Math.max(min, number))
 }
 
+/** Stable ordering for optional text fields; missing values sort last. */
+function compareNullableText(left: string | null, right: string | null): number {
+  if (left === right) return 0
+  if (left === null) return 1
+  if (right === null) return -1
+  return left < right ? -1 : 1
+}
+
 function blockPosition(args: Record<string, JsonValue>): { x: number; y: number; z: number } | undefined {
   const { x, y, z } = args
   if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return undefined
@@ -429,6 +437,7 @@ export class MineflayerProvider implements ActPort {
     name: string | null
     displayName: string | null
     type: string | null
+    kind: string | null
     objectType: string | null
     item: { itemId: number; count: number } | null
     position: { x: number; y: number; z: number } | null
@@ -439,6 +448,7 @@ export class MineflayerProvider implements ActPort {
       name?: string
       displayName?: string
       type?: string
+      kind?: string
       objectType?: string
       position?: { x: number; y: number; z: number }
       metadata?: Record<number, unknown>
@@ -459,6 +469,7 @@ export class MineflayerProvider implements ActPort {
       name: record.name ?? null,
       displayName: record.displayName ?? null,
       type: record.type ?? null,
+      kind: record.kind ?? null,
       objectType: record.objectType ?? null,
       item,
       position: position === undefined ? null : { x: position.x, y: position.y, z: position.z },
@@ -700,18 +711,29 @@ export class MineflayerProvider implements ActPort {
           const objectTypeFilter = typeof args.objectType === 'string' ? args.objectType : undefined
           const nameFilter = typeof args.name === 'string' ? args.name : undefined
           const typeFilter = typeof args.type === 'string' ? args.type : undefined
+          const hostileOnly = args.hostileOnly === true
           const maxDistance = typeof args.maxDistance === 'number' && Number.isFinite(args.maxDistance)
             ? Math.max(0, args.maxDistance)
             : undefined
           const limit = clampNumber(args.count, 64, 1, 256)
+          const sort = args.sort === 'name' || args.sort === 'type' || args.sort === 'distance' ? args.sort : 'distance'
+          const descending = args.descending === true
           const origin = this.bot.entity?.position
           const entities = Object.values(this.bot.entities)
             .filter(entity => objectTypeFilter === undefined || (entity as unknown as { objectType?: string }).objectType === objectTypeFilter)
             .filter(entity => typeFilter === undefined || entity.type === typeFilter)
             .filter(entity => nameFilter === undefined || entity.name === nameFilter)
+            .filter(entity => !hostileOnly || (entity as unknown as { kind?: string }).kind === 'Hostile mobs')
             .map(entity => this.entityView(entity, origin))
             .filter(entry => maxDistance === undefined || entry.distance === null || entry.distance <= maxDistance)
-            .sort((left, right) => (left.distance ?? Number.POSITIVE_INFINITY) - (right.distance ?? Number.POSITIVE_INFINITY))
+            .sort((left, right) => {
+              const compared = sort === 'name'
+                ? compareNullableText(left.name, right.name)
+                : sort === 'type'
+                  ? compareNullableText(left.type, right.type)
+                  : (left.distance ?? Number.POSITIVE_INFINITY) - (right.distance ?? Number.POSITIVE_INFINITY)
+              return descending ? -compared : compared
+            })
             .slice(0, limit)
           return {
             status: 'ok',

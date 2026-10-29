@@ -178,6 +178,27 @@ describe('baseline query operations', () => {
     expect(result.value).toMatchObject([{ id: 1, name: 'cow', distance: 2 }])
   })
 
+  it('filters hostile entities and sorts entities by name or distance', () => {
+    const { bot, raw } = fakeBot()
+    ;(raw.entities as Record<number, unknown>)[1] = { id: 1, name: 'zombie', type: 'mob', kind: 'Hostile mobs', position: { x: 5, y: 64, z: 0 } }
+    ;(raw.entities as Record<number, unknown>)[2] = { id: 2, name: 'cow', type: 'mob', kind: 'Passive mobs', position: { x: 1, y: 64, z: 0 } }
+    ;(raw.entities as Record<number, unknown>)[3] = { id: 3, name: 'skeleton', type: 'mob', kind: 'Hostile mobs', position: { x: 3, y: 64, z: 0 } }
+    const provider = new MineflayerProvider(bot)
+
+    const hostiles = provider.query('entities', { hostileOnly: true, sort: 'name' })
+    expect(hostiles.status).toBe('ok')
+    if (hostiles.status !== 'ok') throw new Error('expected hostiles')
+    expect(hostiles.value).toMatchObject([{ name: 'skeleton' }, { name: 'zombie' }])
+
+    const farFirst = provider.query('entities', { sort: 'distance', descending: true })
+    expect(farFirst.status).toBe('ok')
+    if (farFirst.status !== 'ok') throw new Error('expected entities')
+    expect(farFirst.value).toMatchObject([{ name: 'zombie' }, { name: 'skeleton' }, { name: 'cow' }])
+
+    const named = provider.query('entities', { name: 'cow' })
+    expect(named).toMatchObject({ status: 'ok', value: [{ name: 'cow' }] })
+  })
+
   it('returns equipment slots', () => {
     const { bot, raw } = fakeBot()
     ;(raw.inventory.slots as Array<FakeItem | null>)[5] = { name: 'iron_helmet', count: 1 }

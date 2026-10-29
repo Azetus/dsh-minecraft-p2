@@ -259,7 +259,7 @@
 | `position` | — | `{x,y,z,dimension}` | |
 | `inventory` | — | `[{name,count}]` | 仅主背包 |
 | `health` | — | `{health,food,saturation,oxygen,armor[]}` | `armor` 是已穿戴物品列表 |
-| `entities` | `{objectType?,type?,name?,maxDistance?,count?}` | 见 §10.3 | 已实现限距与 `distance` |
+| `entities` | `{objectType?,type?,name?,hostileOnly?,maxDistance?,count?,sort?,descending?}` | 见 §10.3 | 限距 + `distance`；`hostileOnly` 用 `kind==='Hostile mobs'`；`sort` 支持 distance/name/type |
 | `blocks` | `{names?,radius?,count?,yMin?,yMax?,exposed?}` | `[{name,x,y,z,distance}]` | y/exposed 过滤作用于候选集，见 §10.3 |
 | `block` | `{x,y,z}` | `{name,x,y,z}` 或 `null` | |
 | `time` | — | `{timeOfDay,age,paused,doDaylightCycle,difficulty}` | `age` 是世界 age |
