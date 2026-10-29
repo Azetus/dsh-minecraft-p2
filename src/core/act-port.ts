@@ -43,12 +43,15 @@ const CLEANUP_TIMEOUT_MS = 1000
 export class RunnerActPort implements ActPort {
   private current: ActState | undefined
   private readonly loaded = new Map<string, Promise<void>>()
+  private readonly getClient: () => RunnerClient
 
   constructor(
-    private readonly client: RunnerClient,
+    client: RunnerClient | (() => RunnerClient),
     private readonly broker: DeclaredOpBroker,
     private readonly resolveArtifact: (artifactId: string) => ActSource | undefined,
-  ) {}
+  ) {
+    this.getClient = typeof client === 'function' ? client : () => client
+  }
 
   /** Route an operation request emitted by the runner. */
   handleOp(event: RunnerOpEvent): void {
@@ -146,6 +149,18 @@ export class RunnerActPort implements ActPort {
     return this.broker.pollRelease(now)
   }
 
+  /** Fail the in-flight act and drop per-process artifact caches. */
+  runnerExited(error: P2Error): void {
+    const state = this.current
+    if (state !== undefined && state.phase !== 'terminal') this.fail(state, error)
+    this.loaded.clear()
+  }
+
+  /** Drop cached artifact loads after the runner process was replaced. */
+  reset(): void {
+    this.loaded.clear()
+  }
+
   dispose(): void {
     const state = this.current
     if (state === undefined || state.phase === 'terminal') return
@@ -158,7 +173,7 @@ export class RunnerActPort implements ActPort {
     try {
       await this.load(state.source)
       if (state.phase !== 'starting') return
-      const result = await this.client.actStart(state.source.artifactId, args)
+      const result = await this.getClient().actStart(state.source.artifactId, args)
       state.phase = 'running'
       this.applyHook(state, result)
     } catch (error) {
@@ -169,7 +184,7 @@ export class RunnerActPort implements ActPort {
   private load(source: ActSource): Promise<void> {
     const existing = this.loaded.get(source.artifactId)
     if (existing !== undefined) return existing
-    const promise = this.client.load('act', source.artifactId, source.code).then(() => undefined)
+    const promise = this.getClient().load('act', source.artifactId, source.code).then(() => undefined)
     this.loaded.set(source.artifactId, promise)
     promise.catch(() => this.loaded.delete(source.artifactId))
     return promise
@@ -193,7 +208,7 @@ export class RunnerActPort implements ActPort {
     state.lastUpdateAt = now
     state.inFlight = true
     const inputs = { handles: state.results.splice(0) }
-    void this.client.actUpdate(inputs).then(result => {
+    void this.getClient().actUpdate(inputs).then(result => {
       state.inFlight = false
       this.applyHook(state, result)
     }).catch(error => {
@@ -247,7 +262,7 @@ export class RunnerActPort implements ActPort {
 
   private async runStop(state: ActState, reason: 'completed' | 'failed' | 'cancelled'): Promise<void> {
     try {
-      const stopResult = await this.client.actStop(reason)
+      const stopResult = await this.getClient().actStop(reason)
       if (stopResult.kind === 'failed') {
         // A failed stop hook still requires broker cleanup; report it after cleanup.
         state.business = state.business ?? { ok: false, error: p2Error('ACT_STOP_FAILED', 'control', stopResult.error?.message ?? 'act stop failed', { module: 'core.act-port' }) }
@@ -261,7 +276,7 @@ export class RunnerActPort implements ActPort {
   private async runCleanup(state: ActState): Promise<void> {
     const deadline = state.cleanupUntil ?? Date.now() + CLEANUP_TIMEOUT_MS
     while (Date.now() < deadline) {
-      const result = await this.client.actCleanup({ handles: [] })
+      const result = await this.getClient().actCleanup({ handles: [] })
       if (result.kind === 'running') {
         await new Promise(resolve => setTimeout(resolve, 20))
         continue

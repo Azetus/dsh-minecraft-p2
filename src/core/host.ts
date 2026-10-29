@@ -95,7 +95,7 @@ export type BehaviorHostOptions = {
   /** Experiment-only rescue channel; behavior/act cannot reach it. */
   rescue?: (request: RescueParams, context: { owner: string }) => Promise<RescueResult>
   /** Sandbox runner used for author JS behavior code in production. */
-  behaviorRunner?: RunnerClient
+  behaviorRunner?: RunnerClient | (() => RunnerClient)
 }
 
 /** Library-level behavior host used by M1 tests; body wiring remains separate. */
@@ -111,7 +111,7 @@ export class BehaviorHost {
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
   private readonly loadBehaviorManifest: BehaviorHostOptions['loadBehaviorManifest']
   private readonly rescue: BehaviorHostOptions['rescue']
-  private readonly behaviorRunner: RunnerClient | undefined
+  private readonly behaviorRunner: RunnerClient | (() => RunnerClient) | undefined
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined

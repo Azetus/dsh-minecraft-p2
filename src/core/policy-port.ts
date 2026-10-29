@@ -12,11 +12,19 @@ export type PolicySource = {
 /** Policy calls routed to the isolated runner; waiting never blocks the tick. */
 export class RunnerPolicyPort implements PolicyPort {
   private readonly loaded = new Map<string, Promise<void>>()
+  private readonly getClient: () => RunnerClient
 
   constructor(
-    private readonly client: RunnerClient,
+    client: RunnerClient | (() => RunnerClient),
     private readonly resolveArtifact: (artifactId: string) => PolicySource | undefined,
-  ) {}
+  ) {
+    this.getClient = typeof client === 'function' ? client : () => client
+  }
+
+  /** Drop cached artifact loads after the runner process was replaced. */
+  reset(): void {
+    this.loaded.clear()
+  }
 
   call(ref: ArtifactRef, inputs: Record<string, JsonValue>): PolicyOutcome {
     const artifactId = ref.artifactId
@@ -36,7 +44,7 @@ export class RunnerPolicyPort implements PolicyPort {
       return { status: 'ok', value: value ?? null }
     }
     void this.load(source)
-      .then(() => this.client.runPolicy(artifactId, inputs))
+      .then(() => this.getClient().runPolicy(artifactId, inputs))
       .then(result => {
         value = result
         state = 'ok'
@@ -56,7 +64,7 @@ export class RunnerPolicyPort implements PolicyPort {
   private load(source: PolicySource): Promise<void> {
     const existing = this.loaded.get(source.artifactId)
     if (existing !== undefined) return existing
-    const promise = this.client.load('policy', source.artifactId, source.code).then(() => undefined)
+    const promise = this.getClient().load('policy', source.artifactId, source.code).then(() => undefined)
     this.loaded.set(source.artifactId, promise)
     promise.catch(() => this.loaded.delete(source.artifactId))
     return promise

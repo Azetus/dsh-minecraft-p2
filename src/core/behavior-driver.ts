@@ -149,16 +149,19 @@ export class LocalBehaviorDriver implements BehaviorDriver {
 /** Driver backed by the sandbox runner; one request per generator step. */
 export class RunnerBehaviorDriver implements BehaviorDriver {
   readonly asynchronous = true
+  private readonly getClient: () => RunnerClient
 
   constructor(
-    private readonly client: RunnerClient,
+    client: RunnerClient | (() => RunnerClient),
     private readonly artifact: BehaviorArtifact,
     private readonly runId: string,
-  ) {}
+  ) {
+    this.getClient = typeof client === 'function' ? client : () => client
+  }
 
   async start(params: Record<string, JsonValue>): Promise<void> {
-    await this.client.load('behavior', this.artifact.artifactId, this.artifact.code ?? '')
-    await this.client.behaviorStart(
+    await this.getClient().load('behavior', this.artifact.artifactId, this.artifact.code ?? '')
+    await this.getClient().behaviorStart(
       this.artifact.artifactId,
       this.runId,
       `${this.runId}:behavior`,
@@ -170,7 +173,7 @@ export class RunnerBehaviorDriver implements BehaviorDriver {
   async resume(input: DriverResume, identity: DriverIdentity): Promise<DriverStep> {
     let result: RunnerBehaviorResult
     try {
-      result = await this.client.behaviorResume(identity.runId, identity.generation, {
+      result = await this.getClient().behaviorResume(identity.runId, identity.generation, {
         ...(input.thrown ? { thrown: true } : { thrown: false }),
         ...(input.value === undefined ? {} : { value: input.value as JsonValue }),
       })
@@ -185,7 +188,7 @@ export class RunnerBehaviorDriver implements BehaviorDriver {
 
   async stop(identity: DriverIdentity): Promise<DriverStop> {
     try {
-      const result = await this.client.behaviorStop(identity.runId, identity.generation)
+      const result = await this.getClient().behaviorStop(identity.runId, identity.generation)
       return { yielded: result.kind === 'stopped' && result.yielded === true }
     } catch (error) {
       throw runnerError(error, 'cleanup')

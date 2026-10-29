@@ -7,7 +7,7 @@ import { BehaviorHost } from '../core/host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { RunnerActPort } from '../core/act-port.ts'
 import { RunnerPolicyPort } from '../core/policy-port.ts'
-import { RunnerClient } from '../core/runner-client.ts'
+import { RunnerManager } from '../core/runner-manager.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { DevOpsHost, createCompositeOpSource } from './dev-ops.ts'
@@ -119,14 +119,19 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     let actPort: RunnerActPort | undefined
     let policyPort: RunnerPolicyPort | undefined
     let host: BehaviorHost | undefined
-    const client = new RunnerClient({
+    const runner = new RunnerManager({
       entry: runnerEntry,
       onOp: event => actPort?.handleOp(event),
       onLog: line => process.stderr.write(`[runner] ${line}\n`),
-      onExit: (code) => host?.runnerExited(`runner exited with code ${String(code)}`),
+      onExit: code => {
+        const message = `runner exited with code ${String(code)}`
+        actPort?.runnerExited(p2Error('RUNNER_EXITED', 'runtime', message, { module: 'body.runner' }))
+        policyPort?.reset()
+        host?.runnerExited(message)
+      },
     })
-    actPort = new RunnerActPort(client, ops, artifactId => host?.actSource(artifactId))
-    policyPort = new RunnerPolicyPort(client, artifactId => host?.policySource(artifactId))
+    actPort = new RunnerActPort(() => runner.ensure(), ops, artifactId => host?.actSource(artifactId))
+    policyPort = new RunnerPolicyPort(() => runner.ensure(), artifactId => host?.policySource(artifactId))
     host = new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
       query: ops.queryPort(),
@@ -138,9 +143,9 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
         },
       },
       providerStatus: () => provider.liveStatus(),
-      loadManifest: (kind, code, artifactId) => client.load(kind, artifactId, code),
-      loadBehaviorManifest: (code, artifactId) => client.load('behavior', artifactId, code),
-      behaviorRunner: client,
+      loadManifest: (kind, code, artifactId) => runner.ensure().load(kind, artifactId, code),
+      loadBehaviorManifest: (code, artifactId) => runner.ensure().load('behavior', artifactId, code),
+      behaviorRunner: () => runner.ensure(),
       rescue: (request, context) => executeRescue(provider, request, {
         allowRescue: loaded.config.allowRescue,
         tpRadius: loaded.config.rescueTpRadius,
@@ -156,7 +161,7 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
         devHost?.dispose()
         host?.dispose()
         actPort?.dispose()
-        client.dispose()
+        runner.dispose()
       },
     }
   } catch (error) {

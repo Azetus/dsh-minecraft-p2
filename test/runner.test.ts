@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { checkAct, forbiddenToken } from '../src/core/act-checker.ts'
 import { BehaviorHost } from '../src/core/host.ts'
 import { RunnerClient } from '../src/core/runner-client.ts'
+import { RunnerManager } from '../src/core/runner-manager.ts'
 import type { ReleaseStatus } from '../src/core/node-runtime.ts'
 import { Sandbox, SandboxError } from '../src/runner/sandbox.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
@@ -409,6 +410,110 @@ describe('runner crash and release gating', () => {
     } finally {
       host.dispose()
       client.dispose()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('runner manager recovery', () => {
+  it('replaces a crashed runner on the next ensure', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    let exits = 0
+    const manager = new RunnerManager({
+      entry,
+      onOp: () => {},
+      heartbeatMs: 0,
+      onExit: () => { exits += 1 },
+    })
+    try {
+      const first = manager.ensure()
+      await first.ping()
+      expect(manager.generation).toBe(1)
+
+      first.kill()
+      for (let index = 0; index < 100 && manager.isRunning; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(manager.isRunning).toBe(false)
+      expect(exits).toBe(1)
+
+      const second = manager.ensure()
+      expect(second).not.toBe(first)
+      await second.ping()
+      expect(manager.generation).toBe(2)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  it('recovers the behavior path after the runner exits', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    let host: BehaviorHost
+    const manager = new RunnerManager({
+      entry,
+      onOp: () => {},
+      heartbeatMs: 0,
+      onExit: code => host.runnerExited(`runner exited with code ${String(code)}`),
+    })
+    host = new BehaviorHost({
+      bindingId: 'binding-recovery',
+      query: () => ({ status: 'ok', value: { x: 1 }, meta: { source: 'query', scope: 'test', sampledAt: 0 } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+      behaviorRunner: () => manager.ensure(),
+      loadBehaviorManifest: (code, artifactId) => manager.ensure().load('behavior', artifactId, code),
+    })
+    const directory = mkdtempSync(join(tmpdir(), 'p2-runner-recovery-'))
+    const timeoutPath = join(directory, 'timeout.mjs')
+    const successPath = join(directory, 'success.mjs')
+    writeFileSync(timeoutPath, `
+      defineBehavior({
+        manifest: { id: 'recovery-timeout', mode: 'continuous', parameters: {} },
+        *run() { for (;;) {} },
+      })
+    `)
+    writeFileSync(successPath, `
+      defineBehavior({
+        manifest: { id: 'recovery-success', mode: 'finite', parameters: {} },
+        *run(ctx) {
+          const pos = yield ctx.query('position', {})
+          return ctx.succeed({ x: pos.value.x })
+        },
+      })
+    `)
+    try {
+      const timeout = await host.check({ sourcePath: timeoutPath, format: 'js' })
+      const success = await host.check({ sourcePath: successPath, format: 'js' })
+      host.activate(timeout.artifactId)
+      host.activate(success.artifactId)
+
+      host.switch({ artifactId: timeout.artifactId, params: {}, commandId: 'timeout' })
+      for (let index = 0; index < 100 && host.status().lastRun === null; index += 1) {
+        host.tick(index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(host.status().lastRun).toMatchObject({ status: 'failed', error: { code: 'BEHAVIOR_STEP_TIMEOUT' } })
+      for (let index = 0; index < 100 && manager.isRunning; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(manager.isRunning).toBe(false)
+
+      const recovered = host.switch({ artifactId: success.artifactId, params: {}, commandId: 'recovered' })
+      expect(recovered.accepted).toBe(true)
+      for (let index = 0; index < 100; index += 1) {
+        host.tick(1000 + index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const last = host.status().lastRun
+        if (last !== null && last.runId === recovered.runId && last.status === 'succeeded') break
+      }
+      expect(host.status().lastRun).toMatchObject({
+        runId: recovered.runId,
+        status: 'succeeded',
+        evidence: { x: 1 },
+      })
+      expect(manager.generation).toBe(2)
+    } finally {
+      host.dispose()
+      manager.dispose()
       rmSync(directory, { recursive: true, force: true })
     }
   })
