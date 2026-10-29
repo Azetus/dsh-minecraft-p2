@@ -36,7 +36,9 @@ const DRIVER_LOAD_TIMEOUT_MS = 1000
 
 type JsCommand =
   | { type: 'query'; op: string; args: Record<string, JsonValue> }
-  | { type: 'act'; ref: unknown; args: Record<string, JsonValue> }
+  | { type: 'act'; ref: unknown; args: Record<string, JsonValue>; options?: { async?: boolean } }
+  | { type: 'actWait'; actId: string }
+  | { type: 'actStop'; actId: string; reason?: string }
   | { type: 'decide'; ref: unknown; inputs: Record<string, JsonValue> }
   | { type: 'wait'; durationMs: number }
   | { type: 'progress'; value: JsonValue }
@@ -128,7 +130,16 @@ export class LocalBehaviorDriver implements BehaviorDriver {
       runId: this.runId,
       now: () => Date.now(),
       query: (op: string, args: Record<string, JsonValue> = {}) => command('query', { op, args }),
-      act: (ref: unknown, args: Record<string, JsonValue> = {}) => command('act', { ref, args }),
+      act: (ref: unknown, args: Record<string, JsonValue> = {}, options?: { async?: boolean }) => command('act', {
+        ref,
+        args,
+        ...(options === undefined ? {} : { options }),
+      }),
+      actWait: (actId: string) => command('actWait', { actId }),
+      actStop: (actId: string, reason?: string) => command('actStop', {
+        actId,
+        ...(reason === undefined ? {} : { reason }),
+      }),
       decide: (ref: unknown, inputs: Record<string, JsonValue> = {}) => command('decide', { ref, inputs }),
       wait: (durationMs: number) => command('wait', { durationMs }),
       progress: (value: JsonValue) => command('progress', { value }),

@@ -12,7 +12,9 @@ import type { TraceSink } from './trace.ts'
 
 type JsCommand =
   | { type: 'query'; op: string; args: Record<string, JsonValue> }
-  | { type: 'act'; ref: ArtifactRefLike; args: Record<string, JsonValue> }
+  | { type: 'act'; ref: ArtifactRefLike; args: Record<string, JsonValue>; options?: unknown }
+  | { type: 'actWait'; actId: unknown }
+  | { type: 'actStop'; actId: unknown; reason?: unknown }
   | { type: 'decide'; ref: ArtifactRefLike; inputs: Record<string, JsonValue> }
   | { type: 'wait'; durationMs: number }
   | { type: 'progress'; value: JsonValue }
@@ -22,10 +24,26 @@ type ArtifactRefLike = { definitionId: string; artifactId?: string }
 
 type ResumeSlot = { value: unknown; thrown: boolean }
 
+/** One non-blocking control-act handle owned by this run. */
+type ActEntry = {
+  actId: string
+  definitionId: string
+  artifactId: string
+  startedAt: number
+  handle: ActHandle
+  stopRequested: boolean
+  terminal: ActPoll | undefined
+}
+
 type Pending =
   | { kind: 'query'; poll: () => QueryOutcome }
   | { kind: 'policy'; poll: () => PolicyOutcome }
-  | { kind: 'act'; handle: ActHandle }
+  | { kind: 'act'; actId: string }
+  | { kind: 'actStop'; actId: string; deadline: number }
+
+type PendingTerminal =
+  | { status: 'succeeded'; evidence?: JsonValue }
+  | { status: 'failed'; error: P2Error }
 
 export type JsBehaviorRunOptions = {
   runId: string
@@ -51,6 +69,7 @@ const MAX_PROGRESS_BYTES = 4 * 1024
 const MAX_LOG_MESSAGE_BYTES = 4 * 1024
 const MAX_EVIDENCE_BYTES = 16 * 1024
 const LOG_BUFFER_BYTES = 256 * 1024
+const ACT_STOP_TIMEOUT_MS = 2000
 
 /**
  * JS behavior scheduler. The generator itself runs in a BehaviorDriver (the
@@ -87,6 +106,11 @@ export class JsBehaviorRun {
   private logDropped = 0
   private readonly stopControl = new StopControl()
   private actSequence = 0
+  private readonly acts = new Map<string, ActEntry>()
+  /** A control effect could not be proven released; new control work is refused. */
+  private unconfirmedAct = false
+  private pendingTerminal: PendingTerminal | undefined
+  private finishDeadline: number | undefined
 
   constructor(options: JsBehaviorRunOptions) {
     this.runId = options.runId
@@ -130,6 +154,7 @@ export class JsBehaviorRun {
 
   observation(): RunObservation {
     const state = this.stopControl.state
+    const handle = this.activeHandle()
     return {
       currentStep: this.currentStep,
       stepCount: this.stepCount,
@@ -141,6 +166,15 @@ export class JsBehaviorRun {
       logCount: this.logEntries.length,
       logDropped: this.logDropped,
       ...(this.evidenceValue === undefined ? {} : { evidence: this.evidenceValue }),
+      ...(handle === undefined ? {} : {
+        activeActHandle: {
+          actId: handle.actId,
+          definitionId: handle.definitionId,
+          artifactId: handle.artifactId,
+          startedAt: handle.startedAt,
+          state: handle.stopRequested ? 'stopping' as const : 'running' as const,
+        },
+      }),
     }
   }
 
@@ -163,9 +197,7 @@ export class JsBehaviorRun {
       this.failureIntent = error
       this.stopControl.requestStop()
       this.stopControl.accept(now)
-      if (this.pending?.kind === 'act') {
-        try { this.pending.handle.stop() } catch {}
-      }
+      this.stopAllHandles()
       this.pending = undefined
       this.resumeSlot = undefined
       this.waitUntil = undefined
@@ -181,15 +213,16 @@ export class JsBehaviorRun {
     this.stopControl.requestStop()
     const tokens = this.stopControl.accept(now)
     if (tokens !== undefined) {
-      if (this.pending?.kind === 'act') {
-        try { this.pending.handle.stop() } catch {}
-      }
+      this.stopAllHandles()
       this.pending = undefined
       this.resumeSlot = undefined
       this.waitUntil = undefined
+      this.pendingTerminal = undefined
+      this.finishDeadline = undefined
       this.options.act.stopRun?.(now, this.runId)
       this.beginCleanup()
     } else {
+      this.stopAllHandles()
       this.options.act.stopRun?.(now, this.runId)
     }
     this.advanceStop(now)
@@ -205,6 +238,10 @@ export class JsBehaviorRun {
     if (!this.ready) return this.statusValue
     this.clock = now
     this.budget = STEP_BUDGET
+    if (this.pendingTerminal !== undefined) {
+      this.pollFinishing(now)
+      return this.statusValue
+    }
     this.pump()
     return this.statusValue
   }
@@ -235,6 +272,9 @@ export class JsBehaviorRun {
   private pump(): void {
     while (!this.isTerminal()) {
       if (this.stepInFlight) return
+      // Async handles finish independently of the generator; poll them every
+      // pass so the control slot frees without a wait.
+      this.pollHandles()
       if (this.pending !== undefined) {
         if (!this.pollPending()) return
       }
@@ -370,8 +410,8 @@ export class JsBehaviorRun {
         this.evidenceValue = evidence as JsonValue
       }
       this.currentStep = null
-      this.statusValue = 'succeeded'
       this.releaseDriver()
+      this.completeWith({ status: 'succeeded', ...(this.evidenceValue === undefined ? {} : { evidence: this.evidenceValue }) })
       return
     }
     if (value.type === 'fail') {
@@ -381,10 +421,97 @@ export class JsBehaviorRun {
         this.fail(invalidReturn('return ctx.fail(code, message) requires a code and a message'))
         return
       }
-      this.fail(p2Error(code, 'runtime', message, { module: 'core.js-run' }, { phase: 'return' }))
+      this.releaseDriver()
+      this.completeWith({
+        status: 'failed',
+        error: p2Error(code, 'runtime', message, { module: 'core.js-run' }, { phase: 'return' }),
+      })
       return
     }
     this.fail(invalidReturn('run returned a value that is not ctx.succeed/ctx.fail'))
+  }
+
+  /**
+   * A generator return only ends the run after every in-flight handle is
+   * stopped and the control ledger is released. An unconfirmed release can
+   * never become a success (CONTRACTS §4.2).
+   */
+  private completeWith(terminal: PendingTerminal): void {
+    if (this.hasActiveHandle()) {
+      this.pendingTerminal = terminal
+      this.finishDeadline = (this.clock > 0 ? this.clock : Date.now()) + ACT_STOP_TIMEOUT_MS
+      this.stopAllHandles()
+      return
+    }
+    if (this.unconfirmedAct) {
+      this.applyTerminal({
+        status: 'failed',
+        error: p2Error('STOP_UNCONFIRMED', 'control', 'an act control effect was not confirmed released', { module: 'core.js-run' }),
+      })
+      return
+    }
+    this.applyTerminal(terminal)
+  }
+
+  private pollFinishing(now: number): void {
+    this.pollHandles()
+    for (const entry of this.acts.values()) {
+      if (entry.terminal === undefined) this.stopEntry(entry)
+    }
+    const pending = this.pendingTerminal
+    if (pending === undefined) return
+    if (this.unconfirmedAct) {
+      this.applyTerminal({
+        status: 'failed',
+        error: p2Error('STOP_UNCONFIRMED', 'control', 'an act control effect was not confirmed released', { module: 'core.js-run' }),
+      })
+      return
+    }
+    if (this.hasActiveHandle()) {
+      if (this.finishDeadline !== undefined && now >= this.finishDeadline) {
+        this.applyTerminal({
+          status: 'failed',
+          error: p2Error('STOP_UNCONFIRMED', 'control', 'act handles did not stop before the deadline', { module: 'core.js-run' }),
+        })
+      }
+      return
+    }
+    const release = this.releaseConclusion(now)
+    if (release === 'released') {
+      this.applyTerminal(pending)
+      return
+    }
+    if (release === 'unconfirmed') {
+      this.unconfirmedAct = true
+      this.applyTerminal({
+        status: 'failed',
+        error: p2Error('STOP_UNCONFIRMED', 'control', 'act control release was not confirmed', { module: 'core.js-run' }),
+      })
+      return
+    }
+    if (this.finishDeadline !== undefined && now >= this.finishDeadline) {
+      this.applyTerminal({
+        status: 'failed',
+        error: p2Error('STOP_UNCONFIRMED', 'control', 'act control release was not confirmed before the deadline', { module: 'core.js-run' }),
+      })
+    }
+  }
+
+  private applyTerminal(terminal: PendingTerminal): void {
+    if (this.isTerminal()) return
+    this.pendingTerminal = undefined
+    this.finishDeadline = undefined
+    if (terminal.status === 'succeeded') {
+      this.statusValue = 'succeeded'
+      return
+    }
+    this.currentError = terminal.error
+    this.statusValue = 'failed'
+  }
+
+  private releaseConclusion(now: number): 'released' | 'stopping' | 'unconfirmed' {
+    const release = this.options.act.pollRelease?.(now) ?? 'released'
+    return release === 'idle' ? 'released' : release
   }
 
   private dispatch(value: unknown): void {
@@ -439,24 +566,27 @@ export class JsBehaviorRun {
           return
         }
         this.setStep('act', `act:${ref.definitionId}`, ref.definitionId, null)
-        this.activeAct = ref.definitionId
-        const x = value.args.x
-        const z = value.args.z
-        this.activeTarget = typeof x === 'number' && typeof z === 'number' ? { x, z } : null
-        const actInstanceId = `${this.runId}:act:${this.stopControl.generation}:${++this.actSequence}`
-        this.stopControl.beginAct(actInstanceId)
-        try {
-          this.pending = {
-            kind: 'act',
-            handle: this.options.act.start(
-              { definitionId: ref.definitionId, artifactId },
-              value.args as Record<string, JsonValue>,
-              { runId: this.runId, actInstanceId, generation: this.stopControl.generation },
-            ),
-          }
-        } catch (error) {
-          this.resumeSlot = { value: error, thrown: true }
+        this.beginAct(ref.definitionId, artifactId, value.args as Record<string, JsonValue>, value.options)
+        return
+      }
+      case 'actWait': {
+        if (typeof value.actId !== 'string' || value.actId.length === 0) {
+          this.fail(invalidCommand('actWait command requires an actId'))
+          return
         }
+        this.beginActWait(value.actId)
+        return
+      }
+      case 'actStop': {
+        if (typeof value.actId !== 'string' || value.actId.length === 0) {
+          this.fail(invalidCommand('actStop command requires an actId'))
+          return
+        }
+        if (value.reason !== undefined && typeof value.reason !== 'string') {
+          this.fail(invalidCommand('actStop reason must be a string'))
+          return
+        }
+        this.beginActStop(value.actId, this.clock > 0 ? this.clock : Date.now())
         return
       }
       case 'decide': {
@@ -607,22 +737,209 @@ export class JsBehaviorRun {
       this.completePolicy(outcome)
       return true
     }
-    const outcome: ActPoll = pending.handle.poll()
-    if (outcome.status === 'running') return false
-    this.pending = undefined
-    this.activeAct = null
-    this.activeTarget = null
-    if (outcome.status === 'succeeded') {
-      this.resumeSlot = { value: { value: outcome.result, meta: outcome.meta }, thrown: false }
-    } else if (outcome.status === 'failed') {
-      this.resumeSlot = { value: outcome.error, thrown: true }
-    } else {
-      this.resumeSlot = {
-        value: p2Error('ACT_CANCELLED', 'runtime', 'act was cancelled', { module: 'core.js-run' }),
-        thrown: true,
+    if (pending.kind === 'act') {
+      const entry = this.acts.get(pending.actId)
+      if (entry === undefined) {
+        this.pending = undefined
+        this.resumeSlot = { value: actNotFound(pending.actId), thrown: true }
+        return true
       }
+      const outcome = entry.terminal ?? entry.handle.poll()
+      if (outcome.status === 'running') return false
+      this.cacheTerminal(entry, outcome)
+      this.pending = undefined
+      if (outcome.status === 'succeeded') {
+        this.resumeSlot = { value: outcome.result ?? null, thrown: false }
+      } else if (outcome.status === 'failed') {
+        this.resumeSlot = { value: outcome.error, thrown: true }
+      } else {
+        this.resumeSlot = {
+          value: p2Error('ACT_CANCELLED', 'runtime', 'act was cancelled', { module: 'core.js-run' }),
+          thrown: true,
+        }
+      }
+      return true
     }
+    // actStop: wait for the handle cleanup and the broker release conclusion.
+    const entry = this.acts.get(pending.actId)
+    if (entry === undefined) {
+      this.pending = undefined
+      this.unconfirmedAct = true
+      this.resumeSlot = { value: actStopResult('unconfirmed'), thrown: false }
+      return true
+    }
+    if (entry.terminal === undefined) {
+      const outcome = entry.handle.poll()
+      if (outcome.status === 'running') {
+        if (this.clock < pending.deadline) return false
+        this.pending = undefined
+        this.unconfirmedAct = true
+        this.options.act.stopRun?.(this.clock, this.runId)
+        this.resumeSlot = { value: actStopResult('unconfirmed'), thrown: false }
+        return true
+      }
+      this.cacheTerminal(entry, outcome)
+    }
+    const release = this.releaseConclusion(this.clock)
+    if (release === 'stopping') {
+      if (this.clock < pending.deadline) return false
+      this.pending = undefined
+      this.unconfirmedAct = true
+      this.options.act.stopRun?.(this.clock, this.runId)
+      this.resumeSlot = { value: actStopResult('unconfirmed'), thrown: false }
+      return true
+    }
+    this.pending = undefined
+    if (release === 'unconfirmed') this.unconfirmedAct = true
+    this.resumeSlot = { value: actStopResult(release), thrown: false }
     return true
+  }
+
+  /** Start one control act; async returns the handle id immediately. */
+  private beginAct(
+    definitionId: string,
+    artifactId: string,
+    args: Record<string, JsonValue>,
+    options: unknown,
+  ): void {
+    if (this.unconfirmedAct) {
+      this.resumeSlot = { value: unconfirmedError(), thrown: true }
+      return
+    }
+    if (this.hasActiveHandle()) {
+      this.resumeSlot = { value: actInFlightError(), thrown: true }
+      return
+    }
+    const async = readAsyncOption(options)
+    if (async === undefined) {
+      this.fail(invalidCommand('act options must be an object with a boolean async field'))
+      return
+    }
+    const actId = `${this.runId}:act:${this.stopControl.generation}:${++this.actSequence}`
+    this.stopControl.beginAct(actId)
+    this.activeAct = definitionId
+    this.activeTarget = typeof args.x === 'number' && typeof args.z === 'number'
+      ? { x: args.x, z: args.z }
+      : null
+    let handle: ActHandle
+    try {
+      handle = this.options.act.start(
+        { definitionId, artifactId },
+        args,
+        { runId: this.runId, actInstanceId: actId, generation: this.stopControl.generation },
+      )
+    } catch (error) {
+      this.resumeSlot = { value: error, thrown: true }
+      return
+    }
+    const entry: ActEntry = {
+      actId,
+      definitionId,
+      artifactId,
+      startedAt: Date.now(),
+      handle,
+      stopRequested: false,
+      terminal: undefined,
+    }
+    this.acts.set(actId, entry)
+    if (async) {
+      this.resumeSlot = { value: { actId }, thrown: false }
+      return
+    }
+    this.pending = { kind: 'act', actId }
+  }
+
+  private beginActWait(actId: string): void {
+    const entry = this.acts.get(actId)
+    if (entry === undefined) {
+      this.resumeSlot = { value: actNotFound(actId), thrown: true }
+      return
+    }
+    if (entry.terminal !== undefined) {
+      this.resumeTerminal(entry.terminal)
+      return
+    }
+    this.pending = { kind: 'act', actId }
+  }
+
+  private beginActStop(actId: string, now: number): void {
+    const entry = this.acts.get(actId)
+    if (entry === undefined) {
+      this.resumeSlot = { value: actNotFound(actId), thrown: true }
+      return
+    }
+    if (entry.terminal !== undefined) {
+      this.resumeSlot = { value: actStopResult('released'), thrown: false }
+      return
+    }
+    this.stopEntry(entry)
+    this.pending = { kind: 'actStop', actId, deadline: now + ACT_STOP_TIMEOUT_MS }
+  }
+
+  private resumeTerminal(outcome: ActPoll): void {
+    if (outcome.status === 'succeeded') {
+      this.resumeSlot = { value: outcome.result ?? null, thrown: false }
+      return
+    }
+    if (outcome.status === 'failed') {
+      this.resumeSlot = { value: outcome.error, thrown: true }
+      return
+    }
+    this.resumeSlot = {
+      value: p2Error('ACT_CANCELLED', 'runtime', 'act was cancelled', { module: 'core.js-run' }),
+      thrown: true,
+    }
+  }
+
+  private pollHandles(): void {
+    // A handle the generator is actively waiting on is polled by pollPending at
+    // the established cadence; polling it twice per tick would double-advance it.
+    const pendingActId = this.pending?.kind === 'act' || this.pending?.kind === 'actStop'
+      ? this.pending.actId
+      : undefined
+    for (const entry of this.acts.values()) {
+      if (entry.terminal !== undefined || entry.actId === pendingActId) continue
+      const outcome = entry.handle.poll()
+      if (outcome.status === 'running') continue
+      this.cacheTerminal(entry, outcome)
+    }
+  }
+
+  private cacheTerminal(entry: ActEntry, outcome: ActPoll): void {
+    if (entry.terminal !== undefined) return
+    entry.terminal = outcome
+    if (!this.hasActiveHandle()) {
+      this.activeAct = null
+      this.activeTarget = null
+    }
+  }
+
+  private stopEntry(entry: ActEntry): void {
+    if (entry.stopRequested || entry.terminal !== undefined) return
+    entry.stopRequested = true
+    try {
+      entry.handle.stop()
+    } catch {
+      // The ledger still accounts for the effect; release stays unconfirmed.
+    }
+  }
+
+  private stopAllHandles(): void {
+    for (const entry of this.acts.values()) this.stopEntry(entry)
+  }
+
+  private hasActiveHandle(): boolean {
+    for (const entry of this.acts.values()) {
+      if (entry.terminal === undefined) return true
+    }
+    return false
+  }
+
+  private activeHandle(): ActEntry | undefined {
+    for (const entry of this.acts.values()) {
+      if (entry.terminal === undefined) return entry
+    }
+    return undefined
   }
 
   /** Release the sandbox generator slot after a terminal run. */
@@ -657,6 +974,9 @@ export class JsBehaviorRun {
     this.pending = undefined
     this.waitUntil = undefined
     this.resumeSlot = undefined
+    this.pendingTerminal = undefined
+    this.finishDeadline = undefined
+    this.stopAllHandles()
     this.releaseDriver()
   }
 
@@ -697,6 +1017,30 @@ function parseRef(value: unknown): ArtifactRefLike | undefined {
 
 function invalidCommand(message: string): P2Error {
   return p2Error('BEHAVIOR_INVALID_COMMAND', 'runtime', message, { module: 'core.js-run' }, { phase: 'yield' })
+}
+
+function actInFlightError(): P2Error {
+  return p2Error('ACT_IN_FLIGHT', 'control', 'a control act is already in flight for this run', { module: 'core.js-run' })
+}
+
+function actNotFound(actId: string): P2Error {
+  return p2Error('ACT_NOT_FOUND', 'validation', `act handle is not owned by this run: ${actId}`, { module: 'core.js-run' }, { actId })
+}
+
+function unconfirmedError(): P2Error {
+  return p2Error('STOP_UNCONFIRMED', 'control', 'a previous act control effect was not confirmed released', { module: 'core.js-run' })
+}
+
+function actStopResult(release: 'released' | 'unconfirmed'): { release: 'released' | 'unconfirmed'; error?: P2Error } {
+  return release === 'released' ? { release } : { release, error: unconfirmedError() }
+}
+
+/** `undefined` means the options object itself is invalid; default is sync. */
+function readAsyncOption(value: unknown): boolean | undefined {
+  if (value === undefined) return false
+  if (!isRecord(value)) return undefined
+  if (value.async === undefined) return false
+  return typeof value.async === 'boolean' ? value.async : undefined
 }
 
 function invalidReturn(message: string): P2Error {

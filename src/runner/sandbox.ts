@@ -32,7 +32,13 @@ globalThis.__p2behaviorStart = function (paramsJson, runId) {
     runId: runId,
     now: function () { return __p2now(); },
     query: function (op, args) { return { type: 'query', op: op, args: args === undefined ? {} : args }; },
-    act: function (ref, args) { return { type: 'act', ref: ref, args: args === undefined ? {} : args }; },
+    act: function (ref, args, options) {
+      var command = { type: 'act', ref: ref, args: args === undefined ? {} : args };
+      if (options !== undefined && options !== null) command.options = options;
+      return command;
+    },
+    actWait: function (actId) { return { type: 'actWait', actId: actId }; },
+    actStop: function (actId, reason) { return { type: 'actStop', actId: actId, reason: reason }; },
     decide: function (ref, inputs) { return { type: 'decide', ref: ref, inputs: inputs === undefined ? {} : inputs }; },
     wait: function (durationMs) { return { type: 'wait', durationMs: durationMs }; },
     progress: function (value) { return { type: 'progress', value: value }; },

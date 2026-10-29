@@ -332,6 +332,7 @@ actStop(actId: string, reason?: string): { release: "released" | "unconfirmed"; 
 | 中断 | `actStop` 走统一两阶段停止：请求停止 → 等待释放确认；返回 `unconfirmed` 时不启动新 act。 |
 | 释放 | run 进入终态或取消前，执行器必须停止并确认所有未完成句柄；未确认则 run 不得报告成功。 |
 | 作用域 | 句柄属于当前 run，不跨 run 保存、不写入 status、不作为其他命令参数。 |
+| 状态 | status 只暴露 `activeActHandle` 摘要（actId、definitionId、artifactId、startedAt、running/stopping），不暴露句柄本身。 |
 | 查询 | 持有句柄期间允许 query/decide/log/progress/wait；不允许启动第二个控制 act。 |
 
 act 自身仍只报告固有完成/失败/不可用原因；终止条件由 behavior 在调用语境中决定。

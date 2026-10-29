@@ -50,7 +50,8 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   ['process', /(?<![\w$])process(?![\w$])/u],
   ['fetch', /(?<![\w$])fetch(?![\w$])/u],
   ['XMLHttpRequest', /(?<![\w$])XMLHttpRequest(?![\w$])/u],
-  ['async', /(?<![\w$])async(?![\w$])/u],
+  ['async function', /(?<![\w$])async\s+(?:function\b|\*)/u],
+  ['async arrow', /(?<![\w$])async\s*(?:\([^)]*\)|[\w$]+)\s*=>/u],
   ['await', /(?<![\w$])await(?![\w$])/u],
   ['timer', /(?<![\w$])(setTimeout|setInterval|setImmediate|queueMicrotask)(?![\w$])/u],
 ]

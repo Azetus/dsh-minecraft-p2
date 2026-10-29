@@ -1,6 +1,7 @@
 import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
 import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
 import type {
+  ActiveActHandleSummary,
   CleanupState,
   ControlHealth,
   CurrentStep,
@@ -81,6 +82,7 @@ export type HostStatus = {
   providerState: ProviderRuntimeStatus | null
   commandCount: number
   activeAct: string | null
+  activeActHandle: ActiveActHandleSummary | null
   activeNode: string | null
   activeTarget: { x: number; z: number } | null
   waiting: string | null
@@ -1016,6 +1018,7 @@ export class BehaviorHost {
       providerState: this.providerStatus?.() ?? null,
       commandCount: this.ledger.size,
       activeAct: active?.describe().activeAct ?? null,
+      activeActHandle: observation?.activeActHandle ?? null,
       activeNode: active?.describe().activeNode ?? null,
       activeTarget: active?.describe().activeTarget ?? null,
       waiting: active?.describe().waiting ?? null,

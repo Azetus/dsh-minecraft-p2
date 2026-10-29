@@ -430,6 +430,7 @@ export class BodyRuntime {
       providerState,
       commandCount: this.commands.size,
       activeAct: this.behavior?.status().activeAct ?? null,
+      activeActHandle: this.behavior?.status().activeActHandle ?? null,
       activeNode: this.behavior?.status().activeNode ?? null,
       activeTarget: this.behavior?.status().activeTarget ?? null,
       waiting: this.behavior?.status().waiting ?? null,

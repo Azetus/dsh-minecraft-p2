@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import type { BehaviorArtifact } from '../src/contracts/ir.ts'
+import type { JsonValue } from '../src/contracts/types.ts'
 import { checkBehaviorJs } from '../src/core/js-checker.ts'
 import { JsBehaviorRun } from '../src/core/js-runtime.ts'
 import type { ActHandle, ActPoll, ActPort, PolicyPort, QueryOutcome, QueryPort, ReleaseStatus } from '../src/core/node-runtime.ts'
@@ -491,5 +492,173 @@ describe('runner exit and release proof', () => {
     expect(run.status).toBe('failed')
     expect(run.error?.code).toBe('RUNNER_EXITED')
     expect(run.allowsTakeover).toBe(true)
+  })
+})
+
+// 类别：状态安全
+// 保护对象：CONTRACTS §4.2（act 句柄：单控制、ACT_IN_FLIGHT、ACT_NOT_FOUND、收尾确认）、
+//           BEHAVIOR §3（ctx.act/actWait/actStop 与 status 摘要）、RUNTIME §5（run 终态前释放）。
+// 失败模式：多个控制 act 并存；旧句柄在 run 成功后仍生效；停止未确认仍启动新 act；
+//           已终态句柄重复等待被误判为仍在运行。
+
+type FakeHandleState = {
+  running: boolean
+  result: JsonValue | undefined
+  stops: number
+  stubborn: boolean
+}
+
+function controllableAct(options: {
+  stubborn?: boolean
+  release?: () => ReleaseStatus
+} = {}): { port: ActPort; handles: FakeHandleState[]; starts: Array<Record<string, unknown>> } {
+  const handles: FakeHandleState[] = []
+  const starts: Array<Record<string, unknown>> = []
+  return {
+    handles,
+    starts,
+    port: {
+      start: (_ref, _args, identity) => {
+        starts.push(identity as unknown as Record<string, unknown>)
+        const state: FakeHandleState = {
+          running: true,
+          result: undefined,
+          stops: 0,
+          stubborn: options.stubborn === true,
+        }
+        handles.push(state)
+        return {
+          poll: (): ActPoll => {
+            if (state.running) return { status: 'running' }
+            if (state.result !== undefined) return { status: 'succeeded', result: state.result }
+            return { status: 'cancelled' }
+          },
+          stop: () => {
+            state.stops += 1
+            if (!state.stubborn) state.running = false
+          },
+        }
+      },
+      stopRun: () => {},
+      ...(options.release === undefined ? {} : { pollRelease: options.release }),
+    },
+  }
+}
+
+describe('async act handles', () => {
+  it('starts an act asynchronously and resumes it through actWait', async () => {
+    const artifact = await checked(behavior(`
+      const handle = yield ctx.act('move', { x: 2, z: 3 }, { async: true })
+      const out = yield ctx.actWait(handle.actId)
+      return ctx.succeed({ out })
+    `, { acts: ['move'] }))
+    const fake = controllableAct()
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    expect(fake.handles).toHaveLength(1)
+    expect(fake.starts[0]).toMatchObject({ runId: 'run-1', generation: 0 })
+    expect(fake.starts[0]?.actInstanceId).toMatch(/^run-1:act:/u)
+    expect(fake.handles[0]!.stops).toBe(0)
+
+    fake.handles[0]!.running = false
+    fake.handles[0]!.result = { done: true }
+    expect(run.tick(1)).toBe('succeeded')
+    expect(run.observation().evidence).toEqual({ out: { done: true } })
+  })
+
+  it('stops an in-flight handle and resumes actStop with the release conclusion', async () => {
+    const artifact = await checked(behavior(`
+      const handle = yield ctx.act('move', {}, { async: true })
+      const stopped = yield ctx.actStop(handle.actId)
+      return ctx.succeed({ stopped })
+    `, { acts: ['move'] }))
+    const fake = controllableAct({ release: () => 'released' })
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    expect(fake.handles[0]!.stops).toBe(1)
+    expect(run.tick(1)).toBe('succeeded')
+    expect(run.observation().evidence).toEqual({ stopped: { release: 'released' } })
+  })
+
+  it('refuses a second control act and stops the first before a success terminal', async () => {
+    const artifact = await checked(behavior(`
+      const first = yield ctx.act('move', {}, { async: true })
+      try {
+        yield ctx.act('dig', {}, { async: true })
+      } catch (error) {
+        return ctx.succeed({ code: error.code, first: first.actId })
+      }
+    `, { acts: ['move', 'dig'] }))
+    const fake = controllableAct()
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    expect(run.status).toBe('running')
+    expect(fake.handles).toHaveLength(1)
+    expect(fake.handles[0]!.stops).toBe(1)
+    expect(run.tick(1)).toBe('succeeded')
+    expect(run.observation().evidence).toMatchObject({ code: 'ACT_IN_FLIGHT' })
+  })
+
+  it('stops an unfinished handle before reporting success', async () => {
+    const artifact = await checked(behavior(`
+      yield ctx.act('move', {}, { async: true })
+      return ctx.succeed({ ok: true })
+    `, { acts: ['move'] }))
+    const fake = controllableAct()
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    expect(fake.handles[0]!.stops).toBe(1)
+    expect(run.tick(1)).toBe('succeeded')
+    expect(run.observation().evidence).toEqual({ ok: true })
+  })
+
+  it('blocks new control acts after an unconfirmed stop and never reports success', async () => {
+    const artifact = await checked(behavior(`
+      const handle = yield ctx.act('move', {}, { async: true })
+      const stopped = yield ctx.actStop(handle.actId)
+      yield ctx.progress({ release: stopped.release })
+      try {
+        yield ctx.act('dig', {}, { async: true })
+      } catch (error) {
+        return ctx.succeed({ code: error.code })
+      }
+    `, { acts: ['move', 'dig'] }))
+    const fake = controllableAct({ release: () => 'unconfirmed' })
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    expect(run.tick(1)).toBe('failed')
+    expect(run.error?.code).toBe('STOP_UNCONFIRMED')
+    expect(run.observation().progress).toEqual({ release: 'unconfirmed' })
+    expect(fake.handles).toHaveLength(1)
+  })
+
+  it('rejects actWait for a handle the run does not own', async () => {
+    const artifact = await checked(behavior(`
+      try { yield ctx.actWait('missing') } catch (error) { return ctx.succeed({ code: error.code }) }
+    `))
+    const run = makeRun(artifact)
+    expect(run.tick(0)).toBe('succeeded')
+    expect(run.observation().evidence).toEqual({ code: 'ACT_NOT_FOUND' })
+  })
+
+  it('exposes the active handle summary in the observation', async () => {
+    const artifact = await checked(behavior(`
+      const handle = yield ctx.act('move', {}, { async: true })
+      yield ctx.wait(1000)
+      return ctx.succeed({ id: handle.actId })
+    `, { acts: ['move'] }))
+    const fake = controllableAct()
+    const run = makeRun(artifact, { act: fake.port, resolveAct: id => `p2:act:${id}` })
+
+    expect(run.tick(0)).toBe('running')
+    const summary = run.observation().activeActHandle
+    expect(summary).toMatchObject({ definitionId: 'move', artifactId: 'p2:act:move', state: 'running' })
+    expect(summary?.actId).toMatch(/^run-1:act:/u)
+    run.stop(1)
   })
 })

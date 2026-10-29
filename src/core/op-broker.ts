@@ -346,7 +346,9 @@ export class DeclaredOpBroker {
   pollRelease(now = Date.now()): ReleaseStatus {
     const tracking = this.release
     if (tracking === undefined) {
-      return this.entries.size === 0 ? 'idle' : 'stopping'
+      // No release was requested, but an act stop may still ask whether the
+      // ledger is idle; observing prunes finished handles.
+      return this.observe() === 'idle' ? 'idle' : 'stopping'
     }
     // An untracked effect can end, but nothing proves it did: never report
     // `released` for this run.

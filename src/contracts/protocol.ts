@@ -192,6 +192,14 @@ export type CleanupState = 'none' | 'running' | 'released' | 'unconfirmed'
 export type ControlHealth = 'ok' | 'unknown' | 'faulted'
 export type SwitchState = 'none' | 'queued' | 'stopping' | 'released' | 'unconfirmed'
 
+export type ActiveActHandleSummary = {
+  actId: string
+  definitionId: string
+  artifactId: string
+  startedAt: number
+  state: 'running' | 'stopping'
+}
+
 export type RunObservation = {
   currentStep: CurrentStep | null
   stepCount: number
@@ -203,6 +211,7 @@ export type RunObservation = {
   logCount: number
   logDropped: number
   evidence?: JsonValue
+  activeActHandle?: ActiveActHandleSummary
 }
 
 export type StatusResult = {
@@ -221,6 +230,7 @@ export type StatusResult = {
   providerState?: ProviderRuntimeStatus | null
   commandCount: number
   activeAct?: string | null
+  activeActHandle?: ActiveActHandleSummary | null
   activeNode?: string | null
   activeTarget?: { x: number; z: number } | null
   waiting?: string | null
