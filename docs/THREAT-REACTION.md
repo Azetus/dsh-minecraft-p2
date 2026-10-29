@@ -1,6 +1,6 @@
 # 威胁反应与条件切换（guard v2）
 
-> 状态：**v2 设计定稿，待实现**（2026-10-29）。相对首版的差异：多 guard 并存、条件由“声明查询 + 纯 policy”表达、触发按优先级串行、事件增加 `deferred`。首版 health 单 guard 语义保留为语法糖。
+> 状态：**v2 已实现（fake 测试通过，未做本阶段实机验证）**（2026-10-30）。相对首版的差异：多 guard 并存、条件由“声明查询 + 纯 policy”表达、触发按优先级串行、事件增加 `deferred`。首版 health 单 guard 语义保留为语法糖。
 
 ## 1. 问题与目标
 
@@ -127,6 +127,7 @@ guards: Array<{
   priority: number
   state: 'active' | 'firing' | 'fired' | 'deferred' | 'expired' | 'cleared' | 'error'
   condition: GuardCondition
+  target: { artifactId: string; params: JsonValue }
   armedAt: number
   expiresAt: number
   attemptId?: string
@@ -144,6 +145,8 @@ lastSwitch: {
   phase: 'precheck-failed' | 'stopping' | 'started' | 'failed' | 'suppressed'
 } | null
 ```
+
+`deferred` 是等待在途切换完成时的可观察状态；切换落定（started/failed/suppressed/expired）后回到 `active` 并立即重评，授权不被消费。
 
 `guards` 是授权摘要；事件流以 body `seq` 为准，不以摘要字段推断历史。
 

@@ -641,4 +641,52 @@ describe('guard priority and serial switching', () => {
     expect(status.activeRun?.artifactId ?? null).not.toBe(target.artifactId)
     expect(status.guardEvents?.some(event => event.phase === 'suppressed' && event.guardId === 'same')).toBe(true)
   })
+
+  it('records a handoff failure when the target retires during the stop', async () => {
+    const control = releasableAct()
+    const { host } = await targetHost('guard-g4-1', healthQuery(() => 6), control.act)
+    const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    const target = await host.check({ sourcePath: source('target.mjs', done) })
+    host.activate(current.artifactId)
+    host.activate(target.artifactId)
+    host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
+    host.tick(0)
+    host.setGuard({
+      guardId: 'handoff',
+      condition: health10,
+      targetArtifactId: target.artifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+    host.tick(1_000)
+    expect(host.status().lastSwitch?.phase).toBe('stopping')
+
+    host.retire(target.artifactId)
+    control.release('released')
+    host.tick(1_001)
+    const status = host.status()
+    expect(status.lastSwitch).toMatchObject({ phase: 'failed' })
+    expect(status.guards[0]?.state).toBe('error')
+    expect(status.activeRun?.artifactId ?? null).not.toBe(target.artifactId)
+  })
+
+  it('keeps a bounded guard event log with monotonic seq', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-g4-2', healthQuery(() => 20))
+    for (let index = 0; index < 40; index += 1) {
+      host.setGuard({
+        guardId: `event-${index}`,
+        condition: health10,
+        targetArtifactId,
+        params: {},
+        ttlMs: 60_000,
+      }, index)
+      host.clearGuard(`event-${index}`, index)
+    }
+    const events = host.guardEventLog()
+    expect(events).toHaveLength(64)
+    const sequences = events.map(event => event.seq)
+    expect(sequences).toEqual([...sequences].sort((left, right) => left - right))
+    expect(sequences.at(-1)).toBe(80)
+    expect(host.guardHighWatermark()).toBe(80)
+  })
 })
