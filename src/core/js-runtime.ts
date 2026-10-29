@@ -8,6 +8,7 @@ import { StopControl, cleanupStateOf, controlHealthOf, stopUnconfirmedError, swi
 import type { StopState } from './stop-control.ts'
 import { LocalBehaviorDriver } from './behavior-driver.ts'
 import type { BehaviorDriver, DriverIdentity, DriverResume, DriverStep } from './behavior-driver.ts'
+import type { TraceSink } from './trace.ts'
 
 type JsCommand =
   | { type: 'query'; op: string; args: Record<string, JsonValue> }
@@ -41,6 +42,8 @@ export type JsBehaviorRunOptions = {
   resolvePolicy: (definitionId: string) => string | undefined
   /** Sandbox driver; omitted runs the generator in-process for tests. */
   driver?: BehaviorDriver
+  /** Developer trace; never consulted for control decisions. */
+  trace?: TraceSink
 }
 
 const STEP_BUDGET = 100
@@ -247,10 +250,15 @@ export class JsBehaviorRun {
       this.resumeSlot = undefined
       this.stepCount += 1
       const identity: DriverIdentity = { runId: this.runId, generation: this.stopControl.generation }
+      const token = this.options.trace?.begin('behavior', 'step', {
+        runId: this.runId,
+        detail: { step: this.stepCount },
+      })
       let result: DriverStep | Promise<DriverStep>
       try {
         result = this.driver.resume(slot, identity)
       } catch (error) {
+        this.options.trace?.finish(token, 'error')
         this.handleDriverError(error)
         return
       }
@@ -258,17 +266,23 @@ export class JsBehaviorRun {
         this.stepInFlight = true
         void result.then(step => {
           this.stepInFlight = false
-          if (this.isTerminal()) return
+          if (this.isTerminal()) {
+            this.options.trace?.finish(token, 'end')
+            return
+          }
           this.applyDriverStep(step)
+          this.options.trace?.finish(token, 'end')
           if (!this.isTerminal()) this.pump()
         }).catch((error: unknown) => {
           this.stepInFlight = false
+          this.options.trace?.finish(token, 'error')
           if (this.isTerminal()) return
           this.handleDriverError(error)
         })
         return
       }
       this.applyDriverStep(result)
+      this.options.trace?.finish(token, 'end')
       if (this.pending !== undefined || this.waitUntil !== undefined) return
     }
   }

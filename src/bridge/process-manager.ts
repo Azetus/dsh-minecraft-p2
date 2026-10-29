@@ -201,6 +201,10 @@ export class BodyManager {
     return this.activeClient().observe(op, args)
   }
 
+  trace(params: JsonValue = {}): Promise<JsonValue> {
+    return this.activeClient().trace(params)
+  }
+
   private activeClient(): BodyClient {
     if (this.state !== 'active' || this.client === undefined) {
       throw new Error(`body is ${this.state}`)

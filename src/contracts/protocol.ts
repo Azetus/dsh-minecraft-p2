@@ -27,6 +27,7 @@ export const METHODS = [
   'behavior.stop',
   'guard.set',
   'guard.clear',
+  'trace',
   'stop',
   'shutdown',
   'command.get',
@@ -360,6 +361,54 @@ export type ConfirmationResult = {
 
 export type HeartbeatParams = { seq: number }
 export type HeartbeatResult = { seq: number; alive: true }
+
+export type TraceKind = 'run' | 'behavior' | 'act' | 'op' | 'guard' | 'watch'
+export type TracePhase = 'start' | 'end' | 'error' | 'event'
+
+/** One bounded developer-trace record; durations are monotonic wall-clock ms. */
+export type TraceEvent = {
+  seq: number
+  at: number
+  kind: TraceKind
+  phase: TracePhase
+  name: string
+  durationMs?: number
+  runId?: string
+  actId?: string
+  opId?: string
+  detail?: JsonValue
+}
+
+export type TraceParams = {
+  kind?: TraceKind
+  /** Match events attributed to one run. */
+  runId?: string
+  /** Match act events by definition id. */
+  act?: string
+  /** Match op events by operation name. */
+  op?: string
+  sinceSeq?: number
+  /** Keep the most recent N matching events; stats still cover all matches. */
+  limit?: number
+}
+
+/** Nearest-rank percentiles over completed spans. */
+export type TraceStats = {
+  count: number
+  p50: number | null
+  p95: number | null
+  max: number | null
+}
+
+export type TraceResult = {
+  events: TraceEvent[]
+  stats: Partial<Record<TraceKind, TraceStats>>
+  dropped: number
+  capacity: number
+  seq: number
+  /** True when sinceSeq predates the retained window. */
+  gap: boolean
+}
 
 export type StopParams = { runId?: RunId }
 export type StopResult = { accepted: true; runId: RunId | null }

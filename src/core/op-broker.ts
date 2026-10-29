@@ -3,6 +3,7 @@ import { p2Error } from '../contracts/protocol.ts'
 import type { ActHandle, ActPoll, QueryOutcome, QueryPort, ReleaseStatus } from './node-runtime.ts'
 import { requireCapability, requireOperation } from '../operation/index.ts'
 import type { OperationContract } from '../operation/index.ts'
+import type { TraceSink, TraceToken } from './trace.ts'
 
 /** Identity stamped on a registered control intent; late messages carry it too. */
 export type ControlIdentity = {
@@ -42,6 +43,8 @@ export type OpBrokerOptions = {
   settleMs?: number
   /** Total stop deadline measured from the first `stopRun`. */
   stopTimeoutMs?: number
+  trace?: TraceSink
+  now?: () => number
 }
 
 type EntryPhase = 'active' | 'stopping' | 'unknown'
@@ -89,6 +92,8 @@ export class DeclaredOpBroker {
   private readonly budgets: Record<string, number>
   private readonly settleMs: number
   private readonly stopTimeoutMs: number
+  private readonly trace: TraceSink | undefined
+  private readonly now: () => number
   private sequence = 0
   private release: ReleaseTracking | undefined
 
@@ -96,6 +101,8 @@ export class DeclaredOpBroker {
     this.budgets = options.budgets ?? {}
     this.settleMs = options.settleMs ?? DEFAULT_SETTLE_MS
     this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
+    this.trace = options.trace
+    this.now = options.now ?? Date.now
   }
 
   get activeName(): string | undefined {
@@ -133,24 +140,45 @@ export class DeclaredOpBroker {
     // Intent is visible before the provider can act; a throw still leaves a
     // record that release must account for.
     this.entries.add(entry)
+    const startedAt = this.now()
+    const token = this.trace?.begin('op', name, {
+      ...(identity === undefined ? {} : { runId: identity.runId }),
+      opId: name,
+      detail: { opKind: 'control' },
+    })
     let handle: ActHandle
     try {
       handle = this.source.start(name, args, identity)
     } catch (error) {
+      this.trace?.finish(token, 'error')
       entry.phase = 'unknown'
       throw error
     }
+    this.trace?.finish(token, 'end')
     entry.handle = handle
+    let terminalReported = false
+    const reportTerminal = (result: ActPoll): void => {
+      if (terminalReported || result.status === 'running') return
+      terminalReported = true
+      this.trace?.record('op', 'end', name, {
+        ...(identity === undefined ? {} : { runId: identity.runId }),
+        opId: entry.id,
+        durationMs: this.now() - startedAt,
+        detail: { opKind: 'control', status: result.status },
+      })
+    }
     return {
       ...(handle.cleanup === undefined ? {} : {
         cleanup: (): ActPoll => {
           const result = handle.cleanup?.() ?? { status: 'running' as const }
+          reportTerminal(result)
           if (result.status !== 'running') this.entries.delete(entry)
           return result
         },
       }),
       poll: (): ActPoll => {
         const result = handle.poll()
+        reportTerminal(result)
         if (result.status !== 'running') this.entries.delete(entry)
         return result
       },
@@ -177,7 +205,32 @@ export class DeclaredOpBroker {
     if (this.source.capabilities !== undefined) {
       requireCapability(contract, this.source.capabilities, 'core.op-broker')
     }
-    return this.source.query(op, args)
+    const token = this.trace?.begin('op', op, { opId: op, detail: { opKind: 'query' } })
+    let outcome: QueryOutcome
+    try {
+      outcome = this.source.query(op, args)
+    } catch (error) {
+      this.trace?.finish(token, 'error')
+      throw error
+    }
+    if (outcome.status === 'pending') return this.tracePendingQuery(token, outcome)
+    this.trace?.finish(token, outcome.status === 'failed' ? 'error' : 'end')
+    return outcome
+  }
+
+  /** Keep a query span open until the provider settles the pending request. */
+  private tracePendingQuery(
+    token: TraceToken | undefined,
+    outcome: Extract<QueryOutcome, { status: 'pending' }>,
+  ): QueryOutcome {
+    if (token === undefined) return outcome
+    const poll = (): QueryOutcome => {
+      const next = outcome.poll()
+      if (next.status === 'pending') return { status: 'pending', poll }
+      this.trace?.finish(token, next.status === 'failed' ? 'error' : 'end')
+      return next
+    }
+    return { status: 'pending', poll }
   }
 
   /** Aggregate control state from tracked handles and the provider. */

@@ -22,6 +22,7 @@ import { checkOp } from './op-checker.ts'
 import { checkBehaviorJs } from './js-checker.ts'
 import type { AuthoredOpArtifact } from './op-artifact.ts'
 import type { OperationContract } from '../operation/index.ts'
+import type { TraceSink } from './trace.ts'
 import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
 import { JsBehaviorRun } from './js-runtime.ts'
@@ -149,6 +150,8 @@ export type BehaviorHostOptions = {
   rescue?: (request: RescueParams, context: { owner: string }) => Promise<RescueResult>
   /** Sandbox runner used for author JS behavior code in production. */
   behaviorRunner?: RunnerClient | (() => RunnerClient)
+  /** Developer trace sink; recording never affects scheduling or control. */
+  trace?: TraceSink
 }
 
 /** Library-level behavior host used by M1 tests; body wiring remains separate. */
@@ -165,10 +168,12 @@ export class BehaviorHost {
   private readonly loadBehaviorManifest: BehaviorHostOptions['loadBehaviorManifest']
   private readonly rescue: BehaviorHostOptions['rescue']
   private readonly behaviorRunner: RunnerClient | (() => RunnerClient) | undefined
+  private readonly trace: TraceSink | undefined
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined
   private runArtifact: string | undefined
+  private runTrace: { runId: string; name: string; startedAt: number; artifactId: string } | undefined
   private pendingSwitch: PendingSwitch | undefined
   private lastRun: LastRunSummary | null = null
   private sequence = 0
@@ -199,6 +204,7 @@ export class BehaviorHost {
     this.loadBehaviorManifest = options.loadBehaviorManifest
     this.rescue = options.rescue
     this.behaviorRunner = options.behaviorRunner
+    this.trace = options.trace
     this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
@@ -507,6 +513,16 @@ export class BehaviorHost {
       throw p2Error('ARTIFACT_NOT_BEHAVIOR', 'validation', 'artifactId is not a behavior artifact', { module: 'core.host' })
     }
     const runId = this.newRunId()
+    this.runTrace = {
+      runId,
+      name: artifact.definition.id,
+      startedAt: Date.now(),
+      artifactId: artifact.artifactId,
+    }
+    this.trace?.record('run', 'start', artifact.definition.id, {
+      runId,
+      detail: { artifactId: artifact.artifactId, format: artifact.format ?? 'ir' },
+    })
     if (artifact.format === 'js') {
       const acts = artifact.resolvedDependencies?.acts ?? {}
       const policies = artifact.resolvedDependencies?.policies ?? {}
@@ -522,6 +538,7 @@ export class BehaviorHost {
         allowedPolicies: new Set(Object.values(policies)),
         resolveAct: definitionId => acts[definitionId],
         resolvePolicy: definitionId => policies[definitionId],
+        ...(this.trace === undefined ? {} : { trace: this.trace }),
         ...(this.behaviorRunner === undefined
           ? {}
           : { driver: new RunnerBehaviorDriver(this.behaviorRunner, artifact, runId) }),
@@ -842,6 +859,15 @@ export class BehaviorHost {
     }
     this.guardEvents.push(event)
     while (this.guardEvents.length > GUARD_EVENT_LIMIT) this.guardEvents.shift()
+    this.trace?.record('guard', 'event', phase, {
+      ...(this.run === undefined ? {} : { runId: this.run.runId }),
+      detail: {
+        guardId: input.guardId,
+        ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+        ...(input.targetArtifactId === undefined ? {} : { targetArtifactId: input.targetArtifactId }),
+        ...(input.message === undefined ? {} : { message: input.message }),
+      },
+    })
   }
 
   confirm(input: ConfirmInput): ConfirmResult {
@@ -1026,6 +1052,19 @@ export class BehaviorHost {
       ...(run.error === undefined ? {} : { error: run.error }),
       progress: observation.progress,
       ...(observation.evidence === undefined ? {} : { evidence: observation.evidence }),
+    }
+    const trace = this.runTrace
+    if (trace !== undefined && trace.runId === run.runId) {
+      this.runTrace = undefined
+      this.trace?.record('run', run.status === 'succeeded' ? 'end' : 'error', trace.name, {
+        runId: trace.runId,
+        durationMs: Date.now() - trace.startedAt,
+        detail: {
+          status: run.status,
+          artifactId: trace.artifactId,
+          ...(run.error === undefined ? {} : { code: run.error.code }),
+        },
+      })
     }
   }
 }

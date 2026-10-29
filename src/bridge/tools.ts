@@ -31,8 +31,13 @@ export type ToolRegistration = {
   dispose: () => void
 }
 
+export type P2ToolOptions = {
+  /** Register the developer-only p2_trace tool. */
+  devTrace?: boolean
+}
+
 /** Register owner-scoped P2 tools after a human `/p2 start`; never starts a body. */
-export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolRegistration {
+export function registerP2Tools(agent: AgentLike, manager: BodyManager, options: P2ToolOptions = {}): ToolRegistration {
   const tools = agent.ctx?.tools
   if (tools === undefined) {
     return { owner: { sessionId: agent.session.id, agentId: agent.id }, dispose: () => {} }
@@ -258,6 +263,34 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
       }
     }),
   })
+
+  if (options.devTrace === true) {
+    register({
+      name: 'p2_trace',
+      description: 'Developer-only bounded execution trace: run/behavior/act/op/guard/watch events with p50/p95 durations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['run', 'behavior', 'act', 'op', 'guard', 'watch'], description: 'Event kind filter' },
+          runId: { type: 'string', description: 'Only events attributed to this run' },
+          act: { type: 'string', description: 'Only act events with this definition id' },
+          op: { type: 'string', description: 'Only op events with this operation name' },
+          sinceSeq: { type: 'number', description: 'Return events with a greater seq' },
+          limit: { type: 'number', description: 'Keep the most recent N matching events' },
+        },
+        additionalProperties: false,
+      },
+      output: jsonOutput(),
+      execute: guarded(async args => manager.trace({
+        ...(typeof args.kind === 'string' ? { kind: args.kind } : {}),
+        ...(typeof args.runId === 'string' ? { runId: args.runId } : {}),
+        ...(typeof args.act === 'string' ? { act: args.act } : {}),
+        ...(typeof args.op === 'string' ? { op: args.op } : {}),
+        ...(typeof args.sinceSeq === 'number' ? { sinceSeq: args.sinceSeq } : {}),
+        ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+      } as JsonValue)),
+    })
+  }
 
   register({
     name: 'p2_rescue',

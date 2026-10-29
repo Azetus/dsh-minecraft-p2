@@ -6,6 +6,7 @@ import { CheckerError } from '../core/checker.ts'
 import { RegistryError } from '../core/registry.ts'
 import type { DebugLog } from '../core/logging.ts'
 import type { WorkQuota } from '../core/quota.ts'
+import type { TraceSink } from '../core/trace.ts'
 
 import {
   PROTOCOL_VERSION,
@@ -41,6 +42,8 @@ import type {
   SwitchResult,
   ActivateParams,
   ActivateResult,
+  TraceParams,
+  TraceResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -62,8 +65,9 @@ export class BodyRuntime {
   private lastHeartbeatAt = 0
   private readonly rescueState: { enabled: boolean; tpRadius: number } | undefined
   private readonly devOpsState: (() => DevOpsStatus | null) | undefined
+  private readonly trace: TraceSink | undefined
 
-  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota }) {
+  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota; trace?: TraceSink }) {
     this.body = options.body
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     this.behavior = options.behavior
@@ -75,6 +79,7 @@ export class BodyRuntime {
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs
     this.rescueState = options.rescue
     this.devOpsState = options.devOps
+    this.trace = options.trace
     if (this.owner !== null) this.lastHeartbeatAt = this.now()
   }
 
@@ -124,6 +129,8 @@ export class BodyRuntime {
         return { ...base, result: this.describe() }
       case 'status':
         return { ...base, result: this.status() }
+      case 'trace':
+        return { ...base, result: this.traceResult(envelope.params) as unknown as JsonValue }
       case 'stop':
         return this.handleStop(base, envelope)
       case 'shutdown':
@@ -447,6 +454,13 @@ export class BodyRuntime {
     }
   }
 
+  private traceResult(params: JsonValue): TraceResult {
+    if (this.trace === undefined) {
+      return { events: [], stats: {}, dropped: 0, capacity: 0, seq: 0, gap: false }
+    }
+    return this.trace.read(parseTraceParams(params))
+  }
+
   tickBehavior(now = this.now()): string | undefined {
     const status = this.behavior?.tick(now)
     if (status !== undefined && status !== this.lastBehaviorStatus) {
@@ -681,6 +695,28 @@ function parseStopParams(params: JsonValue): { value: StopParams } | { error: P2
     return { error: invalidMessageError('stop runId must be a string') }
   }
   return { value: { runId: runId as RunId } }
+}
+
+const TRACE_KINDS: ReadonlySet<string> = new Set(['run', 'behavior', 'act', 'op', 'guard', 'watch'])
+
+/** Invalid trace filters are ignored field by field; tracing never fails a request. */
+function parseTraceParams(params: JsonValue): TraceParams {
+  const record = asRecord(params)
+  if (record === undefined) return {}
+  const filter: TraceParams = {}
+  if (typeof record.kind === 'string' && TRACE_KINDS.has(record.kind)) {
+    filter.kind = record.kind as NonNullable<TraceParams['kind']>
+  }
+  if (typeof record.runId === 'string' && record.runId.length > 0) filter.runId = record.runId
+  if (typeof record.act === 'string' && record.act.length > 0) filter.act = record.act
+  if (typeof record.op === 'string' && record.op.length > 0) filter.op = record.op
+  if (typeof record.sinceSeq === 'number' && Number.isInteger(record.sinceSeq) && record.sinceSeq >= 0) {
+    filter.sinceSeq = record.sinceSeq
+  }
+  if (typeof record.limit === 'number' && Number.isInteger(record.limit) && record.limit > 0) {
+    filter.limit = record.limit
+  }
+  return filter
 }
 
 function asRecord(value: JsonValue): Record<string, JsonValue> | undefined {

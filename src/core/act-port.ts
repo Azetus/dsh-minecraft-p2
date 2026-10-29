@@ -4,6 +4,7 @@ import type { ActHandle, ActIdentity, ActPoll, ActPort, ActRefLike, QueryOutcome
 import type { DeclaredOpBroker } from './op-broker.ts'
 import type { RunnerClient, RunnerOpEvent } from './runner-client.ts'
 import { RunnerError } from './runner-client.ts'
+import type { TraceSink, TraceToken } from './trace.ts'
 
 export type ActSource = {
   artifactId: string
@@ -31,6 +32,8 @@ type ActState = {
   startedAt: number
   cleanupUntil: number | undefined
   lastUpdateAt: number
+  trace: TraceToken | undefined
+  stopStartedAt: number | undefined
 }
 
 const DEFAULT_ACT_LIMIT_MS = 30_000
@@ -49,6 +52,7 @@ export class RunnerActPort implements ActPort {
     client: RunnerClient | (() => RunnerClient),
     private readonly broker: DeclaredOpBroker,
     private readonly resolveArtifact: (artifactId: string) => ActSource | undefined,
+    private readonly trace?: TraceSink,
   ) {
     this.getClient = typeof client === 'function' ? client : () => client
   }
@@ -130,6 +134,11 @@ export class RunnerActPort implements ActPort {
       startedAt: Date.now(),
       cleanupUntil: undefined,
       lastUpdateAt: 0,
+      trace: this.trace?.begin('act', source.definitionId, {
+        ...(identity === undefined ? {} : { runId: identity.runId }),
+        actId: source.artifactId,
+      }),
+      stopStartedAt: undefined,
     }
     this.current = state
     void this.begin(state, args)
@@ -164,17 +173,23 @@ export class RunnerActPort implements ActPort {
   dispose(): void {
     const state = this.current
     if (state === undefined || state.phase === 'terminal') return
+    this.finishStart(state, 'end')
     this.stopOperations(state)
     state.phase = 'terminal'
     state.final = { status: 'cancelled' }
+    this.recordTerminal(state, 'event', 'cancelled')
   }
 
   private async begin(state: ActState, args: Record<string, JsonValue>): Promise<void> {
     try {
       await this.load(state.source)
-      if (state.phase !== 'starting') return
+      if (state.phase !== 'starting') {
+        this.finishStart(state, 'end')
+        return
+      }
       const result = await this.getClient().actStart(state.source.artifactId, args)
       state.phase = 'running'
+      this.finishStart(state, 'end')
       this.applyHook(state, result)
     } catch (error) {
       this.fail(state, asP2Error(error, 'core.act-port'))
@@ -248,6 +263,7 @@ export class RunnerActPort implements ActPort {
   private requestStop(state: ActState): void {
     if (state.phase === 'terminal' || state.stopRequested) return
     state.stopRequested = true
+    state.stopStartedAt ??= Date.now()
     this.stopOperations(state)
     this.beginStop(state, 'cancelled')
   }
@@ -298,29 +314,55 @@ export class RunnerActPort implements ActPort {
   private complete(state: ActState): void {
     if (state.phase === 'terminal') return
     state.phase = 'terminal'
+    this.finishStart(state, 'end')
     const business = state.business
     if (state.stopRequested && business === undefined) {
       state.final = { status: 'cancelled' }
+      this.recordTerminal(state, 'event', 'cancelled')
       return
     }
     if (business === undefined) {
       state.final = { status: 'cancelled' }
+      this.recordTerminal(state, 'event', 'cancelled')
       return
     }
     state.final = business.ok
       ? { status: 'succeeded', ...(business.value === undefined ? {} : { result: business.value }) }
       : { status: 'failed', error: business.error ?? p2Error('ACT_FAILED', 'runtime', 'act failed', { module: 'core.act-port' }) }
+    this.recordTerminal(state, business.ok ? 'end' : 'error', business.ok ? 'succeeded' : 'failed')
   }
 
   private fail(state: ActState, error: P2Error): void {
     if (state.phase === 'terminal') return
     state.phase = 'terminal'
+    this.finishStart(state, 'error')
     this.stopOperations(state)
     state.final = { status: 'failed', error }
+    this.recordTerminal(state, 'error', error.code)
   }
 
   private drive(state: ActState): ActPoll {
     return state.final ?? { status: 'running' }
+  }
+
+  /** Close the act-start span exactly once. */
+  private finishStart(state: ActState, phase: 'end' | 'error'): void {
+    if (state.trace === undefined) return
+    this.trace?.finish(state.trace, phase)
+    state.trace = undefined
+  }
+
+  private recordTerminal(state: ActState, phase: 'end' | 'error' | 'event', status: string): void {
+    const now = Date.now()
+    this.trace?.record('act', phase, state.source.definitionId, {
+      ...(state.identity === undefined ? {} : { runId: state.identity.runId }),
+      actId: state.source.artifactId,
+      durationMs: now - state.startedAt,
+      detail: {
+        status,
+        ...(state.stopStartedAt === undefined ? {} : { stopMs: now - state.stopStartedAt }),
+      },
+    })
   }
 
   private expired(state: ActState): boolean {

@@ -83,6 +83,8 @@ export type P2PluginOptions = {
    * The shipped plugin keeps body lifecycle on the human `/p2` command.
    */
   devBodyControl?: boolean
+  /** Development-only: register the `p2_trace` execution-trace tool. */
+  devTrace?: boolean
 }
 
 export function createP2Plugin(options: P2PluginOptions = {}): {
@@ -135,7 +137,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       const ensureTools = (agent: AgentLike): void => {
         const key = keyOf(agent)
         if (registrations.has(key)) return
-        registrations.set(key, registerP2Tools(agent, manager))
+        registrations.set(key, registerP2Tools(agent, manager, { devTrace: options.devTrace === true }))
       }
       const disposeTools = (): void => {
         for (const registration of registrations.values()) registration.dispose()

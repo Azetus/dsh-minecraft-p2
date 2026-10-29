@@ -140,6 +140,10 @@ export class BodyClient {
     return this.request('observe', { op, args })
   }
 
+  trace(params: JsonValue = {}): Promise<JsonValue> {
+    return this.request('trace', params)
+  }
+
   async describe(): Promise<DescribeResult> {
     return await this.request('describe', {}) as unknown as DescribeResult
   }

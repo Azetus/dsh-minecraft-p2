@@ -9,6 +9,7 @@ import { createAuthoredOpSource } from '../core/op-artifact.ts'
 import { RunnerActPort } from '../core/act-port.ts'
 import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerManager } from '../core/runner-manager.ts'
+import { TraceSink } from '../core/trace.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { DevOpsHost, createCompositeOpSource } from './dev-ops.ts'
@@ -33,11 +34,13 @@ async function main(): Promise<void> {
     return
   }
 
-  const bundle = await createBehaviorHost(body)
+  const trace = new TraceSink({ capacity: 2048 })
+  const bundle = await createBehaviorHost(body, trace)
   const runtime = new BodyRuntime({
     body,
     behavior: bundle.host,
     heartbeatTimeoutMs: 10_000,
+    trace,
     ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
     ...(bundle.devOps === undefined ? {} : { devOps: bundle.devOps }),
   })
@@ -58,11 +61,12 @@ async function main(): Promise<void> {
   server.start()
 }
 
-async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
+async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<HostBundle> {
   const loaded = await loadProviderConfig()
   if (loaded === undefined) {
     const host = new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
+      trace,
       query: () => ({
         status: 'failed',
         error: p2Error(
@@ -129,7 +133,7 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
         onUntracked: input => { opsBroker?.markUntracked(input.runId) },
       },
     )
-    opsBroker = new DeclaredOpBroker(opsSource)
+    opsBroker = new DeclaredOpBroker(opsSource, { trace, now: () => Date.now() })
     const ops = opsBroker
 
     const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
@@ -144,10 +148,11 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
         host?.runnerExited(message)
       },
     })
-    actPort = new RunnerActPort(() => runner.ensure(), ops, artifactId => host?.actSource(artifactId))
+    actPort = new RunnerActPort(() => runner.ensure(), ops, artifactId => host?.actSource(artifactId), trace)
     policyPort = new RunnerPolicyPort(() => runner.ensure(), artifactId => host?.policySource(artifactId))
     host = new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
+      trace,
       query: ops.queryPort(),
       act: actPort,
       policy: {
