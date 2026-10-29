@@ -331,6 +331,27 @@ type ControlStatus<T> =
 
 completed 可表示输入成功设置，但 active 表示控制效果仍需释放；不能据此让 act 终态。失败也可能留下已发生或持续效果。unknown 是控制操作结果不确定，不是普通业务失败。stop 确认必须涵盖该请求及其子操作，不只是“已收到停止请求”。
 
+### 5.1 控制释放与 provider 职责边界
+
+provider 只负责“每个控制操作能否停止、控制效果是否已释放”，不承担 behavior run 的生命周期；run 的归属、撤权与接管规则属于核心运行时，provider 不需要认识 runId。
+
+```ts
+type ControlRelease =
+  | { kind: "stopping" }
+  | { kind: "released" }
+  | { kind: "unconfirmed"; reason: "no-ack" | "unobservable" | "disconnected" };
+
+type ProviderControlState = {
+  state: "idle" | "active" | "unknown";
+  activeOps?: string[];
+};
+```
+
+- `stop()` 返回只是“请求已收到”，不是释放证明；释放结论由 `controlState()` 给出（或等价接口）。
+- `released` 必须同时满足：该 run 已登记的控制句柄都不再 running，且 `controlState() === 'idle'`，并经过一个短暂 settle 窗口（初值 200–500ms）。
+- `unknown` 持续到总期限仍未转成 `idle` → `unconfirmed`；核心报 `stop-unconfirmed` 并禁止新 run 接管，保留账目等待迟到确认。
+- 核心只消费这个粗粒度结论，不推断 provider 内部实现（不区分物理 tick、在途包等细节）。
+
 游戏底层可能需要协议缓存或游戏自有状态；它们属于 provider 实现，P2 不另行复制维护一份世界模型。跨版本 entity/block 引用使用带 worldScope、connectionEpoch 的不透明值。
 
 ## 6. 统一错误与处理归属

@@ -171,6 +171,21 @@ act 只能提交 manifest 中声明的 op；未声明调用返回 `OP_NOT_DECLAR
 
 act 自称完成不等于控制权释放：只有 broker 确认持续操作已停止、回调已隔离、无未决控制请求，才进入终态。终态后拒绝旧 runner 的普通请求；迟到结果只对账。
 
+### 5.1 停止与接管状态机
+
+| 状态 | 含义 | 允许新 run？ |
+| --- | --- | --- |
+| `queued` | 请求已排队，尚未撤权 | 否 |
+| `accepted` | 旧 run 普通控制入口已关闭、act 实例已作废；清理开始 | 否 |
+| `stopping` | 已向 provider 请求停止，等待释放确认 | 否 |
+| `released` | 控制句柄均非 running 且 provider `controlState() === 'idle'`（含 settle） | 是 |
+| `stop-unconfirmed` | 总期限耗尽或无法确认；粘性故障 | 否 |
+
+- 对外报告 `accepted` 必须与撤权在同一次同步状态变更内完成；仅入队时只能称 `queued`。
+- 总期限从首次 `accepted` 起算，重复 stop/switch 不重置；settle 窗口计入期限。
+- 旧消息分类处理：旧普通控制请求拒绝；用于恢复旧 generator 的业务结果丢弃；与旧账目精确关联的完成/停止确认允许对账，但不得取得新控制。
+- `stop-unconfirmed` 收到有效释放确认后转 `released` 并记录事件；rescue 走同一链路，只清故障标志不算释放。
+
 ## 6. 停止、重试与未知结果
 
 沿用主文档共识：首次停止或正常收尾开始建立总 deadline。每个明确可重试的清理操作最多追加一次，所有操作共享总期限；不重发整个 act，不重置计时，不在 broker/runner/driver 各叠加次数。
