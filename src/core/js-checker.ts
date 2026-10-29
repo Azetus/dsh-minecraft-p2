@@ -16,6 +16,8 @@ export type BehaviorJsCheckRequest = {
   bindingId: string
   builtinsDigest?: string
   timeoutMs?: number
+  /** Resolve a declared act/policy definitionId to the exact artifact for this binding. */
+  resolveDependency?: (kind: 'act' | 'policy', definitionId: string) => { artifactId: string; digest: string } | undefined
 }
 
 export type BehaviorJsCheckResult = {
@@ -23,11 +25,51 @@ export type BehaviorJsCheckResult = {
   credential: CheckerCredential
 }
 
+type JsBehaviorDependencies = {
+  acts: string[]
+  policies: string[]
+}
+
 type JsBehaviorManifest = {
   id: string
   description?: string
   mode: 'finite' | 'continuous'
   parameters: Record<string, unknown>
+  dependencies?: Partial<JsBehaviorDependencies>
+}
+
+/** Tokens that must not appear in a JS behavior module. */
+const FORBIDDEN: Array<[string, RegExp]> = [
+  ['import', /(?<![\w$])import(?![\w$])/u],
+  ['require', /(?<![\w$])require(?![\w$])/u],
+  ['eval', /(?<![\w$])eval(?![\w$])/u],
+  ['Function', /(?<![\w$])Function(?![\w$])/u],
+  ['WebAssembly', /(?<![\w$])WebAssembly(?![\w$])/u],
+  ['process', /(?<![\w$])process(?![\w$])/u],
+  ['fetch', /(?<![\w$])fetch(?![\w$])/u],
+  ['XMLHttpRequest', /(?<![\w$])XMLHttpRequest(?![\w$])/u],
+  ['async', /(?<![\w$])async(?![\w$])/u],
+  ['await', /(?<![\w$])await(?![\w$])/u],
+  ['timer', /(?<![\w$])(setTimeout|setInterval|setImmediate|queueMicrotask)(?![\w$])/u],
+]
+
+function forbiddenIn(code: string): { token: string; index: number } | undefined {
+  let found: { token: string; index: number } | undefined
+  for (const [label, pattern] of FORBIDDEN) {
+    pattern.lastIndex = 0
+    const match = pattern.exec(code)
+    if (match === null) continue
+    const index = match.index
+    if (found === undefined || index < found.index) found = { token: label, index }
+  }
+  return found
+}
+
+function lineColumn(code: string, index: number): { line: number; column: number } {
+  const before = code.slice(0, index)
+  const line = before.split('\n').length
+  const lastBreak = before.lastIndexOf('\n')
+  return { line, column: index - lastBreak }
 }
 
 /** A checked JS behavior keeps a synthetic IR definition for the host surface. */
@@ -62,6 +104,9 @@ function readManifest(code: string, timeoutMs: number): JsBehaviorManifest {
   if (typeof module.run !== 'function') {
     throw new CheckerError('INVALID_MANIFEST', 'JS behavior must provide a generator function run(ctx)')
   }
+  if (Object.prototype.toString.call(module.run) !== '[object GeneratorFunction]') {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior run(ctx) must be a synchronous generator function')
+  }
   if (typeof module.manifest !== 'object' || module.manifest === null) {
     throw new CheckerError('INVALID_MANIFEST', 'JS behavior manifest must be an object')
   }
@@ -75,7 +120,35 @@ function readManifest(code: string, timeoutMs: number): JsBehaviorManifest {
   if (typeof manifest.parameters !== 'object' || manifest.parameters === null) {
     throw new CheckerError('INVALID_MANIFEST', 'JS behavior parameters must be an object')
   }
+  readDependencies(manifest.dependencies)
   return manifest as JsBehaviorManifest
+}
+
+function readDependencies(value: unknown): JsBehaviorDependencies {
+  if (value === undefined) return { acts: [], policies: [] }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior dependencies must be an object')
+  }
+  const record = value as { acts?: unknown; policies?: unknown }
+  return {
+    acts: readDefinitionList(record.acts, 'acts'),
+    policies: readDefinitionList(record.policies, 'policies'),
+  }
+}
+
+function readDefinitionList(value: unknown, field: string): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new CheckerError('INVALID_MANIFEST', `JS behavior dependencies.${field} must be an array`)
+  }
+  const names: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.length === 0) {
+      throw new CheckerError('INVALID_MANIFEST', `JS behavior dependencies.${field} must contain definition ids`)
+    }
+    if (!names.includes(entry)) names.push(entry)
+  }
+  return names
 }
 
 export async function checkBehaviorJs(request: BehaviorJsCheckRequest): Promise<BehaviorJsCheckResult> {
@@ -93,11 +166,35 @@ export async function checkBehaviorJs(request: BehaviorJsCheckRequest): Promise<
     throw new CheckerError('SOURCE_UNREADABLE', error instanceof Error ? error.message : String(error))
   }
   const code = bytes.toString('utf8')
-  const token = forbiddenToken(code)
-  if (token !== undefined) {
-    throw new CheckerError('FORBIDDEN_SYNTAX', `JS behavior must not use ${token}`)
+  const forbidden = forbiddenIn(code)
+  if (forbidden !== undefined) {
+    const { line, column } = lineColumn(code, forbidden.index)
+    throw new CheckerError(
+      'FORBIDDEN_SYNTAX',
+      `line ${line}, column ${column}: JS behavior must not use ${forbidden.token}`,
+    )
   }
   const manifestInfo = readManifest(code, request.timeoutMs ?? 1000)
+  const declared = readDependencies(manifestInfo.dependencies)
+  const dependencies: ArtifactManifest['dependencies'] = []
+  const resolved: { acts: Record<string, string>; policies: Record<string, string> } = { acts: {}, policies: {} }
+  for (const kind of ['act', 'policy'] as const) {
+    const names = kind === 'act' ? declared.acts : declared.policies
+    for (const definitionId of names) {
+      const artifact = request.resolveDependency?.(kind, definitionId)
+      if (artifact === undefined) {
+        throw new CheckerError(
+          'DEPENDENCY_NOT_FOUND',
+          `${kind} ${definitionId} is not available in binding ${request.bindingId}`,
+        )
+      }
+      if (kind === 'act') resolved.acts[definitionId] = artifact.artifactId
+      else resolved.policies[definitionId] = artifact.artifactId
+      if (!dependencies.some(entry => entry.kind === kind && entry.id === artifact.artifactId)) {
+        dependencies.push({ kind, id: artifact.artifactId, digest: artifact.digest })
+      }
+    }
+  }
   const normalizedRelative = relativePath.split(sep).join('/')
   const sourceHash = sourceDigest([{ path: normalizedRelative, bytes }])
   const manifest: ArtifactManifest = {
@@ -110,12 +207,13 @@ export async function checkBehaviorJs(request: BehaviorJsCheckRequest): Promise<
     codeDigest: createHash('sha256').update(bytes).digest('hex'),
     buildToolVersion: CHECKER_VERSION,
     bindingId: request.bindingId,
-    dependencies: [],
+    dependencies,
   }
   const artifact: BehaviorArtifact = {
     kind: 'behavior',
     format: 'js',
     code,
+    resolvedDependencies: resolved,
     definition: jsBehaviorDefinition(manifestInfo),
     manifest,
     artifactId: artifactId(manifest),

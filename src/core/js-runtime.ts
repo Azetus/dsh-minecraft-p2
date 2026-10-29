@@ -37,6 +37,9 @@ export type JsBehaviorRunOptions = {
   query: QueryPort
   act: ActPort
   policy?: PolicyPort
+  /** Exact act/policy artifacts declared by the checked manifest; omitted means unrestricted. */
+  allowedActs?: ReadonlySet<string>
+  allowedPolicies?: ReadonlySet<string>
   resolveAct: (definitionId: string) => string | undefined
   resolvePolicy: (definitionId: string) => string | undefined
 }
@@ -351,6 +354,18 @@ export class JsBehaviorRun {
           }
           return
         }
+        if (this.options.allowedActs !== undefined && !this.options.allowedActs.has(artifactId)) {
+          this.resumeSlot = {
+            value: p2Error(
+              'DEPENDENCY_NOT_DECLARED',
+              'validation',
+              `act ${ref.definitionId} is not in the behavior's declared dependencies`,
+              { module: 'core.js-run' },
+            ),
+            thrown: true,
+          }
+          return
+        }
         this.setStep('act', `act:${ref.definitionId}`, ref.definitionId, null)
         this.activeAct = ref.definitionId
         const x = value.args.x
@@ -393,6 +408,18 @@ export class JsBehaviorRun {
         if (artifactId === undefined) {
           this.resumeSlot = {
             value: p2Error('POLICY_REF_UNRESOLVED', 'validation', `policy ${ref.definitionId} is not checked`, { module: 'core.js-run' }),
+            thrown: true,
+          }
+          return
+        }
+        if (this.options.allowedPolicies !== undefined && !this.options.allowedPolicies.has(artifactId)) {
+          this.resumeSlot = {
+            value: p2Error(
+              'DEPENDENCY_NOT_DECLARED',
+              'validation',
+              `policy ${ref.definitionId} is not in the behavior's declared dependencies`,
+              { module: 'core.js-run' },
+            ),
             thrown: true,
           }
           return

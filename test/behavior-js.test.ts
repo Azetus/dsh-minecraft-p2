@@ -17,7 +17,7 @@ import type { ActHandle, ActPoll, ActPort, PolicyPort, QueryOutcome, QueryPort, 
 
 const CODE = `
 defineBehavior({
-  manifest: { id: 'js-smoke', mode: 'finite', parameters: { x: { type: 'number', required: true } } },
+  manifest: { id: 'js-smoke', mode: 'finite', parameters: { x: { type: 'number', required: true } }, dependencies: { acts: ['move-to'] } },
   *run(ctx) {
     const pos = yield ctx.query('position', {})
     yield ctx.act('move-to', { x: ctx.params.x, z: pos.value.z })
@@ -37,24 +37,65 @@ async function checked(code: string): Promise<BehaviorArtifact> {
   const path = join(directory, 'behavior.mjs')
   writeFileSync(path, code)
   try {
-    const result = await checkBehaviorJs({ sourcePath: path, bindingId: 'binding-1' })
+    const result = await checkBehaviorJs({
+      sourcePath: path,
+      bindingId: 'binding-1',
+      resolveDependency: (kind, definitionId) => ({
+        artifactId: `p2:${kind}:${definitionId}`,
+        digest: `digest-${kind}-${definitionId}`,
+      }),
+    })
     return result.artifact
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
 }
 
-function behavior(body: string): string {
+function behavior(body: string, dependencies?: Record<string, string[]>): string {
   return `defineBehavior({
-    manifest: { id: 'js-test', mode: 'continuous', parameters: {} },
+    manifest: { id: 'js-test', mode: 'continuous', parameters: {}${dependencies === undefined ? '' : `, dependencies: ${JSON.stringify(dependencies)}`} },
     *run(ctx) { ${body} },
   })`
+}
+
+function rawArtifact(code: string, id = 'js-raw'): BehaviorArtifact {
+  return {
+    kind: 'behavior',
+    format: 'js',
+    code,
+    definition: {
+      id,
+      description: id,
+      mode: 'continuous',
+      parameters: {},
+      locals: {},
+      root: { kind: 'fail', id: 'raw', code: 'RAW', message: 'raw artifact' },
+    },
+    manifest: {
+      schemaVersion: 1,
+      kind: 'behavior',
+      definitionId: id,
+      sourceDigest: 'source',
+      irVersion: 0,
+      irDigest: null,
+      codeDigest: null,
+      buildToolVersion: 'test',
+      bindingId: 'binding-1',
+      dependencies: [],
+    },
+    artifactId: `p2:behavior:${id}`,
+    artifactDigest: `digest-${id}`,
+    bindingId: 'binding-1',
+    sourceDigest: 'source',
+  }
 }
 
 type RunOptions = {
   query?: QueryPort
   act?: ActPort
   policy?: PolicyPort
+  allowedActs?: ReadonlySet<string>
+  allowedPolicies?: ReadonlySet<string>
   resolveAct?: (definitionId: string) => string | undefined
   resolvePolicy?: (definitionId: string) => string | undefined
 }
@@ -68,6 +109,8 @@ function makeRun(artifact: BehaviorArtifact, options: RunOptions = {}): JsBehavi
     query: options.query ?? SYNC_QUERY,
     act: options.act ?? { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
     ...(options.policy === undefined ? {} : { policy: options.policy }),
+    ...(options.allowedActs === undefined ? {} : { allowedActs: options.allowedActs }),
+    ...(options.allowedPolicies === undefined ? {} : { allowedPolicies: options.allowedPolicies }),
     resolveAct: options.resolveAct ?? (() => undefined),
     resolvePolicy: options.resolvePolicy ?? (() => undefined),
   })
@@ -97,6 +140,41 @@ describe('JS behavior check and run', () => {
     expect(artifact.definition.id).toBe('js-smoke')
     expect(artifact.definition.mode).toBe('finite')
     expect(artifact.code).toContain('defineBehavior')
+    expect(artifact.resolvedDependencies?.acts['move-to']).toBe('p2:act:move-to')
+    expect(artifact.manifest.dependencies).toEqual([
+      { kind: 'act', id: 'p2:act:move-to', digest: 'digest-act-move-to' },
+    ])
+  })
+
+  it('rejects non-generators, async functions and timers with positions', async () => {
+    await expect(checked("defineBehavior({ manifest: { id: 'bad', mode: 'continuous', parameters: {} }, run(ctx) {} })"))
+      .rejects.toThrow(/synchronous generator/u)
+    await expect(checked("defineBehavior({ manifest: { id: 'bad', mode: 'continuous', parameters: {} }, async *run(ctx) {} })"))
+      .rejects.toThrow(/must not use async/u)
+    await expect(checked("defineBehavior({ manifest: { id: 'bad', mode: 'continuous', parameters: {} }, *run(ctx) { setTimeout(() => {}, 1) } })"))
+      .rejects.toThrow(/line \d+, column \d+: JS behavior must not use timer/u)
+  })
+
+  it('rejects a declared dependency that is not available in the binding', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'p2-js-behavior-'))
+    const path = join(directory, 'behavior.mjs')
+    writeFileSync(path, behavior('return ctx.succeed({})', { acts: ['missing'] }))
+    try {
+      await expect(checkBehaviorJs({ sourcePath: path, bindingId: 'binding-1' }))
+        .rejects.toThrow(/DEPENDENCY_NOT_FOUND|missing/u)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an act that is not in the declared dependency set at run time', async () => {
+    const artifact = await checked(behavior('yield ctx.act("move", {})', { acts: ['move'] }))
+    const run = makeRun(artifact, {
+      allowedActs: new Set(),
+      resolveAct: () => 'p2:act:other',
+    })
+    expect(run.tick(0)).toBe('failed')
+    expect(run.error?.code).toBe('DEPENDENCY_NOT_DECLARED')
   })
 
   it('rejects forbidden host access', async () => {
@@ -171,7 +249,7 @@ describe('non-recursive step budget', () => {
   })
 
   it('counts synchronous policy completions as steps instead of recursing', async () => {
-    const artifact = await checked(behavior('while (true) { yield ctx.decide("pick", {}) }'))
+    const artifact = await checked(behavior('while (true) { yield ctx.decide("pick", {}) }', { policies: ['pick'] }))
     let calls = 0
     const run = makeRun(artifact, {
       policy: {
@@ -187,7 +265,7 @@ describe('non-recursive step budget', () => {
   })
 
   it('turns a synchronous act reference failure into a thrown slot, not recursion', async () => {
-    const artifact = await checked(behavior('while (true) { try { yield ctx.act("missing", {}) } catch {} }'))
+    const artifact = await checked(behavior('while (true) { try { yield ctx.act("missing", {}) } catch {} }', { acts: ['missing'] }))
     let resolutions = 0
     const run = makeRun(artifact, {
       resolveAct: () => {
@@ -223,13 +301,13 @@ describe('author-code timeouts', () => {
     expect(Date.now() - started).toBeLessThan(2000)
   })
 
-  it('bounds a non-generator run() body during initialization', async () => {
-    const artifact = await checked(`
+  it('bounds a non-generator run() body during initialization', () => {
+    const artifact = rawArtifact(`
       defineBehavior({
         manifest: { id: 'js-init-loop', mode: 'continuous', parameters: {} },
         run(ctx) { for (;;) {} },
       })
-    `)
+    `, 'js-init-loop')
     const started = Date.now()
     const run = makeRun(artifact)
     expect(run.status).toBe('failed')
@@ -286,7 +364,7 @@ describe('yield and return shapes', () => {
 
 describe('stop revocation and release', () => {
   it('stops the act, keeps the run non-terminal until release, and never resumes the generator', async () => {
-    const artifact = await checked(behavior('while (true) { yield ctx.act("move", { x: 1, z: 2 }) }'))
+    const artifact = await checked(behavior('while (true) { yield ctx.act("move", { x: 1, z: 2 }) }', { acts: ['move'] }))
     let release: ReleaseStatus = 'stopping'
     let stops = 0
     let releaseRequests = 0
@@ -326,7 +404,7 @@ describe('observation and bounded payloads', () => {
       yield ctx.query('position', {})
       yield ctx.act('move-to', { x: 1, z: 2 })
       return ctx.succeed({ mined: 3 })
-    `))
+    `, { acts: ['move-to'] }))
     const act = fakeAct()
     const run = makeRun(artifact, {
       act: { start: () => act.handle },

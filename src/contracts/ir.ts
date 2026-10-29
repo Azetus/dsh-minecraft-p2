@@ -93,6 +93,8 @@ export type BehaviorArtifact = {
   format?: 'ir' | 'js'
   /** Present for format === 'js'; evaluated in a sandboxed step runner. */
   code?: string
+  /** Exact act/policy artifacts resolved at check time from declared dependencies. */
+  resolvedDependencies?: { acts: Record<string, string>; policies: Record<string, string> }
   definition: BehaviorDefinition
   manifest: ArtifactManifest
   artifactId: string

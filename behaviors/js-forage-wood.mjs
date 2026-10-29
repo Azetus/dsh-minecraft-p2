@@ -24,6 +24,10 @@ defineBehavior({
       avoid: { type: 'json', required: true },
       maxDy: { type: 'number', required: true },
     },
+    dependencies: {
+      acts: ['goto', 'mine-one'],
+      policies: ['item-count', 'pick-nearest-candidate'],
+    },
   },
   *run(ctx) {
     const maxSkip = 8

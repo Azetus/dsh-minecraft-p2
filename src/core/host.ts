@@ -165,6 +165,14 @@ export class BehaviorHost {
       ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
       bindingId: this.bindingId,
+      resolveDependency: (kind, definitionId) => {
+        const artifact = kind === 'act'
+          ? this.registry.resolveDefault('act', definitionId)
+          : this.registry.find('policy', definitionId)
+        return artifact === undefined
+          ? undefined
+          : { artifactId: artifact.artifactId, digest: artifact.artifactDigest }
+      },
     })
     this.credentials.set(result.artifact.artifactId, result.credential)
     this.registry.add(result.artifact, result.credential)
@@ -362,6 +370,8 @@ export class BehaviorHost {
     }
     const runId = this.newRunId()
     if (artifact.format === 'js') {
+      const acts = artifact.resolvedDependencies?.acts ?? {}
+      const policies = artifact.resolvedDependencies?.policies ?? {}
       this.run = new JsBehaviorRun({
         runId,
         owner: this.owner,
@@ -370,8 +380,10 @@ export class BehaviorHost {
         query: this.query,
         act: this.act,
         policy: this.policy,
-        resolveAct: definitionId => this.registry.resolveDefault('act', definitionId)?.artifactId,
-        resolvePolicy: definitionId => this.registry.find('policy', definitionId)?.artifactId,
+        allowedActs: new Set(Object.values(acts)),
+        allowedPolicies: new Set(Object.values(policies)),
+        resolveAct: definitionId => acts[definitionId],
+        resolvePolicy: definitionId => policies[definitionId],
       })
     } else {
       this.run = new BehaviorRun({
