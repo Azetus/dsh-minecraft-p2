@@ -247,6 +247,89 @@ describe('BodyManager', () => {
     }
   })
 
+  it('steers a running owner for urgent wakes and follows up when idle', async () => {
+    const host = new BehaviorHost({
+      bindingId: 'guard-steer',
+      query: () => ({ status: 'ok', value: { health: 6 } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-guard-steer-'))
+    const path = join(dir, 'target.mjs')
+    writeFileSync(path, `
+      export default {
+        id: 'steer-target', description: '', mode: 'finite', parameters: {}, locals: {},
+        root: { kind: 'sequence', id: 'root', children: [] },
+        completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
+      }
+    `)
+    try {
+      const target = await host.check({ sourcePath: path })
+      host.activate(target.artifactId)
+      const guard = {
+        condition: { kind: 'health' as const, hpBelow: 10 },
+        targetArtifactId: target.artifactId,
+        params: {},
+        ttlMs: 60_000,
+      }
+      host.setGuard(guard, 1_000)
+      const fake = fakeBody(host)
+      const definitions: Definition[] = []
+      const tools: Array<Record<string, unknown>> = []
+      type Message = { source: { kind: string }; content: Array<{ text: string }> }
+      const followups: Message[] = []
+      const steers: Message[] = []
+      let status: 'idle' | 'running' = 'running'
+      const ctx = {
+        commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+        tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
+        agents: {
+          get: (id: string) => id === owner.sessionId
+            ? {
+                get status() { return status },
+                followup: (message: Message) => followups.push(message),
+                steer: (message: Message) => steers.push(message),
+              }
+            : undefined,
+        },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      }
+      const plugin = createP2Plugin({
+        devBodyControl: true,
+        bodyEntry: 'unused-body.mjs',
+        spawnBody: () => fake.handle,
+        log: () => {},
+      })
+      ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+      const agent = {
+        id: owner.agentId,
+        session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+        ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
+      }
+      const bodyTool = tools.find(tool => tool.name === 'p2_body') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      await bodyTool.execute({ action: 'start' }, { agent })
+      const statusTool = tools.find(tool => tool.name === 'p2_status') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+
+      fake.runtime.tickBehavior(1_000)
+      await statusTool.execute({}, { agent })
+      expect(steers).toHaveLength(1)
+      expect(followups).toHaveLength(0)
+      expect(steers[0]?.source).toEqual({ kind: 'p2-guard' })
+
+      status = 'idle'
+      host.setGuard(guard, 2_000)
+      fake.runtime.tickBehavior(2_000)
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(1)
+      expect(steers).toHaveLength(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('starts one body, reports status, and stops it', async () => {
     const fake = fakeBody()
     const manager = managerWith(fake)
@@ -497,6 +580,9 @@ describe('P2 commands', () => {
     expect(again.epoch).toBe('epoch-1')
     expect(spawns).toBe(1)
 
+    await expect(tool.execute({ action: 'start' }, {
+      agent: { ...agent, session: { id: 'other-session', header: { cwd: owner.cwd } } },
+    })).rejects.toThrow(/different session/u)
     await expect(tool.execute({ action: 'stop' }, {
       agent: { ...agent, session: { id: 'other-session', header: { cwd: owner.cwd } } },
     })).rejects.toThrow(/different session/u)
@@ -643,7 +729,7 @@ describe('P2 commands', () => {
         },
         effect: (callback: () => unknown) => { callback(); return () => {} },
       }
-      const plugin = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+      const plugin = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {}, watchWakeWindowMs: 0 })
       ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
       const agent = {
         id: owner.agentId,
@@ -674,9 +760,11 @@ describe('P2 commands', () => {
       }, { agent }) as { id: string; state: string }
       expect(added).toMatchObject({ state: 'active' })
 
+      const settle = () => new Promise(resolve => setTimeout(resolve, 5))
       const startedAt = Date.now()
       fake.runtime.tickBehavior(startedAt)
       await statusTool.execute({}, { agent })
+      await settle()
       expect(followups).toHaveLength(1)
       expect(followups[0]?.source).toEqual({ kind: 'p2-watch' })
       expect(followups[0]?.content[0]?.text).toContain(added.id)
@@ -689,6 +777,7 @@ describe('P2 commands', () => {
 
       fake.runtime.tickBehavior(startedAt + 1_000)
       await statusTool.execute({}, { agent })
+      await settle()
       expect(followups).toHaveLength(2)
 
       const eventsTool = tools.find(tool => tool.name === 'p2_events') as {
@@ -704,6 +793,99 @@ describe('P2 commands', () => {
       const empty = await watchTool.execute({ action: 'list' }, { agent }) as { watches: unknown[] }
       expect(empty.watches).toHaveLength(0)
       await (definitions[0] as Definition).handler({ agent, rawInput: ' stop' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('coalesces watch events into one injected digest while the owner runs', async () => {
+    let counter = 0
+    const host = new BehaviorHost({
+      bindingId: 'watch-digest',
+      query: () => ({ status: 'ok', value: { poisoned: true } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+      policy: {
+        call: () => ({
+          status: 'ok',
+          value: { fire: true, key: `k-${++counter}`, summary: 'poison detected' },
+        }),
+      },
+      loadManifest: async () => ({ id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] }),
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watch-digest-'))
+    const path = join(dir, 'predicate.mjs')
+    writeFileSync(path, `
+      definePolicy({
+        manifest: { id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] },
+        run: () => false,
+      })
+    `)
+    try {
+      const predicate = await host.check({ sourcePath: path, artifactKind: 'policy' })
+      const fake = fakeBody(host)
+      const definitions: Definition[] = []
+      const tools: Array<Record<string, unknown>> = []
+      type Message = { source: { kind: string }; content: Array<{ text: string }> }
+      const followups: Message[] = []
+      const injects: Message[] = []
+      const ctx = {
+        commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+        tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
+        agents: {
+          get: (id: string) => id === owner.sessionId
+            ? {
+                status: 'running' as const,
+                followup: (message: Message) => followups.push(message),
+                inject: (message: Message) => injects.push(message),
+              }
+            : undefined,
+        },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      }
+      const plugin = createP2Plugin({
+        devBodyControl: true,
+        bodyEntry: 'unused-body.mjs',
+        spawnBody: () => fake.handle,
+        log: () => {},
+        watchWakeWindowMs: 100,
+      })
+      ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+      const agent = {
+        id: owner.agentId,
+        session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+        ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
+      }
+      const bodyTool = tools.find(tool => tool.name === 'p2_body') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      await bodyTool.execute({ action: 'start' }, { agent })
+      const statusTool = tools.find(tool => tool.name === 'p2_status') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      const watchTool = tools.find(tool => tool.name === 'p2_watch') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<{ id: string; state: string }>
+      }
+      const added = await watchTool.execute({
+        action: 'add',
+        queries: [{ op: 'health' }],
+        predicate: predicate.artifactId,
+        cooldownMs: 1000,
+        ttlMs: 60_000,
+      }, { agent })
+
+      const startedAt = Date.now()
+      fake.runtime.tickBehavior(startedAt)
+      await statusTool.execute({}, { agent })
+      fake.runtime.tickBehavior(startedAt + 1_000)
+      await statusTool.execute({}, { agent })
+      await new Promise(resolve => setTimeout(resolve, 150))
+
+      expect(injects).toHaveLength(1)
+      expect(followups).toHaveLength(0)
+      expect(injects[0]?.source).toEqual({ kind: 'p2-watch' })
+      expect(injects[0]?.content[0]?.text).toContain('2 event(s)')
+      expect(injects[0]?.content[0]?.text).toContain(added.id)
+      expect(injects[0]?.content[0]?.text).toContain('not an instruction')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

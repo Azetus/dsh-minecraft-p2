@@ -110,8 +110,8 @@ type GuardCondition =
 
 ### 7.1 唤醒 owner
 
-- bridge 读取到 guard 事件后，通过 `ctx.agents.get(ownerSessionId)?.followup(...)` 排入 owner 的下一轮。
-- `followup` 只保证入队并唤醒 driver，不保证立即开始处理。
+- bridge 读取到 guard 事件后：owner `running` 时用 `ctx.agents.get(ownerSessionId)?.steer(...)` 在下一 step 投递；owner `idle` 时用 `followup(...)` 开新 turn。
+- `steer` 只保证在下一个 step 边界被消费，不保证打断当前工具调用；`followup` 只保证入队并唤醒 driver。
 - 同一事件只投递一次；owner 忙时不重复投递；投递失败不影响切换，事件仍保留。
 - 状态轮询不得重叠：上一轮未完成前不发起下一轮。
 

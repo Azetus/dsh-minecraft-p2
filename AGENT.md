@@ -27,6 +27,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 ### 职责与接入
 
 - 统一使用 behavior（策略）、act（完整动作）、operation/op（基础操作）；job 留给 DSH 内部事务。控制路径为 behavior → act → ControlOp；behavior 不得直接引用 ControlOp。QueryOp 可直接供观测层、behavior 条件和 act 使用。
+- 接入游戏时的使用侧角色分工见 [OPERATOR-PLAYBOOK.md](docs/OPERATOR-PLAYBOOK.md)：body active 时主 session 只做热路径，策略与 behavior/act/op 编写委派给 subagent。该规则**不约束本插件的开发迭代**。
 - policy 是 behavior 层内部的纯决策单元（纯函数、无 op、无生命周期），由 `decide` 节点调用一次，不是第四级控制层；它只返回一个值，由 behavior 决定如何使用，不单独启用。
 - 首版本机一个 body、一个角色、一个固定 owner session。人工 /p2 start 后由 bridge 创建 stdio body 子进程；body 调度独立于模型，生命周期跟随插件，不接管用户 agent。安装/加载/热重载不自动创建 P2 进程。
 - 已选独立客户端路线，首版使用 Mineflayer 验证。真实客户端及其有窗口／无头方式为后续方向；服务器假玩家是历史方案，不能未经讨论切换到该路线。

@@ -116,7 +116,7 @@ fixture：
 | G7 | 空闲（无 run）时 set + 触发 | 可从 idle 启动 target | status |
 | G8 | 无权限/不可用 target | 预检失败 `precheck-failed`，不停止当前 run | events |
 | G9 | `p2_guard status` | 返回 guards 数组与 lastSwitch；`p2_events` 游标无重复/丢失 | status/events |
-| G10 | 触发后等下一轮模型 | owner 收到 `[p2 guard] … fired` followup（同一事件一次） | 会话消息 |
+| G10 | 触发后等下一轮模型 | owner 收到 `[p2 guard] … fired` 唤醒（running→steer，idle→followup），同一事件一次 | 会话消息 |
 
 > 健康语法糖可用 `/damage P2_Bot 2` 或 `/effect give P2_Bot instant_damage 1 0` 触发；测试后补血/回满。
 

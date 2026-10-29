@@ -114,7 +114,7 @@ PTC调用这些工具时，也必须经过相同body owner、binding和控制权
 
 ## 6. 事件进入session
 
-执行器事件经 bridge 有界内存队列去重/合并；inject 用于附带事实，followup 用于有预算的下一轮决策。首版无持久 pending 队列，插件退出后不恢复未投递通知。人类消息沿 DSH 原路径，不由 bridge 复制一份。
+执行器事件经 bridge 有界内存队列去重/合并。guard/runtime 事件在 owner `running` 时用 `steer` 投递到下一 step，idle 时用 `followup` 开新 turn；watch 事件在窗口内合并为一条摘要，running 时用 `inject` 附带、idle 时用 `followup` 唤醒。首版无持久 pending 队列，插件退出后不恢复未投递通知。人类消息沿 DSH 原路径，不由 bridge 复制一份。
 
 `inject()`只是不立即唤醒，不代表内容永远不消耗token：进入下一次模型请求仍有上下文成本。成功调用不等于模型已经看到；当前进程内按批次跟踪，首版不从 session/调试日志自动恢复投递状态。[反馈文档](FEEDBACK-AND-RECOVERY.md)定义有界事件队列、可能重复与缺口处理。
 
