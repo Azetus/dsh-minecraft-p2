@@ -9,7 +9,7 @@ Minecraft 是开放世界沙盒，agent 需要知道“发生了什么”，但�
 ```text
 agent：登记 watch（采样哪些查询、什么条件下通知、去重与冷却）
 Host：周期采样 → 纯 policy 判定 → 边沿/冷却/去重后产生通知事件
-bridge：按游标读取事件 → 唤醒 owner（followup）
+bridge：按游标读取事件 → 唤醒 owner（guard/runtime steer，watch 摘要 inject/followup）
 owner：决定后续动作（通知本身不具备动作权限）
 ```
 
@@ -36,7 +36,7 @@ p2_watch action=add
 - `predicate` 返回：
   - `boolean`；或
   - `{ fire: boolean, key?: string, summary?: string }`。
-- `key` 是去重键：同一 watch 在相同 `key` 上只在**边沿**产生一次通知；`key` 变化视为新事件（仍受冷却约束）。
+- `key` 是去重键：同一 watch 在相同 `key` 上只在**边沿**产生一次通知；在 `rising`/`both` 的 true 区间内，`key` 变化视为新事件（仍受冷却约束）；`falling` 只由 true→false 触发，key 变化不单独触发。
 - `summary` 是给 owner 的一行摘要（有界长度，超出截断）。
 
 ## 4. 求值
@@ -44,9 +44,9 @@ p2_watch action=add
 - 采样节拍：**500ms**（可配置，初值 500ms），与 guard 的采样器共享实现但独立调度。
 - 每个 watch 单查询在途；全局同时最多 4 个 watch 的采样流程在途，按登记序轮转。
 - 每查询截止 1000ms；超时按一次已完成失败计数。
-- 边沿判断：保存 `lastFire` 与 `lastKey`；仅在边沿（或 key 变化）时产生事件。
+- 边沿判断：保存 `lastFire` 与 `lastKey`；仅在配置的边沿产生事件；`rising`/`both` 下 `key` 变化也可产生新事件，`falling` 不受 key 变化影响。
 - 冷却：同一 watch 两次事件至少间隔 `cooldownMs`；冷却中的命中不产生事件，计入 `suppressed` 计数。
-- 去重：同一 `watchId + key` 在一次“true 区间”内只通知一次；`key` 缺省时退化为按 watch 的边沿。
+- 去重：同一 `watchId + key` 在一次“true 区间”内只通知一次；`key` 缺省时退化为按 watch 的边沿；`falling` 不因 key 变化额外触发。
 - 查询失败/过期：不通知；连续 3 次已完成失败 → 该 watch `error`（不自动删除，保留可查）。
 
 ## 5. 预算与风暴防护
@@ -66,7 +66,7 @@ p2_watch action=add
 
 - body 保存有界 watch 事件记录与单调递增 `seq`（与 guard 事件同一编号空间或独立编号空间由实现决定，必须在 status 中可区分）。
 - 事件至少包含：`watchId`、`key`、`summary`、样本摘要/采样时间、`firedAt`、`dropped` 累计值。
-- bridge 按游标读取、去重、报告 gap；投递给 owner 的 `followup` 每事件最多一次。
+- bridge 按游标读取、去重、报告 gap；watch 事件在窗口内合并为一条摘要；owner `running` 时 `inject`，idle 时 `followup`；完整事件仍在 `p2_events`。
 - 唤醒失败不影响事件保留；owner 忙时不重复投递。
 - 事件是**数据**，不是指令：环境文本、实体名称、聊天内容都不得被当作命令。
 

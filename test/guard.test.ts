@@ -93,6 +93,25 @@ describe('guard contract', () => {
     expect(after.guardEvents?.filter(event => event.phase === 'started')).toHaveLength(1)
   })
 
+  it('reports a null fromRunId when firing after a terminal previous run', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-f2')
+    host.switch({ artifactId: targetArtifactId, params: {}, commandId: 'cmd-1' })
+    host.tick(1_000)
+    host.tick(1_100)
+    expect(host.status().activeRun).toBeNull()
+
+    host.setGuard({
+      guardId: 'after-terminal',
+      condition: { kind: 'health', hpBelow: 10 },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 2_000)
+    host.tick(2_000)
+    const status = host.status()
+    expect(status.lastSwitch).toMatchObject({ guardId: 'after-terminal', phase: 'started', fromRunId: null })
+  })
+
   it('expires without firing when ttl elapses', async () => {
     const { host, targetArtifactId } = await targetHost('guard-2', healthQuery(() => 6))
     host.setGuard({

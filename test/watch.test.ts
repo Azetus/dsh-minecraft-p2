@@ -60,6 +60,36 @@ function health(value: () => JsonValue): QueryPort {
 }
 
 describe('watch registration and edge control', () => {
+  it('does not fire a falling watch when only the key changes', async () => {
+    let wet = true
+    const { host, predicate } = await watchHost('watch-falling-key', health(() => ({ wet })), samples => {
+      const value = samples['0']?.value as { wet?: boolean } | undefined
+      const current = value?.wet === true
+      return { fire: current, key: current ? 'wet' : 'dry' }
+    })
+    const watch = host.addWatch({
+      queries: [{ op: 'health' }],
+      predicate,
+      edge: 'falling',
+      cooldownMs: 1_000,
+      ttlMs: 60_000,
+    }, 0)
+
+    host.tick(0)
+    expect(host.status().watchEvents).toHaveLength(0)
+
+    wet = false
+    host.tick(1_000)
+    expect(host.status().watchEvents).toHaveLength(1)
+    expect(host.status().watchEvents?.[0]).toMatchObject({ watchId: watch.id, key: 'dry' })
+
+    // Rising again changes the key but must not satisfy the falling edge.
+    wet = true
+    host.tick(2_000)
+    expect(host.status().watchEvents).toHaveLength(1)
+    expect(host.status().watches?.[0]).toMatchObject({ lastKey: 'wet', state: 'active' })
+  })
+
   it('notifies once on a rising edge and not while the condition stays true', async () => {
     const { host, predicate } = await watchHost('watch-1', health(() => ({ poisoned: true })), samples =>
       (samples['0']?.value as { poisoned?: boolean } | undefined)?.poisoned === true)

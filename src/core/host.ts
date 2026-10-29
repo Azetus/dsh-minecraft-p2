@@ -728,7 +728,7 @@ export class BehaviorHost {
       .sort((left, right) => right.guard.priority - left.guard.priority || left.index - right.index)
     if (candidates.length === 0) return
     const selected = candidates[0] as { guard: ActiveGuard; index: number }
-    const fromRunId = this.run?.runId ?? null
+    const fromRunId = this.activeRunId()
     if (this.pendingSwitch !== undefined) {
       const attemptId = this.pendingSwitch.attemptId
       for (const { guard } of candidates) {
@@ -905,6 +905,10 @@ export class BehaviorHost {
     }
   }
 
+  private activeRunId(): string | null {
+    return this.run !== undefined && !isTerminal(this.run.status) ? this.run.runId : null
+  }
+
   private fireGuard(guard: ActiveGuard, now: number, evidence: JsonValue): void {
     if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     if (this.pendingSwitch !== undefined) return
@@ -914,7 +918,7 @@ export class BehaviorHost {
     guard.evaluator = undefined
     guard.candidate = undefined
     guard.deferredAttempt = undefined
-    const fromRunId = this.run?.runId ?? null
+    const fromRunId = this.activeRunId()
     this.emitGuard('fired', {
       guardId: guard.id,
       attemptId,
@@ -1213,7 +1217,7 @@ export class BehaviorHost {
     const key = outcome.key?.slice(0, WATCH_KEY_MAX)
     const rising = current && watch.lastValue !== true
     const falling = !current && watch.lastValue === true
-    const keyChanged = current && key !== undefined && key !== watch.lastKey
+    const keyChanged = current && key !== undefined && key !== watch.lastKey && watch.edge !== 'falling'
     let hit = false
     if (watch.edge === 'rising') hit = rising
     else if (watch.edge === 'falling') hit = falling
