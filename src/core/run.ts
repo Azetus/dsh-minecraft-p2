@@ -5,6 +5,8 @@ import { BehaviorExecutor } from './executor.ts'
 import type { ExecutorStatus } from './executor.ts'
 import type { IngressEvent } from './ingress.ts'
 import type { ActPort, PolicyPort, QueryPort } from './node-runtime.ts'
+import { StopControl, stopUnconfirmedError } from './stop-control.ts'
+import type { StopState } from './stop-control.ts'
 
 export type RunStatus = 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -65,11 +67,15 @@ export class BehaviorRun {
   private decision: 'confirm' | 'deny' | undefined
   private readonly outcomes = new Map<string, ConfirmResult>()
   private stopRequested = false
+  private readonly act: ActPort
+  private readonly stopControl = new StopControl()
+  private stopFailure: P2Error | undefined
 
   constructor(options: BehaviorRunOptions) {
     this.runId = options.runId
     this.owner = options.owner
     this.definition = options.definition
+    this.act = options.act
     this.executor = new BehaviorExecutor({
       definition: options.definition,
       params: options.params,
@@ -84,7 +90,15 @@ export class BehaviorRun {
   }
 
   get error(): P2Error | undefined {
-    return this.executor.currentError
+    return this.stopFailure ?? this.executor.currentError
+  }
+
+  get stopState(): StopState {
+    return this.stopControl.state
+  }
+
+  get allowsTakeover(): boolean {
+    return this.stopControl.allowsNewRun
   }
 
   get confirmation(): ConfirmationRequest | undefined {
@@ -105,14 +119,10 @@ export class BehaviorRun {
 
   tick(now = Date.now()): RunStatus {
     if (this.statusValue !== 'running' && this.statusValue !== 'blocked') return this.statusValue
-    if (this.stopRequested) {
-      if (this.confirmationValue?.status === 'pending') {
-        this.confirmationValue.status = 'cancelled'
-        this.statusValue = 'cancelled'
-        return this.statusValue
-      }
-      const status = this.executor.tick(now)
-      this.statusValue = status
+    const control = this.stopControl.state
+    if (control !== 'running' && control !== 'queued') {
+      this.executor.tick(now)
+      this.advanceStop(now)
       return this.statusValue
     }
 
@@ -135,10 +145,20 @@ export class BehaviorRun {
   }
 
   /** Stop intent is applied before the next tick; pending confirmation ends immediately. */
-  stop(): void {
+  stop(now = Date.now()): void {
     if (this.statusValue === 'succeeded' || this.statusValue === 'failed' || this.statusValue === 'cancelled') return
-    this.stopRequested = true
-    this.executor.stop()
+    if (this.confirmationValue?.status === 'pending') this.confirmationValue.status = 'cancelled'
+    this.stopControl.requestStop()
+    this.stopControl.accept(now)
+    this.act.stopRun?.(now, this.runId)
+    if (!this.stopRequested) {
+      this.stopRequested = true
+      this.executor.stop()
+      // Run one cancellation pass now so a synchronous act stop happens before
+      // the run is reported as stopped; asynchronous cleanup continues in tick.
+      this.executor.tick(now)
+    }
+    this.advanceStop(now)
   }
 
   /** Process one fixed ingress batch: any accepted stop wins before decisions. */
@@ -175,10 +195,9 @@ export class BehaviorRun {
 
     if (this.stopRequested) {
       if (this.confirmationValue?.status === 'pending') this.confirmationValue.status = 'cancelled'
-      this.statusValue = 'cancelled'
       const result: ConfirmResult = {
         outcome: 'rejected',
-        status: 'cancelled',
+        status: this.statusValue,
         error: p2Error('RUN_CANCELLED', 'control', 'run is being cancelled', { module: 'core.run' }),
       }
       this.outcomes.set(input.commandId, result)
@@ -217,6 +236,25 @@ export class BehaviorRun {
     this.confirmationValue.status = 'denied'
     this.statusValue = 'failed'
     return this.outcomes.get(input.commandId) as ConfirmResult
+  }
+
+  private advanceStop(now: number): void {
+    const release = this.act.pollRelease?.(now) ?? 'released'
+    const state = this.stopControl.observe(now, release)
+    if (state === 'released') {
+      // Release proof alone is not terminal: executor cleanup must finish too.
+      if (this.stopRequested && this.executor.currentStatus === 'running') return
+      const failure = this.executor.currentError
+      if (failure !== undefined) {
+        this.stopFailure = failure
+        this.statusValue = 'failed'
+      } else {
+        this.statusValue = 'cancelled'
+      }
+      return
+    }
+    const failure = this.executor.currentError ?? stopUnconfirmedError(state)
+    if (failure !== undefined) this.stopFailure = failure
   }
 
   private validateConfirmation(input: ConfirmInput): P2Error | undefined {

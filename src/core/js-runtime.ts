@@ -6,6 +6,8 @@ import type { ArtifactRef } from '../contracts/ir.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import type { ActHandle, ActPoll, ActPort, PolicyOutcome, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 import type { RunStatus } from './run.ts'
+import { StopControl, stopUnconfirmedError } from './stop-control.ts'
+import type { StopState } from './stop-control.ts'
 
 type JsCommand =
   | { type: 'query'; op: string; args: Record<string, JsonValue> }
@@ -68,7 +70,8 @@ export class JsBehaviorRun {
   private activeAct: string | null = null
   private activeTarget: { x: number; z: number } | null = null
   private progressValue: JsonValue | undefined
-  private stopped = false
+  private readonly stopControl = new StopControl()
+  private actSequence = 0
 
   constructor(options: JsBehaviorRunOptions) {
     this.runId = options.runId
@@ -85,6 +88,14 @@ export class JsBehaviorRun {
 
   get error(): P2Error | undefined {
     return this.currentError
+  }
+
+  get stopState(): StopState {
+    return this.stopControl.state
+  }
+
+  get allowsTakeover(): boolean {
+    return this.stopControl.allowsNewRun
   }
 
   get confirmation(): undefined {
@@ -109,23 +120,31 @@ export class JsBehaviorRun {
     }
   }
 
-  stop(): void {
+  stop(now = Date.now()): void {
     if (this.isTerminal()) return
-    this.stopped = true
-    if (this.pending?.kind === 'act') {
-      try { this.pending.handle.stop() } catch {}
+    this.stopControl.requestStop()
+    const tokens = this.stopControl.accept(now)
+    if (tokens !== undefined) {
+      if (this.pending?.kind === 'act') {
+        try { this.pending.handle.stop() } catch {}
+      }
+      this.pending = undefined
+      this.resumeSlot = undefined
+      this.waitUntil = undefined
+      this.options.act.stopRun?.(now, this.runId)
+      this.runCleanup()
+    } else {
+      // Repeated stop/switch: re-request ledger stopping without a new deadline.
+      this.options.act.stopRun?.(now, this.runId)
     }
-    this.pending = undefined
-    this.resumeSlot = undefined
-    this.waitUntil = undefined
-    this.statusValue = 'cancelled'
-    this.runCleanup()
+    this.advanceStop(now)
   }
 
   tick(now = Date.now()): RunStatus {
     if (this.isTerminal()) return this.statusValue
-    if (this.stopped) {
-      this.statusValue = 'cancelled'
+    const control = this.stopControl.state
+    if (control !== 'running' && control !== 'queued') {
+      this.advanceStop(now)
       return this.statusValue
     }
     this.clock = now
@@ -300,8 +319,17 @@ export class JsBehaviorRun {
         const x = value.args.x
         const z = value.args.z
         this.activeTarget = typeof x === 'number' && typeof z === 'number' ? { x, z } : null
+        const actInstanceId = `${this.runId}:act:${this.stopControl.generation}:${++this.actSequence}`
+        this.stopControl.beginAct(actInstanceId)
         try {
-          this.pending = { kind: 'act', handle: this.options.act.start({ definitionId: ref.definitionId, artifactId }, value.args as Record<string, JsonValue>) }
+          this.pending = {
+            kind: 'act',
+            handle: this.options.act.start(
+              { definitionId: ref.definitionId, artifactId },
+              value.args as Record<string, JsonValue>,
+              { runId: this.runId, actInstanceId, generation: this.stopControl.generation },
+            ),
+          }
         } catch (error) {
           this.resumeSlot = { value: error, thrown: true }
         }
@@ -428,8 +456,19 @@ export class JsBehaviorRun {
     return true
   }
 
-  private runCleanup(): void {
-    const generator = this.generator
+  private advanceStop(now: number): StopState {
+    const release = this.options.act.pollRelease?.(now) ?? 'released'
+    const state = this.stopControl.observe(now, release)
+    if (state === 'released') {
+      this.statusValue = 'cancelled'
+    } else {
+      const failure = stopUnconfirmedError(state)
+      if (failure !== undefined) this.currentError = failure
+    }
+    return state
+  }
+
+  private runCleanup(): void {    const generator = this.generator
     if (generator === undefined) return
     this.generator = undefined
     this.context.__p2_return = () => generator.return(undefined)

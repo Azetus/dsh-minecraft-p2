@@ -50,8 +50,23 @@ export type ActHandle = {
 /** Act references are exact artifacts; the string form is only a legacy test input. */
 export type ActRefLike = ArtifactRef | string
 
+/** Identity a run stamps on every control operation it starts. */
+export type ActIdentity = {
+  runId: string
+  actInstanceId: string
+  /** Control-authority generation; incremented when a stop accepts. */
+  generation: number
+}
+
+/** Result of polling a pending release; `unconfirmed` is sticky until confirmed. */
+export type ReleaseStatus = 'idle' | 'stopping' | 'released' | 'unconfirmed'
+
 export type ActPort = {
-  start(ref: ActRefLike, args: Record<string, JsonValue>): ActHandle
+  start(ref: ActRefLike, args: Record<string, JsonValue>, identity?: ActIdentity): ActHandle
+  /** Begin releasing this run's control ledger; returns before release is proven. */
+  stopRun?(now: number, runId?: string): void
+  /** Poll release proof; omitted means the port cannot prove release. */
+  pollRelease?(now: number): ReleaseStatus
 }
 
 export type RuntimeReport = {

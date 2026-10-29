@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { BehaviorArtifact } from '../src/contracts/ir.ts'
 import { checkBehaviorJs } from '../src/core/js-checker.ts'
 import { JsBehaviorRun } from '../src/core/js-runtime.ts'
-import type { ActHandle, ActPoll, ActPort, PolicyPort, QueryOutcome, QueryPort } from '../src/core/node-runtime.ts'
+import type { ActHandle, ActPoll, ActPort, PolicyPort, QueryOutcome, QueryPort, ReleaseStatus } from '../src/core/node-runtime.ts'
 
 // 类别：状态安全
 // 保护对象：RUNTIME §3（每轮 step 预算与推进顺序）、§4（yield/return 语义与单步超时）、
@@ -281,5 +281,40 @@ describe('yield and return shapes', () => {
     const run = makeRun(artifact)
     expect(run.tick(0)).toBe('failed')
     expect(run.error?.code).toBe('BEHAVIOR_INVALID_RETURN')
+  })
+})
+
+describe('stop revocation and release', () => {
+  it('stops the act, keeps the run non-terminal until release, and never resumes the generator', async () => {
+    const artifact = await checked(behavior('while (true) { yield ctx.act("move", { x: 1, z: 2 }) }'))
+    let release: ReleaseStatus = 'stopping'
+    let stops = 0
+    let releaseRequests = 0
+    const identities: Array<Record<string, unknown>> = []
+    const run = makeRun(artifact, {
+      act: {
+        start: (_ref, _args, identity) => {
+          identities.push(identity as unknown as Record<string, unknown>)
+          return { poll: () => ({ status: 'running' }), stop: () => { stops += 1 } }
+        },
+        stopRun: () => { releaseRequests += 1 },
+        pollRelease: () => release,
+      },
+      resolveAct: () => 'p2:act:move',
+    })
+    expect(run.tick(0)).toBe('running')
+    expect(identities[0]).toMatchObject({ runId: 'run-1', generation: 0 })
+
+    run.stop(100)
+    expect(stops).toBe(1)
+    expect(releaseRequests).toBe(1)
+    expect(run.status).toBe('running')
+    expect(run.stopState).toBe('stopping')
+    expect(run.tick(200)).toBe('running')
+    expect(identities).toHaveLength(1)
+
+    release = 'released'
+    expect(run.tick(300)).toBe('cancelled')
+    expect(run.allowsTakeover).toBe(true)
   })
 })

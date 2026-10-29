@@ -1,6 +1,6 @@
 import type { JsonValue } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
-import type { ActHandle, ActPoll, QueryOutcome, QueryPort } from './node-runtime.ts'
+import type { ActHandle, ActPoll, QueryOutcome, QueryPort, ReleaseStatus } from './node-runtime.ts'
 import { requireCapability, requireOperation } from '../operation/index.ts'
 
 /** Identity stamped on a registered control intent; late messages carry it too. */
@@ -14,8 +14,7 @@ export type ControlIdentity = {
 /** Provider-visible control state; `unknown` means "cannot confirm release". */
 export type ProviderControlState = 'idle' | 'active' | 'unknown'
 
-/** Result of polling a pending release; `unconfirmed` is sticky until confirmed. */
-export type ReleaseStatus = 'idle' | 'stopping' | 'released' | 'unconfirmed'
+export type { ReleaseStatus }
 
 /** A concrete operation implementation, normally the Minecraft provider. */
 export type OpSource = {

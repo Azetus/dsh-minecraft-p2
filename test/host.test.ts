@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { BehaviorHost } from '../src/core/host.ts'
-import type { ActPort, QueryPort } from '../src/core/node-runtime.ts'
+import type { ActPort, QueryPort, ReleaseStatus } from '../src/core/node-runtime.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -36,6 +36,26 @@ export default {
   completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
 }
 `
+
+const waiting = `
+export default {
+  id: 'waiting-c', description: 'wait', mode: 'finite', parameters: {}, locals: {},
+  root: { kind: 'wait', id: 'settle-node', durationMs: 5000 },
+  completion: { kind: 'externalConfirmation', description: 'never happens during the test' },
+}
+`
+
+function releasableAct(): { act: ActPort; release: (state: ReleaseStatus) => void } {
+  let state: ReleaseStatus = 'stopping'
+  return {
+    act: {
+      start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }),
+      stopRun: () => {},
+      pollRelease: () => state,
+    },
+    release: next => { state = next },
+  }
+}
 
 describe('BehaviorHost workflow', () => {
   it('checks, activates, switches, confirms and retires with one active run', async () => {
@@ -119,5 +139,66 @@ export default {
     expect(status.activeNode).toBeNull()
     expect(status.activeTarget).toBeNull()
     expect(status.waiting).toBeNull()
+  })
+})
+
+describe('BehaviorHost stop and takeover', () => {
+  async function pair(act: ActPort): Promise<{ host: BehaviorHost; oldArtifact: string; nextArtifact: string }> {
+    const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
+    const oldOne = await host.check({ sourcePath: source('waiting-switch.mjs', waiting) })
+    const nextOne = await host.check({ sourcePath: source('next-switch.mjs', predicate) })
+    host.activate(oldOne.artifactId)
+    host.activate(nextOne.artifactId)
+    return { host, oldArtifact: oldOne.artifactId, nextArtifact: nextOne.artifactId }
+  }
+
+  it('queues a switch until the old run proves release', async () => {
+    const control = releasableAct()
+    const { host, oldArtifact, nextArtifact } = await pair(control.act)
+    const first = host.switch({ artifactId: oldArtifact, params: {}, commandId: 'old' })
+    expect(host.tick(0)).toBe('running')
+
+    const second = host.switch({ artifactId: nextArtifact, params: {}, commandId: 'next' })
+    expect(second.accepted).toBe(true)
+    expect(second.status).toBe('stopping')
+    expect(second.runId).toBe(first.runId)
+    expect(host.status().activeRun?.artifactId).toBe(oldArtifact)
+
+    control.release('released')
+    host.tick(10)
+    expect(host.status().lastRun).toMatchObject({ runId: first.runId, status: 'cancelled' })
+    expect(host.status().activeRun?.artifactId).toBe(nextArtifact)
+    expect(host.tick(11)).toBe('succeeded')
+  })
+
+  it('does not take over while release is unconfirmed', async () => {
+    const control = releasableAct()
+    control.release('unconfirmed')
+    const { host, oldArtifact, nextArtifact } = await pair(control.act)
+    host.switch({ artifactId: oldArtifact, params: {}, commandId: 'old' })
+    host.tick(0)
+
+    const second = host.switch({ artifactId: nextArtifact, params: {}, commandId: 'next' })
+    expect(second.accepted).toBe(false)
+    expect(second.status).toBe('superseded')
+    expect(second.error?.code).toBe('STOP_UNCONFIRMED')
+    expect(host.status().activeRun?.artifactId).toBe(oldArtifact)
+
+    control.release('released')
+    host.tick(10)
+    expect(host.status().activeRun).toBeNull()
+  })
+
+  it('clears a pending switch when the old run is stopped by the user', async () => {
+    const control = releasableAct()
+    const { host, oldArtifact, nextArtifact } = await pair(control.act)
+    const first = host.switch({ artifactId: oldArtifact, params: {}, commandId: 'old' })
+    host.tick(0)
+
+    host.switch({ artifactId: nextArtifact, params: {}, commandId: 'next' })
+    host.stop(first.runId as string)
+    control.release('released')
+    host.tick(10)
+    expect(host.status().activeRun).toBeNull()
   })
 })

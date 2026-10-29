@@ -12,6 +12,7 @@ import { BehaviorRun } from './run.ts'
 import { JsBehaviorRun } from './js-runtime.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
+import type { ArtifactRecord } from './registry.ts'
 import type { ActPort, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 import type { ActSource } from './act-port.ts'
 import type { PolicySource } from './policy-port.ts'
@@ -42,7 +43,7 @@ export type SwitchInput = {
 export type SwitchResult = {
   accepted: boolean
   runId: string | null
-  status: RunStatus | 'rejected' | 'superseded'
+  status: RunStatus | 'rejected' | 'superseded' | 'stopping'
   error?: P2Error
 }
 
@@ -99,6 +100,7 @@ export class BehaviorHost {
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined
   private runArtifact: string | undefined
+  private pendingSwitch: { artifactId: string; params: Record<string, JsonValue>; commandId: string } | undefined
   private lastRun: LastRunSummary | null = null
   private sequence = 0
 
@@ -312,28 +314,50 @@ export class BehaviorHost {
       return result
     }
 
+    // A newer valid switch supersedes an unactivated pending candidate.
+    this.pendingSwitch = undefined
+
     if (this.run !== undefined && !isTerminal(this.run.status)) {
       this.run.stop()
       for (let index = 0; index < 100 && !isTerminal(this.run.status); index += 1) this.run.tick()
       this.rememberLastRun()
       if (!isTerminal(this.run.status)) {
-        const result: SwitchResult = {
-          accepted: false,
-          runId: this.run.runId,
-          status: 'superseded',
-          error: p2Error('SWITCH_TIMEOUT', 'runtime', 'old run did not stop', { module: 'core.host' }),
+        if (this.run.stopState === 'stop-unconfirmed') {
+          const result: SwitchResult = {
+            accepted: false,
+            runId: this.run.runId,
+            status: 'superseded',
+            error: p2Error('STOP_UNCONFIRMED', 'timeout', 'old run control release was not confirmed', { module: 'core.host' }),
+          }
+          this.ledger.record(input.commandId, result)
+          return result
         }
+        // Release is still settling: accept the candidate and activate it once
+        // the old run proves control is gone.
+        this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId }
+        const result: SwitchResult = { accepted: true, runId: this.run.runId, status: 'stopping' }
         this.ledger.record(input.commandId, result)
         return result
       }
     }
 
+    const runId = this.startRun(record, params)
+    const result: SwitchResult = { accepted: true, runId, status: 'running' }
+    this.ledger.record(input.commandId, result)
+    return result
+  }
+
+  private startRun(record: ArtifactRecord, params: Record<string, JsonValue>): string {
+    const artifact = record.artifact
+    if (artifact.kind !== 'behavior') {
+      throw p2Error('ARTIFACT_NOT_BEHAVIOR', 'validation', 'artifactId is not a behavior artifact', { module: 'core.host' })
+    }
     const runId = this.newRunId()
-    if (record.artifact.kind === 'behavior' && record.artifact.format === 'js') {
+    if (artifact.format === 'js') {
       this.run = new JsBehaviorRun({
         runId,
         owner: this.owner,
-        artifact: record.artifact,
+        artifact,
         params,
         query: this.query,
         act: this.act,
@@ -345,22 +369,32 @@ export class BehaviorHost {
       this.run = new BehaviorRun({
         runId,
         owner: this.owner,
-        definition: record.artifact.definition,
+        definition: artifact.definition,
         params,
         query: this.query,
         act: this.act,
         policy: this.policy,
       })
     }
-    this.runArtifact = input.artifactId
-    const result: SwitchResult = { accepted: true, runId, status: 'running' }
-    this.ledger.record(input.commandId, result)
-    return result
+    this.runArtifact = artifact.artifactId
+    return runId
+  }
+
+  private activatePending(): void {
+    const pending = this.pendingSwitch
+    if (pending === undefined) return
+    if (this.run !== undefined && !isTerminal(this.run.status)) return
+    this.pendingSwitch = undefined
+    const record = this.registry.get(pending.artifactId)
+    // A candidate that retired while the old run was stopping must not take over.
+    if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') return
+    this.startRun(record, pending.params)
   }
 
   tick(now = Date.now()): RunStatus | undefined {
     const status = this.run?.tick(now)
     if (this.run !== undefined && isTerminal(this.run.status)) this.rememberLastRun()
+    this.activatePending()
     return status
   }
 
@@ -378,6 +412,7 @@ export class BehaviorHost {
   }
 
   stop(runId: string): { accepted: true; status: RunStatus } | { accepted: false; status: RunStatus; error: P2Error } {
+    this.pendingSwitch = undefined
     if (this.run === undefined || this.run.runId !== runId) {
       return {
         accepted: false,
@@ -433,6 +468,7 @@ export class BehaviorHost {
   }
 
   dispose(): void {
+    this.pendingSwitch = undefined
     if (this.run !== undefined && !isTerminal(this.run.status)) {
       this.run.stop()
       this.run.tick()

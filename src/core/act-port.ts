@@ -1,6 +1,6 @@
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
-import type { ActHandle, ActPoll, ActPort, ActRefLike, QueryOutcome } from './node-runtime.ts'
+import type { ActHandle, ActIdentity, ActPoll, ActPort, ActRefLike, QueryOutcome, ReleaseStatus } from './node-runtime.ts'
 import type { DeclaredOpBroker } from './op-broker.ts'
 import type { RunnerClient, RunnerOpEvent } from './runner-client.ts'
 import { RunnerError } from './runner-client.ts'
@@ -20,6 +20,7 @@ type OpState =
 
 type ActState = {
   source: ActSource
+  identity: ActIdentity | undefined
   phase: 'starting' | 'running' | 'stopping' | 'terminal'
   final: ActPoll | undefined
   inFlight: boolean
@@ -53,6 +54,16 @@ export class RunnerActPort implements ActPort {
   handleOp(event: RunnerOpEvent): void {
     const state = this.current
     if (state === undefined || state.phase === 'terminal') return
+    if (state.phase !== 'starting' && state.phase !== 'running') {
+      // The act is stopping; its old control requests must not start new work.
+      this.finishOp(state, event.callId, false, undefined, p2Error(
+        'OP_CANCELLED',
+        'control',
+        'act is stopping; control request was rejected',
+        { module: 'core.act-port', opId: event.name },
+      ))
+      return
+    }
     const declared = event.kind === 'query' ? state.source.ops.query : state.source.ops.control
     if (!declared.includes(event.name)) {
       this.finishOp(state, event.callId, false, undefined, p2Error(
@@ -78,14 +89,14 @@ export class RunnerActPort implements ActPort {
         this.finishOp(state, event.callId, true, outcome.value)
         return
       }
-      const handle = this.broker.start(event.name, opArgs)
+      const handle = this.broker.start(event.name, opArgs, state.identity)
       state.ops.set(event.callId, { callId: event.callId, kind: 'control', handle })
     } catch (error) {
       this.finishOp(state, event.callId, false, undefined, asP2Error(error, 'core.act-port'))
     }
   }
 
-  start(ref: ActRefLike, args: Record<string, JsonValue>): ActHandle {
+  start(ref: ActRefLike, args: Record<string, JsonValue>, identity?: ActIdentity): ActHandle {
     if (typeof ref === 'string') {
       throw p2Error('ACT_REF_UNRESOLVED', 'validation', `act reference must be an artifact reference, got ${ref}`, {
         module: 'core.act-port',
@@ -105,6 +116,7 @@ export class RunnerActPort implements ActPort {
     }
     const state: ActState = {
       source,
+      identity,
       phase: 'starting',
       final: undefined,
       inFlight: false,
@@ -123,6 +135,15 @@ export class RunnerActPort implements ActPort {
       stop: () => this.requestStop(state),
       cleanup: () => this.drive(state),
     }
+  }
+
+  /** Begin releasing the run's operation ledger; release proof is polled. */
+  stopRun(now: number, runId?: string): void {
+    this.broker.stopRun(now, runId)
+  }
+
+  pollRelease(now: number): ReleaseStatus {
+    return this.broker.pollRelease(now)
   }
 
   dispose(): void {
