@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -37,12 +38,22 @@ type CommandsService = {
 
 type P2Context = Context & { commands: CommandsService; tools?: ToolsService; agents?: AgentsService }
 
+/**
+ * DSH `Agent.followup` takes a complete `UserMessage`, not a bare
+ * `{ content, source }` object: the identity and role are part of the message
+ * the loop appends to the durable session log and replays to the model. A
+ * partial object is accepted at runtime and poisons every later request.
+ */
+type GuardWakeMessage = {
+  id: string
+  role: 'user'
+  content: Array<{ type: 'text'; text: string }>
+  source: { kind: 'p2-guard' }
+}
+
 type AgentsService = {
   get(id: string): {
-    followup(input: {
-      content: Array<{ type: 'text'; text: string }>
-      source: { kind: string }
-    }): unknown
+    followup(message: GuardWakeMessage): void
   } | undefined
 }
 
@@ -105,14 +116,17 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         const evidence = event.evidence === undefined ? 'n/a' : JSON.stringify(event.evidence)
         try {
           agent.followup({
+            id: randomUUID(),
+            role: 'user',
             content: [{
               type: 'text',
               text: `[p2 guard] ${event.guardId} fired (${event.attemptId ?? 'no attempt'}); target=${event.targetArtifactId ?? 'unknown'}; evidence=${evidence}. Inspect p2_events and p2_status for the switch phase.`,
             }],
             source: { kind: 'p2-guard' },
           })
-        } catch {
-          // Waking is best effort; the event remains readable through p2_events.
+        } catch (cause) {
+          // Waking is best effort, but a silent swallow hides a broken wake path.
+          options.log?.(`p2 guard wake failed: ${formatError(cause)}`)
         }
       }
       const registrations = new Map<string, ToolRegistration>()

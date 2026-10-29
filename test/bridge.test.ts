@@ -147,7 +147,7 @@ describe('BodyManager', () => {
     }
   })
 
-  it('wakes the owner once when a guard fires', async () => {
+  it('wakes the owner for each fired guard with a complete user message', async () => {
     const host = new BehaviorHost({
       bindingId: 'guard-wake',
       query: () => ({ status: 'ok', value: { health: 6 } }),
@@ -165,22 +165,36 @@ describe('BodyManager', () => {
     try {
       const target = await host.check({ sourcePath: path })
       host.activate(target.artifactId)
-      host.setGuard({
-        condition: { kind: 'health', hpBelow: 10 },
+      const guard = {
+        condition: { kind: 'health' as const, hpBelow: 10 },
         targetArtifactId: target.artifactId,
         params: {},
         ttlMs: 60_000,
-      }, 1_000)
+      }
+      host.setGuard(guard, 1_000)
       const fake = fakeBody(host)
       const definitions: Definition[] = []
       const tools: Array<Record<string, unknown>> = []
-      const followups: string[] = []
+      type WakeMessage = {
+        id: string
+        role: string
+        content: Array<{ type: string; text: string }>
+        source: { kind: string }
+      }
+      const followups: WakeMessage[] = []
+      const logs: string[] = []
+      let rejectWake = false
       const ctx = {
         commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
         tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
         agents: {
           get: (id: string) => id === owner.sessionId
-            ? { followup: (input: { content: Array<{ text: string }> }) => { followups.push(input.content.map(part => part.text).join('\n')) } }
+            ? {
+              followup: (message: WakeMessage) => {
+                if (rejectWake) throw new Error('inbox rejected the message')
+                followups.push(message)
+              },
+            }
             : undefined,
         },
         effect: (callback: () => unknown) => { callback(); return () => {} },
@@ -189,7 +203,7 @@ describe('BodyManager', () => {
         devBodyControl: true,
         bodyEntry: 'unused-body.mjs',
         spawnBody: () => fake.handle,
-        log: () => {},
+        log: line => { logs.push(line) },
       })
       ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
       const bodyTool = tools.find(tool => tool.name === 'p2_body') as {
@@ -201,15 +215,33 @@ describe('BodyManager', () => {
         ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
       }
       await bodyTool.execute({ action: 'start' }, { agent })
-      fake.runtime.tickBehavior(1_000)
       const statusTool = tools.find(tool => tool.name === 'p2_status') as {
         execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
       }
+      fake.runtime.tickBehavior(1_000)
       await statusTool.execute({}, { agent })
       expect(followups).toHaveLength(1)
-      expect(followups[0]).toContain('fired')
+      const first = followups[0]!
+      expect(first.role).toBe('user')
+      expect(typeof first.id).toBe('string')
+      expect(first.id.length).toBeGreaterThan(0)
+      expect(first.source).toEqual({ kind: 'p2-guard' })
+      expect(first.content[0]?.text).toContain('fired')
       await statusTool.execute({}, { agent })
       expect(followups).toHaveLength(1)
+
+      host.setGuard(guard, 2_000)
+      fake.runtime.tickBehavior(2_000)
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(2)
+      expect(followups[1]!.id).not.toBe(first.id)
+
+      rejectWake = true
+      host.setGuard(guard, 3_000)
+      fake.runtime.tickBehavior(3_000)
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(2)
+      expect(logs.some(line => line.includes('p2 guard wake failed'))).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
