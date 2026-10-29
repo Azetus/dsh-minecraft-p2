@@ -178,6 +178,82 @@ describe('P2 commands', () => {
     expect(disposers.length).toBeGreaterThan(0)
   })
 
+  it('registers a development body tool only when enabled', async () => {
+    const fake = fakeBody()
+    let spawns = 0
+    const definitions: Definition[] = []
+    const globalTools: Array<Record<string, unknown>> = []
+    const normalTools: Array<Record<string, unknown>> = []
+    const disposed: string[] = []
+    const ctx = {
+      commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+      tools: {
+        register: (definition: Record<string, unknown>) => {
+          globalTools.push(definition)
+          return () => {}
+        },
+      },
+      effect: (callback: () => unknown) => { callback(); return () => {} },
+    }
+    const plugin = createP2Plugin({
+      devBodyControl: true,
+      bodyEntry: 'unused-body.mjs',
+      spawnBody: () => {
+        spawns += 1
+        return fake.handle
+      },
+      log: () => {},
+    })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    expect(definitions).toHaveLength(1)
+    expect(globalTools.map(tool => tool.name)).toEqual(['p2_body'])
+    expect(spawns).toBe(0)
+
+    const agent = {
+      id: owner.agentId,
+      session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+      ctx: {
+        tools: {
+          register: (definition: Record<string, unknown>) => {
+            normalTools.push(definition)
+            const name = String(definition.name)
+            return () => { disposed.push(name) }
+          },
+        },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      },
+    }
+    const tool = globalTools[0] as {
+      execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<Record<string, unknown>>
+    }
+    expect(await tool.execute({ action: 'status' }, { agent })).toMatchObject({ state: 'inactive' })
+
+    const started = await tool.execute({ action: 'start' }, { agent })
+    expect(started).toMatchObject({ action: 'start', state: 'active', epoch: 'epoch-1' })
+    expect(spawns).toBe(1)
+    expect(normalTools.map(definition => definition.name)).toContain('p2_status')
+
+    const again = await tool.execute({ action: 'start' }, { agent })
+    expect(again.epoch).toBe('epoch-1')
+    expect(spawns).toBe(1)
+
+    await expect(tool.execute({ action: 'stop' }, {
+      agent: { ...agent, session: { id: 'other-session', header: { cwd: owner.cwd } } },
+    })).rejects.toThrow(/different session/u)
+    const stopped = await tool.execute({ action: 'stop' }, { agent })
+    expect(stopped).toMatchObject({ action: 'stop', state: 'inactive' })
+    expect(disposed.length).toBeGreaterThan(0)
+
+    const disabledTools: Array<Record<string, unknown>> = []
+    const disabled = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+    ;(disabled as unknown as { apply(ctx: unknown): void }).apply({
+      commands: { register: () => () => {} },
+      tools: { register: (definition: Record<string, unknown>) => { disabledTools.push(definition); return () => {} } },
+      effect: (callback: () => unknown) => { callback(); return () => {} },
+    })
+    expect(disabledTools).toHaveLength(0)
+  })
+
   it('rejects start without a project cwd', async () => {
     const fake = fakeBody()
     const definitions: Definition[] = []

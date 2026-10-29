@@ -1,13 +1,16 @@
 import { existsSync } from 'node:fs'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
 
+import type { JsonValue } from '../contracts/index.ts'
 import type { OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
-import type { BodySpawner } from './process-manager.ts'
+import type { BodySpawner, StartResult, StopResult } from './process-manager.ts'
 import { registerP2Tools } from './tools.ts'
 import type { AgentLike, ToolRegistration } from './tools.ts'
 
@@ -32,7 +35,22 @@ type CommandsService = {
   }): () => void
 }
 
-type P2Context = Context & { commands: CommandsService }
+type P2Context = Context & { commands: CommandsService; tools?: ToolsService }
+
+type ToolsService = {
+  register(definition: ToolDefinition): () => void
+}
+
+type ToolDefinition = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  output: {
+    schema: Record<string, unknown>
+    render: (args: Record<string, unknown>, value: unknown) => Array<{ type: 'text'; text: string }>
+  }
+  execute: (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }) => Promise<JsonValue>
+}
 
 export type P2PluginOptions = {
   bodyEntry?: string
@@ -40,6 +58,11 @@ export type P2PluginOptions = {
   heartbeatMs?: number
   stopTimeoutMs?: number
   log?: (line: string) => void
+  /**
+   * Development-only: register the global `p2_body` start/stop/status tool.
+   * The shipped plugin keeps body lifecycle on the human `/p2` command.
+   */
+  devBodyControl?: boolean
 }
 
 export function createP2Plugin(options: P2PluginOptions = {}): {
@@ -57,13 +80,31 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 
   return {
     name: 'dsh-minecraft-p2',
-    inject: ['commands'],
+    inject: ['commands', 'tools'],
     apply(ctx: P2Context): void {
-      let tools: ToolRegistration | undefined
-      const disposeTools = (): void => {
-        tools?.dispose()
-        tools = undefined
+      const registrations = new Map<string, ToolRegistration>()
+      const globalDisposers: Array<() => void> = []
+      const keyOf = (agent: AgentLike): string => `${agent.session.id}/${agent.id}`
+      const ensureTools = (agent: AgentLike): void => {
+        const key = keyOf(agent)
+        if (registrations.has(key)) return
+        registrations.set(key, registerP2Tools(agent, manager))
       }
+      const disposeTools = (): void => {
+        for (const registration of registrations.values()) registration.dispose()
+        registrations.clear()
+      }
+      const disposeGlobals = (): void => {
+        for (const dispose of globalDisposers.splice(0)) dispose()
+      }
+
+      if (options.devBodyControl === true && ctx.tools !== undefined) {
+        globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
+          ensureTools,
+          disposeTools,
+        })))
+      }
+
       ctx.effect(
         () => ctx.commands.register({
           name: 'p2',
@@ -71,10 +112,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           input: { hint: '<setup|start|status|stop>' },
           handler: invocation => handleP2Command(manager, invocation, {
             onStarted: agent => {
-              disposeTools()
-              tools = registerP2Tools(agent, manager)
+              ensureTools(agent)
             },
-            onStopped: disposeTools,
+            onStopped: () => {
+              disposeTools()
+            },
           }),
         }),
         'p2.commands',
@@ -82,12 +124,115 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       ctx.effect(
         () => async () => {
           disposeTools()
+          disposeGlobals()
           await manager.dispose()
         },
         'p2.body',
       )
     },
   }
+}
+
+type BodyToolHooks = {
+  ensureTools: (agent: AgentLike) => void
+  disposeTools: () => void
+}
+
+/** Development-only global tool; the human `/p2` command remains the shipped path. */
+function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
+  return {
+    name: 'p2_body',
+    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status'], description: 'Body lifecycle action' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    execute: async (args, exec) => {
+      const agent = exec.agent
+      if (agent === undefined) throw new Error('p2_body requires an agent context')
+      const action = String(args.action)
+      if (action === 'status') {
+        assertBodyOwner(manager, agent.session.id)
+        return await bodyStatus(manager)
+      }
+      if (action === 'start') {
+        const result = await startBody(manager, agent)
+        hooks.ensureTools(agent)
+        void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
+        const status = await bodyStatus(manager)
+        return { action, ...result, status }
+      }
+      if (action === 'stop') {
+        assertBodyOwner(manager, agent.session.id)
+        const result = await stopBody(manager)
+        hooks.disposeTools()
+        void auditBodyControl(agent, { action, state: result.state })
+        return { action, ...result }
+      }
+      throw new Error(`unknown p2_body action: ${action}`)
+    },
+  }
+}
+
+function assertBodyOwner(manager: BodyManager, sessionId: string): void {
+  if (manager.currentState !== 'active') return
+  const current = manager.currentOwner
+  if (current !== undefined && current.sessionId !== sessionId) {
+    throw new Error('P2 body is owned by a different session')
+  }
+}
+
+async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
+  if (manager.currentState !== 'active') {
+    return { state: manager.currentState }
+  }
+  const status = await manager.status()
+  if (status.state !== 'active') return { state: status.state }
+  return {
+    state: 'active',
+    epoch: manager.bodyEpoch ?? null,
+    run: status.status.activeRun,
+    lastRun: status.status.lastRun,
+    providerState: status.status.providerState ?? null,
+  } as unknown as JsonValue
+}
+
+async function auditBodyControl(agent: AgentLike, entry: Record<string, unknown>): Promise<void> {
+  const cwd = agent.session.header?.cwd
+  if (cwd === undefined || cwd.length === 0) return
+  try {
+    await mkdir(join(cwd, '.m5-runs'), { recursive: true })
+    await appendFile(
+      join(cwd, '.m5-runs', 'body-control.jsonl'),
+      `${JSON.stringify({ at: new Date().toISOString(), session: agent.session.id, agent: agent.id, ...entry })}\n`,
+    )
+  } catch {
+    // Development audit is best effort; lifecycle results never wait for it.
+  }
+}
+
+async function startBody(manager: BodyManager, agent: AgentLike): Promise<StartResult> {
+  const owner = ownerOf(agent)
+  if (manager.currentState === 'active') {
+    const current = manager.currentOwner
+    if (current !== undefined && (current.sessionId !== owner.sessionId || current.agentId !== owner.agentId)) {
+      throw new Error('P2 body is owned by a different session')
+    }
+    return { state: 'active', epoch: manager.bodyEpoch ?? '' }
+  }
+  return manager.start(owner)
+}
+
+async function stopBody(manager: BodyManager): Promise<StopResult> {
+  return manager.stop()
 }
 
 export async function handleP2Command(
@@ -107,19 +252,21 @@ export async function handleP2Command(
         return setup(invocation.agent)
       case 'start': {
         const owner = ownerOf(invocation.agent)
-        const result = await manager.start(owner)
+        const result = await startBody(manager, invocation.agent)
         hooks.onStarted?.(invocation.agent)
+        void auditBodyControl(invocation.agent, { action: 'start', state: result.state, epoch: result.epoch, via: 'command', owner })
         return success(`P2 body active (epoch ${result.epoch})`)
       }
       case 'status':
         return success(await statusText(manager))
       case 'stop':
       case 'shutdown': {
-        const result = await manager.stop()
+        const result = await stopBody(manager)
         if (result.state === 'faulted') {
           return error(`P2 body stop was not confirmed${result.error === undefined ? '' : `: ${result.error}`}`)
         }
         hooks.onStopped?.()
+        void auditBodyControl(invocation.agent, { action: 'stop', state: result.state, via: 'command' })
         return success('P2 body stopped')
       }
       default:
