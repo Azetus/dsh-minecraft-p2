@@ -291,6 +291,41 @@ describe('BodyManager', () => {
     expect(manager.currentState).toBe('inactive')
   })
 
+  it('sends exactly one snapshot request for a batch observation', async () => {
+    const host = new BehaviorHost({
+      bindingId: 'snapshot-bridge',
+      query: ref => ({
+        status: 'ok',
+        value: ref.op === 'health' ? { health: 20 } : ref.op === 'position' ? { x: 0, y: 64, z: 0 } : [],
+        meta: { source: 'query', scope: ref.op, sampledAt: 0 },
+      }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+    })
+    const fake = fakeBody(host)
+    let snapshotRequests = 0
+    const transport = fake.handle.transport
+    fake.handle.transport = {
+      send: line => {
+        if (line.includes('"method":"snapshot"')) snapshotRequests += 1
+        transport.send(line)
+      },
+      onLine: listener => transport.onLine(listener),
+      onError: listener => transport.onError(listener),
+      onClose: listener => transport.onClose(listener),
+      close: () => transport.close(),
+    }
+    const manager = managerWith(fake)
+    await manager.start(owner)
+    const result = await manager.snapshot([
+      { key: 'health', op: 'health' },
+      { key: 'position', op: 'position' },
+    ]) as { partial: boolean; parts: unknown[] }
+    expect(snapshotRequests).toBe(1)
+    expect(result.partial).toBe(false)
+    expect(result.parts).toHaveLength(2)
+    await manager.stop()
+  })
+
   it('reports a watch event gap when the retained ring skips events', async () => {
     let counter = 0
     const host = new BehaviorHost({

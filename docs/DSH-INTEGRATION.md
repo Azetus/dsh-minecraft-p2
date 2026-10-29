@@ -100,6 +100,8 @@ bridge 不创建/恢复用户 agent，不改 session header，不自动 fork/mov
 
 当前阶段限制必须对 agent 明示：哪些内容类型允许编写与检查、哪些允许启用、隔离引擎门槛是否已通过、`imported` 是否允许。能力清单与阶段限制随 status/describe 返回，不能只写在文档里而让 agent 试探。
 
+`p2_snapshot` 与 `p2_card` 都只发出**一次** body 往返；`inventory` 计数、实体敌对计数等摘要由 bridge 纯函数生成（纯函数定义见 `src/bridge/summaries.ts`），不新增 provider 查询语义。批量观测逐项返回 `status/value/meta`，单项失败或未完成只影响该项并把整体标为 `partial`；未知保持 `null`，不折成 0 或空数组。`p2_watch` 只有登记/撤销/查询入口，没有停止或切换控制。
+
 工具声明参数与输出schema，输出同时包含结构化结果和可读摘要。switch返回accepted+commandId，不能渲染为“已开始/已完成”。停止超时展示控制权未释放，不能用一个普通失败卡片掩盖。
 
 confirm 明确指定 bodyEpoch、runId、confirmationId 和 commandId，并提交确认或否定及依据，不隐式操作“当前任务”。bridge 根据实际入口提供可信来源：模型工具调用记为 agent 判断，只有可核验的人类交互入口才记为玩家确认。模型声称“玩家同意”、环境文本或行为源码均不能提升来源；尚未实现玩家入口时仅记录 agent 判断。body 仍须校验当前 owner 授权及请求归属，来源字段不替代鉴权。
