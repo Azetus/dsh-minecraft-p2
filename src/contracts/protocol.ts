@@ -31,6 +31,7 @@ export const METHODS = [
   'watch.remove',
   'watch.list',
   'snapshot',
+  'card',
   'trace',
   'stop',
   'shutdown',
@@ -376,6 +377,40 @@ export type SnapshotResult = {
   parts: SnapshotPart[]
   /** True when at least one part did not complete successfully. */
   partial: boolean
+  sampledAt: number
+}
+
+export type CardParams = {
+  timeoutMs?: number
+  /** Hostile entity search radius (default 16). */
+  radius?: number
+}
+
+/** Compact projection for high-frequency polling; no new query semantics. */
+export type CardResult = {
+  bodyEpoch: BodyEpoch
+  health: 'ready' | 'faulted'
+  connection: 'connected' | 'disconnected'
+  run: {
+    runId: string
+    status: string
+    artifactId: string
+    act: string | null
+    stepCount: number
+  } | null
+  lastRun: {
+    runId: string
+    status: LastRunSummary['status']
+    errorCode?: string
+  } | null
+  healthValue: number | null
+  food: number | null
+  position: { x: number; y: number; z: number } | null
+  /** Null means hostile count could not be established (not zero). */
+  hostiles: number | null
+  guards: { active: number; firing: number; error: number }
+  watches: { active: number; error: number }
+  provider: ProviderRuntimeStatus | null
   sampledAt: number
 }
 

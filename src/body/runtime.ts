@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 import { BehaviorHost } from '../core/host.ts'
+import type { QueryOutcome } from '../core/node-runtime.ts'
 import { CheckerError } from '../core/checker.ts'
 import { RegistryError } from '../core/registry.ts'
 import type { DebugLog } from '../core/logging.ts'
@@ -49,6 +50,8 @@ import type {
   SnapshotOp,
   SnapshotPart,
   SnapshotResult,
+  CardParams,
+  CardResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -164,6 +167,7 @@ export class BodyRuntime {
       && envelope.method !== 'watch.remove'
       && envelope.method !== 'observe'
       && envelope.method !== 'snapshot'
+      && envelope.method !== 'card'
       && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
     }
@@ -273,6 +277,82 @@ export class BodyRuntime {
       const result: SnapshotResult = {
         parts,
         partial: parts.some(part => part.status !== 'ok'),
+        sampledAt: Date.now(),
+      }
+      return { ...base, result: result as unknown as JsonValue }
+    }
+
+    if (envelope.method === 'card') {
+      const cardParams = params as CardParams
+      const radius = typeof cardParams.radius === 'number' && Number.isFinite(cardParams.radius)
+        ? Math.min(64, Math.max(1, cardParams.radius))
+        : 16
+      const timeoutMs = typeof cardParams.timeoutMs === 'number' && Number.isFinite(cardParams.timeoutMs)
+        ? Math.min(2000, Math.max(0, cardParams.timeoutMs))
+        : 300
+      const observed = {
+        health: observeSafely(this.behavior, 'health', {}),
+        position: observeSafely(this.behavior, 'position', {}),
+        entities: observeSafely(this.behavior, 'entities', { hostileOnly: true, maxDistance: radius, count: 64 }),
+      }
+      const deadline = Date.now() + timeoutMs
+      while (
+        [observed.health, observed.position, observed.entities].some(outcome => outcome.status === 'pending')
+        && Date.now() < deadline
+      ) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        if (observed.health.status === 'pending') observed.health = observed.health.poll()
+        if (observed.position.status === 'pending') observed.position = observed.position.poll()
+        if (observed.entities.status === 'pending') observed.entities = observed.entities.poll()
+      }
+      const status = this.behavior.status()
+      const providerState = status.providerState ?? null
+      const healthValue = observed.health.status === 'ok'
+        ? readNumericField(observed.health.value, 'health')
+        : null
+      const food = observed.health.status === 'ok'
+        ? readNumericField(observed.health.value, 'food')
+        : null
+      const position = observed.position.status === 'ok' ? readPosition(observed.position.value) : null
+      const hostiles = observed.entities.status === 'ok' && Array.isArray(observed.entities.value)
+        ? observed.entities.value.length
+        : null
+      const guards = status.guards ?? []
+      const watches = status.watches ?? []
+      const result: CardResult = {
+        bodyEpoch: this.bodyEpoch,
+        health: this.closing ? 'faulted' : 'ready',
+        connection: providerState === null || providerState.connected !== false ? 'connected' : 'disconnected',
+        run: status.activeRun === null
+          ? null
+          : {
+              runId: status.activeRun.runId,
+              status: status.activeRun.status,
+              artifactId: status.activeRun.artifactId,
+              act: status.activeAct,
+              stepCount: status.stepCount,
+            },
+        lastRun: status.lastRun === null
+          ? null
+          : {
+              runId: status.lastRun.runId,
+              status: status.lastRun.status,
+              ...(status.lastRun.error === undefined ? {} : { errorCode: status.lastRun.error.code }),
+            },
+        healthValue,
+        food,
+        position,
+        hostiles,
+        guards: {
+          active: guards.filter(guard => guard.state === 'active' || guard.state === 'deferred').length,
+          firing: guards.filter(guard => guard.state === 'firing').length,
+          error: guards.filter(guard => guard.state === 'error').length,
+        },
+        watches: {
+          active: watches.filter(watch => watch.state === 'active').length,
+          error: watches.filter(watch => watch.state === 'error').length,
+        },
+        provider: providerState,
         sampledAt: Date.now(),
       }
       return { ...base, result: result as unknown as JsonValue }
@@ -810,6 +890,34 @@ function parseStopParams(params: JsonValue): { value: StopParams } | { error: P2
 }
 
 const TRACE_KINDS: ReadonlySet<string> = new Set(['run', 'behavior', 'act', 'op', 'guard', 'watch'])
+
+function observeSafely(
+  behavior: BehaviorHost,
+  op: string,
+  args: Record<string, JsonValue>,
+): QueryOutcome {
+  try {
+    return behavior.observe(op, args)
+  } catch (error) {
+    return {
+      status: 'failed',
+      error: p2Error('CARD_QUERY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'body.card', opId: op }),
+    }
+  }
+}
+
+function readNumericField(value: JsonValue, field: string): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const candidate = (value as Record<string, JsonValue>)[field]
+  return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : null
+}
+
+function readPosition(value: JsonValue): { x: number; y: number; z: number } | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, JsonValue>
+  if (typeof record.x !== 'number' || typeof record.y !== 'number' || typeof record.z !== 'number') return null
+  return { x: record.x, y: record.y, z: record.z }
+}
 
 function parseSnapshotOps(value: JsonValue | undefined): SnapshotOp[] | undefined {
   if (!Array.isArray(value) || value.length === 0 || value.length > 8) return undefined

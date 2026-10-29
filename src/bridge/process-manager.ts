@@ -303,6 +303,10 @@ export class BodyManager {
     return this.activeClient().snapshot(ops, timeoutMs)
   }
 
+  card(params: JsonValue = {}): Promise<JsonValue> {
+    return this.activeClient().card(params)
+  }
+
   trace(params: JsonValue = {}): Promise<JsonValue> {
     return this.activeClient().trace(params)
   }

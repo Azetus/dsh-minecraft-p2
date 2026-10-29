@@ -547,8 +547,8 @@ describe('P2 commands', () => {
     const command = definitions[0] as Definition
     expect(await command.handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
     expect(tools.map(tool => tool.name)).toEqual([
-      'p2_status', 'p2_observe', 'p2_snapshot', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop',
-      'p2_guard', 'p2_events', 'p2_watch', 'p2_rescue', 'p2_command',
+      'p2_status', 'p2_observe', 'p2_snapshot', 'p2_card', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm',
+      'p2_stop', 'p2_guard', 'p2_events', 'p2_watch', 'p2_rescue', 'p2_command',
     ])
     const status = tools[0] as { execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown> }
     expect(await status.execute({}, { agent })).toBeDefined()

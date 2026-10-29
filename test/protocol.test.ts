@@ -131,6 +131,7 @@ describe('protocol vocabulary', () => {
       'watch.remove',
       'watch.list',
       'snapshot',
+      'card',
       'trace',
       'stop',
       'shutdown',

@@ -131,6 +131,24 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
   })
 
   register({
+    name: 'p2_card',
+    description: 'Compact high-frequency status card: run summary, health, position, nearby hostile count, and guard/watch counts in one round trip.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radius: { type: 'number', description: 'Hostile search radius (default 16)' },
+        timeoutMs: { type: 'number', description: 'Deadline for the observation parts (default 300)' },
+      },
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => manager.card({
+      ...(typeof args.radius === 'number' ? { radius: args.radius } : {}),
+      ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
+    } as JsonValue)),
+  })
+
+  register({
     name: 'p2_check',
     description: 'Check a behavior, act, policy or op source file in the owner project without activating or running it.',
     parameters: {

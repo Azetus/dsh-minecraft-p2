@@ -163,6 +163,10 @@ export class BodyClient {
     })
   }
 
+  card(params: JsonValue = {}): Promise<JsonValue> {
+    return this.request('card', params)
+  }
+
   trace(params: JsonValue = {}): Promise<JsonValue> {
     return this.request('trace', params)
   }
