@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { checkAct, forbiddenToken } from '../src/core/act-checker.ts'
+import { RunnerActPort } from '../src/core/act-port.ts'
 import { BehaviorHost } from '../src/core/host.ts'
+import { DeclaredOpBroker } from '../src/core/op-broker.ts'
 import { RunnerClient } from '../src/core/runner-client.ts'
 import { RunnerManager } from '../src/core/runner-manager.ts'
 import type { ReleaseStatus } from '../src/core/node-runtime.ts'
@@ -511,6 +513,125 @@ describe('runner manager recovery', () => {
         evidence: { x: 1 },
       })
       expect(manager.generation).toBe(2)
+    } finally {
+      host.dispose()
+      manager.dispose()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('IR behavior act path', () => {
+  const INSTANT_ACT = `
+    defineAct({
+      manifest: { id: 'ir-instant-act', queryOps: [], controlOps: [] },
+      create: () => ({
+        start: () => ({ kind: 'complete', result: { ok: true } }),
+        update: () => ({ kind: 'running' }),
+        stop: () => ({ kind: 'complete' }),
+        cleanup: () => ({ kind: 'complete' }),
+      }),
+    })
+  `
+
+  const SLOW_ACT = `
+    defineAct({
+      manifest: { id: 'ir-slow-act', queryOps: [], controlOps: [] },
+      create: () => ({
+        start: () => ({ kind: 'running' }),
+        update: () => ({ kind: 'running' }),
+        stop: () => ({ kind: 'complete' }),
+        cleanup: () => ({ kind: 'complete' }),
+      }),
+    })
+  `
+
+  const finish = (id: string, actId: string): string => `
+    export default {
+      id: '${id}',
+      description: 'IR act test',
+      mode: 'finite',
+      parameters: {},
+      locals: { done: { type: 'boolean' } },
+      root: {
+        kind: 'sequence',
+        id: 'root',
+        children: [
+          { kind: 'act', id: 'work', act: { definitionId: '${actId}' }, args: {} },
+          { kind: 'assign', id: 'mark', target: 'done', value: { kind: 'literal', value: true } },
+        ],
+      },
+      completion: {
+        kind: 'predicate',
+        condition: { kind: 'expr', expr: { kind: 'local', name: 'done' } },
+      },
+    }
+  `
+
+  it('runs and stops IR acts through the runner', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    let host: BehaviorHost
+    const manager = new RunnerManager({
+      entry,
+      onOp: () => {},
+      heartbeatMs: 0,
+      onExit: code => host.runnerExited(`runner exited with code ${String(code)}`),
+    })
+    const ops = new DeclaredOpBroker({
+      start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }),
+      query: () => ({ status: 'ok', value: null }),
+    })
+    let actPort: RunnerActPort
+    actPort = new RunnerActPort(() => manager.ensure(), ops, artifactId => host.actSource(artifactId))
+    host = new BehaviorHost({
+      bindingId: 'binding-ir-act',
+      query: () => ({ status: 'ok', value: null }),
+      act: actPort,
+      loadManifest: (kind, code, artifactId) => manager.ensure().load(kind, artifactId, code),
+      behaviorRunner: () => manager.ensure(),
+    })
+    const directory = mkdtempSync(join(tmpdir(), 'p2-ir-act-'))
+    const instantPath = join(directory, 'instant.mjs')
+    const slowPath = join(directory, 'slow.mjs')
+    const successPath = join(directory, 'success.mjs')
+    const stuckPath = join(directory, 'stuck.mjs')
+    writeFileSync(instantPath, INSTANT_ACT)
+    writeFileSync(slowPath, SLOW_ACT)
+    writeFileSync(successPath, finish('ir-act-success', 'ir-instant-act'))
+    writeFileSync(stuckPath, finish('ir-act-stuck', 'ir-slow-act'))
+    try {
+      const instant = await host.check({ sourcePath: instantPath, artifactKind: 'act' })
+      const slow = await host.check({ sourcePath: slowPath, artifactKind: 'act' })
+      host.activate(instant.artifactId)
+      host.activate(slow.artifactId)
+      const success = await host.check({ sourcePath: successPath })
+      const stuck = await host.check({ sourcePath: stuckPath })
+      host.activate(success.artifactId)
+      host.activate(stuck.artifactId)
+
+      const first = host.switch({ artifactId: success.artifactId, params: {}, commandId: 'ir-success' })
+      for (let index = 0; index < 100; index += 1) {
+        host.tick()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const last = host.status().lastRun
+        if (last !== null && last.runId === first.runId) break
+      }
+      expect(host.status().lastRun).toMatchObject({ runId: first.runId, status: 'succeeded' })
+
+      const second = host.switch({ artifactId: stuck.artifactId, params: {}, commandId: 'ir-stuck' })
+      for (let index = 0; index < 100 && host.status().activeRun === null; index += 1) {
+        host.tick()
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(host.status().activeRun?.runId).toBe(second.runId)
+      host.stop(second.runId as string)
+      for (let index = 0; index < 150; index += 1) {
+        host.tick()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const last = host.status().lastRun
+        if (last !== null && last.runId === second.runId && last.status === 'cancelled') break
+      }
+      expect(host.status().lastRun).toMatchObject({ runId: second.runId, status: 'cancelled' })
     } finally {
       host.dispose()
       manager.dispose()
