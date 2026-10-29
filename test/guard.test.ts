@@ -72,7 +72,7 @@ describe('guard contract', () => {
     host.tick(1_000)
     const fired = host.status()
     expect(fired.guard).toMatchObject({ state: 'fired', condition: { kind: 'health', hpBelow: 10 } })
-    expect(fired.lastSwitch).toMatchObject({ phase: 'started', targetArtifactId: target.artifactId })
+    expect(fired.lastSwitch).toMatchObject({ phase: 'started', targetArtifactId: target.artifactId, fromRunId: null })
     expect(fired.activeRun?.artifactId).toBe(target.artifactId)
     expect(fired.guardEvents?.map(event => event.phase)).toEqual(['armed', 'fired', 'started'])
     const firstAttempt = fired.guard?.attemptId
@@ -199,6 +199,36 @@ describe('guard contract', () => {
     expect(status.lastSwitch).toMatchObject({ phase: 'precheck-failed' })
     expect(status.guard?.state).toBe('fired')
     expect(status.activeRun?.artifactId).toBe(current.artifactId)
+  })
+
+  it('reports the run a guard switched away from', async () => {
+    const control = releasableAct()
+    const host = new BehaviorHost({ bindingId: 'guard-9', query: healthQuery(() => 6), act: control.act })
+    const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    const target = await host.check({ sourcePath: source('target.mjs', done) })
+    host.activate(current.artifactId)
+    host.activate(target.artifactId)
+    host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
+    host.tick(0)
+    const fromRunId = host.status().activeRun?.runId
+    expect(fromRunId).toBeTruthy()
+
+    host.setGuard({
+      condition: { kind: 'health', hpBelow: 10 },
+      targetArtifactId: target.artifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+    host.tick(1_000)
+    expect(host.status().lastSwitch).toMatchObject({ phase: 'stopping', fromRunId })
+
+    control.release('released')
+    host.tick(1_001)
+    host.tick(1_002)
+    const status = host.status()
+    expect(status.lastSwitch).toMatchObject({ phase: 'started', fromRunId })
+    expect(status.lastSwitch?.toRunId).toBeTruthy()
+    expect(status.guard?.state).toBe('fired')
   })
 
   it('reports stop-unconfirmed without starting the target', async () => {

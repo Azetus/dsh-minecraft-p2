@@ -120,6 +120,8 @@ type PendingSwitch = {
   source: 'user' | 'guard'
   guardId?: string
   attemptId?: string
+  /** Run that the guard attempt stopped, recorded on the attempt until it starts the target. */
+  fromRunId?: string | null
 }
 
 const GUARD_EVAL_INTERVAL_MS = 250
@@ -500,16 +502,16 @@ export class BehaviorHost {
       }
       if (now >= guard.expiresAt) {
         guard.state = 'expired'
-        this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'failed', 'guard expired before target start')
+        this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'failed', 'guard expired before target start', now, pending.fromRunId ?? null)
         this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
         return
       }
       const record = this.registry.get(guard.targetArtifactId)
       if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') {
-        this.failGuardTarget(guard, now, 'target is not active at handoff')
+        this.failGuardTarget(guard, now, 'target is not active at handoff', undefined, pending.fromRunId ?? null)
         return
       }
-      this.startGuardTarget(guard, record, now)
+      this.startGuardTarget(guard, record, now, pending.fromRunId ?? null)
       return
     }
     const record = this.registry.get(pending.artifactId)
@@ -543,14 +545,14 @@ export class BehaviorHost {
     if (now >= guard.expiresAt) {
       this.pendingSwitch = undefined
       guard.state = 'expired'
-      this.lastSwitch = guardSwitchOf(guard, guard.attemptId, 'failed', 'guard expired before target start', now)
+      this.lastSwitch = guardSwitchOf(guard, guard.attemptId, 'failed', 'guard expired before target start', now, pending.fromRunId ?? null)
       this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
       return
     }
     if (this.run !== undefined && !isTerminal(this.run.status) && this.run.stopState === 'stop-unconfirmed') {
       this.pendingSwitch = undefined
       const error = p2Error('STOP_UNCONFIRMED', 'timeout', 'old run control release was not confirmed', { module: 'core.host' })
-      this.failGuardTarget(guard, now, 'old run stop was not confirmed', error)
+      this.failGuardTarget(guard, now, 'old run stop was not confirmed', error, pending.fromRunId ?? null)
     }
   }
 
@@ -648,7 +650,7 @@ export class BehaviorHost {
     if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') {
       guard.state = 'fired'
       guard.lastError = p2Error('GUARD_TARGET_NOT_ACTIVE', 'validation', 'target is not active before stop', { module: 'core.host' })
-      this.lastSwitch = guardSwitchOf(guard, attemptId, 'precheck-failed', 'target is not active before stop', now)
+      this.lastSwitch = guardSwitchOf(guard, attemptId, 'precheck-failed', 'target is not active before stop', now, fromRunId)
       this.emitGuard('precheck-failed', {
         guardId: guard.id,
         attemptId,
@@ -660,7 +662,7 @@ export class BehaviorHost {
       return
     }
     if (this.run === undefined || isTerminal(this.run.status)) {
-      this.startGuardTarget(guard, record, now)
+      this.startGuardTarget(guard, record, now, fromRunId)
       return
     }
     this.run.stop()
@@ -671,8 +673,9 @@ export class BehaviorHost {
       source: 'guard',
       guardId: guard.id,
       attemptId,
+      fromRunId,
     }
-    this.lastSwitch = guardSwitchOf(guard, attemptId, 'stopping', 'guard fired', now)
+    this.lastSwitch = guardSwitchOf(guard, attemptId, 'stopping', 'guard fired', now, fromRunId)
     this.emitGuard('stopping', {
       guardId: guard.id,
       attemptId,
@@ -682,20 +685,19 @@ export class BehaviorHost {
     })
   }
 
-  private startGuardTarget(guard: ActiveGuard, record: ArtifactRecord, now: number): void {
+  private startGuardTarget(guard: ActiveGuard, record: ArtifactRecord, now: number, fromRunId: string | null): void {
     const attemptId = guard.attemptId
     if (this.guard !== guard || attemptId === undefined) return
     if (now >= guard.expiresAt) {
       guard.state = 'expired'
-      this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', 'guard expired before target start', now)
+      this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', 'guard expired before target start', now, fromRunId)
       this.emitGuard('expired', { guardId: guard.id, attemptId, at: now })
       return
     }
     if (record.retired || !record.enabled) {
-      this.failGuardTarget(guard, now, 'target is not active at handoff')
+      this.failGuardTarget(guard, now, 'target is not active at handoff', undefined, fromRunId)
       return
     }
-    const fromRunId = this.lastSwitch?.fromRunId ?? null
     try {
       const runId = this.startRun(record, guard.params)
       guard.state = 'fired'
@@ -719,16 +721,16 @@ export class BehaviorHost {
         error instanceof Error ? error.message : String(error),
         { module: 'core.host' },
       )
-      this.failGuardTarget(guard, now, failure.message, failure)
+      this.failGuardTarget(guard, now, failure.message, failure, fromRunId)
     }
   }
 
-  private failGuardTarget(guard: ActiveGuard, now: number, message: string, error?: P2Error): void {
+  private failGuardTarget(guard: ActiveGuard, now: number, message: string, error?: P2Error, fromRunId: string | null = null): void {
     guard.state = 'error'
     const failure = error ?? p2Error('GUARD_START_FAILED', 'runtime', message, { module: 'core.host' })
     guard.lastError = failure
     const attemptId = guard.attemptId ?? 'unknown'
-    this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', message, now)
+    this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', message, now, fromRunId)
     this.emitGuard('failed', {
       guardId: guard.id,
       attemptId: guard.attemptId,
@@ -745,7 +747,7 @@ export class BehaviorHost {
     const guard = this.guard
     if (guard !== undefined && guard.id === pending.guardId) {
       guard.state = 'fired'
-      this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'suppressed', reason)
+      this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'suppressed', reason, Date.now(), pending.fromRunId ?? null)
       this.emitGuard('suppressed', {
         guardId: guard.id,
         attemptId: pending.attemptId,
@@ -990,13 +992,14 @@ function guardSwitchOf(
   phase: GuardSwitchSummary['phase'],
   reason: string,
   now = Date.now(),
+  fromRunId: string | null = null,
 ): GuardSwitchSummary {
   return {
     guardId: guard.id,
     attemptId: attemptId ?? guard.attemptId ?? 'unknown',
     reason,
     targetArtifactId: guard.targetArtifactId,
-    fromRunId: null,
+    fromRunId,
     toRunId: null,
     at: now,
     phase,
