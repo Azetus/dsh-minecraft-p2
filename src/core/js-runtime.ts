@@ -70,6 +70,7 @@ export class JsBehaviorRun {
   private waitUntil: number | undefined
   private clock = 0
   private currentError: P2Error | undefined
+  private failureIntent: P2Error | undefined
   private currentStep: CurrentStep | null = null
   private stepCount = 0
   private activeAct: string | null = null
@@ -145,16 +146,26 @@ export class JsBehaviorRun {
     }
   }
 
-  /** The runner exited; a live run fails, a stopping run records the cleanup fault. */
+  /** The runner exited; a live run revokes control and waits for release proof. */
   runnerExited(message: string): void {
     if (this.isTerminal()) return
+    const now = Date.now()
     const error = p2Error('RUNNER_EXITED', 'runtime', message, { module: 'core.js-run' })
     if (this.stopControl.controlOpen) {
-      this.fail(error)
-      return
+      this.failureIntent = error
+      this.stopControl.requestStop()
+      this.stopControl.accept(now)
+      if (this.pending?.kind === 'act') {
+        try { this.pending.handle.stop() } catch {}
+      }
+      this.pending = undefined
+      this.resumeSlot = undefined
+      this.waitUntil = undefined
+      this.options.act.stopRun?.(now, this.runId)
+    } else {
+      this.currentError = error
     }
-    this.currentError = error
-    this.advanceStop(this.clock)
+    this.advanceStop(now)
   }
 
   stop(now = Date.now()): void {
@@ -309,6 +320,12 @@ export class JsBehaviorRun {
     const state = this.stopControl.observe(now, release)
     if (state === 'released') {
       if (this.cleanupPending) return
+      if (this.failureIntent !== undefined) {
+        this.currentError = this.failureIntent
+        this.statusValue = 'failed'
+        this.currentStep = null
+        return
+      }
       this.statusValue = 'cancelled'
       this.currentStep = null
       return

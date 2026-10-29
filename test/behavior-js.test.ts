@@ -455,3 +455,41 @@ describe('observation and bounded payloads', () => {
     expect(observation.currentStep).toMatchObject({ kind: 'log' })
   })
 })
+
+describe('runner exit and release proof', () => {
+  async function activeRun(releaseState: () => ReleaseStatus): Promise<JsBehaviorRun> {
+    const artifact = await checked(behavior('while (true) { yield ctx.act("move", {}) }', { acts: ['move'] }))
+    return makeRun(artifact, {
+      act: {
+        start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }),
+        stopRun: () => {},
+        pollRelease: releaseState,
+      },
+      resolveAct: () => 'p2:act:move',
+    })
+  }
+
+  it('does not take over when a runner crash leaves release unconfirmed', async () => {
+    let release: ReleaseStatus = 'unconfirmed'
+    const run = await activeRun(() => release)
+    expect(run.tick(0)).toBe('running')
+    run.runnerExited('runner crashed')
+    expect(run.status).toBe('running')
+    expect(run.stopState).toBe('stop-unconfirmed')
+    expect(run.allowsTakeover).toBe(false)
+
+    release = 'released'
+    expect(run.tick(1)).toBe('failed')
+    expect(run.error?.code).toBe('RUNNER_EXITED')
+    expect(run.allowsTakeover).toBe(true)
+  })
+
+  it('fails without blocking takeover when release is confirmed', async () => {
+    const run = await activeRun(() => 'released')
+    expect(run.tick(0)).toBe('running')
+    run.runnerExited('runner crashed')
+    expect(run.status).toBe('failed')
+    expect(run.error?.code).toBe('RUNNER_EXITED')
+    expect(run.allowsTakeover).toBe(true)
+  })
+})

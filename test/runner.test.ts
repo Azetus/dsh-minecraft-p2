@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { checkAct, forbiddenToken } from '../src/core/act-checker.ts'
 import { BehaviorHost } from '../src/core/host.ts'
 import { RunnerClient } from '../src/core/runner-client.ts'
+import type { ReleaseStatus } from '../src/core/node-runtime.ts'
 import { Sandbox, SandboxError } from '../src/runner/sandbox.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
 
@@ -294,6 +295,90 @@ describe('body host with sandbox behavior driver', () => {
       }
       const status = host.status()
       expect(status.lastRun).toMatchObject({ status: 'succeeded', evidence: { x: 7 } })
+    } finally {
+      host.dispose()
+      client.dispose()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('runner behavior timeout supervision', () => {
+  it('interrupts a behavior step that never yields', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    const client = new RunnerClient({ entry, onOp: () => {}, heartbeatMs: 0 })
+    try {
+      await client.load('behavior', 'p2:behavior:loop', `
+        defineBehavior({
+          manifest: { id: 'loop', mode: 'continuous', parameters: {} },
+          *run() { for (;;) {} },
+        })
+      `)
+      await client.behaviorStart('p2:behavior:loop', 'run-1', 'act-1', 0, {})
+      await expect(client.behaviorResume('run-1', 0, { thrown: false }))
+        .rejects.toMatchObject({ code: 'BEHAVIOR_STEP_TIMEOUT' })
+    } finally {
+      client.dispose()
+    }
+  })
+})
+
+describe('runner crash and release gating', () => {
+  it('blocks takeover until release is proven, then reports the crash', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    let host: BehaviorHost
+    let release: ReleaseStatus = 'unconfirmed'
+    const client = new RunnerClient({
+      entry,
+      onOp: () => {},
+      heartbeatMs: 0,
+      onExit: code => host.runnerExited(`runner exited with code ${String(code)}`),
+    })
+    host = new BehaviorHost({
+      bindingId: 'binding-crash',
+      query: () => ({ status: 'ok', value: null, meta: { source: 'query', scope: 'test', sampledAt: 0 } }),
+      act: {
+        start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }),
+        stopRun: () => {},
+        pollRelease: () => release,
+      },
+      behaviorRunner: client,
+      loadBehaviorManifest: (code, artifactId) => client.load('behavior', artifactId, code),
+    })
+    const directory = mkdtempSync(join(tmpdir(), 'p2-runner-crash-'))
+    const path = join(directory, 'behavior.mjs')
+    writeFileSync(path, `
+      defineBehavior({
+        manifest: { id: 'crash-behavior', mode: 'continuous', parameters: {} },
+        *run() { while (true) { yield { type: 'wait', durationMs: 1000 } } },
+      })
+    `)
+    try {
+      const checked = await host.check({ sourcePath: path, format: 'js' })
+      host.activate(checked.artifactId)
+      host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'start' })
+      for (let index = 0; index < 50 && host.status().waiting !== 'wait'; index += 1) {
+        host.tick(index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(host.status().waiting).toBe('wait')
+
+      client.kill()
+      await new Promise(resolve => setTimeout(resolve, 100))
+      host.tick(1000)
+      expect(host.status().activeRun?.status).toBe('running')
+      const blocked = host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'blocked' })
+      expect(blocked.accepted).toBe(false)
+      expect(blocked.error?.code).toBe('STOP_UNCONFIRMED')
+
+      release = 'released'
+      for (let index = 0; index < 20 && host.status().lastRun === null; index += 1) {
+        host.tick(2000 + index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(host.status().lastRun).toMatchObject({ status: 'failed', error: { code: 'RUNNER_EXITED' } })
+      const takeover = host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'after-crash' })
+      expect(takeover.accepted).toBe(true)
     } finally {
       host.dispose()
       client.dispose()
