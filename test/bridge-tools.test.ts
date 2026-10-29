@@ -39,6 +39,7 @@ describe('bridge tools', () => {
       'p2_activate',
       'p2_switch',
       'p2_stop',
+      'p2_guard',
       'p2_events',
       'p2_rescue',
     ]))

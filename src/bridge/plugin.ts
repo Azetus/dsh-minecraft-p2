@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 
 import type { JsonValue } from '../contracts/index.ts'
-import type { OwnerContext } from '../contracts/protocol.ts'
+import type { GuardEvent, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
@@ -35,7 +35,16 @@ type CommandsService = {
   }): () => void
 }
 
-type P2Context = Context & { commands: CommandsService; tools?: ToolsService }
+type P2Context = Context & { commands: CommandsService; tools?: ToolsService; agents?: AgentsService }
+
+type AgentsService = {
+  get(id: string): {
+    followup(input: {
+      content: Array<{ type: 'text'; text: string }>
+      source: { kind: string }
+    }): unknown
+  } | undefined
+}
 
 type ToolsService = {
   register(definition: ToolDefinition): () => void
@@ -70,18 +79,42 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
   inject: string[]
   apply(ctx: P2Context): void
 } {
+  let notifyGuardEvent: ((event: GuardEvent) => void) | undefined
   const manager = new BodyManager({
     bodyEntry: options.bodyEntry ?? fileURLToPath(new URL('./body/body.mjs', import.meta.url)),
     ...(options.spawnBody === undefined ? {} : { spawnBody: options.spawnBody }),
     ...(options.heartbeatMs === undefined ? {} : { heartbeatMs: options.heartbeatMs }),
     ...(options.stopTimeoutMs === undefined ? {} : { stopTimeoutMs: options.stopTimeoutMs }),
     ...(options.log === undefined ? {} : { log: options.log }),
+    onGuardEvent: event => notifyGuardEvent?.(event),
+    onGuardGap: (fromSeq, toSeq) => {
+      options.log?.(`p2 guard event gap: ${fromSeq}..${toSeq}`)
+    },
   })
 
   return {
     name: 'dsh-minecraft-p2',
-    inject: ['commands', 'tools'],
+    inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
+      notifyGuardEvent = event => {
+        if (event.phase !== 'fired') return
+        const owner = manager.currentOwner
+        if (owner === undefined) return
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined) return
+        const evidence = event.evidence === undefined ? 'n/a' : JSON.stringify(event.evidence)
+        try {
+          agent.followup({
+            content: [{
+              type: 'text',
+              text: `[p2 guard] ${event.guardId} fired (${event.attemptId ?? 'no attempt'}); target=${event.targetArtifactId ?? 'unknown'}; evidence=${evidence}. Inspect p2_events and p2_status for the switch phase.`,
+            }],
+            source: { kind: 'p2-guard' },
+          })
+        } catch {
+          // Waking is best effort; the event remains readable through p2_events.
+        }
+      }
       const registrations = new Map<string, ToolRegistration>()
       const globalDisposers: Array<() => void> = []
       const keyOf = (agent: AgentLike): string => `${agent.session.id}/${agent.id}`
@@ -123,6 +156,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       )
       ctx.effect(
         () => async () => {
+          notifyGuardEvent = undefined
           disposeTools()
           disposeGlobals()
           await manager.dispose()

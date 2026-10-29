@@ -25,6 +25,8 @@ export const METHODS = [
   'rescue',
   'confirm',
   'behavior.stop',
+  'guard.set',
+  'guard.clear',
   'stop',
   'shutdown',
   'command.get',
@@ -133,6 +135,58 @@ export type CurrentStep = {
   summary: string
 }
 
+export type GuardCondition = { kind: 'health'; hpBelow: number }
+
+export type GuardState = 'active' | 'firing' | 'fired' | 'expired' | 'cleared' | 'error'
+
+export type GuardEventPhase =
+  | 'armed'
+  | 'fired'
+  | 'precheck-failed'
+  | 'stopping'
+  | 'started'
+  | 'failed'
+  | 'suppressed'
+  | 'cleared'
+  | 'expired'
+  | 'error'
+
+export type GuardEvent = {
+  seq: number
+  guardId: string
+  attemptId?: string
+  phase: GuardEventPhase
+  at: number
+  condition?: GuardCondition
+  evidence?: JsonValue
+  targetArtifactId?: string
+  fromRunId?: string | null
+  toRunId?: string | null
+  message?: string
+  error?: P2Error
+}
+
+export type GuardStatus = {
+  id: string
+  state: GuardState
+  condition: GuardCondition
+  armedAt: number
+  expiresAt: number
+  attemptId?: string
+  lastError?: P2Error
+}
+
+export type GuardSwitchSummary = {
+  guardId: string
+  attemptId: string
+  reason: string
+  targetArtifactId: string
+  fromRunId: string | null
+  toRunId: string | null
+  at: number
+  phase: 'precheck-failed' | 'stopping' | 'started' | 'failed' | 'suppressed'
+}
+
 export type CleanupState = 'none' | 'running' | 'released' | 'unconfirmed'
 export type ControlHealth = 'ok' | 'unknown' | 'faulted'
 export type SwitchState = 'none' | 'queued' | 'stopping' | 'released' | 'unconfirmed'
@@ -177,6 +231,10 @@ export type StatusResult = {
   cleanupState?: CleanupState
   controlHealth?: ControlHealth
   switchState?: SwitchState
+  guard?: GuardStatus | null
+  lastSwitch?: GuardSwitchSummary | null
+  guardEvents?: GuardEvent[]
+  guardEventSeq?: number
   /** Experiment-only rescue channel state; null when the body has no provider. */
   rescue?: { enabled: boolean; tpRadius: number } | null
   /** Developer-mode external operations; null when the hook is disabled. */

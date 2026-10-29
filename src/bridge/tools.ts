@@ -177,8 +177,71 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
   })
 
   register({
+    name: 'p2_guard',
+    description: 'Manage the one-shot guard that switches to an activated behavior when health drops below a threshold. Set requires condition, target, and ttlMs; clear keeps the current behavior.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['set', 'clear', 'status'], description: 'Guard action' },
+        condition: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['health'], description: 'Condition kind; only health in the first version' },
+            hpBelow: { type: 'number', description: 'Fire when health is at or below this value' },
+          },
+          required: ['kind', 'hpBelow'],
+          additionalProperties: false,
+        },
+        target: {
+          type: 'object',
+          properties: {
+            artifactId: { type: 'string', description: 'Activated target behavior artifact id' },
+            params: { type: 'object', description: 'Target behavior parameters', additionalProperties: true },
+          },
+          required: ['artifactId'],
+          additionalProperties: false,
+        },
+        ttlMs: { type: 'number', description: 'Authorization lifetime in milliseconds (10000-3600000)' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => {
+      const action = String(args.action)
+      if (action === 'status') {
+        const status = await manager.status()
+        return status.state === 'active'
+          ? { state: 'active', guard: status.status.guard ?? null, lastSwitch: status.status.lastSwitch ?? null, guardEventSeq: status.status.guardEventSeq ?? 0 }
+          : { state: status.state, guard: null }
+      }
+      if (action === 'clear') {
+        return await manager.guardClear()
+      }
+      if (action !== 'set') throw new Error(`unknown p2_guard action: ${action}`)
+      const condition = args.condition as { kind?: unknown; hpBelow?: unknown } | undefined
+      const target = args.target as { artifactId?: unknown; params?: unknown } | undefined
+      if (condition?.kind !== 'health' || typeof condition.hpBelow !== 'number') {
+        throw new Error('p2_guard set requires condition { kind: "health", hpBelow }')
+      }
+      if (target === undefined || typeof target.artifactId !== 'string') {
+        throw new Error('p2_guard set requires target { artifactId, params? }')
+      }
+      if (typeof args.ttlMs !== 'number') {
+        throw new Error('p2_guard set requires ttlMs')
+      }
+      return await manager.guardSet({
+        condition: { kind: 'health', hpBelow: condition.hpBelow },
+        targetArtifactId: target.artifactId,
+        params: (target.params ?? {}) as JsonValue,
+        ttlMs: args.ttlMs,
+      })
+    }),
+  })
+
+  register({
     name: 'p2_events',
-    description: 'Drain the bounded current-epoch P2 status event buffer, including active/last run and provider pause state.',
+    description: 'Drain the bounded current-epoch P2 event buffer, including run status and guard events.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {

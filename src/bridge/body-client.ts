@@ -5,6 +5,7 @@ import {
 } from '../contracts/index.ts'
 import type {
   DescribeResult,
+  GuardCondition,
   HelloResult,
   JsonValue,
   MessageTransport,
@@ -112,6 +113,23 @@ export class BodyClient {
 
   behaviorStop(runId?: string): Promise<JsonValue> {
     return this.command('behavior.stop', runId === undefined ? {} : { runId })
+  }
+
+  guardSet(input: {
+    condition: GuardCondition
+    targetArtifactId: string
+    params: JsonValue
+    ttlMs: number
+  }): Promise<JsonValue> {
+    return this.command('guard.set', {
+      condition: input.condition,
+      target: { artifactId: input.targetArtifactId, params: input.params },
+      ttlMs: input.ttlMs,
+    })
+  }
+
+  guardClear(): Promise<JsonValue> {
+    return this.command('guard.clear', {})
   }
 
   commandGet(commandId: string): Promise<JsonValue> {

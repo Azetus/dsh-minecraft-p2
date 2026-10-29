@@ -1,6 +1,17 @@
 import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
 import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
-import type { CleanupState, ControlHealth, CurrentStep, SwitchState } from '../contracts/protocol.ts'
+import type {
+  CleanupState,
+  ControlHealth,
+  CurrentStep,
+  GuardCondition,
+  GuardEvent,
+  GuardEventPhase,
+  GuardState,
+  GuardStatus,
+  GuardSwitchSummary,
+  SwitchState,
+} from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -77,7 +88,44 @@ export type HostStatus = {
   cleanupState: CleanupState
   controlHealth: ControlHealth
   switchState: SwitchState
+  guard: GuardStatus | null
+  lastSwitch: GuardSwitchSummary | null
+  guardEvents: GuardEvent[]
+  guardEventSeq: number
 }
+
+export type GuardSetInput = {
+  condition: GuardCondition
+  targetArtifactId: string
+  params: Record<string, JsonValue>
+  ttlMs: number
+}
+
+type ActiveGuard = {
+  id: string
+  condition: GuardCondition
+  targetArtifactId: string
+  params: Record<string, JsonValue>
+  armedAt: number
+  expiresAt: number
+  state: GuardState
+  attemptId?: string
+  lastError?: P2Error
+}
+
+type PendingSwitch = {
+  artifactId: string
+  params: Record<string, JsonValue>
+  commandId: string
+  source: 'user' | 'guard'
+  guardId?: string
+  attemptId?: string
+}
+
+const GUARD_EVAL_INTERVAL_MS = 250
+const GUARD_QUERY_TIMEOUT_MS = 1000
+const GUARD_ERROR_LIMIT = 3
+const GUARD_EVENT_LIMIT = 64
 
 export type BehaviorHostOptions = {
   bindingId: string
@@ -116,9 +164,18 @@ export class BehaviorHost {
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined
   private runArtifact: string | undefined
-  private pendingSwitch: { artifactId: string; params: Record<string, JsonValue>; commandId: string } | undefined
+  private pendingSwitch: PendingSwitch | undefined
   private lastRun: LastRunSummary | null = null
   private sequence = 0
+  private guard: ActiveGuard | undefined
+  private guardSequence = 0
+  private attemptSequence = 0
+  private guardNextEvalAt = 0
+  private guardFailures = 0
+  private guardInFlight: { poll: () => QueryOutcome; startedAt: number } | undefined
+  private lastSwitch: GuardSwitchSummary | null = null
+  private readonly guardEvents: GuardEvent[] = []
+  private guardEventSeq = 0
 
   constructor(options: BehaviorHostOptions) {
     this.bindingId = options.bindingId
@@ -345,6 +402,7 @@ export class BehaviorHost {
     }
 
     // A newer valid switch supersedes an unactivated pending candidate.
+    this.suppressGuardPending('superseded by switch')
     this.pendingSwitch = undefined
 
     if (this.run !== undefined && !isTerminal(this.run.status)) {
@@ -364,7 +422,7 @@ export class BehaviorHost {
         }
         // Release is still settling: accept the candidate and activate it once
         // the old run proves control is gone.
-        this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId }
+        this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId, source: 'user' }
         const result: SwitchResult = { accepted: true, runId: this.run.runId, status: 'stopping' }
         this.ledger.record(input.commandId, result)
         return result
@@ -373,7 +431,7 @@ export class BehaviorHost {
 
     if (this.run !== undefined && !this.run.allowsTakeover) {
       // A terminal JS run may still be releasing its runner slot.
-      this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId }
+      this.pendingSwitch = { artifactId: input.artifactId, params, commandId: input.commandId, source: 'user' }
       const result: SwitchResult = { accepted: true, runId: this.run.runId, status: 'stopping' }
       this.ledger.record(input.commandId, result)
       return result
@@ -425,11 +483,35 @@ export class BehaviorHost {
     return runId
   }
 
-  private activatePending(): void {
+  private activatePending(now = Date.now()): void {
     const pending = this.pendingSwitch
     if (pending === undefined) return
     if (this.run !== undefined && !this.run.allowsTakeover) return
     this.pendingSwitch = undefined
+    if (pending.source === 'guard') {
+      const guard = this.guard
+      if (guard === undefined || guard.id !== pending.guardId || guard.attemptId !== pending.attemptId) {
+        this.emitGuard('suppressed', {
+          guardId: pending.guardId ?? 'unknown',
+          attemptId: pending.attemptId,
+          message: 'guard attempt was invalidated before activation',
+        })
+        return
+      }
+      if (now >= guard.expiresAt) {
+        guard.state = 'expired'
+        this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'failed', 'guard expired before target start')
+        this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
+        return
+      }
+      const record = this.registry.get(guard.targetArtifactId)
+      if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') {
+        this.failGuardTarget(guard, now, 'target is not active at handoff')
+        return
+      }
+      this.startGuardTarget(guard, record, now)
+      return
+    }
     const record = this.registry.get(pending.artifactId)
     // A candidate that retired while the old run was stopping must not take over.
     if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') return
@@ -439,8 +521,269 @@ export class BehaviorHost {
   tick(now = Date.now()): RunStatus | undefined {
     const status = this.run?.tick(now)
     if (this.run !== undefined && isTerminal(this.run.status)) this.rememberLastRun()
-    this.activatePending()
+    this.checkGuardPending(now)
+    this.activatePending(now)
+    this.evaluateGuard(now)
     return status
+  }
+
+  private checkGuardPending(now: number): void {
+    const pending = this.pendingSwitch
+    if (pending?.source !== 'guard') return
+    const guard = this.guard
+    if (guard === undefined || guard.id !== pending.guardId || guard.attemptId !== pending.attemptId) {
+      this.pendingSwitch = undefined
+      this.emitGuard('suppressed', {
+        guardId: pending.guardId ?? 'unknown',
+        attemptId: pending.attemptId,
+        message: 'guard attempt was invalidated',
+      })
+      return
+    }
+    if (now >= guard.expiresAt) {
+      this.pendingSwitch = undefined
+      guard.state = 'expired'
+      this.lastSwitch = guardSwitchOf(guard, guard.attemptId, 'failed', 'guard expired before target start', now)
+      this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
+      return
+    }
+    if (this.run !== undefined && !isTerminal(this.run.status) && this.run.stopState === 'stop-unconfirmed') {
+      this.pendingSwitch = undefined
+      const error = p2Error('STOP_UNCONFIRMED', 'timeout', 'old run control release was not confirmed', { module: 'core.host' })
+      this.failGuardTarget(guard, now, 'old run stop was not confirmed', error)
+    }
+  }
+
+  private evaluateGuard(now: number): void {
+    const guard = this.guard
+    if (guard === undefined || guard.state !== 'active') return
+    if (now >= guard.expiresAt) {
+      guard.state = 'expired'
+      this.guardInFlight = undefined
+      this.emitGuard('expired', { guardId: guard.id, at: now })
+      return
+    }
+    if (this.pendingSwitch !== undefined) return
+    if (now < this.guardNextEvalAt) return
+    this.guardNextEvalAt = now + GUARD_EVAL_INTERVAL_MS
+    if (this.guardInFlight !== undefined) {
+      if (now - this.guardInFlight.startedAt > GUARD_QUERY_TIMEOUT_MS) {
+        this.guardInFlight = undefined
+        this.failGuardEvaluation(guard, now, p2Error('GUARD_QUERY_TIMEOUT', 'timeout', 'guard health query timed out', { module: 'core.host' }))
+        return
+      }
+      const outcome = this.guardInFlight.poll()
+      if (outcome.status === 'pending') return
+      this.guardInFlight = undefined
+      this.handleGuardOutcome(guard, outcome, now)
+      return
+    }
+    const outcome = this.query({ op: 'health', args: {} }, {})
+    if (outcome.status === 'pending') {
+      this.guardInFlight = { poll: outcome.poll, startedAt: now }
+      return
+    }
+    this.handleGuardOutcome(guard, outcome, now)
+  }
+
+  private handleGuardOutcome(guard: ActiveGuard, outcome: QueryOutcome, now: number): void {
+    if (this.guard !== guard || guard.state !== 'active') return
+    if (outcome.status === 'failed') {
+      this.failGuardEvaluation(guard, now, outcome.error)
+      return
+    }
+    if (outcome.status !== 'ok') return
+    const meta = outcome.meta
+    if (meta?.validUntil !== undefined && now > meta.validUntil) {
+      this.failGuardEvaluation(guard, now, p2Error('STALE_OBSERVATION', 'runtime', 'guard health observation is stale', { module: 'core.host' }))
+      return
+    }
+    const value = outcome.value
+    const health = typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as { health?: unknown }).health
+      : undefined
+    if (typeof health !== 'number' || !Number.isFinite(health) || health <= 0) {
+      this.failGuardEvaluation(guard, now, p2Error('GUARD_HEALTH_UNKNOWN', 'runtime', 'guard health is unavailable', { module: 'core.host' }))
+      return
+    }
+    this.guardFailures = 0
+    if (health <= guard.condition.hpBelow) {
+      this.fireGuard(guard, now, { health, sampledAt: meta?.sampledAt ?? now })
+    }
+  }
+
+  private failGuardEvaluation(guard: ActiveGuard, now: number, error: P2Error): void {
+    if (this.guard !== guard || guard.state !== 'active') return
+    this.guardFailures += 1
+    guard.lastError = error
+    this.emitGuard('error', {
+      guardId: guard.id,
+      error,
+      message: `guard evaluation failed (${this.guardFailures}/${GUARD_ERROR_LIMIT})`,
+      at: now,
+    })
+    if (this.guardFailures >= GUARD_ERROR_LIMIT) {
+      guard.state = 'error'
+      this.emitGuard('error', { guardId: guard.id, error, message: 'guard disabled after repeated evaluation failures', at: now })
+    }
+  }
+
+  private fireGuard(guard: ActiveGuard, now: number, evidence: JsonValue): void {
+    if (this.guard !== guard || guard.state !== 'active') return
+    const attemptId = `attempt-${++this.attemptSequence}`
+    guard.state = 'firing'
+    guard.attemptId = attemptId
+    this.guardInFlight = undefined
+    const fromRunId = this.run?.runId ?? null
+    this.emitGuard('fired', {
+      guardId: guard.id,
+      attemptId,
+      condition: guard.condition,
+      evidence,
+      targetArtifactId: guard.targetArtifactId,
+      fromRunId,
+      at: now,
+    })
+    const record = this.registry.get(guard.targetArtifactId)
+    if (record === undefined || record.retired || !record.enabled || record.artifact.kind !== 'behavior') {
+      guard.state = 'fired'
+      guard.lastError = p2Error('GUARD_TARGET_NOT_ACTIVE', 'validation', 'target is not active before stop', { module: 'core.host' })
+      this.lastSwitch = guardSwitchOf(guard, attemptId, 'precheck-failed', 'target is not active before stop', now)
+      this.emitGuard('precheck-failed', {
+        guardId: guard.id,
+        attemptId,
+        targetArtifactId: guard.targetArtifactId,
+        fromRunId,
+        message: 'target is not active before stop',
+        at: now,
+      })
+      return
+    }
+    if (this.run === undefined || isTerminal(this.run.status)) {
+      this.startGuardTarget(guard, record, now)
+      return
+    }
+    this.run.stop()
+    this.pendingSwitch = {
+      artifactId: guard.targetArtifactId,
+      params: guard.params,
+      commandId: `guard:${attemptId}`,
+      source: 'guard',
+      guardId: guard.id,
+      attemptId,
+    }
+    this.lastSwitch = guardSwitchOf(guard, attemptId, 'stopping', 'guard fired', now)
+    this.emitGuard('stopping', {
+      guardId: guard.id,
+      attemptId,
+      targetArtifactId: guard.targetArtifactId,
+      fromRunId,
+      at: now,
+    })
+  }
+
+  private startGuardTarget(guard: ActiveGuard, record: ArtifactRecord, now: number): void {
+    const attemptId = guard.attemptId
+    if (this.guard !== guard || attemptId === undefined) return
+    if (now >= guard.expiresAt) {
+      guard.state = 'expired'
+      this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', 'guard expired before target start', now)
+      this.emitGuard('expired', { guardId: guard.id, attemptId, at: now })
+      return
+    }
+    if (record.retired || !record.enabled) {
+      this.failGuardTarget(guard, now, 'target is not active at handoff')
+      return
+    }
+    const fromRunId = this.lastSwitch?.fromRunId ?? null
+    try {
+      const runId = this.startRun(record, guard.params)
+      guard.state = 'fired'
+      this.lastSwitch = {
+        ...guardSwitchOf(guard, attemptId, 'started', 'guard target started', now),
+        fromRunId,
+        toRunId: runId,
+      }
+      this.emitGuard('started', {
+        guardId: guard.id,
+        attemptId,
+        targetArtifactId: guard.targetArtifactId,
+        fromRunId,
+        toRunId: runId,
+        at: now,
+      })
+    } catch (error) {
+      const failure = p2Error(
+        'GUARD_START_FAILED',
+        'runtime',
+        error instanceof Error ? error.message : String(error),
+        { module: 'core.host' },
+      )
+      this.failGuardTarget(guard, now, failure.message, failure)
+    }
+  }
+
+  private failGuardTarget(guard: ActiveGuard, now: number, message: string, error?: P2Error): void {
+    guard.state = 'error'
+    const failure = error ?? p2Error('GUARD_START_FAILED', 'runtime', message, { module: 'core.host' })
+    guard.lastError = failure
+    const attemptId = guard.attemptId ?? 'unknown'
+    this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', message, now)
+    this.emitGuard('failed', {
+      guardId: guard.id,
+      attemptId: guard.attemptId,
+      targetArtifactId: guard.targetArtifactId,
+      error: failure,
+      message,
+      at: now,
+    })
+  }
+
+  private suppressGuardPending(reason: string): void {
+    const pending = this.pendingSwitch
+    if (pending?.source !== 'guard') return
+    const guard = this.guard
+    if (guard !== undefined && guard.id === pending.guardId) {
+      guard.state = 'fired'
+      this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'suppressed', reason)
+      this.emitGuard('suppressed', {
+        guardId: guard.id,
+        attemptId: pending.attemptId,
+        targetArtifactId: guard.targetArtifactId,
+        message: reason,
+      })
+    }
+  }
+
+  private emitGuard(phase: GuardEventPhase, input: {
+    guardId: string
+    attemptId?: string | undefined
+    condition?: GuardCondition
+    evidence?: JsonValue
+    targetArtifactId?: string
+    fromRunId?: string | null
+    toRunId?: string | null
+    message?: string
+    error?: P2Error
+    at?: number
+  }): void {
+    this.guardEventSeq += 1
+    const event: GuardEvent = {
+      seq: this.guardEventSeq,
+      guardId: input.guardId,
+      phase,
+      at: input.at ?? Date.now(),
+      ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+      ...(input.condition === undefined ? {} : { condition: input.condition }),
+      ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+      ...(input.targetArtifactId === undefined ? {} : { targetArtifactId: input.targetArtifactId }),
+      ...(input.fromRunId === undefined ? {} : { fromRunId: input.fromRunId }),
+      ...(input.toRunId === undefined ? {} : { toRunId: input.toRunId }),
+      ...(input.message === undefined ? {} : { message: input.message }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+    }
+    this.guardEvents.push(event)
+    while (this.guardEvents.length > GUARD_EVENT_LIMIT) this.guardEvents.shift()
   }
 
   confirm(input: ConfirmInput): ConfirmResult {
@@ -457,6 +800,7 @@ export class BehaviorHost {
   }
 
   stop(runId: string): { accepted: true; status: RunStatus } | { accepted: false; status: RunStatus; error: P2Error } {
+    this.suppressGuardPending('superseded by stop')
     this.pendingSwitch = undefined
     if (this.run === undefined || this.run.runId !== runId) {
       return {
@@ -480,6 +824,81 @@ export class BehaviorHost {
 
   retire(artifactId: string): void {
     this.registry.retire(artifactId)
+  }
+
+  /** Arm the single one-shot guard. Never starts the target immediately. */
+  setGuard(input: GuardSetInput, now = Date.now()): GuardStatus {
+    if (!Number.isFinite(input.ttlMs) || input.ttlMs < 10_000 || input.ttlMs > 3_600_000) {
+      throw p2Error('GUARD_TTL_INVALID', 'validation', 'guard ttlMs must be between 10000 and 3600000', { module: 'core.host' })
+    }
+    if (!Number.isFinite(input.condition.hpBelow) || input.condition.hpBelow <= 0) {
+      throw p2Error('GUARD_CONDITION_INVALID', 'validation', 'health hpBelow must be a positive number', { module: 'core.host' })
+    }
+    const record = this.registry.get(input.targetArtifactId)
+    if (record === undefined || record.artifact.kind !== 'behavior' || record.retired || !record.enabled) {
+      throw p2Error('GUARD_TARGET_NOT_ACTIVE', 'validation', 'guard target is not an enabled behavior artifact', { module: 'core.host' })
+    }
+    let params: Record<string, JsonValue>
+    try {
+      params = validateParams(record.artifact, input.params)
+    } catch (error) {
+      throw p2Error('INVALID_PARAMS', 'validation', error instanceof Error ? error.message : String(error), { module: 'core.host' })
+    }
+
+    if (this.pendingSwitch?.source === 'guard') {
+      this.suppressGuardPending('replaced by a new guard')
+      this.pendingSwitch = undefined
+    }
+    if (this.guard !== undefined) {
+      const replaced = this.guard
+      this.emitGuard('cleared', { guardId: replaced.id, message: 'replaced by a new guard' })
+    }
+    const guard: ActiveGuard = {
+      id: `guard-${++this.guardSequence}`,
+      condition: { kind: 'health', hpBelow: input.condition.hpBelow },
+      targetArtifactId: input.targetArtifactId,
+      params,
+      armedAt: now,
+      expiresAt: now + input.ttlMs,
+      state: 'active',
+    }
+    this.guard = guard
+    this.guardFailures = 0
+    this.guardInFlight = undefined
+    this.guardNextEvalAt = now
+    this.emitGuard('armed', {
+      guardId: guard.id,
+      condition: guard.condition,
+      targetArtifactId: guard.targetArtifactId,
+      at: now,
+    })
+    return guardStatusOf(guard)
+  }
+
+  /** Revoke the guard without touching the current behavior. */
+  clearGuard(now = Date.now()): { cleared: boolean; guard: GuardStatus | null } {
+    const guard = this.guard
+    if (guard === undefined) return { cleared: false, guard: null }
+    if (this.pendingSwitch?.source === 'guard' && this.pendingSwitch.guardId === guard.id) {
+      this.suppressGuardPending('guard cleared')
+      this.pendingSwitch = undefined
+    }
+    this.guard = undefined
+    this.guardInFlight = undefined
+    this.emitGuard('cleared', { guardId: guard.id, at: now })
+    return { cleared: true, guard: guardStatusOf(guard) }
+  }
+
+  guardStatus(): GuardStatus | null {
+    return this.guard === undefined ? null : guardStatusOf(this.guard)
+  }
+
+  guardEventLog(): GuardEvent[] {
+    return [...this.guardEvents]
+  }
+
+  guardHighWatermark(): number {
+    return this.guardEventSeq
   }
 
   /** Report a sandbox runner exit to the active JS run, if any. */
@@ -523,6 +942,10 @@ export class BehaviorHost {
       cleanupState: observation?.cleanupState ?? 'none',
       controlHealth: observation?.controlHealth ?? 'ok',
       switchState: this.pendingSwitch !== undefined ? 'queued' : (observation?.switchState ?? 'none'),
+      guard: this.guardStatus(),
+      lastSwitch: this.lastSwitch,
+      guardEvents: [...this.guardEvents],
+      guardEventSeq: this.guardEventSeq,
     }
   }
 
@@ -549,8 +972,38 @@ export class BehaviorHost {
   }
 }
 
-function validateParams(artifact: BehaviorArtifact, params: Record<string, JsonValue>): Record<string, JsonValue> {
-  const result: Record<string, JsonValue> = { ...params }
+function guardStatusOf(guard: ActiveGuard): GuardStatus {
+  return {
+    id: guard.id,
+    state: guard.state,
+    condition: guard.condition,
+    armedAt: guard.armedAt,
+    expiresAt: guard.expiresAt,
+    ...(guard.attemptId === undefined ? {} : { attemptId: guard.attemptId }),
+    ...(guard.lastError === undefined ? {} : { lastError: guard.lastError }),
+  }
+}
+
+function guardSwitchOf(
+  guard: ActiveGuard,
+  attemptId: string | undefined,
+  phase: GuardSwitchSummary['phase'],
+  reason: string,
+  now = Date.now(),
+): GuardSwitchSummary {
+  return {
+    guardId: guard.id,
+    attemptId: attemptId ?? guard.attemptId ?? 'unknown',
+    reason,
+    targetArtifactId: guard.targetArtifactId,
+    fromRunId: null,
+    toRunId: null,
+    at: now,
+    phase,
+  }
+}
+
+function validateParams(artifact: BehaviorArtifact, params: Record<string, JsonValue>): Record<string, JsonValue> {  const result: Record<string, JsonValue> = { ...params }
   for (const [name, spec] of Object.entries(artifact.definition.parameters)) {
     if (!(name in result)) {
       if (spec.required === true && spec.default === undefined) {

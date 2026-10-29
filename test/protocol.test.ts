@@ -125,6 +125,8 @@ describe('protocol vocabulary', () => {
       'rescue',
       'confirm',
       'behavior.stop',
+      'guard.set',
+      'guard.clear',
       'stop',
       'shutdown',
       'command.get',

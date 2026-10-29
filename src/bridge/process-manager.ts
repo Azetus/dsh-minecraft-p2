@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
+  GuardEvent,
   JsonValue,
   MessageTransport,
   OwnerContext,
@@ -34,6 +35,10 @@ export type BodyManagerOptions = {
   heartbeatMs?: number
   stopTimeoutMs?: number
   log?: (line: string) => void
+  /** Called once per body guard event, after deduplication by body seq. */
+  onGuardEvent?: (event: GuardEvent) => void
+  /** Called when the body event cursor skipped events it no longer retained. */
+  onGuardGap?: (fromSeq: number, toSeq: number) => void
 }
 
 export type StartResult = {
@@ -66,6 +71,7 @@ export class BodyManager {
   private readonly events = new EventQueue(128)
   private eventSeq = 0
   private lastStatusSignature: string | undefined
+  private lastGuardSeq = 0
 
   constructor(private readonly options: BodyManagerOptions) {
     this.spawnBody = options.spawnBody ?? createProcessSpawner(options.log)
@@ -121,6 +127,7 @@ export class BodyManager {
       this.state = 'active'
       this.events.clear()
       this.eventSeq = 0
+      this.lastGuardSeq = 0
       this.lastStatusSignature = undefined
       this.startHeartbeat()
       this.watchExit(handle)
@@ -138,8 +145,9 @@ export class BodyManager {
       return { state: this.state === 'active' ? 'faulted' : this.state }
     }
     try {
-      const status = await this.client.request('status', {})
-      return { state: 'active', status: status as unknown as StatusResult }
+      const status = await this.client.request('status', {}) as unknown as StatusResult
+      this.processGuardEvents(status)
+      return { state: 'active', status }
     } catch (error) {
       this.state = 'faulted'
       this.stopHeartbeat()
@@ -170,6 +178,19 @@ export class BodyManager {
 
   stopBehavior(runId?: string): Promise<JsonValue> {
     return this.activeClient().behaviorStop(runId)
+  }
+
+  guardSet(input: {
+    condition: { kind: 'health'; hpBelow: number }
+    targetArtifactId: string
+    params: JsonValue
+    ttlMs: number
+  }): Promise<JsonValue> {
+    return this.activeClient().guardSet(input)
+  }
+
+  guardClear(): Promise<JsonValue> {
+    return this.activeClient().guardClear()
   }
 
   commandGet(commandId: string): Promise<JsonValue> {
@@ -268,6 +289,7 @@ export class BodyManager {
     if (this.state !== 'active' || this.client === undefined) return
     try {
       const status = await this.client.request('status', {}) as unknown as StatusResult
+      this.processGuardEvents(status)
       const signature = JSON.stringify({
         run: status.activeRun,
         lastRun: status.lastRun,
@@ -287,6 +309,25 @@ export class BodyManager {
       })
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
+    }
+  }
+
+  private processGuardEvents(status: StatusResult): void {
+    const events = status.guardEvents ?? []
+    for (const event of events) {
+      if (event.seq <= this.lastGuardSeq) continue
+      if (this.lastGuardSeq > 0 && event.seq > this.lastGuardSeq + 1) {
+        this.options.onGuardGap?.(this.lastGuardSeq + 1, event.seq - 1)
+      }
+      this.lastGuardSeq = event.seq
+      this.eventSeq += 1
+      this.events.push({
+        eventId: `${this.epoch ?? 'epoch'}:guard:${event.seq}`,
+        seq: this.eventSeq,
+        kind: 'guard',
+        data: event as unknown as JsonValue,
+      })
+      this.options.onGuardEvent?.(event)
     }
   }
 

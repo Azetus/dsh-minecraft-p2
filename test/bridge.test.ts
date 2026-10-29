@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
@@ -5,6 +8,8 @@ import { BodyServer } from '../src/body/server.ts'
 import { BodyManager } from '../src/bridge/process-manager.ts'
 import type { BodyHandle } from '../src/bridge/process-manager.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
+import { BehaviorHost } from '../src/core/host.ts'
+import type { GuardEvent } from '../src/contracts/protocol.ts'
 import {
   PROTOCOL_VERSION,
   bodyManifestDigest,
@@ -37,8 +42,8 @@ const owner = {
   cwd: process.cwd(),
 }
 
-function fakeBody(): { handle: BodyHandle; server: BodyServer; runtime: BodyRuntime } {
-  const runtime = new BodyRuntime({ body, newEpoch: () => 'epoch-1' })
+function fakeBody(behavior?: BehaviorHost): { handle: BodyHandle; server: BodyServer; runtime: BodyRuntime } {
+  const runtime = new BodyRuntime({ body, newEpoch: () => 'epoch-1', ...(behavior === undefined ? {} : { behavior }) })
   const [client, serverTransport] = createMemoryTransportPair()
   const server = new BodyServer(runtime, serverTransport)
   server.start()
@@ -55,7 +60,10 @@ function fakeBody(): { handle: BodyHandle; server: BodyServer; runtime: BodyRunt
   return { handle, server, runtime }
 }
 
-function managerWith(fake: { handle: BodyHandle }): BodyManager {
+function managerWith(
+  fake: { handle: BodyHandle },
+  options: { onGuardEvent?: (event: GuardEvent) => void } = {},
+): BodyManager {
   let starts = 0
   return new BodyManager({
     bodyEntry: 'unused-body.mjs',
@@ -66,6 +74,7 @@ function managerWith(fake: { handle: BodyHandle }): BodyManager {
       return fake.handle
     },
     log: () => {},
+    ...(options.onGuardEvent === undefined ? {} : { onGuardEvent: options.onGuardEvent }),
   })
 }
 
@@ -80,6 +89,132 @@ type Definition = {
 type Result = { kind: string; text: string }
 
 describe('BodyManager', () => {
+  it('processes guard events once and exposes guard commands', async () => {
+    const host = new BehaviorHost({
+      bindingId: 'guard-bridge',
+      query: () => ({ status: 'ok', value: { health: 6 } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-guard-bridge-'))
+    const path = join(dir, 'target.mjs')
+    writeFileSync(path, `
+      export default {
+        id: 'bridge-guard-target', description: '', mode: 'finite', parameters: {}, locals: {},
+        root: { kind: 'sequence', id: 'root', children: [] },
+        completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
+      }
+    `)
+    try {
+      const target = await host.check({ sourcePath: path })
+      host.activate(target.artifactId)
+      host.setGuard({
+        condition: { kind: 'health', hpBelow: 10 },
+        targetArtifactId: target.artifactId,
+        params: {},
+        ttlMs: 60_000,
+      }, 1_000)
+      const fake = fakeBody(host)
+      const events: GuardEvent[] = []
+      const manager = managerWith(fake, { onGuardEvent: event => events.push(event) })
+      await manager.start(owner)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(events.map(event => event.phase)).toContain('armed')
+
+      fake.runtime.tickBehavior(1_000)
+      const status = await manager.status()
+      expect(status.state).toBe('active')
+      if (status.state === 'active') expect(status.status.guard?.state).toBe('fired')
+      expect(events.map(event => event.phase)).toEqual(expect.arrayContaining(['armed', 'fired', 'started']))
+
+      const count = events.length
+      await manager.status()
+      expect(events.length).toBe(count)
+
+      const armed = await manager.guardSet({
+        condition: { kind: 'health', hpBelow: 5 },
+        targetArtifactId: target.artifactId,
+        params: {},
+        ttlMs: 60_000,
+      })
+      expect(armed).toMatchObject({ state: 'active', condition: { kind: 'health', hpBelow: 5 } })
+      const cleared = await manager.guardClear()
+      expect(cleared).toMatchObject({ cleared: true })
+      const after = await manager.status()
+      if (after.state === 'active') expect(after.status.guard).toBeNull()
+      await manager.stop()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('wakes the owner once when a guard fires', async () => {
+    const host = new BehaviorHost({
+      bindingId: 'guard-wake',
+      query: () => ({ status: 'ok', value: { health: 6 } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-guard-wake-'))
+    const path = join(dir, 'target.mjs')
+    writeFileSync(path, `
+      export default {
+        id: 'wake-target', description: '', mode: 'finite', parameters: {}, locals: {},
+        root: { kind: 'sequence', id: 'root', children: [] },
+        completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'literal', value: true } } },
+      }
+    `)
+    try {
+      const target = await host.check({ sourcePath: path })
+      host.activate(target.artifactId)
+      host.setGuard({
+        condition: { kind: 'health', hpBelow: 10 },
+        targetArtifactId: target.artifactId,
+        params: {},
+        ttlMs: 60_000,
+      }, 1_000)
+      const fake = fakeBody(host)
+      const definitions: Definition[] = []
+      const tools: Array<Record<string, unknown>> = []
+      const followups: string[] = []
+      const ctx = {
+        commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+        tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
+        agents: {
+          get: (id: string) => id === owner.sessionId
+            ? { followup: (input: { content: Array<{ text: string }> }) => { followups.push(input.content.map(part => part.text).join('\n')) } }
+            : undefined,
+        },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      }
+      const plugin = createP2Plugin({
+        devBodyControl: true,
+        bodyEntry: 'unused-body.mjs',
+        spawnBody: () => fake.handle,
+        log: () => {},
+      })
+      ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+      const bodyTool = tools.find(tool => tool.name === 'p2_body') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      const agent = {
+        id: owner.agentId,
+        session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+        ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
+      }
+      await bodyTool.execute({ action: 'start' }, { agent })
+      fake.runtime.tickBehavior(1_000)
+      const statusTool = tools.find(tool => tool.name === 'p2_status') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(1)
+      expect(followups[0]).toContain('fired')
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('starts one body, reports status, and stops it', async () => {
     const fake = fakeBody()
     const manager = managerWith(fake)
@@ -322,7 +457,7 @@ describe('P2 commands', () => {
     const command = definitions[0] as Definition
     expect(await command.handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
     expect(tools.map(tool => tool.name)).toEqual([
-      'p2_status', 'p2_observe', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_events', 'p2_rescue', 'p2_command',
+      'p2_status', 'p2_observe', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_guard', 'p2_events', 'p2_rescue', 'p2_command',
     ])
     const status = tools[0] as { execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown> }
     expect(await status.execute({}, { agent })).toBeDefined()

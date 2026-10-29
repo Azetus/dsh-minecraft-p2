@@ -141,6 +141,8 @@ export class BodyRuntime {
       && envelope.method !== 'switch'
       && envelope.method !== 'confirm'
       && envelope.method !== 'behavior.stop'
+      && envelope.method !== 'guard.set'
+      && envelope.method !== 'guard.clear'
       && envelope.method !== 'observe'
       && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
@@ -325,6 +327,34 @@ export class BodyRuntime {
           this.recordCommand(commandId, 'behavior.stop', stopped)
           return { ...base, result: stopped as unknown as JsonValue }
         }
+        case 'guard.set': {
+          const condition = params.condition as { kind?: unknown; hpBelow?: unknown } | undefined
+          const target = params.target as { artifactId?: unknown; params?: unknown } | undefined
+          const ttlMs = typeof params.ttlMs === 'number' ? params.ttlMs : undefined
+          if (
+            condition === undefined || condition.kind !== 'health' || typeof condition.hpBelow !== 'number'
+            || target === undefined || typeof target.artifactId !== 'string'
+            || ttlMs === undefined
+          ) {
+            return { ...base, error: invalidMessageError('condition (health), target.artifactId, and ttlMs are required') }
+          }
+          const targetParams = target.params !== undefined && typeof target.params === 'object' && target.params !== null && !Array.isArray(target.params)
+            ? target.params as Record<string, JsonValue>
+            : {}
+          const guarded = this.behavior.setGuard({
+            condition: { kind: 'health', hpBelow: condition.hpBelow },
+            targetArtifactId: target.artifactId,
+            params: targetParams,
+            ttlMs,
+          })
+          this.recordCommand(commandId, 'guard.set', guarded)
+          return { ...base, result: guarded as unknown as JsonValue }
+        }
+        case 'guard.clear': {
+          const cleared = this.behavior.clearGuard()
+          this.recordCommand(commandId, 'guard.clear', cleared)
+          return { ...base, result: cleared as unknown as JsonValue }
+        }
         default:
           return { ...base, error: unknownMethodError(envelope.method) }
       }
@@ -404,6 +434,10 @@ export class BodyRuntime {
       cleanupState: this.behavior?.status().cleanupState ?? 'none',
       controlHealth: this.behavior?.status().controlHealth ?? 'ok',
       switchState: this.behavior?.status().switchState ?? 'none',
+      guard: behavior?.guard ?? null,
+      lastSwitch: behavior?.lastSwitch ?? null,
+      guardEvents: behavior?.guardEvents ?? [],
+      guardEventSeq: behavior?.guardEventSeq ?? 0,
       rescue: this.rescueState ?? null,
       devOps: this.devOpsState?.() ?? null,
       ...(this.debugLog === undefined ? {} : {
