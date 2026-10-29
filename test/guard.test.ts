@@ -503,3 +503,142 @@ definePolicy({
     }, 0)).toThrow(/predicate/u)
   })
 })
+
+describe('guard priority and serial switching', () => {
+  const health10 = { kind: 'health' as const, hpBelow: 10 }
+
+  it('fires the highest priority match and defers the rest without consuming them', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-g3-1', healthQuery(() => 6))
+    host.setGuard({
+      guardId: 'low',
+      priority: 1,
+      condition: health10,
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+    host.setGuard({
+      guardId: 'high',
+      priority: 10,
+      condition: health10,
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+
+    host.tick(1_000)
+    let status = host.status()
+    expect(status.lastSwitch).toMatchObject({ guardId: 'high', phase: 'started' })
+    expect(status.guards.find(guard => guard.id === 'high')?.state).toBe('fired')
+    expect(status.guards.find(guard => guard.id === 'low')?.state).toBe('active')
+    expect(status.guardEvents?.filter(event => event.phase === 'deferred').map(event => event.guardId))
+      .toEqual(['low'])
+
+    // The authorization was kept, so the deferred guard fires on re-evaluation.
+    host.tick(1_250)
+    status = host.status()
+    expect(status.guards.find(guard => guard.id === 'low')?.state).toBe('fired')
+    expect(status.lastSwitch).toMatchObject({ guardId: 'low', phase: 'started' })
+  })
+
+  it('breaks priority ties by registration order', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-g3-2', healthQuery(() => 6))
+    host.setGuard({ guardId: 'first', condition: health10, targetArtifactId, params: {}, ttlMs: 60_000 }, 1_000)
+    host.setGuard({ guardId: 'second', condition: health10, targetArtifactId, params: {}, ttlMs: 60_000 }, 1_000)
+    host.tick(1_000)
+    expect(host.status().lastSwitch).toMatchObject({ guardId: 'first', phase: 'started' })
+    expect(host.status().guards.find(guard => guard.id === 'second')?.state).toBe('active')
+  })
+
+  it('defers a second match while a switch is stopping and reports it once per attempt', async () => {
+    const control = releasableAct()
+    const { host } = await targetHost('guard-g3-3', healthQuery(() => 6), control.act)
+    const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    host.activate(current.artifactId)
+    host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
+    host.tick(0)
+    host.setGuard({ guardId: 'high', priority: 5, condition: health10, targetArtifactId: current.artifactId, params: {}, ttlMs: 60_000 }, 1_000)
+    host.setGuard({ guardId: 'low', condition: health10, targetArtifactId: current.artifactId, params: {}, ttlMs: 60_000 }, 1_000)
+
+    host.tick(1_000)
+    expect(host.status().lastSwitch).toMatchObject({ guardId: 'high', phase: 'stopping' })
+    host.tick(1_250)
+    expect(host.status().guards.find(guard => guard.id === 'low')?.state).toBe('deferred')
+    const first = host.status().guardEvents?.filter(event => event.phase === 'deferred' && event.guardId === 'low') ?? []
+    expect(first).toHaveLength(1)
+    expect(first[0]?.attemptId).toBeTruthy()
+    host.tick(1_500)
+    expect(host.status().guardEvents?.filter(event => event.phase === 'deferred' && event.guardId === 'low'))
+      .toHaveLength(1)
+
+    control.release('released')
+    host.tick(1_501)
+    // The deferred guard re-evaluates as soon as the winner's switch settles;
+    // assert the winner did start rather than the final lastSwitch owner.
+    expect(host.status().guardEvents?.some(event => event.phase === 'started' && event.guardId === 'high'))
+      .toBe(true)
+  })
+
+  it('does not start a pending target after the guard TTL expires', async () => {
+    const control = releasableAct()
+    const { host } = await targetHost('guard-g3-4', healthQuery(() => 6), control.act)
+    const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    const target = await host.check({ sourcePath: source('target.mjs', done) })
+    host.activate(current.artifactId)
+    host.activate(target.artifactId)
+    host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
+    host.tick(0)
+    host.setGuard({
+      guardId: 'expiring',
+      condition: health10,
+      targetArtifactId: target.artifactId,
+      params: {},
+      ttlMs: 10_000,
+    }, 1_000)
+    host.tick(1_000)
+    expect(host.status().lastSwitch).toMatchObject({ phase: 'stopping' })
+
+    host.tick(11_001)
+    expect(host.status().guards[0]?.state).toBe('expired')
+    control.release('released')
+    host.tick(11_002)
+    expect(host.status().activeRun?.artifactId ?? null).not.toBe(target.artifactId)
+  })
+
+  it('suppresses the old attempt when a guard is replaced during a pending switch', async () => {
+    const control = releasableAct()
+    const { host } = await targetHost('guard-g3-5', healthQuery(() => 6), control.act)
+    const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
+    const target = await host.check({ sourcePath: source('target.mjs', done) })
+    host.activate(current.artifactId)
+    host.activate(target.artifactId)
+    host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
+    host.tick(0)
+    host.setGuard({
+      guardId: 'same',
+      condition: health10,
+      targetArtifactId: target.artifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+    host.tick(1_000)
+    expect(host.status().lastSwitch?.phase).toBe('stopping')
+
+    const replaced = host.setGuard({
+      guardId: 'same',
+      priority: 2,
+      condition: { kind: 'health', hpBelow: 5 },
+      targetArtifactId: target.artifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_001)
+    expect(replaced).toMatchObject({ id: 'same', state: 'active' })
+
+    control.release('released')
+    host.tick(1_002)
+    host.tick(1_003)
+    const status = host.status()
+    expect(status.activeRun?.artifactId ?? null).not.toBe(target.artifactId)
+    expect(status.guardEvents?.some(event => event.phase === 'suppressed' && event.guardId === 'same')).toBe(true)
+  })
+})

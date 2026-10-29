@@ -142,6 +142,10 @@ type ActiveGuard = {
   failures: number
   nextEvalAt: number
   round: GuardRound | undefined
+  /** A completed evaluation that wants to fire; resolved by priority dispatch. */
+  candidate: { evidence: JsonValue } | undefined
+  /** Attempt id already reported as deferred, to avoid repeating the event. */
+  deferredAttempt: string | undefined
 }
 
 type PendingSwitch = {
@@ -600,12 +604,14 @@ export class BehaviorHost {
           attemptId: pending.attemptId,
           message: 'guard attempt was invalidated before activation',
         })
+        this.rearmGuards(now)
         return
       }
       if (now >= guard.expiresAt) {
         guard.state = 'expired'
         this.lastSwitch = guardSwitchOf(guard, pending.attemptId, 'failed', 'guard expired before target start', now, pending.fromRunId ?? null)
         this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
+        this.rearmGuards(now)
         return
       }
       const record = this.registry.get(guard.targetArtifactId)
@@ -642,6 +648,7 @@ export class BehaviorHost {
         attemptId: pending.attemptId,
         message: 'guard attempt was invalidated',
       })
+      this.rearmGuards(now)
       return
     }
     if (now >= guard.expiresAt) {
@@ -649,6 +656,7 @@ export class BehaviorHost {
       guard.state = 'expired'
       this.lastSwitch = guardSwitchOf(guard, guard.attemptId, 'failed', 'guard expired before target start', now, pending.fromRunId ?? null)
       this.emitGuard('expired', { guardId: guard.id, attemptId: guard.attemptId, at: now })
+      this.rearmGuards(now)
       return
     }
     if (this.run !== undefined && !isTerminal(this.run.status) && this.run.stopState === 'stop-unconfirmed') {
@@ -658,18 +666,88 @@ export class BehaviorHost {
     }
   }
 
-  /** One transition per pass; priority ordering and the firing lock are G3. */
+  /** One dispatch per pass; lower-priority matches are recorded as deferred. */
   private evaluateGuards(now: number): void {
-    if (this.pendingSwitch !== undefined) return
     for (const guard of [...this.guards]) {
-      if (guard.state !== 'active') continue
+      if (!this.isEvaluable(guard)) continue
       this.evaluateGuard(guard, now)
-      if (guard.state !== 'active') return
+    }
+    this.dispatchGuardCandidates(now)
+  }
+
+  private dispatchGuardCandidates(now: number): void {
+    const candidates = this.guards
+      .map((guard, index) => ({ guard, index }))
+      .filter(entry => this.isEvaluable(entry.guard) && entry.guard.candidate !== undefined)
+      .sort((left, right) => right.guard.priority - left.guard.priority || left.index - right.index)
+    if (candidates.length === 0) return
+    const selected = candidates[0] as { guard: ActiveGuard; index: number }
+    const fromRunId = this.run?.runId ?? null
+    if (this.pendingSwitch !== undefined) {
+      const attemptId = this.pendingSwitch.attemptId
+      for (const { guard } of candidates) {
+        const evidence = guard.candidate?.evidence
+        this.deferGuard(guard, now)
+        if (attemptId !== undefined && guard.deferredAttempt === attemptId) continue
+        guard.deferredAttempt = attemptId
+        this.emitGuard('deferred', {
+          guardId: guard.id,
+          ...(attemptId === undefined ? {} : { attemptId }),
+          condition: guard.condition,
+          ...(evidence === undefined ? {} : { evidence }),
+          targetArtifactId: guard.targetArtifactId,
+          fromRunId,
+          message: `deferred behind ${this.pendingSwitch.guardId ?? 'a pending switch'}`,
+          at: now,
+        })
+      }
+      return
+    }
+    const deferred = candidates.slice(1)
+    for (const { guard } of deferred) this.deferGuard(guard, now)
+    const evidence = selected.guard.candidate?.evidence
+    selected.guard.candidate = undefined
+    if (evidence !== undefined) this.fireGuard(selected.guard, now, evidence)
+    if (this.pendingSwitch !== undefined) return
+    // The winner started immediately (body idle), so the losers are deferred
+    // against that completed switch rather than an attempt id.
+    for (const { guard } of deferred) {
+      if (guard.deferredAttempt === selected.guard.id) continue
+      guard.deferredAttempt = selected.guard.id
+      this.emitGuard('deferred', {
+        guardId: guard.id,
+        condition: guard.condition,
+        targetArtifactId: guard.targetArtifactId,
+        fromRunId,
+        message: `deferred behind ${selected.guard.id} by priority`,
+        at: now,
+      })
     }
   }
 
+  private deferGuard(guard: ActiveGuard, now: number): void {
+    guard.candidate = undefined
+    guard.state = 'deferred'
+    // Re-evaluate shortly after the in-flight switch concludes.
+    guard.nextEvalAt = now + GUARD_EVAL_INTERVAL_MS
+  }
+
+  /** Let deferred guards re-check immediately after an attempt settles. */
+  private rearmGuards(now: number): void {
+    for (const guard of this.guards) {
+      if (guard.state !== 'active' && guard.state !== 'deferred') continue
+      if (guard.state === 'deferred') guard.state = 'active'
+      guard.candidate = undefined
+      guard.nextEvalAt = now
+    }
+  }
+
+  private isEvaluable(guard: ActiveGuard): boolean {
+    return guard.state === 'active' || guard.state === 'deferred'
+  }
+
   private evaluateGuard(guard: ActiveGuard, now: number): void {
-    if (guard.state !== 'active' || this.findGuard(guard.id) !== guard) return
+    if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     if (now >= guard.expiresAt) {
       guard.state = 'expired'
       guard.round = undefined
@@ -679,6 +757,7 @@ export class BehaviorHost {
     if (guard.round === undefined) {
       if (now < guard.nextEvalAt) return
       if (this.samplingInFlight() >= GUARD_SAMPLING_LIMIT) return
+      guard.state = 'active'
       guard.nextEvalAt = now + GUARD_EVAL_INTERVAL_MS
       guard.round = {
         index: 0,
@@ -787,7 +866,7 @@ export class BehaviorHost {
       guard.failures = 0
       guard.round = undefined
       if (health <= guard.condition.hpBelow) {
-        this.fireGuard(guard, now, { health, sampledAt: round.samples[0]?.meta?.sampledAt ?? now })
+        guard.candidate = { evidence: { health, sampledAt: round.samples[0]?.meta?.sampledAt ?? now } }
       }
       return
     }
@@ -850,11 +929,13 @@ export class BehaviorHost {
     guard.failures = 0
     guard.round = undefined
     if (!fire) return
-    this.fireGuard(guard, now, {
-      samples: this.samplesPayload(round),
-      sampledAt: now,
-      ...(policyEvidence === undefined ? {} : { policy: policyEvidence }),
-    })
+    guard.candidate = {
+      evidence: {
+        samples: this.samplesPayload(round),
+        sampledAt: now,
+        ...(policyEvidence === undefined ? {} : { policy: policyEvidence }),
+      },
+    }
   }
 
   private samplesPayload(round: GuardRound): JsonValue {
@@ -872,7 +953,7 @@ export class BehaviorHost {
 
   private failGuardRound(guard: ActiveGuard, now: number, error: P2Error): void {
     guard.round = undefined
-    if (guard.state !== 'active' || this.findGuard(guard.id) !== guard) return
+    if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     guard.failures += 1
     guard.lastError = error
     this.emitGuard('error', {
@@ -888,12 +969,14 @@ export class BehaviorHost {
   }
 
   private fireGuard(guard: ActiveGuard, now: number, evidence: JsonValue): void {
-    if (guard.state !== 'active' || this.findGuard(guard.id) !== guard) return
+    if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     if (this.pendingSwitch !== undefined) return
     const attemptId = `attempt-${++this.attemptSequence}`
     guard.state = 'firing'
     guard.attemptId = attemptId
     guard.round = undefined
+    guard.candidate = undefined
+    guard.deferredAttempt = undefined
     const fromRunId = this.run?.runId ?? null
     this.emitGuard('fired', {
       guardId: guard.id,
@@ -917,6 +1000,7 @@ export class BehaviorHost {
         message: 'target is not active before stop',
         at: now,
       })
+      this.rearmGuards(now)
       return
     }
     if (this.run === undefined || isTerminal(this.run.status)) {
@@ -950,6 +1034,7 @@ export class BehaviorHost {
       guard.state = 'expired'
       this.lastSwitch = guardSwitchOf(guard, attemptId, 'failed', 'guard expired before target start', now, fromRunId)
       this.emitGuard('expired', { guardId: guard.id, attemptId, at: now })
+      this.rearmGuards(now)
       return
     }
     if (record.retired || !record.enabled) {
@@ -972,6 +1057,7 @@ export class BehaviorHost {
         toRunId: runId,
         at: now,
       })
+      this.rearmGuards(now)
     } catch (error) {
       const failure = p2Error(
         'GUARD_START_FAILED',
@@ -997,6 +1083,7 @@ export class BehaviorHost {
       message,
       at: now,
     })
+    this.rearmGuards(now)
   }
 
   private suppressGuardPending(reason: string): void {
@@ -1012,6 +1099,7 @@ export class BehaviorHost {
         targetArtifactId: guard.targetArtifactId,
         message: reason,
       })
+      this.rearmGuards(Date.now())
     }
   }
 
@@ -1168,6 +1256,8 @@ export class BehaviorHost {
       failures: 0,
       nextEvalAt: now,
       round: undefined,
+      candidate: undefined,
+      deferredAttempt: undefined,
     }
     if (existing === undefined) this.guards.push(guard)
     else this.guards[this.guards.indexOf(existing)] = guard
