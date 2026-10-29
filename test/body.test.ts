@@ -9,6 +9,7 @@ import {
   bodyManifestDigest,
   createMemoryTransportPair,
   encodeJsonLine,
+  p2Error,
 } from '../src/contracts/index.ts'
 import type {
   BodyInfo,
@@ -205,6 +206,30 @@ describe('BodyServer', () => {
     expect(responses).toHaveLength(2)
     expect(closed).toBe(true)
     expect(server.isStopped).toBe(true)
+  })
+
+  it('preserves a thrown P2Error instead of wrapping it as INTERNAL_ERROR', async () => {
+    const [client, bodySide] = createMemoryTransportPair()
+    const failure = p2Error('UNKNOWN_OP', 'validation', 'unknown operation: rm-look', { module: 'core.host' })
+    const rt = {
+      bodyEpoch: 'epoch-f1',
+      isClosing: false,
+      handleRequestAsync: async () => { throw failure },
+    } as unknown as BodyRuntime
+    const server = new BodyServer(rt, bodySide)
+    const responses: ResponseEnvelope[] = []
+    client.onLine(line => responses.push(JSON.parse(line) as ResponseEnvelope))
+    server.start()
+
+    client.send(encodeJsonLine(request('check', {})))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(responses).toHaveLength(1)
+    expect(responses[0]?.error).toMatchObject({
+      code: 'UNKNOWN_OP',
+      category: 'validation',
+      message: 'unknown operation: rm-look',
+    })
+    server.stop()
   })
 
   it('closes on invalid JSON and logs a diagnostic', () => {

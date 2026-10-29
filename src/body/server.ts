@@ -8,6 +8,7 @@ import {
 import type {
   JsonValue,
   MessageTransport,
+  P2Error,
   RequestEnvelope,
   ResponseEnvelope,
 } from '../contracts/index.ts'
@@ -15,6 +16,20 @@ import { BodyRuntime } from './runtime.ts'
 
 export type BodyServerOptions = {
   log?: (line: string) => void
+}
+
+/** Recognize a serialized P2Error thrown by a host method. */
+function asP2Error(error: unknown): P2Error | undefined {
+  if (!isRecord(error)) return undefined
+  const { code, category, message, retry, source } = error
+  if (typeof code !== 'string'
+    || typeof category !== 'string'
+    || typeof message !== 'string'
+    || typeof retry !== 'string'
+    || !isRecord(source)) {
+    return undefined
+  }
+  return error as unknown as P2Error
 }
 
 /** Protocol dispatcher over a MessageTransport; framing stays in the transport. */
@@ -110,15 +125,21 @@ export class BodyServer {
     try {
       response = await this.runtime.handleRequestAsync(request.value)
     } catch (error) {
-      this.log(`request failed: ${error instanceof Error ? error.message : String(error)}`)
+      // Host methods throw P2Error values, not Error instances. Preserve them so
+      // the bridge and model see the real code instead of "[object Object]".
+      const protocolError = asP2Error(error)
+      const description = protocolError === undefined
+        ? error instanceof Error ? error.message : String(error)
+        : `${protocolError.code}: ${protocolError.message}`
+      this.log(`request failed: ${description}`)
       response = {
         protocol: 1,
         requestId: request.value.requestId,
         bodyEpoch: this.runtime.bodyEpoch,
-        error: p2Error(
+        error: protocolError ?? p2Error(
           ErrorCodes.INTERNAL_ERROR,
           'runtime',
-          error instanceof Error ? error.message : String(error),
+          description,
           { module: 'body.server' },
         ),
       }
