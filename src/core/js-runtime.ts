@@ -14,10 +14,12 @@ type JsCommand =
   | { type: 'wait'; durationMs: number }
   | { type: 'progress'; value: JsonValue }
   | { type: 'log'; message: string }
+
+type TerminalCommand =
   | { type: 'succeed'; evidence?: JsonValue }
   | { type: 'fail'; code: string; message: string }
 
-type GeneratorResult = { done?: boolean; value?: unknown }
+type ResumeSlot = { value: unknown; thrown: boolean }
 
 type Pending =
   | { kind: 'query'; poll: () => QueryOutcome }
@@ -38,11 +40,16 @@ export type JsBehaviorRunOptions = {
 
 const STEP_TIMEOUT_MS = 50
 const STEP_BUDGET = 100
+const LOAD_TIMEOUT_MS = 1000
 
 /**
- * Experimental JS behavior driver. It evaluates a single generator step inside
- * a vm context and maps yielded commands to the existing query/act/policy ports.
- * It is intentionally small: the experiment compares this driver with IR.
+ * JS behavior driver. One tick advances at most one bounded scheduling pass over
+ * the generator: all completions travel through a single resume slot, so no
+ * callback or synchronous port reply can recurse into another step.
+ *
+ * Every author-code entry (run initialization, one step, generator.return()
+ * cleanup) runs inside the vm with a CPU timeout; invalid yields/returns fail
+ * the run immediately instead of being skipped or misread as terminal.
  */
 export class JsBehaviorRun {
   readonly runId: string
@@ -51,10 +58,11 @@ export class JsBehaviorRun {
   private readonly options: JsBehaviorRunOptions
   private readonly context: vm.Context
   private generator: Generator<unknown, unknown, unknown> | undefined
-  private stepState: { generator: Generator<unknown, unknown, unknown>; input?: unknown; thrown?: boolean } | undefined
+  private resumeSlot: ResumeSlot | undefined
   private statusValue: RunStatus = 'running'
   private pending: Pending | undefined
   private waitUntil: number | undefined
+  private clock = 0
   private currentError: P2Error | undefined
   private stepLabel: string | null = null
   private activeAct: string | null = null
@@ -108,10 +116,10 @@ export class JsBehaviorRun {
       try { this.pending.handle.stop() } catch {}
     }
     this.pending = undefined
-    try {
-      if (this.generator !== undefined) this.generator.return(undefined)
-    } catch {}
+    this.resumeSlot = undefined
+    this.waitUntil = undefined
     this.statusValue = 'cancelled'
+    this.runCleanup()
   }
 
   tick(now = Date.now()): RunStatus {
@@ -120,22 +128,24 @@ export class JsBehaviorRun {
       this.statusValue = 'cancelled'
       return this.statusValue
     }
+    this.clock = now
     let budget = STEP_BUDGET
-    while (budget > 0 && !this.isTerminal()) {
-      budget -= 1
+    while (!this.isTerminal()) {
       if (this.pending !== undefined) {
-        if (!this.pollPending(now)) return this.statusValue
-        continue
+        if (!this.pollPending()) return this.statusValue
       }
       if (this.waitUntil !== undefined) {
         if (now < this.waitUntil) return this.statusValue
         this.waitUntil = undefined
-        this.resume(undefined)
-        continue
+        this.resumeSlot = { value: undefined, thrown: false }
       }
-      this.resume(undefined)
+      const slot = this.resumeSlot
+      if (slot === undefined) return this.statusValue
+      if (budget <= 0) return this.statusValue
+      budget -= 1
+      this.resumeSlot = undefined
+      this.step(slot)
       if (this.pending !== undefined || this.waitUntil !== undefined) return this.statusValue
-      if (this.isTerminal()) return this.statusValue
     }
     return this.statusValue
   }
@@ -144,22 +154,42 @@ export class JsBehaviorRun {
     let captured: unknown
     this.context.defineBehavior = (value: unknown) => { captured = value }
     try {
-      vm.runInContext(code, this.context, { timeout: 1000 })
+      vm.runInContext(code, this.context, { timeout: LOAD_TIMEOUT_MS })
     } catch (error) {
       this.fail(p2Error('JS_LOAD_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.js-run' }))
       return
     }
-    if (typeof captured !== 'object' || captured === null) {
+    if (!isRecord(captured)) {
       this.fail(p2Error('INVALID_MANIFEST', 'validation', 'JS behavior must call defineBehavior', { module: 'core.js-run' }))
       return
     }
-    const module = captured as { run?: (ctx: unknown) => unknown }
+    const module = captured as { run?: unknown }
     if (typeof module.run !== 'function') {
       this.fail(p2Error('INVALID_MANIFEST', 'validation', 'JS behavior must provide run(ctx)', { module: 'core.js-run' }))
       return
     }
     const params = JSON.parse(JSON.stringify(this.options.params)) as Record<string, JsonValue>
-    const ctx = Object.freeze({
+    const ctx = this.createContext(params)
+    // The call is made from inside the vm so the step timeout also covers a
+    // non-generator run() that would otherwise occupy the body process.
+    this.context.__p2_init = () => (module.run as (context: unknown) => unknown)(ctx)
+    let generator: unknown
+    try {
+      generator = vm.runInContext('__p2_init()', this.context, { timeout: STEP_TIMEOUT_MS })
+    } catch (error) {
+      this.fail(this.authorError(error, 'init'))
+      return
+    }
+    if (!isGenerator(generator)) {
+      this.fail(p2Error('INVALID_MANIFEST', 'validation', 'run(ctx) must return a synchronous generator', { module: 'core.js-run' }))
+      return
+    }
+    this.generator = generator
+    this.resumeSlot = { value: undefined, thrown: false }
+  }
+
+  private createContext(params: Record<string, JsonValue>): Readonly<Record<string, unknown>> {
+    return Object.freeze({
       params,
       runId: this.runId,
       now: () => Date.now(),
@@ -179,165 +209,205 @@ export class JsBehaviorRun {
         return snapshot.value
       },
     })
-    try {
-      const generator = module.run(ctx) as Generator<unknown, unknown, unknown>
-      if (typeof generator?.next !== 'function') {
-        this.fail(p2Error('INVALID_MANIFEST', 'validation', 'run(ctx) must return a generator', { module: 'core.js-run' }))
-        return
-      }
-      this.generator = generator
-      const state = { generator, input: undefined as unknown, thrown: false }
-      this.stepState = state
-      this.context.__p2_step = function (): GeneratorResult {
-        return state.thrown ? state.generator.throw(state.input) : state.generator.next(state.input)
-      }
-    } catch (error) {
-      this.fail(p2Error('JS_START_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.js-run' }))
-    }
   }
 
-  private resume(value: unknown, thrown = false): void {
-    if (this.generator === undefined || this.isTerminal()) return
-    if (this.stepState === undefined) return
-    this.stepState.input = value
-    this.stepState.thrown = thrown
-    let result: GeneratorResult
+  private step(slot: ResumeSlot): void {
+    const generator = this.generator
+    if (generator === undefined) return
+    const state = { input: slot.value, thrown: slot.thrown }
+    this.context.__p2_step = () => (state.thrown ? generator.throw(state.input) : generator.next(state.input))
+    let result: unknown
     try {
-      result = vm.runInContext('__p2_step()', this.context, { timeout: STEP_TIMEOUT_MS }) as GeneratorResult
+      result = vm.runInContext('__p2_step()', this.context, { timeout: STEP_TIMEOUT_MS })
     } catch (error) {
-      if (typeof error === 'object' && error !== null && typeof (error as P2Error).code === 'string' && typeof (error as P2Error).message === 'string') {
-        this.fail(error as P2Error)
-        return
-      }
-      this.fail(p2Error(
-        error instanceof Error && /timed out/u.test(error.message) ? 'JS_STEP_TIMEOUT' : 'JS_BEHAVIOR_ERROR',
-        'runtime',
-        error instanceof Error ? error.message : String(error),
-        { module: 'core.js-run' },
-      ))
+      this.fail(this.authorError(error, 'step'))
       return
     }
-    const command = result.value as JsCommand | undefined
-    if (command !== undefined) {
-      this.handle(command)
+    if (!isRecord(result) || typeof result.done !== 'boolean') {
+      this.fail(p2Error('BEHAVIOR_SCRIPT_ERROR', 'runtime', 'generator step returned an invalid result', { module: 'core.js-run' }, { phase: 'step' }))
       return
     }
-    if (result.done === true) {
-      this.fail(p2Error('JS_BEHAVIOR_ENDED', 'runtime', 'JS behavior ended without succeed/fail', { module: 'core.js-run' }))
+    if (result.done) {
+      this.finishRun(result.value)
+      return
     }
+    this.dispatch(result.value)
   }
 
-  private handle(command: JsCommand): void {
-    switch (command.type) {
+  private finishRun(value: unknown): void {
+    if (!isRecord(value)) {
+      this.fail(invalidReturn('run ended without return ctx.succeed/ctx.fail'))
+      return
+    }
+    if (value.type === 'succeed') {
+      this.statusValue = 'succeeded'
+      return
+    }
+    if (value.type === 'fail') {
+      const code = value.code
+      const message = value.message
+      if (typeof code !== 'string' || code.length === 0 || typeof message !== 'string') {
+        this.fail(invalidReturn('return ctx.fail(code, message) requires a code and a message'))
+        return
+      }
+      this.fail(p2Error(code, 'runtime', message, { module: 'core.js-run' }, { phase: 'return' }))
+      return
+    }
+    this.fail(invalidReturn('run returned a value that is not ctx.succeed/ctx.fail'))
+  }
+
+  private dispatch(value: unknown): void {
+    if (!isRecord(value)) {
+      this.fail(invalidCommand('yielded value must be a ctx command object'))
+      return
+    }
+    switch (value.type) {
       case 'query': {
-        this.stepLabel = `query:${command.op}`
-        const outcome = this.options.query({ op: command.op, args: {} }, command.args)
-        if (outcome.status === 'pending') {
-          this.pending = { kind: 'query', poll: outcome.poll }
+        const op = value.op
+        if (typeof op !== 'string' || op.length === 0) {
+          this.fail(invalidCommand('query command requires a non-empty op'))
           return
         }
-        this.finishQuery(outcome)
+        if (!isRecord(value.args)) {
+          this.fail(invalidCommand('query command requires an args object'))
+          return
+        }
+        this.stepLabel = `query:${op}`
+        const outcome = this.options.query({ op, args: {} }, value.args as Record<string, JsonValue>)
+        this.completeQuery(outcome)
         return
       }
       case 'act': {
-        const definitionId = typeof command.ref === 'string' ? command.ref : command.ref.definitionId
-        const artifactId = typeof command.ref === 'object' && command.ref.artifactId !== undefined
-          ? command.ref.artifactId
-          : this.options.resolveAct(definitionId)
-        if (artifactId === undefined) {
-          this.resume(p2Error('ACT_REF_UNRESOLVED', 'validation', `act ${definitionId} is not active`, { module: 'core.js-run' }), true)
+        const ref = parseRef(value.ref)
+        if (ref === undefined) {
+          this.fail(invalidCommand('act command requires a ref string or { definitionId, artifactId }'))
           return
         }
-        this.stepLabel = `act:${definitionId}`
-        this.activeAct = definitionId
-        const x = command.args.x
-        const z = command.args.z
+        if (!isRecord(value.args)) {
+          this.fail(invalidCommand('act command requires an args object'))
+          return
+        }
+        const artifactId = ref.artifactId ?? this.options.resolveAct(ref.definitionId)
+        if (artifactId === undefined) {
+          this.resumeSlot = {
+            value: p2Error('ACT_REF_UNRESOLVED', 'validation', `act ${ref.definitionId} is not active`, { module: 'core.js-run' }),
+            thrown: true,
+          }
+          return
+        }
+        this.stepLabel = `act:${ref.definitionId}`
+        this.activeAct = ref.definitionId
+        const x = value.args.x
+        const z = value.args.z
         this.activeTarget = typeof x === 'number' && typeof z === 'number' ? { x, z } : null
         try {
-          this.pending = { kind: 'act', handle: this.options.act.start({ definitionId, artifactId }, command.args) }
+          this.pending = { kind: 'act', handle: this.options.act.start({ definitionId: ref.definitionId, artifactId }, value.args as Record<string, JsonValue>) }
         } catch (error) {
-          this.resume(error, true)
+          this.resumeSlot = { value: error, thrown: true }
         }
         return
       }
       case 'decide': {
+        const ref = parseRef(value.ref)
+        if (ref === undefined) {
+          this.fail(invalidCommand('decide command requires a ref string or { definitionId, artifactId }'))
+          return
+        }
+        if (!isRecord(value.inputs)) {
+          this.fail(invalidCommand('decide command requires an inputs object'))
+          return
+        }
         if (this.options.policy === undefined) {
-          this.resume(p2Error('POLICY_UNAVAILABLE', 'runtime', 'no policy port is connected', { module: 'core.js-run' }), true)
+          this.resumeSlot = {
+            value: p2Error('POLICY_UNAVAILABLE', 'runtime', 'no policy port is connected', { module: 'core.js-run' }),
+            thrown: true,
+          }
           return
         }
-        const definitionId = typeof command.ref === 'string' ? command.ref : command.ref.definitionId
-        const artifactId = typeof command.ref === 'object' && command.ref.artifactId !== undefined
-          ? command.ref.artifactId
-          : this.options.resolvePolicy(definitionId)
+        const artifactId = ref.artifactId ?? this.options.resolvePolicy(ref.definitionId)
         if (artifactId === undefined) {
-          this.resume(p2Error('POLICY_REF_UNRESOLVED', 'validation', `policy ${definitionId} is not checked`, { module: 'core.js-run' }), true)
+          this.resumeSlot = {
+            value: p2Error('POLICY_REF_UNRESOLVED', 'validation', `policy ${ref.definitionId} is not checked`, { module: 'core.js-run' }),
+            thrown: true,
+          }
           return
         }
-        this.stepLabel = `decide:${definitionId}`
-        const outcome = this.options.policy.call({ definitionId, artifactId }, command.inputs)
-        if (outcome.status === 'pending') {
-          this.pending = { kind: 'policy', poll: outcome.poll }
-          return
-        }
-        this.finishPolicy(outcome)
+        this.stepLabel = `decide:${ref.definitionId}`
+        const outcome = this.options.policy.call({ definitionId: ref.definitionId, artifactId }, value.inputs as Record<string, JsonValue>)
+        this.completePolicy(outcome)
         return
       }
       case 'wait': {
-        this.stepLabel = `wait ${Math.max(0, command.durationMs)}`
-        this.waitUntil = Date.now() + Math.max(0, command.durationMs)
+        const durationMs = value.durationMs
+        if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
+          this.fail(invalidCommand('wait command requires a finite durationMs'))
+          return
+        }
+        this.stepLabel = `wait ${Math.max(0, durationMs)}`
+        this.waitUntil = this.clock + Math.max(0, durationMs)
         return
       }
       case 'progress': {
-        this.progressValue = command.value
-        this.resume(undefined)
+        if (!('value' in value)) {
+          this.fail(invalidCommand('progress command requires a value'))
+          return
+        }
+        this.progressValue = value.value as JsonValue | undefined
+        this.resumeSlot = { value: undefined, thrown: false }
         return
       }
       case 'log': {
-        this.resume(undefined)
+        if (typeof value.message !== 'string') {
+          this.fail(invalidCommand('log command requires a message string'))
+          return
+        }
+        this.resumeSlot = { value: undefined, thrown: false }
         return
       }
-      case 'succeed': {
-        this.statusValue = 'succeeded'
+      case 'succeed':
+      case 'fail':
+        this.fail(invalidCommand(`${String(value.type)} must be returned, not yielded`))
         return
-      }
-      case 'fail': {
-        this.fail(p2Error(command.code, 'runtime', command.message, { module: 'core.js-run' }))
-        return
-      }
+      default:
+        this.fail(invalidCommand('yielded value has an unknown command type'))
     }
   }
 
-  private finishQuery(outcome: QueryOutcome): void {
-    if (outcome.status === 'ok') {
-      this.resume({ value: outcome.value, meta: outcome.meta })
-    } else if (outcome.status === 'failed') {
-      this.resume(outcome.error, true)
+  private completeQuery(outcome: QueryOutcome): void {
+    if (outcome.status === 'pending') {
+      this.pending = { kind: 'query', poll: outcome.poll }
+    } else if (outcome.status === 'ok') {
+      this.resumeSlot = { value: { value: outcome.value, meta: outcome.meta }, thrown: false }
+    } else {
+      this.resumeSlot = { value: outcome.error, thrown: true }
     }
   }
 
-  private finishPolicy(outcome: PolicyOutcome): void {
-    if (outcome.status === 'ok') {
-      this.resume(outcome.value)
-    } else if (outcome.status === 'failed') {
-      this.resume(outcome.error, true)
+  private completePolicy(outcome: PolicyOutcome): void {
+    if (outcome.status === 'pending') {
+      this.pending = { kind: 'policy', poll: outcome.poll }
+    } else if (outcome.status === 'ok') {
+      this.resumeSlot = { value: outcome.value, thrown: false }
+    } else {
+      this.resumeSlot = { value: outcome.error, thrown: true }
     }
   }
 
-  private pollPending(now: number): boolean {
+  private pollPending(): boolean {
     const pending = this.pending
     if (pending === undefined) return true
     if (pending.kind === 'query') {
       const outcome = pending.poll()
       if (outcome.status === 'pending') return false
       this.pending = undefined
-      this.finishQuery(outcome)
+      this.completeQuery(outcome)
       return true
     }
     if (pending.kind === 'policy') {
       const outcome = pending.poll()
       if (outcome.status === 'pending') return false
       this.pending = undefined
-      this.finishPolicy(outcome)
+      this.completePolicy(outcome)
       return true
     }
     const outcome: ActPoll = pending.handle.poll()
@@ -346,14 +416,57 @@ export class JsBehaviorRun {
     this.activeAct = null
     this.activeTarget = null
     if (outcome.status === 'succeeded') {
-      this.resume({ value: outcome.result, meta: outcome.meta })
+      this.resumeSlot = { value: { value: outcome.result, meta: outcome.meta }, thrown: false }
     } else if (outcome.status === 'failed') {
-      this.resume(outcome.error, true)
+      this.resumeSlot = { value: outcome.error, thrown: true }
     } else {
-      this.resume(p2Error('ACT_CANCELLED', 'runtime', 'act was cancelled', { module: 'core.js-run' }), true)
+      this.resumeSlot = {
+        value: p2Error('ACT_CANCELLED', 'runtime', 'act was cancelled', { module: 'core.js-run' }),
+        thrown: true,
+      }
     }
-    void now
     return true
+  }
+
+  private runCleanup(): void {
+    const generator = this.generator
+    if (generator === undefined) return
+    this.generator = undefined
+    this.context.__p2_return = () => generator.return(undefined)
+    try {
+      const result = vm.runInContext('__p2_return()', this.context, { timeout: STEP_TIMEOUT_MS })
+      if (isRecord(result) && result.done === false) {
+        this.currentError = p2Error(
+          'BEHAVIOR_CLEANUP_ERROR',
+          'runtime',
+          'behavior yielded while running finally after cancellation',
+          { module: 'core.js-run' },
+          { phase: 'cleanup' },
+        )
+      }
+    } catch (error) {
+      this.currentError = this.authorError(error, 'cleanup')
+    }
+  }
+
+  private authorError(error: unknown, phase: 'init' | 'step' | 'cleanup'): P2Error {
+    if (isTimeoutError(error)) {
+      return p2Error(
+        'BEHAVIOR_STEP_TIMEOUT',
+        'timeout',
+        `behavior ${phase} timed out after ${STEP_TIMEOUT_MS}ms`,
+        { module: 'core.js-run' },
+        { phase },
+      )
+    }
+    if (isP2Error(error)) return error
+    return p2Error(
+      'BEHAVIOR_SCRIPT_ERROR',
+      'runtime',
+      error instanceof Error ? error.message : String(error),
+      { module: 'core.js-run' },
+      { phase },
+    )
   }
 
   private fail(error: P2Error): void {
@@ -362,9 +475,51 @@ export class JsBehaviorRun {
     this.statusValue = 'failed'
     this.pending = undefined
     this.waitUntil = undefined
+    this.resumeSlot = undefined
   }
 
   private isTerminal(): boolean {
     return this.statusValue === 'succeeded' || this.statusValue === 'failed' || this.statusValue === 'cancelled'
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isP2Error(value: unknown): value is P2Error {
+  if (!isRecord(value)) return false
+  return typeof value.code === 'string'
+    && typeof value.category === 'string'
+    && typeof value.message === 'string'
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return isRecord(error) && error.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
+}
+
+function isGenerator(value: unknown): value is Generator<unknown, unknown, unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && Object.prototype.toString.call(value) === '[object Generator]'
+    && typeof (value as { next?: unknown }).next === 'function'
+    && typeof (value as { return?: unknown }).return === 'function'
+}
+
+function parseRef(value: unknown): ArtifactRef | undefined {
+  if (typeof value === 'string') return value.length > 0 ? { definitionId: value } : undefined
+  if (!isRecord(value)) return undefined
+  if (typeof value.definitionId !== 'string' || value.definitionId.length === 0) return undefined
+  if (value.artifactId !== undefined && typeof value.artifactId !== 'string') return undefined
+  return value.artifactId === undefined
+    ? { definitionId: value.definitionId }
+    : { definitionId: value.definitionId, artifactId: value.artifactId }
+}
+
+function invalidCommand(message: string): P2Error {
+  return p2Error('BEHAVIOR_INVALID_COMMAND', 'runtime', message, { module: 'core.js-run' }, { phase: 'yield' })
+}
+
+function invalidReturn(message: string): P2Error {
+  return p2Error('BEHAVIOR_INVALID_RETURN', 'runtime', message, { module: 'core.js-run' }, { phase: 'return' })
 }
