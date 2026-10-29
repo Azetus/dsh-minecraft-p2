@@ -85,7 +85,7 @@ export class BodyClient {
     })
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.command('check', {
       sourcePath,
       ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),

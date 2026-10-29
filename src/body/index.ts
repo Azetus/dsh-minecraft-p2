@@ -5,6 +5,7 @@ import { createStdioTransport, p2Error } from '../contracts/index.ts'
 import type { BodyInfo, DevOpsStatus } from '../contracts/index.ts'
 import { BehaviorHost } from '../core/host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
+import { createAuthoredOpSource } from '../core/op-artifact.ts'
 import { RunnerActPort } from '../core/act-port.ts'
 import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerManager } from '../core/runner-manager.ts'
@@ -113,12 +114,25 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
     }
     const devOpsInfo = (): DevOpsStatus | null => devHost?.info() ?? null
 
-    const ops = new DeclaredOpBroker(createCompositeOpSource(provider, devHost, bot))
-
-    const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
     let actPort: RunnerActPort | undefined
     let policyPort: RunnerPolicyPort | undefined
     let host: BehaviorHost | undefined
+    let opsBroker: DeclaredOpBroker | undefined
+    // Activated authored ops are resolved from the host registry; the provider
+    // stays behind this seam and the broker remains the only control ledger.
+    const opsSource = createAuthoredOpSource(
+      createCompositeOpSource(provider, devHost, bot),
+      name => host?.opArtifact(name),
+      {
+        log: message => process.stderr.write(`[op] ${message}\n`),
+        now: () => Date.now(),
+        onUntracked: input => { opsBroker?.markUntracked(input.runId) },
+      },
+    )
+    opsBroker = new DeclaredOpBroker(opsSource)
+    const ops = opsBroker
+
+    const runnerEntry = fileURLToPath(new URL('../runner.js', import.meta.url))
     const runner = new RunnerManager({
       entry: runnerEntry,
       onOp: event => actPort?.handleOp(event),

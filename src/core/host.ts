@@ -18,7 +18,10 @@ import { CheckerError, checkBehavior } from './checker.ts'
 import type { CheckerCredential } from './checker.ts'
 import { checkAct } from './act-checker.ts'
 import { checkPolicy } from './policy-checker.ts'
+import { checkOp } from './op-checker.ts'
 import { checkBehaviorJs } from './js-checker.ts'
+import type { AuthoredOpArtifact } from './op-artifact.ts'
+import type { OperationContract } from '../operation/index.ts'
 import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
 import { JsBehaviorRun } from './js-runtime.ts'
@@ -35,7 +38,7 @@ export type CheckHostRequest = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
-  artifactKind?: 'behavior' | 'act' | 'policy'
+  artifactKind?: 'behavior' | 'act' | 'policy' | 'op'
   /** Experimental behavior script format; default is IR. */
   format?: 'ir' | 'js'
 }
@@ -44,7 +47,7 @@ export type CheckHostResult = {
   artifactId: string
   definitionId: string
   sourceDigest: string
-  kind: 'behavior' | 'act' | 'policy'
+  kind: 'behavior' | 'act' | 'policy' | 'op'
   artifact: ContentArtifact
 }
 
@@ -204,6 +207,7 @@ export class BehaviorHost {
     const kind = request.artifactKind ?? 'behavior'
     if (kind === 'act') return this.checkAct(request)
     if (kind === 'policy') return this.checkPolicy(request)
+    if (kind === 'op') return this.checkOp(request)
     if (request.format === 'js') return this.checkJsBehavior(request)
     return this.checkBehavior(request)
   }
@@ -268,6 +272,7 @@ export class BehaviorHost {
       ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
       bindingId: this.bindingId,
       loadManifest: (code, artifactId) => loadManifest('act', code, artifactId),
+      resolveOperation: name => this.opContract(name),
     })
     this.credentials.set(result.artifact.artifactId, result.credential)
     this.registry.add(result.artifact, result.credential)
@@ -302,6 +307,24 @@ export class BehaviorHost {
     }
   }
 
+  private async checkOp(request: CheckHostRequest): Promise<CheckHostResult> {
+    const result = await checkOp({
+      sourcePath: request.sourcePath,
+      ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      bindingId: this.bindingId,
+    })
+    this.credentials.set(result.artifact.artifactId, result.credential)
+    this.registry.add(result.artifact, result.credential)
+    return {
+      artifactId: result.artifact.artifactId,
+      definitionId: result.artifact.definitionId,
+      sourceDigest: result.artifact.sourceDigest,
+      kind: 'op',
+      artifact: result.artifact,
+    }
+  }
+
   setOwner(owner: string): void {
     this.owner = owner
   }
@@ -320,7 +343,7 @@ export class BehaviorHost {
     return this.query({ op, args: {} }, args)
   }
 
-  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true; kind: 'behavior' | 'act' | 'policy' } {
+  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true; kind: 'behavior' | 'act' | 'policy' | 'op' } {
     const record = this.registry.get(artifactId)
     if (record !== undefined && record.artifact.kind === 'policy') {
       throw new RegistryError('POLICY_NOT_ACTIVATABLE', 'policy artifacts are dependencies and are not enabled separately')
@@ -351,6 +374,39 @@ export class BehaviorHost {
     const record = this.registry.get(artifactId)
     if (record === undefined || record.artifact.kind !== 'policy') return undefined
     return { artifactId: record.artifact.artifactId, code: record.artifact.code }
+  }
+
+  /**
+   * Activated authored op for one bare op name. Activation replaces the
+   * built-in implementation for the rest of the body epoch; retiring it falls
+   * back to the provider.
+   */
+  opArtifact(name: string): AuthoredOpArtifact | undefined {
+    const artifact = this.registry.resolveDefault('op', name)
+    if (artifact === undefined || artifact.kind !== 'op') return undefined
+    return {
+      artifactId: artifact.artifactId,
+      name: artifact.definitionId,
+      opKind: artifact.opKind,
+      effects: artifact.effects,
+      stop: artifact.stop,
+      capabilities: [...artifact.capabilities],
+      ...(artifact.limits === undefined ? {} : { limits: artifact.limits }),
+      code: artifact.code,
+    }
+  }
+
+  /** Declaration used by act checks and the broker for an activated authored op. */
+  opContract(name: string): OperationContract | undefined {
+    const artifact = this.opArtifact(name)
+    if (artifact === undefined) return undefined
+    return {
+      id: artifact.name,
+      kind: artifact.opKind,
+      effects: artifact.effects,
+      stop: artifact.stop,
+      capabilities: [...artifact.capabilities],
+    }
   }
 
   switch(input: SwitchInput): SwitchResult {

@@ -239,10 +239,10 @@ export class BodyRuntime {
             return { ...base, error: quotaError }
           }
           const rawKind = params.artifactKind
-          if (rawKind !== undefined && rawKind !== 'behavior' && rawKind !== 'act' && rawKind !== 'policy') {
-            return { ...base, error: invalidMessageError('artifactKind must be behavior, act or policy') }
+          if (rawKind !== undefined && rawKind !== 'behavior' && rawKind !== 'act' && rawKind !== 'policy' && rawKind !== 'op') {
+            return { ...base, error: invalidMessageError('artifactKind must be behavior, act, policy or op') }
           }
-          const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | undefined
+          const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | 'op' | undefined
           const rawFormat = params.format
           if (rawFormat !== undefined && rawFormat !== 'ir' && rawFormat !== 'js') {
             return { ...base, error: invalidMessageError('format must be ir or js') }

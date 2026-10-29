@@ -405,6 +405,20 @@ type OpManifest = {
 // 模块导出
 type QueryOpModule = { manifest: OpManifest; query(ctx: OpContext, args: JsonValue): JsonValue | Promise<JsonValue> };
 type ControlOpModule = { manifest: OpManifest; start(ctx: OpContext, args: JsonValue): OpHandle };
+
+// 装配入口：与 act/policy 相同，单文件由注入的 defineOp 装配，不使用 import。
+defineOp(QueryOpModule | ControlOpModule);
+
+// OpContext：直接持有 provider 能力；query 解析为值或抛出 P2Error，
+// start 仅在 control op 中提供，且只由作者交回 broker 的句柄被记账。
+type OpContext = {
+  provider: {
+    query(name: string, args?: JsonValue): JsonValue | Promise<JsonValue>;
+    start?(name: string, args?: JsonValue): OpHandle;
+  };
+  now(): number;
+  log(message: string): void;
+};
 ```
 
 | 项 | 规则 |
@@ -413,7 +427,7 @@ type ControlOpModule = { manifest: OpManifest; start(ctx: OpContext, args: JsonV
 | 检查 | 仅做语法与 manifest 形状检查；不连接游戏、不做兼容性验证、不做安全审核。 |
 | 激活 | 与 act/policy 相同的 digest + binding + enable 流程；同名时按激活状态覆盖内置实现。 |
 | 记账 | 经 broker 提交的 op 照旧记账、停止、核对；**直接调用 provider 的 op 不被账本跟踪**。 |
-| 释放诚实 | 一个 run 使用过未跟踪控制时，该 run 的释放结论必须是 `unknown/unconfirmed`；status 不得报告 `released`。 |
+| 释放诚实 | 一个 run 使用过未跟踪控制时，该 run 的释放结论必须是 `unknown/unconfirmed`；status 不得报告 `released`。broker 以“作者交回的句柄”为跟踪对象：作者通过 `ctx.provider.start` 启动、但没有作为返回值交回 broker 的控制效果即视为未跟踪。 |
 | 停止 | control op 的停止/清理契约由作者实现；`stop` 仍是隐式撤回原语。 |
 | 生命周期 | op 模块随 binding 缓存；源码变化产生新产物，旧运行实例不热替换。 |
 | 崩溃 | op 同步挂死由 body 看门狗处理（心跳缺失→有界重启）；异步超时由 `limits.totalMs` 或 broker 预算判失败。 |

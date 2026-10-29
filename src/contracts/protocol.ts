@@ -267,8 +267,8 @@ export type CheckParams = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
-  artifactKind?: 'behavior' | 'act' | 'policy'
-  /** Experimental behavior format; ignored for act/policy. */
+  artifactKind?: 'behavior' | 'act' | 'policy' | 'op'
+  /** Experimental behavior format; ignored for act/policy/op. */
   format?: 'ir' | 'js'
 }
 
@@ -288,7 +288,7 @@ export type CheckResult = {
   definitionId: string
   sourceDigest: string
   bindingId: string
-  kind: 'behavior' | 'act' | 'policy'
+  kind: 'behavior' | 'act' | 'policy' | 'op'
   enabled: false
 }
 

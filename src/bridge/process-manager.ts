@@ -156,7 +156,7 @@ export class BodyManager {
     }
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.activeClient().check(sourcePath, options)
   }
 

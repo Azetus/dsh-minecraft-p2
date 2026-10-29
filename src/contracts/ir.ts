@@ -130,13 +130,36 @@ export type ActArtifact = {
   sourceDigest: string
 }
 
-export type ContentArtifact = BehaviorArtifact | ActArtifact | PolicyArtifact
+export type ContentArtifact = BehaviorArtifact | ActArtifact | PolicyArtifact | OpArtifact
 
 /** Immutable policy artifact: single-file pure decision code. */
 export type PolicyArtifact = {
   kind: 'policy'
   definitionId: string
   code: string
+  manifest: ArtifactManifest
+  artifactId: string
+  artifactDigest: string
+  bindingId: string
+  sourceDigest: string
+}
+
+/**
+ * Immutable authored operation artifact. It runs in the body process and holds
+ * the provider capability directly; the broker only tracks the handle handed
+ * back to it.
+ */
+export type OpArtifact = {
+  kind: 'op'
+  definitionId: string
+  code: string
+  opKind: 'query' | 'control'
+  effects: 'none' | 'active'
+  stop: 'none' | 'poll'
+  capabilities: string[]
+  parameters?: JsonValue
+  resultSchema?: JsonValue
+  limits?: { totalMs?: number }
   manifest: ArtifactManifest
   artifactId: string
   artifactDigest: string

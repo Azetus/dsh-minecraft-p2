@@ -96,7 +96,19 @@ export type BindingManifest = {
   config: JsonValue
 }
 
-export type ArtifactKind = 'behavior' | 'act' | 'policy'
+export type ArtifactKind = 'behavior' | 'act' | 'policy' | 'op'
+
+/** Execution-relevant declaration of an authored operation artifact. */
+export type OpDeclaration = {
+  opKind: 'query' | 'control'
+  effects: 'none' | 'active'
+  stop: 'none' | 'poll'
+  capabilities: string[]
+  /** Opaque parameter schema; identity-relevant, not executed by the core. */
+  parameters?: JsonValue
+  /** Opaque result schema; identity-relevant, not executed by the core. */
+  result?: JsonValue
+}
 
 export type ArtifactManifest = {
   schemaVersion: 1
@@ -115,6 +127,8 @@ export type ArtifactManifest = {
   }>
   /** Declared operations for an act artifact. */
   ops?: { query: string[]; control: string[] }
+  /** Declaration of an op artifact (kind === 'op'). */
+  op?: OpDeclaration
   limits?: { totalMs?: number; hookMs?: number; callMs?: number }
 }
 

@@ -166,6 +166,16 @@ export function normalizeArtifactManifest(manifest: ArtifactManifest): ArtifactM
         control: [...new Set(manifest.ops.control)].sort(compareKeys),
       },
     }),
+    ...(manifest.op === undefined ? {} : {
+      op: {
+        opKind: manifest.op.opKind,
+        effects: manifest.op.effects,
+        stop: manifest.op.stop,
+        capabilities: [...new Set(manifest.op.capabilities)].sort(compareKeys),
+        ...(manifest.op.parameters === undefined ? {} : { parameters: manifest.op.parameters }),
+        ...(manifest.op.result === undefined ? {} : { result: manifest.op.result }),
+      },
+    }),
     ...(manifest.limits === undefined ? {} : { limits: manifest.limits }),
   }
 }

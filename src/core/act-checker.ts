@@ -5,7 +5,9 @@ import { dirname, relative, resolve, sep } from 'node:path'
 import { artifactDigest, artifactId, sourceDigest } from '../contracts/digest.ts'
 import type { ActArtifact, ActLimits } from '../contracts/ir.ts'
 import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
+import { p2Error } from '../contracts/protocol.ts'
 import { requireOperation } from '../operation/index.ts'
+import type { OperationContract } from '../operation/index.ts'
 import { CHECKER_VERSION, CheckerError } from './checker.ts'
 import type { CheckerCredential } from './checker.ts'
 
@@ -15,6 +17,8 @@ export type ActCheckRequest = {
   bindingId: string
   /** Loads the code in a sandbox and returns its manifest (no host access). */
   loadManifest: (code: string, artifactId: string) => Promise<JsonValue>
+  /** An activated authored op declaration that is not in the static catalog. */
+  resolveOperation?: (name: string) => OperationContract | undefined
   builtinsDigest?: string
   timeoutMs?: number
 }
@@ -73,8 +77,8 @@ export async function checkAct(request: ActCheckRequest): Promise<ActCheckResult
 
   const queryOps = [...new Set(info.queryOps)].sort()
   const controlOps = [...new Set(info.controlOps)].sort()
-  for (const op of queryOps) requireOperation(op, 'query', 'core.act-checker')
-  for (const op of controlOps) requireOperation(op, 'control', 'core.act-checker')
+  for (const op of queryOps) requireDeclaredOperation(op, 'query', request.resolveOperation)
+  for (const op of controlOps) requireDeclaredOperation(op, 'control', request.resolveOperation)
 
   const codeDigest = createHash('sha256').update(bytes).digest('hex')
   const manifest: ArtifactManifest = {
@@ -166,4 +170,24 @@ function stringList(value: JsonValue | undefined, field: string): string[] {
     result.push(item)
   }
   return result
+}
+
+/** Prefer an activated authored declaration, then the static operation catalog. */
+function requireDeclaredOperation(
+  op: string,
+  kind: 'query' | 'control',
+  resolve: ActCheckRequest['resolveOperation'],
+): OperationContract {
+  const resolved = resolve?.(op)
+  if (resolved === undefined) return requireOperation(op, kind, 'core.act-checker')
+  if (resolved.kind !== kind) {
+    throw p2Error(
+      'OP_KIND_MISMATCH',
+      'validation',
+      `operation ${op} is ${resolved.kind}, not ${kind}`,
+      { module: 'core.act-checker', opId: op },
+      { operation: op, expected: kind, actual: resolved.kind },
+    )
+  }
+  return resolved
 }

@@ -2,6 +2,7 @@ import type { JsonValue } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type { ActHandle, ActPoll, QueryOutcome, QueryPort, ReleaseStatus } from './node-runtime.ts'
 import { requireCapability, requireOperation } from '../operation/index.ts'
+import type { OperationContract } from '../operation/index.ts'
 
 /** Identity stamped on a registered control intent; late messages carry it too. */
 export type ControlIdentity = {
@@ -19,8 +20,13 @@ export type { ReleaseStatus }
 /** A concrete operation implementation, normally the Minecraft provider. */
 export type OpSource = {
   /** Capabilities the provider actually implements; omitted means "trust the declaration". */
-  capabilities?: readonly string[]
-  start(name: string, args: Record<string, JsonValue>): ActHandle
+  capabilities?: readonly string[] | undefined
+  /**
+   * Declaration of an activated authored op. When absent the broker falls back
+   * to the static operation catalog (which includes developer-mode operations).
+   */
+  contract?(name: string): OperationContract | undefined
+  start(name: string, args: Record<string, JsonValue>, identity?: ControlIdentity): ActHandle
   query(op: string, args: Record<string, JsonValue>): QueryOutcome
   /**
    * Reports whether the provider still holds any control effect. Omitted means
@@ -52,6 +58,10 @@ type ReleaseTracking = {
   deadline: number
   idleSince: number | undefined
   unconfirmed: boolean
+  /** The run whose release this tracking covers; undefined means "any run". */
+  runId: string | undefined
+  /** An untracked control effect exists, so release can never be proven. */
+  unconfirmable: boolean
 }
 
 const DEFAULT_SETTLE_MS = 300
@@ -74,6 +84,8 @@ const DEFAULT_STOP_TIMEOUT_MS = 2000
 export class DeclaredOpBroker {
   private readonly entries = new Set<ControlEntry>()
   private readonly used = new Map<string, number>()
+  private readonly untrackedRuns = new Set<string>()
+  private untrackedAnonymous = false
   private readonly budgets: Record<string, number>
   private readonly settleMs: number
   private readonly stopTimeoutMs: number
@@ -95,7 +107,7 @@ export class DeclaredOpBroker {
   }
 
   start(name: string, args: Record<string, JsonValue>, identity?: ControlIdentity): ActHandle {
-    const contract = requireOperation(name, 'control', 'core.op-broker')
+    const contract = this.contractOf(name, 'control')
     if (this.source.capabilities !== undefined) {
       requireCapability(contract, this.source.capabilities, 'core.op-broker')
     }
@@ -123,7 +135,7 @@ export class DeclaredOpBroker {
     this.entries.add(entry)
     let handle: ActHandle
     try {
-      handle = this.source.start(name, args)
+      handle = this.source.start(name, args, identity)
     } catch (error) {
       entry.phase = 'unknown'
       throw error
@@ -161,7 +173,7 @@ export class DeclaredOpBroker {
   }
 
   query(op: string, args: Record<string, JsonValue>): QueryOutcome {
-    const contract = requireOperation(op, 'query', 'core.op-broker')
+    const contract = this.contractOf(op, 'query')
     if (this.source.capabilities !== undefined) {
       requireCapability(contract, this.source.capabilities, 'core.op-broker')
     }
@@ -196,11 +208,41 @@ export class DeclaredOpBroker {
   }
 
   /**
+   * Record a control effect the ledger cannot track (an authored op called the
+   * provider directly). The run's release conclusion becomes unconfirmable.
+   */
+  markUntracked(runId?: string): void {
+    if (runId === undefined || runId.length === 0) this.untrackedAnonymous = true
+    else this.untrackedRuns.add(runId)
+    if (this.release === undefined) return
+    if (runId === undefined || this.release.runId === undefined || this.release.runId === runId) {
+      this.release.unconfirmable = true
+    }
+  }
+
+  /** Runs that left at least one untracked control effect. */
+  get untrackedControl(): readonly string[] {
+    return [...this.untrackedRuns]
+  }
+
+  /** True when any untracked control effect exists (attributed or anonymous). */
+  get hasUntrackedControl(): boolean {
+    return this.untrackedAnonymous || this.untrackedRuns.size > 0
+  }
+
+  /**
    * Begin releasing a run's controls. The deadline is established once; later
    * calls do not reset it and only re-request stop for still-active entries.
    */
   stopRun(now = Date.now(), runId?: string): void {
-    this.release ??= { deadline: now + this.stopTimeoutMs, idleSince: undefined, unconfirmed: false }
+    this.release ??= {
+      deadline: now + this.stopTimeoutMs,
+      idleSince: undefined,
+      unconfirmed: false,
+      runId,
+      unconfirmable: this.untrackedApplies(runId),
+    }
+    if (this.untrackedApplies(runId)) this.release.unconfirmable = true
     for (const entry of this.entries) {
       if (runId !== undefined && entry.identity !== undefined && entry.identity.runId !== runId) continue
       if (entry.phase === 'unknown' || entry.phase === 'stopping') continue
@@ -224,6 +266,9 @@ export class DeclaredOpBroker {
     if (tracking === undefined) {
       return this.entries.size === 0 ? 'idle' : 'stopping'
     }
+    // An untracked effect can end, but nothing proves it did: never report
+    // `released` for this run.
+    if (tracking.unconfirmable) return 'unconfirmed'
     const observed = this.observe()
     if (observed === 'idle') {
       tracking.idleSince ??= now
@@ -250,6 +295,28 @@ export class DeclaredOpBroker {
     this.stopAll()
     this.entries.clear()
     this.release = undefined
+    this.untrackedRuns.clear()
+    this.untrackedAnonymous = false
+  }
+
+  private untrackedApplies(runId: string | undefined): boolean {
+    if (this.untrackedAnonymous) return true
+    return runId === undefined ? this.untrackedRuns.size > 0 : this.untrackedRuns.has(runId)
+  }
+
+  private contractOf(name: string, kind: 'query' | 'control'): OperationContract {
+    const contract = this.source.contract?.(name)
+    if (contract === undefined) return requireOperation(name, kind, 'core.op-broker')
+    if (contract.kind !== kind) {
+      throw p2Error(
+        'OP_KIND_MISMATCH',
+        'validation',
+        `operation ${name} is ${contract.kind}, not ${kind}`,
+        { module: 'core.op-broker', opId: name },
+        { operation: name, expected: kind, actual: contract.kind },
+      )
+    }
+    return contract
   }
 
   private observe(): ProviderControlState {
@@ -324,7 +391,7 @@ export class DeclaredOpBroker {
         this.entries.delete(entry)
         continue
       }
-      if (requireOperation(entry.name, 'control', 'core.op-broker').concurrent !== true) return entry.name
+      if (this.contractOf(entry.name, 'control').concurrent !== true) return entry.name
     }
     return undefined
   }
