@@ -1,15 +1,15 @@
 # 共享基线：基本 op/act 清单与 smoke 清单
 
-> 状态：**整理中，未冻结**。本文是 IR 与受限 JS 两个实验分支的共同起点；冻结后打 `m5-baseline` tag。
-> 目标：让两个分支只差 behavior 层；op、act、provider、broker、status、工具面尽量一致。实验期间新需要的 act 只实现一次，两边共用。
+> 状态：**当前基线**。本文定义基本 op/act 清单与 smoke 清单。
+> 目标：定义一份共享基线，使 op、act、provider、broker、status 与工具面保持一致；新需要的 act 只实现一次。
 
 ## 1. 原则
 
-- **最小但可生存**：基线只保证“能开始正常生存实验”，不追求覆盖全部游戏机制；缺失能力在实验中按需补，补一次两边共用。
+- **最小但可生存**：基线只保证“能开始正常生存”，不追求覆盖全部游戏机制；缺失能力按需补。
 - **op 是能力，act 是技能**：op 只做原子读写；act 做单目标、可停止、有边界的完整动作；behavior 才做策略编排。
 - **两边一致**：同一 op 名称、参数、结果、错误码；同一 act 名称与参数；同一 status 字段。分支不能私改共享语义。
 - **失败可诊断**：每个 op/act 的失败都有明确错误码；smoke 要覆盖成功、失败、取消、清理。
-- **不预置策略**：基线只给基本 act，不预置“探索/战斗/建造/协作”等完整策略；这些在实验中由 subagent 编写。
+- **不预置策略**：基线只给基本 act，不预置“探索/战斗/建造/协作”等完整策略；这些由 subagent 编写。
 
 ## 2. 当前已有能力（M5 结束时）
 
@@ -46,7 +46,7 @@
 
 ### 3.1 QueryOp
 
-优先级：P0 实验前必须；P1 实验中按需补；P2 后续。
+优先级：P0 基线必须；P1 按需补；P2 后续。
 
 | op | 优先级 | 参数 | 返回 | 用途 |
 | --- | --- | --- | --- | --- |
@@ -116,16 +116,16 @@
 | `attack-target` | P2 | `{entityId, timeoutMs?}` | `entities`, `attack`, `moveTo`, `stop` | 战斗技能 act（追击+攻击），实时性更高 |
 | `build-segment` | P2 | `{blueprint}` | `block`, `place`, `moveTo`, `stop` | 分段建造；避免巨型 act |
 
-**不在基线内**：探索策略、采集策略、战斗策略、建造策略、协作策略、末影龙阶段；这些是实验中要编写的 behavior。
+**不在基线内**：探索策略、采集策略、战斗策略、建造策略、协作策略、末影龙阶段；这些是要编写的 behavior。
 
 ## 4. 基线实现顺序
 
 1. **扩展 contracts/provider**：`position.dimension`、`health`、`blocks`、`place`、`attack`、`equip`、`use`；补错误码。
 2. **补 act**：`place-block`、`attack-one`、`equip-item`、`use-item`；每个 act 单文件、声明 ops、可停止/收尾。
-3. **观测/status**：`currentStep`（IR 为 activeNode，JS 为 step）、`activeTarget`、`waiting`、`progress`、`lastFailure`、`lastRun` 证据；两边一致。
+3. **观测/status**：`currentStep`（结构体：类型 + 目标）、`activeTarget`、`waiting`、`progress`、`lastFailure`、`lastRun` 证据。
 4. **测试**：op 契约、provider 行为（可用假 provider）、act 生命周期、取消/清理。
-5. **smoke**：按 §5 在真实游戏跑一遍；两分支都通过后打 `m5-baseline`。
-6. **冻结**：tag `m5-baseline`，记录 commit、能力清单、smoke 结果。
+5. **smoke**：按 §5 在真实游戏跑一遍。
+6. **冻结**：记录 commit、能力清单与 smoke 结果。
 
 ## 5. smoke 清单
 
@@ -199,24 +199,18 @@
 
 | ID | 用例 | 预期 |
 | --- | --- | --- |
-| G1 | 安装 IR bundle（版本 A） | 工具可见；body 可连；smoke A—F 通过 |
-| G2 | 卸载 IR、安装 JS bundle（版本 B） | 同一工具面；body 可连；smoke A—F 通过 |
+| G1 | 安装 bundle（版本 A） | 工具可见；body 可连；smoke A—F 通过 |
+| G2 | 卸载并安装另一版本（版本 B） | 同一工具面；body 可连；smoke A—F 通过 |
 | G3 | 记录版本/tarball 摘要/commit/切换耗时 | 日志完整 |
 | G4 | 安装后未启动 behavior | 角色不动；无自动 run |
 
-### H. 两分支一致性
-
-| ID | 用例 | 预期 |
-| --- | --- | --- |
-| H1 | 同一 smoke 在两分支执行 | 除 behavior artifact 形态外，结果一致；差异记录在实验日志 |
-| H2 | 同一基本 act/policy 在两分支复用 | 不需要复制或改写；op 声明与错误码一致 |
 
 ## 6. smoke 记录模板
 
 | 字段 | 内容 |
 | --- | --- |
 | 用例 ID | A1、C3… |
-| 分支/版本 | IR/JS；bundle 版本；commit |
+| 版本 | bundle 版本；commit |
 | 世界/位置 | 维度、坐标、时间、难度 |
 | 前置 | 背包、实体、方块状态 |
 | 步骤 | 工具调用与参数 |
@@ -242,7 +236,7 @@
 | act：`place-block`、`attack-one`、`equip-item`、`use-item` | 已实现 |
 | 单元测试 | 173 passed / 1 skipped（`npm run check`）；离线时 body 流程测试跳过 |
 | 真实游戏 smoke | **PASS 19/19**（2026-10-28，超平坦世界，LAN 25575）；证据 .m5-runs/baseline-smoke-2026-10-28T08-12-24-390Z.json |
-| `m5-baseline` tag | 代码基线已可打 tag；真实 smoke 作为实验开始前的门槛 |
+| `m5-baseline` tag | 代码基线已可打 tag；真实 smoke 作为基线门槛 |
 
 ## 9. 已确定的边界
 
@@ -359,7 +353,7 @@
 
 ### 10.5 开发者模式：外部 op 模块（临时口子）
 
-> 仅开发期使用。正式实验必须关闭；它破坏 binding/epoch 身份假设，不是发布能力。
+> 仅开发期使用。正式使用必须关闭；它破坏 binding/epoch 身份假设，不是发布能力。
 
 - 开关：`.p2/config.json` 的 `experiment.devOps: true`，可配 `experiment.devOpsPath`（默认 `.p2/dev-ops.mjs`）。
 - 模块格式（ESM）：

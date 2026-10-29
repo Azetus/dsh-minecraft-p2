@@ -1,9 +1,9 @@
 # behavior IR 参考（v1 小内核）
 
-> 本文是 v1 behavior IR 的单一参考：节点、表达式、求值语义、预算与示例。IR 是可序列化的数据，由可信执行器运行；作者用什么语言生成它不影响运行语义。契约级定义见[接口契约 §3](CONTRACTS.md#3-behavior-定义与构建产物)，调度规则见[运行时 §3—§4](RUNTIME.md#3-每轮调度与资源上限)。
+> 本文是 v1 behavior IR 的单一参考：节点、表达式、求值语义、预算与示例。IR 是可序列化的数据，由可信执行器运行；作者用什么语言生成它不影响运行语义。契约级定义见[接口契约 §3](../CONTRACTS.md#3-behavior-模块与构建产物)，调度规则见[运行时 §3—§4](../RUNTIME.md#3-每轮调度与资源上限)。
 >
-> **v1 只包含本文第 2—4 节列出的内容。**第 9 节列出被推迟的候选能力，它们不属于本轮实现，也不应被当作已定契约。验证计划见[M5 验证计划](history/M5-VALIDATION.md)。
-> **实验提示（2026-10-28）**：本文仍是 `dev` 的当前实现；behavior 层的 IR vs 受限 JS 对照实验见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)与[JS 架构草案](BEHAVIOR-JS.md)，实验结论前不改变本文契约。
+> **v1 只包含本文第 2—4 节列出的内容。**第 9 节列出被推迟的候选能力，它们不属于本轮实现，也不应被当作已定契约。验证计划见[M5 验证计划](../history/M5-VALIDATION.md)。
+> **实验提示（2026-10-28）**：本文仍是 `dev` 的当前实现；behavior 层的 IR vs 受限 JS 对照实验见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)与[JS 架构草案](../BEHAVIOR.md)，实验结论前不改变本文契约。
 
 ## 1. 结构
 
@@ -147,7 +147,7 @@ type ValueMeta = {
 
 ### 7.1 当前形态（M4）
 
-[behaviors/approach-target.mjs](../behaviors/approach-target.mjs) 是真实存在的 IR 字面量：`sequence(moveTo, stop, assign phase)`，`completion` 读 `phase`。它的 `act` 写的是 op 名 `moveTo`——这是 M4 的旧形态，G1 会改为 `ActRef`。
+[behaviors/approach-target.mjs](../../behaviors/approach-target.mjs) 是真实存在的 IR 字面量：`sequence(moveTo, stop, assign phase)`，`completion` 读 `phase`。它的 `act` 写的是 op 名 `moveTo`——这是 M4 的旧形态，G1 会改为 `ActRef`。
 
 ### 7.2 有限配额：`decide` + `fail` + 完成条件
 

@@ -25,21 +25,21 @@
 | A11 | 生成代码不持游戏连接，隔离runner与可信broker分开 | [扩展生命周期4](BEHAVIOR-LIFECYCLE.md#4-构建act-与-policy-的代码隔离) |
 | A12 | 采用独立客户端路线，初版用 Mineflayer 验证；服务器角色不作为当前方向 | [接入决策](MINECRAFT-INTEGRATION-OPTIONS.md#11-接入路线决策) |
 | A13 | Mineflayer 仅为 operation 实现依赖，core、观测层及行为内容不直接依赖其对象或接口 | [依赖边界](MINECRAFT-INTEGRATION-OPTIONS.md#12-mineflayer-与-p2-的依赖边界) |
-| A14 | D1 已确认：显式赋值、成功输出绑定和独立局部作用域；观测传递不刷新时效 | [数据契约](CONTRACTS.md#31-数据归属与寿命)、[运行规则](RUNTIME.md#43-局部状态与结果写入)；第一版沿用 locals 保存查询快照，保留后续评估空间。 |
+| A14 | D1 已确认：数据以受限 JSON 跨 ctx 边界传递；query 返回值与观测元数据；时效不自动传播 | [数据契约](CONTRACTS.md#31-数据归属与寿命)、[运行规则](RUNTIME.md#43-局部状态与结果写入)；第一版沿用 locals 保存查询快照，保留后续评估空间。 |
 | A15 | D2 已确认：顺序写入立即可读，新动作与终态前统一检查条件并裁决 | [调度检查点](RUNTIME.md#31-新动作与终态的统一检查点)、[完成裁决](RUNTIME.md#42-完成判定)；取消优先，程序错误不被目标掩盖，普通环境失败可让位于有效目标证据，故障阻止终态提交。 |
 | A16 | D3 已确认：外部验收结束原 run，补做工作新建 run；请求有明确标识、来源与唯一决定 | [验收契约](CONTRACTS.md#71-外部完成验收契约)、[运行规则](RUNTIME.md#44-外部完成验收)；确认/否定、非法命令、重复/失效、取消竞争与断线取回分别处理。 |
 | A17 | D4 已确认：binding 固定环境，artifact 锁定实际依赖，run 按 artifactId 固定内容 | [发布设计 §3](OPERATIONS-AND-RELEASE.md#3-不可变-binding)、[生命周期 §5—6](BEHAVIOR-LIFECYCLE.md#5-artifact-与检查凭据)；新增 act 不改变全局环境，明确摘要、检查范围、候选并存及退休规则。 |
 | A18 | D5 首版方案已确认：stdio 子进程、协议与传输解耦、固定单 owner、显式生命周期 | [首版协议](CONTRACTS.md#8-bridgebody-消息协议)、[接入流程](DSH-INTEGRATION.md#4-启动与关闭状态机)；已讨论 WS 设计保存在 [WS-FUTURE.md](WS-FUTURE.md)，以后实现。 |
 | A19 | D6 首版已确认：日志只服务开发调试，业务不等落盘，队列有界且停止优先 | [反馈设计 §3](FEEDBACK-AND-RECOVERY.md#3-当前状态日志与内存预算)；仅内存去重与通知，持久索引/可靠投递/崩溃恢复延期。 |
 | A20 | 三层职责纠正：op 是原子能力（声明归 P2 核心、实现归 provider），act 是唯一控制层，behavior 不得直接引用 ControlOp | [主架构 §3](ARCHITECTURE.md#3-核心概念)、[运行时 §5](RUNTIME.md#5-act-与操作控制权)；现有 provider 动作下沉为 op。 |
-| A21 | behavior = 计划（v1 小内核 IR）+ 决策（`decide` 调用的 policy）+ 状态；集合算子、`forEach`、`call` 为候选，由 [M5 验证](history/M5-VALIDATION.md) 的结论决定是否加入 | [IR](IR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；先证明小内核够用，再按证据扩展。 |
+| A21 | behavior = 计划（受限生成器协程）+ 决策（`decide` 调用的 policy）+ 状态；集合算子与子行为调用为候选 | [BEHAVIOR](BEHAVIOR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；按证据扩展。 |
 | A22 | 安全口径只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全，不为第三方来源背书 | [隔离设计](ISOLATION.md)；`imported` 产物默认不启用。 |
-| A23 | G3 判定：继续采用小 IR；不引入集合算子、`forEach`、`call`，为多阶段与引用成本预设观察项 | [M5 G3 判定](history/M5-G3-DECISION.md)；M5 阶段仍待隔离与真实扰动证据。 |
-| A24 | 启动 behavior 表示方式对照实验：IR 仍是 `dev` 主线，JS 只在实验分支评估；结论前不合并 JS | [实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)；分支 `exp/behavior-ir`、`exp/behavior-js`，结论由 DSH 实操后给出、用户确认合并。 |
 
 这些是当前架构基线，新增部分仍是可复审的设计决定，不是源码实现事实。修改长期约束时应更新关联文档与验收，而不是只改示例代码。
 
 ## 3. 实施阶段
+
+当前处于 M5.5 之后的实现阶段：behavior 表示已确定为受限生成器协程，重点是把 JS 运行时补齐、实现威胁反应，并清理基线遗留问题。
 
 ### M0：契约与可安装骨架
 
@@ -55,7 +55,7 @@ D5 在 M0 建立消息接口、stdio JSON Lines 和内存测试传输，分开�
 
 实现树控制结构、状态机、查询结果注入的开发测试端、act/broker 生命周期、内存命令记录和简单调试日志。开发测试端仅用于 P2 自身测试，不成为用户 checker 依赖。实现构建隔离与不可变 artifact 启用，不把运行日志作为恢复数据库。
 
-数据流按 D1 实现 assign、输出槽、子树帧及元数据传播；调度按 D2 实现固定输入批次、同轮写入可见、条件依赖版本与检查点、结束意图及终态裁决。覆盖对应运行时验收场景，尤其是同批取消与成功、目标与环境失败、程序错误、收尾故障及晚到结果；设计确认不代表测试已通过。
+数据流按 D1 实现受限 JSON 跨边界传递与观测元数据；调度按 D2 实现固定输入批次、同轮写入可见、条件依赖版本与检查点、结束意图及终态裁决。覆盖对应运行时验收场景，尤其是同批取消与成功、目标与环境失败、程序错误、收尾故障及晚到结果；设计确认不代表测试已通过。
 
 D3 在 M1 实现每个 run 唯一的待确认记录、根成功且收尾后的准入、确认/否定结束原 run、重复与相反决定、失效及取消竞争。以受控命令测试验证状态转换和终态检查，不将外部确认当作执行错误恢复；首版协议按 D5 的 stdio 方案实现，D6 使用简单调试日志，命令与确认记录仅保存在当前 epoch 内存中。
 
@@ -93,7 +93,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 ### M5：三层补齐与验证
 
-M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架构结论。完整规格见 [M5 验证计划](history/M5-VALIDATION.md)；本节只列阶段与门槛。
+本节只列阶段与门槛。
 
 **G1 基础设施（冻结集）**
 
@@ -101,8 +101,8 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 2. op 最小契约与 broker：静态声明、握手核验、按 act 声明默认拒绝、效果预算、清理与对账接线；补 `dig`／`pickup` 与验证所需查询。
 3. act 层：单文件、op 强制声明、不可变产物、`ActRef`、共享 runner（`role` 预留拆分）。
 4. `decide` 与 policy：单一决策调用点、异步等待、纯桥、有界预算。
-5. 运行时冻结项 F1—F8（见验证计划 §3.4）：分支切换等收尾、act 前完成检查、`fail` 节点、查询时效与复用、查询期限、status 可读性、参数校验、取消期间拒绝新 act。
-6. 冻结内核：G2 开始后不再增加节点、表达式或执行器分支。
+5. 运行时冻结项 F1—F8（见验证计划 §3.4）：分支切换等收尾、act 前完成检查、`ctx.fail`、查询时效与复用、查询期限、status 可读性、参数校验、取消期间拒绝新 act。
+6. 冻结内核：G2 开始后不再增加命令类型或执行器分支。
 
 **G2 验证**
 
@@ -113,42 +113,33 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 
 **G3 结论（已完成）**
 
-判定为**继续采用小 IR**，不进入替代方案对照；不引入集合算子、`forEach`、`call`，也不拆独立 policy runner。观察项与触发条件见 [M5 G3 判定](history/M5-G3-DECISION.md)：多阶段/退出原语、精确引用成本、隔离证据、共享 runner 故障耦合。
+M5 阶段已完成，验证记录归档在 `docs/history/`。当前 behavior 表示为受限生成器协程，见 [BEHAVIOR.md](BEHAVIOR.md)。
 
-2026-10-28 起，该结论进入 **IR vs 受限 JS 的对照实验（M5.5）**复核；实验期间 IR 仍是 `dev` 主线，若实验结论不同，将以新 decision 显式修订本条，不默认推翻。
-
-**M5 阶段尚未完成**：隔离 S1—S7 与真实游戏公共扰动仍未执行。
+**M5 遗留门槛**：隔离 S1—S7 与真实游戏公共扰动仍未执行，作为后续门槛保留。
 
 退出条件：G1 的冻结集实现并通过测试；G2 的四个场景、四个反例、四个变体有明确结论且证据可复核；G3 结论与依据已记录；M4 链路在分层后回归通过；恶意/错误示例无法直接访问宿主能力（朴素攻击集），runner 失控时 broker 仍清理并拒绝未声明 op；隔离 S1—S7 与真实扰动补齐。
 
-### M5.5：behavior 表示方式对照实验
+### M5.5：behavior 表示（已完成）
 
-目标：在 agent 作为决策者的前提下，比较 behavior IR 与受限 JS 协程在表达、作者效率、长跑稳定性与扩展性上的潜力；结论决定 behavior 层沿用 IR 还是转向 JS（或混合）。
+behavior 表示已确定并落地：受限生成器协程，见 [BEHAVIOR.md](BEHAVIOR.md)。
 
-步骤：
+### 下一步：JS 运行时补齐与反应速度
 
-1. 固定实验协议与判定标准（[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)），评审 JS 架构草案（[BEHAVIOR-JS.md](BEHAVIOR-JS.md)）。
-2. 完成共享基线：op、provider、broker、act/policy runner、body/bridge、status/observability；补齐基本 act（清单见 [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md)）。
-3. 冻结基线：`m5-baseline` tag；smoke 清单与日志模板。
-4. 从基线拉 `exp/behavior-ir` 与 `exp/behavior-js`；各自实现 behavior 层，共享其余部分。
-5. 两分支分别打包为同包名、不同版本的 bundle，在桌面 DSH 一次装一个，验证工具面与 smoke。
-6. 正常生存世界实验：基本 behavior/act 起步，过程中由 subagent 编写新策略；每分支至少两组 session，交替进行，记录日志。
-7. DSH 写决策 memo；用户确认后合并胜者到 `dev`，败者归档；共享资产可移植。
-
-退出条件：两分支都通过同一 smoke；实验日志完整；决策 memo 说明证据、结论与合并/归档方案；若结论为 JS，`ARCHITECTURE.md §5.1` 与相关 decision 同步修订。
-
-### M6：可复现发行与体验验收
-
-固定DSH/Node/provider/游戏/加载器/模组集合，使用单包 tarball 生成发行清单、依赖摘要、安装说明及回退说明。执行纯软件回归、DSH集成、实际游戏适配三类验证，分别记录证据。
-
-退出条件：干净环境可安装、停止、升级和回退；安装不自动启动角色；断连/重启不重放旧控制；长期目标跨session保留但需显式启动执行。
+1. **JS 运行时补齐**（启用前必须）：
+   - `currentStep` 结构化（类型 + 目标），而不是裸字符串；
+   - `ctx.progress` 进入 `p2_status`；
+   - 有限 behavior 的完成检查点（成功/失败前统一走收尾校验）；
+   - behavior 迁入隔离 runner（当前为进程内 `node:vm`）；
+   - 时效策略：显式 `ctx.fresh()` 的默认值与检查点位置。
+2. **反应速度**：按 [THREAT-REACTION.md](THREAT-REACTION.md) 实现 guard 条件切换、直接唤醒 owner 与低频轮询；guard 条件限 health/hostile/inventory/time。
+3. **基线遗留**：`dig` 对脚下方块不收尾（`ACT_TIMEOUT`）、1 宽下台阶寻路不可用、`blocks` 计数截断早于过滤——先修或在 act 侧规避。
 
 ## 4. 验证矩阵
 
 | 层 | 必测故障 | 不能借此声称 |
 | --- | --- | --- |
 | builder/checker | 语法/类型错、非法引用、循环构建、超预算、变更源码 | 策略合理、游戏一定成功。 |
-| IR/policy | 空集合、类型错误、未知值、`decide` 超时或非法返回、`fail` 传播 | 策略合理、目标可达。 |
+| behavior/policy | 空集合、类型错误、未知值、`decide` 超时或非法返回、`fail` 传播 | 策略合理、目标可达。 |
 | runtime | unknown guard、迟到响应、停止超时、冲突切换、旧epoch | 真实游戏驱动的停止已可靠。 |
 | broker/provider | 未确认控制、部分成功、重复取消、连接丢失、thread延迟 | 玩家目标一定达成。 |
 | bridge | scope清理、session错配、重复事件、DSH退出/重载 | 模型一定及时响应。 |
@@ -162,7 +153,7 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 | --- | --- | --- |
 | Minecraft客户端接入 | Mineflayer首版验证已选；真实客户端为后续方向 | 固定测试版本、连接与授权条件，取得G0—G6证据；真实客户端另测驱动、模组交互与运行资源。 |
 | 生成代码执行引擎 | 独立进程+受限JS上下文（act 走 op 桥，policy 走纯桥），候选需核验 | 中断/内存/能力桥原型与逃逸面审查；只承诺宿主能力、资源、账本三项，见[隔离设计](ISOLATION.md)；未完成不开放自定义 act／policy。 |
-| IR 与 policy 表达力 | v1 小内核 + `decide` 调用的 policy；集合算子与 `forEach`/`call` 为候选 | 按 [M5 验证计划](history/M5-VALIDATION.md) 执行四个场景、四个变体与公共扰动；记录核心修改次数、策略归属、取消责任与可读性，G3 给出结论。 |
+| behavior 与 policy 表达力 | 受限生成器协程 + `decide` 调用的 policy；长跑、打断与恢复为主要观察项 | 按实施阶段门槛执行，记录核心修改次数、策略归属、取消责任与可读性。 |
 | 具体超时与数据年龄 | RUNTIME配置初值 | Windows及选定游戏组合的分位数和卡顿数据。 |
 | DSH新版本兼容 | 源码核验 0.2.1-rc.2；安装端为 0.2.1-rc.3（卸载器版本），M0 以实际 runtime 为准 | 实际安装、命令、工具、session和HMR测试。 |
 | Windows 托管进程生命周期 | 人工 start 后由插件持有 body，stdio 通信 | 正常 stop、热重载、DSH 异常退出、管道失效、runner 卡住和进程树回收实验。 |

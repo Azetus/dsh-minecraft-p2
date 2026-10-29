@@ -2,7 +2,7 @@
 
 > 状态：**G1 已实现，G2 主轨迹、反例、变体与可读性已完成；真实游戏公共扰动未逐项执行**。本文定义 G1 基础设施冻结集、G2 验证规格、G3 结论规则；实测见 [G2 验证记录](M5-G2-EVIDENCE.md)与 [G2 报告](M5-G2-REPORT.md)。
 >
-> 关联：[实施计划 M5](../IMPLEMENTATION-PLAN.md#m5三层补齐与验证)、[IR 参考](../IR.md)、[运行时](../RUNTIME.md)、[隔离设计](../ISOLATION.md)。
+> 关联：[实施计划 M5](../IMPLEMENTATION-PLAN.md#m5三层补齐与验证)、[IR 参考](IR.md)、[运行时](../RUNTIME.md)、[隔离设计](../ISOLATION.md)。
 
 ## 1. 目标
 
@@ -242,4 +242,4 @@ act 只能处理一个已选目标，不得出现承包整个配额的动作。
 
 2026-10-28 完成 G3：**继续采用小 IR**，不进入替代方案对照。依据、观察项 C1—C4 与 M5 剩余门槛见 [M5 G3 判定](M5-G3-DECISION.md)。
 
-2026-10-28 起，该判定进入 behavior IR vs 受限 JS 的对照实验复核；实验期间 IR 仍是 `dev` 主线，见[实验计划](../EXPERIMENT-BEHAVIOR-SUBSTRATE.md)。
+2026-10-28 起，该判定进入 behavior IR vs 受限 JS 的对照实验复核；实验期间 IR 仍是 `dev` 主线，见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)。

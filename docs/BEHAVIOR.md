@@ -1,8 +1,8 @@
-# behavior JS 架构（实验草案）
+# behavior 表示：受限生成器协程
 
-> 状态：**实验分支草案，未采纳**。当前主线仍是 behavior IR（[IR.md](IR.md)）。
-> 本文定义“受限 JS 协程”作为 behavior 层另一种表示方式的初版方案，用于 IR vs JS 的对照实验。
-> 若实验结论选择 JS，需要显式修订 [ARCHITECTURE.md](ARCHITECTURE.md) §5.1 与相关 decision，而不是把本文当作已生效契约。
+> 状态：**当前 behavior 表示**（见 [ARCHITECTURE.md](ARCHITECTURE.md) §5.1）。
+> 本文定义 behavior 作为受限生成器协程的契约：ctx API、执行模型、完成与恢复、状态可观测性与限制。
+
 
 ## 1. 目标与边界
 
@@ -72,9 +72,9 @@ export default {
 
 约束：
 
-- `ctx.query` 返回的 `meta` 必须参与时效判断；直接使用旧快照前必须 `ctx.fresh(snapshot)`，否则按作者责任处理。JS 模式不自动传播时效，这是相对 IR 的真实损失。
+- `ctx.query` 返回的 `meta` 必须参与时效判断；直接使用旧快照前必须 `ctx.fresh(snapshot)`，否则按作者责任处理。时效不会自动传播。
 - `ctx.decide` 是唯一跨进程纯计算入口；允许 behavior 内联纯计算，但跨 behavior 复用的决策应做成 policy 产物。
-- `ctx.act` 的 ref 解析与 IR 相同：definitionId + 启用映射，产物可带 artifactId。
+- `ctx.act` 的 ref 解析：definitionId + 启用映射，产物可带 artifactId。
 
 ## 4. 执行模型
 
@@ -104,9 +104,9 @@ runner → driver: 下一个 yield / { kind: "done", result } / { kind: "error" 
 
 ## 5. 数据、完成与恢复
 
-- **数据**：query 返回 `{ value, meta }`；meta 含 source/scope/sampledAt/validUntil。`ctx.fresh(snapshot, maxAgeMs?)` 在过期或无法证明时抛出 `STALE_OBSERVATION` / `FRESHNESS_UNPROVABLE`。与 IR 不同，**时效不会自动传播**，作者必须显式检查。
-- **完成**：`mode: finite` 必须最终 `return ctx.succeed(evidence)`；`mode: continuous` 由 agent 停止。运行时记录 evidence，但**不能像 IR completion 那样静态检查**；这是 JS 的代价，也是实验要观察的可审计性差异。
-- **恢复**：行为可用 `try/catch` 对 act/query 错误做局部恢复；重试预算、错误分类由作者决定，运行时只记录。IR 的 `recover` 是声明式的，JS 的是代码式的，两者语义不等价。
+- **数据**：query 返回 `{ value, meta }`；meta 含 source/scope/sampledAt/validUntil。`ctx.fresh(snapshot, maxAgeMs?)` 在过期或无法证明时抛出 `STALE_OBSERVATION` / `FRESHNESS_UNPROVABLE`。**时效不会自动传播**，作者必须显式检查。
+- **完成**：`mode: finite` 必须最终 `return ctx.succeed(evidence)`；`mode: continuous` 由 agent 停止。运行时记录 evidence，但**无法静态检查**。
+- **恢复**：行为可用 `try/catch` 对 act/query 错误做局部恢复；重试预算、错误分类由作者决定，运行时只记录。恢复是代码式的，重试预算与错误分类由作者决定。
 - **业务失败**：`ctx.fail(code, message)` 不被“目标已达成”掩盖；agent 通过 lastRun 读取。
 
 ## 6. 状态与可观测性
@@ -119,15 +119,15 @@ status 至少包含：
 - `progress`（最近一次 `ctx.progress`）；
 - `lastFailure` / `lastRun`（成功证据或失败原因）。
 
-JS 行为没有节点树，agent 无法像 IR 那样看到“计划结构”；可读性依赖代码本身与这些运行字段。实验会用同一个“四问”复核：当前阶段、当前目标、下一步、失败出口。
+behavior 没有计划结构，可读性依赖代码本身与这些运行字段；复核仍看“四问”：当前阶段、当前目标、下一步、失败出口。
 
 ## 7. 隔离与安全
 
 - behavior 代码在现有隔离 runner 中执行（新增 `behavior` 角色），不在 body 进程内。
 - 禁止 `import` / `require` / `process` / `eval` / `Function` / `WebAssembly` / `fetch`；不注入 `setTimeout`/`setInterval`/文件/网络；禁止 `async`/`await`（保持单步语义）。
-- ctx 是冻结对象，只暴露第 3 节 API；不暴露 ControlOp、broker、provider、locals 引用。
+- ctx 是冻结对象，只暴露第 3 节 API；不暴露 ControlOp、broker、provider 或运行内状态的引用。
 - 输出大小、日志条数、单步 CPU 时间、总运行时长都受预算限制；超限按失败处理并走 act 收尾。
-- 这是 `node:vm` 基线，不是完整安全隔离；实验期 act/policy/behavior 都是本会话编写，不涉及 `imported` 产物。
+- 这是 `node:vm` 基线，不是完整安全隔离；个人使用场景下 act/policy/behavior 都是本会话编写，不涉及 `imported` 产物。
 
 ## 8. 长跑策略
 
@@ -138,48 +138,46 @@ JS 行为没有节点树，agent 无法像 IR 那样看到“计划结构”；�
 
 ## 9. policy 与 act 的关系
 
-- `ctx.decide` 与 IR 的 `decide` 同义：一次异步纯计算，结果写入 behavior 局部状态；policy 不能调 act/op。
+- `ctx.decide`：一次异步纯计算，结果写入 behavior 局部状态；policy 不能调 act/op。
 - 允许 behavior 内联纯计算（距离、比较、格式化参数）；跨 behavior 复用的决策应提取为 policy 产物。
 - act 契约不变：单目标、边界明确、必须声明 ops、必须可停止/收尾；behavior 不能把长期策略塞进 act。
 
-## 10. 已决定的初值
+## 10. 实现初值
 
-以下为实验期初值，**不是最终契约**。若实验后采用 JS，允许继续优化（例如 evidence schema、freshness 的书写便利性、step 超时的默认值）。
+以下为实现初值，可按证据调整。
 
-| 问题 | 初值 |
+| 项 | 初值 |
 | --- | --- |
-| artifact 形态 | `kind: behavior` + `format: ir` / `format: js`；启用、检查、工具面与 IR 保持一致，避免形成第二套工具流程。 |
+| artifact 形态 | `kind: behavior` + `format: "js"`；启用、检查与工具面沿用同一套流程。 |
 | 完成证据 | `return ctx.succeed(evidence)`；evidence 为有界 JSON，运行期记录；检查期只校验非空，不校验 schema。 |
 | 时效 | `query` 返回 `{ value, meta }`；跨 yield 复用旧快照前必须 `ctx.fresh(snapshot)`，过期/无法证明时抛出 `STALE_OBSERVATION` / `FRESHNESS_UNPROVABLE`。 |
-| policy 内联 | 允许 behavior 内联纯计算；跨 behavior 复用的决策仍应做成 policy 产物；实验日志记录“内联替代 policy”的次数。 |
+| policy 内联 | 允许 behavior 内联纯计算；跨 behavior 复用的决策仍应做成 policy 产物；运行日志记录“内联替代 policy”的次数。 |
 | 取消 | driver 调 `generator.return()`；取消后 ctx 命令全部拒绝；`finally` 只能清理纯状态，不能发游戏操作；取消不可被吞掉。 |
 | step 超时 | 初值 50ms（可配置）；超时按 `BEHAVIOR_STEP_TIMEOUT` 失败并走收尾。 |
 | 状态粒度 | `currentStep` 为结构体 `{ type, ref/op, summary }`；另带 `activeTarget`、`waiting`、`progress`、`lastFailure`、`lastRun`。 |
 
-这些决定只约束实验实现；IR 分支不因此改变现有契约。
+这些初值可按证据调整，不改变契约。
 
-## 11. 初版实现顺序（JS 实验分支）
+## 11. 实现顺序
 
 1. 契约：`BehaviorJsArtifact`（模块 + manifest：id/mode/parameters），检查器（导出形状、禁用 token、参数定义）。
 2. runner：`behavior` 角色、模块加载、generator 单步协议、step 超时、取消。
 3. core：`JsBehaviorRun` 驱动（query/act/decide/wait/progress/terminal），复用现有 Host/Run 表面与 status。
 4. body/bridge：artifact kind、check/activate/switch、status 透出 `currentStep`。
 5. 测试：generator 驱动、取消/晚到结果、act 失败、长跑、时效 helper。
-6. 与 IR 分支跑同一套 smoke（S1—S4 等价 + 长跑 + 取消 + 失败）。
+6. 跑同一套 smoke（S1—S4 等价 + 长跑 + 取消 + 失败）。
 
 ## 12. 风险
 
-- **可审计性下降**：没有节点树，完成条件与时效靠代码；agent 与人类都更难静态检查。
+- **可审计性下降**：没有计划结构，完成条件与时效靠代码；agent 与人类都更难静态检查。
 - **生命周期 bug**：行为代码可能吞取消、漏清理、无限循环；运行时要强制边界。
-- **策略泄漏**：作者可能把规划写进 behavior 或 act；实验必须记录这种泄漏，因为它决定“JS 是否只是把复杂度藏起来”。
-- **隔离基线**：vm 不是完整安全边界；实验结论不能外推为“可安全运行第三方 behavior”。
+- **策略泄漏**：作者可能把规划写进 behavior 或 act；运行日志应记录这种泄漏。
+- **隔离基线**：vm 不是完整安全边界，不能外推为“可安全运行第三方 behavior”。
 
-## 13. 分支实现状态（2026-10-28）
+## 13. 实现状态
 
-- 已实现：`kind: behavior` + `format: 'js'`、`checkBehaviorJs`、`JsBehaviorRun`、status 当前步骤/act/目标/等待原因、取消与 act 失败传播。
-- 形态：`defineBehavior({ manifest, run })` 全局函数（不是 `export default`），`run` 是生成器；这是初版实现细节，若采纳 JS 可改为模块导出。
-- **原型偏差**：behavior 代码在 body 进程内的 `node:vm` 中执行，尚未搬到隔离 runner；原因是先验证作者体验与执行语义。进入实验前若要求同等隔离，需要把 `JsBehaviorRun` 的 step 协议搬进 runner。
+- 已实现：`kind: behavior` + `format: "js"`、`checkBehaviorJs`、`JsBehaviorRun`、status 当前步骤/act/目标/等待原因、取消与 act 失败传播。
+- 形态：`defineBehavior({ manifest, run })` 为注入的全局函数，不需要 `import`，也不要求 `export default`；`run` 是生成器。
+- **已知偏差**：behavior 代码当前在 body 进程内的 `node:vm` 中执行，尚未搬到隔离 runner；需要把 `JsBehaviorRun` 的 step 协议搬进 runner 才能获得同等隔离。
 - 已支持命令：query / act / decide / wait / succeed / fail / progress / log；`ctx.fresh(snapshot)` 显式校验时效。
-- smoke：与 IR 分支同一套 19 项，JS 分支 PASS 19/19；`npm run check` 178 tests pass。
 - 已知限制：`progress` 只记录在运行内部、尚未进入 status；没有 external confirmation；`vm` 不是完整安全边界；没有对 `ctx` 宿主对象泄漏做对抗性验证。
-- 证据：`.m5-runs/baseline-smoke-2026-10-28T08-23-23-959Z.json`。

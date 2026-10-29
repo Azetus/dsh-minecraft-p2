@@ -8,9 +8,8 @@
 
 | 模块 | 对外提供 | 不负责 |
 | --- | --- | --- |
-| contracts | behavior IR、消息、错误、版本及运行状态类型/运行时解析器 | 加载 DSH 或游戏 |
+| contracts | behavior 契约、消息、错误、版本及运行状态类型/运行时解析器 | 加载 DSH 或游戏 |
 | op-contracts | QueryOp／ControlOp 的声明：名称、类别、参数/结果契约、持续效果、停止语义与能力标记 | 某版 MC 实现 |
-| builder-sdk | 带类型的构建函数，输出可序列化 behavior IR | 游戏 I/O、执行树 |
 | checker | 请求式语法/类型/构建检查，覆盖 behavior、act 与 policy，产出 artifact 与报告 | 游戏行为测试、自动调用模型 |
 | registry | 不可变 artifact、源码 revision、校验凭据、按目标 binding 区分的启用记录与精确依赖 | 在游戏中验证策略正确性 |
 | body | 树调度、act 生命周期、控制权、操作 broker、状态/执行事件 | LLM 会话和自然语言策略 |
@@ -30,115 +29,202 @@
 - 单调时间只在本进程内比较。消息中的墙钟用于展示；远端单调值不能直接与 body 时钟相减。查询采用 [运行时的保守年龄规则](RUNTIME.md#8-queryop-的具体执行)。
 - 单条普通桥消息初始限制 1MiB，源代码/构建产物通过工作区文件及内容摘要引用，不塞入事件。参数限制为配置值并在两端一致验证。
 
-## 3. behavior 定义与构建产物
+## 3. behavior 模块与构建产物
 
-定义是作者源码；执行产物是数据图。构建期间可用宿主语言循环、函数和计算展开节点，运行期间不保存作者任意闭包。
+behavior 产物是一个可加载的 ESM 模块，在顶层调用注入的 `defineBehavior` 声明 manifest 与生成器函数：
 
-```ts
-type BehaviorDefinition = {
-  id: string;
-  description: string;
-  mode: "finite" | "continuous";
-  parameters: Schema;
-  locals: Record<string, { schema: Schema; initial?: JsonValue }>;
-  root: Node;
-  completion?: CompletionRule; // finite 必须；continuous 禁止成功完成声明
-  progress?: Record<string, ValueExpr>;
-};
-
-type Node =
-  | { kind: "sequence"; id: string; children: Node[] }
-  | { kind: "if"; id: string; when: Condition; then: Node; else?: Node }
-  | { kind: "reactivePriority"; id: string; branches: GuardedBranch[] }
-  | { kind: "repeat"; id: string; child: Node; count?: number }
-  | { kind: "assign"; id: string; target: LocalRef; value: ValueExpr }
-  | { kind: "query"; id: string; op: OpRef; args: ValueExpr;
-      output: LocalRef; freshness: FreshnessPolicy }
-  | { kind: "act"; id: string; act: ActRef; args: ValueExpr;
-      output?: LocalRef }
-  | { kind: "decide"; id: string; policy: PolicyRef;
-      inputs: Record<string, ValueExpr>; output: LocalRef;
-      timeoutMs?: number }
-  | { kind: "fail"; id: string; code: string; message: string;
-      category?: P2ErrorCategory }
-  | { kind: "wait"; id: string; durationMs: number }
-  | { kind: "recover"; id: string; child: Node; rules: RecoveryRule[] };
+```js
+defineBehavior({
+  manifest: {
+    id: 'gather-ore',
+    description: '在可见矿脉中采集指定数量的矿石',
+    mode: 'finite', // finite | continuous
+    parameters: {
+      item: { type: 'string', required: true },
+      want: { type: 'number', required: true, min: 1 },
+    },
+  },
+  *run(ctx) {
+    let mined = 0
+    while (true) {
+      const inv = yield ctx.query('inventory', {})
+      ctx.fresh(inv) // 消费当前快照前显式校验时效
+      const pos = yield ctx.query('position', {})
+      const pick = yield ctx.decide('pick-ore', {
+        inv: inv.value,
+        pos: pos.value,
+        item: ctx.params.item,
+      })
+      if (pick.kind === 'none') return ctx.fail('NO_CANDIDATE', 'no ore visible')
+      yield ctx.act('move-to', { x: pick.x, z: pick.z })
+      yield ctx.act('mine-one', { pos: pick.pos })
+      mined += 1
+      yield ctx.progress({ mined, want: ctx.params.want })
+      if (mined >= ctx.params.want) return ctx.succeed({ mined })
+    }
+  },
+})
 ```
 
-subtree 是 builder 复用形式，构建后展开成独立节点路径，并保留局部帧声明及输入/输出映射；展开不消除数据作用域。`decide` 每次运行只提交一次 policy 请求，结果写入声明的 local；它不占控制权，也不进入 act 生命周期。`fail` 以给定业务码结束节点，`recover` 可按码捕获。禁止递归引用环、重复节点 id、共享可变节点对象。runtime repeat 是有限图中的循环节点，不等于图结构含引用环。节点数初值上限 10000、深度 64，超限返回构建错误，不执行游戏。
+`defineBehavior` 由 runner 在加载模块时注入，源码不 `import` 它；它只声明并校验模块形状，不执行游戏 I/O。模块顶层只能做 manifest、`run` 与纯计算的定义；加载阶段不得查询、控制、启动定时器或发起异步任务。`run` 必须是 `function* (ctx)` 形式的生成器函数，不能是 `async` 函数，I/O 只能发生在 `yield` 命令处。
 
-`forEach`、`call` 以及表达式内的集合算子不属于 v1 契约，作为候选记录在 [IR §9](IR.md#9-推迟的候选能力不属于-v1)；启用前需由验证结论支撑，不能因“可能有用”预先加入。
+```ts
+type BehaviorManifest = {
+  id: string;
+  description?: string;
+  mode: "finite" | "continuous";
+  parameters: Schema;              // 启动参数 schema，实例内只读
+};
 
-v1 的 ValueExpr 只允许：`literal`、`param`、`local`、`member`、`record`、`array`、`not`、`length`，以及 `binary` 的比较、四则与逻辑运算（`eq/neq/lt/lte/gt/gte/and/or/add/sub/mul/div`）。动态游戏读取必须声明为 query/Condition 的 QueryOp 依赖，不能藏在表达式里。除数为零、空引用或类型不符返回 `EXPRESSION_ERROR`，不转换成 false。
+type BehaviorModule = {
+  manifest: BehaviorManifest;
+  run(ctx: BehaviorContext): Generator<BehaviorCommand, BehaviorResult, CommandResult>;
+};
+```
 
-集合筛选、排序、评分、距离与资源分配交给 policy（经 `decide` 调用一次），不翻译成新的表达式节点。`select`、`aggregate`、`length`、`unary` 数学与 policy 表达式都属于推迟的候选能力，见 [IR §9](IR.md#9-推迟的候选能力不属于-v1)。
+`parameters` 是启动参数的 schema；实例启动时按 schema 校验并冻结为只读快照。`mode: "finite"` 的行为必须以 `return ctx.succeed(evidence)` 结束；普通返回或其他结束方式按失败处理。`mode: "continuous"` 不要求成功终态，由 agent 停止。业务终态只能由 `ctx.succeed` 或 `ctx.fail` 产生，取消由执行器结束 run；run 结束后 ctx 拒绝任何新命令。
 
-Condition 由查询声明和布尔表达式组成，运行时求值为 true、false、pending 或 error。query 输出提交到对应局部帧；guard 查询只放入当前 evaluation 帧。未写入 local 的读取可被类型/构建约束发现；无法静态排除的情况运行时返回 UNINITIALIZED_VALUE。
+| 写法 | 语义与恢复值 |
+| --- | --- |
+| `yield ctx.query(op, args)` | 执行一次 QueryOp，恢复为 `{ value, meta }`；失败抛出 `P2Error`。 |
+| `yield ctx.act(ref, args)` | 执行一次 act，成功恢复为 output；失败抛出；取消不可被吞掉。 |
+| `yield ctx.decide(ref, inputs)` | 调用一次 policy，恢复为受限 JSON；失败抛出。 |
+| `yield ctx.wait(ms)` | 可取消等待，恢复值为空。 |
+| `yield ctx.progress(obj)` | 上报有界进度，进入 run status，恢复值为空。 |
+| `yield ctx.log(message, data?)` | 有界诊断日志，恢复值为空。 |
+| `ctx.params` | 启动参数的只读快照。 |
+| `ctx.runId` / `ctx.now()` | 当前 run 标识与进程内单调时间。 |
+| `ctx.fresh(snapshot, maxAgeMs?)` | 校验观测快照的时效；过期或无法证明时抛出。 |
+| `return ctx.succeed(evidence)` | finite 行为成功终态，记录有界证据。 |
+| `return ctx.fail(code, message)` | 业务失败终态，记录业务码与原因。 |
 
-查询结果槽同时保存值与观测元数据，不能只复制value后把旧事实变成新鲜数据。纯表达式派生的当前事实沿用输入中最保守的年龄；需要当前事实的条件/act入参在消费时校验其声明的新鲜度。累计进展等历史执行证据另有明确含义，不被当作当前世界查询结果。body只约束这些数据通道，不声称静态证明自定义act内部所有判断都正确。
+- 唯一 I/O 通道是上述命令。运行时不执行作者提供的 Promise、回调或定时器；`import`、`require`、`process`、`eval`、`Function`、`WebAssembly`、`fetch`、文件与网络均不可用，`async`/`await` 也不被接受。
+- ctx 是冻结对象，只暴露本节 API；不暴露 ControlOp、act 或 policy 的内部句柄、broker、provider、注册表、游戏连接或宿主对象。
+- ctx 不提供控制 op 入口，控制只能通过 act 产物进入；behavior 可以直接使用 QueryOp 读取当前数据。
+- 每个 `yield` 是调度、取消与计时边界；两次 `yield` 之间的 CPU 时间有上限，超时按 `BEHAVIOR_STEP_TIMEOUT` 失败并进入收尾。取消通过停止当前 act 并结束 generator 落实。
+- 取消不能被 `try/catch` 转成成功；`finally` 只能清理局部状态，不能发游戏操作。未捕获的 `P2Error` 使 run 失败，其他未捕获异常按 `BEHAVIOR_SCRIPT_ERROR` 处理。
 
-CompletionRule 为 predicate 或 externalConfirmation。predicate 必须声明 QueryOp 依赖、检查周期和布尔表达式；externalConfirmation 描述外部可核实的目标，不直接注入游戏控制。条件和进度表达式不能产生副作用。
+构建产物是只读的内容单元：
 
-构建产物包含 irVersion、definitionId、revision、sourceDigest、artifactDigest、节点到源位置映射、参数 schema、局部帧声明与子树输入/输出映射、依赖闭包及 bindingId。保留这些信息才能定位错误；源位置映射不改变运行逻辑。
+```ts
+type BehaviorArtifact = {
+  kind: "behavior";
+  format: "js";
+  definitionId: string;
+  revision: string;                 // 源码版本
+  sourceDigest: string;
+  artifactDigest: string;
+  artifactId: string;
+  bindingId: string;
+  manifest: BehaviorManifest;
+  entry: string;                    // 模块入口，相对源根目录
+  code: string;                     // 入口模块源码快照
+  dependencies: DependencyClosure;  // 锁定的确切依赖闭包
+};
+```
 
-D4 将环境 binding 与产物依赖分开。ActRef 至少携带用于定位的 definitionId 和确切 artifactId，并与产物依赖清单一致；revision 可用于源码诊断，不能单独选择运行内容。依赖清单锁定所用 act 产物、policy 产物、纯辅助库与构建依赖的内容摘要及传递闭包，不包含无关注册表条目。源码中的便捷名称必须在构建前解析并锁定，IR 内不保留运行时 latest 查找。
+产物保存模块源码、manifest 与依赖清单，不保存作者运行期闭包、局部变量或中间执行状态。`definitionId` 标识行为定义，与 manifest 的 `id` 一致。`sourceDigest` 是入口相对路径与模块源码字节的摘要；`revision` 标识源码版本，`artifactId` 才标识确切可执行产物；同一 revision 在不同依赖或 binding 下构建可得到不同 artifactId。artifactId 由 artifactDigest 形成；摘要覆盖产物类型、definitionId、源码摘要、模块字节、manifest、精确依赖清单、构建工具版本与目标 binding，排除 artifactId 自身、检查时间等元数据。
 
-分层约束在 IR 上也要能检查：behavior 可以出现 `query` 节点、QueryOp 条件与表达式，但**不得直接引用 ControlOp**；控制只能通过 `act` 节点引用 act 产物进入。`ActRef` 与 `PolicyRef` 都是确切产物引用。源码可只写 definitionId，检查阶段按启用映射解析；写入产物的 IR 必须包含确切 artifactId，不允许写成裸名字。
+依赖闭包锁定本行为引用的 act 产物、policy 产物及其传递依赖的内容摘要，不包含无关的注册表条目。源码中的便捷名称在检查阶段按目标 binding 的启用映射解析为确切 artifactId；写入产物的引用必须携带确切 artifactId：
 
-artifactId 由 artifactDigest 形成；产物摘要覆盖源码、依赖、构建工具、产物内容及目标 binding，排除自己的摘要字段与运行/检查元数据。完整输入、规范化和排除规则见[身份与摘要规则](OPERATIONS-AND-RELEASE.md#32-身份与摘要规则)。checker 凭据独立关联该产物与环境；启用及启动以 artifactId 为对象，不以源码 revision 代替。
+```ts
+type ActRef = { definitionId: string; artifactId: string };
+type PolicyRef = { definitionId: string; artifactId: string };
+```
+
+运行期只使用产物内的确切引用，不按 definitionId 执行 latest 查找，也不因注册表默认映射变化而替换依赖。检查时无法解析、存在歧义、缺少启用资格（act）或已退休的引用使候选被拒绝；policy 只要求已检查并锁定内容摘要。已启动的 run 使用启动时锁定的闭包继续结束。
+
+behavior 可以直接使用 QueryOp；改变游戏状态的控制必须通过 act 产物进入。`ctx.query` 只接受 QueryOp 名称，控制 op 名称按 `OP_KIND_MISMATCH` 拒绝。behavior 不得引用 ControlOp，不得持有游戏连接、act 运行实例或 broker 句柄；policy 只能由 `ctx.decide` 调用，不能调用 act 或 op，也不能读写 behavior 状态。检查阶段验证模块导出形状、manifest、参数 schema、禁用语法、引用解析与依赖闭包；运行期 ctx 不提供绕过这些约束的通道。
 
 ### 3.1 数据归属与寿命
 
-| 数据 | 写入方与寿命 |
+behavior 的状态是普通 JS 变量，不是执行器维护的槽位或局部帧。运行器只负责启动、注入命令结果、超时与取消，不解释、不持久化作者的局部状态。
+
+| 数据 | 归属与寿命 |
 | --- | --- |
-| behavior 参数 | 实例启动时求值并校验，实例内只读；修改参数创建新实例。 |
-| behavior locals | 执行器维护，每个实例独有；按声明初始化，跨 repeat 轮次和树内分支切换保留，显式写入或输出槽更新除外。新实例重新初始化。 |
-| 子树参数与 locals | 每次进入子树创建独立局部帧；输入在进入时求值并成为只读参数，locals 按声明初始化。等待及推进期间保留，结束后不供下一次调用复用。 |
-| act 内部状态 | 属于本次 act 运行，由 act 自己维护；对 behavior 只提供声明的结果，不直接持有或修改 behavior 的 LocalRef。 |
-| policy 输入与返回值 | 每次调用独立：输入是按值传入的只读 JSON 快照，返回的决策值由 `decide` 写入声明的 local；不保留跨调用状态，不写 locals，不产生副作用。 |
+| behavior 参数 | 实例启动时按 schema 校验，形成只读快照；整个 run 使用同一份值。修改参数须创建新实例。 |
+| 运行内状态 | 作者在 `run` 内声明的局部变量、闭包与对象；随本次 generator 实例存在，run 结束或取消后丢弃。运行器、agent、status 与其他 behavior 均不可见，也不跨 run 恢复。 |
+| 查询快照 | `yield ctx.query` 恢复的 `{ value, meta }`，由作者保存在局部变量中；它是采样时的事实，不随游戏变化自动更新。 |
+| act 内部状态 | 属于本次 act 运行，由 act 自己维护；behavior 只能取得 act 成功恢复的 output，不能读取或修改其内部变量。 |
+| policy 输入与输出 | 每次 `decide` 独立：输入是按值传入的只读 JSON 快照，输出是受限 JSON；policy 不保留跨调用状态，不读写 behavior 状态，不产生副作用。 |
 
-LocalRef 标识所属局部帧和槽位。普通 assign、query/act 输出绑定只能写入当前帧声明的可写 local，不能写参数或越过子树作用域修改调用者状态；子树结果由执行器按显式映射写回。值按受限 JSON 的值语义传递，不暴露跨帧共享的可变对象。
+- 局部变量可以保存任意 JS 值，但只有受限 JSON 才能跨越 ctx 边界（启动参数、query/act 参数、decide 输入与输出、progress、日志数据、evidence）。函数、Promise、循环对象、类实例与游戏对象在边界处被拒绝，不能借闭包把宿主对象带入后续命令。
+- 运行期闭包不会被序列化、持久化或恢复；取消后重新启动会从模块开头重新执行，不续接旧局部状态。跨 run 保留的信息必须由外部显式保存。模块顶层的可变对象不属于运行实例状态，行为状态应放在 `run` 内。
+- act、policy 与查询实现都不能直接访问 behavior 的局部变量；它们只看到调用时按值传入的输入。
 
-未声明初值的 local 初始为未就绪，不隐式填入 0、空集合或 null。合法的 null 与未就绪不同；读取未就绪值返回 UNINITIALIZED_VALUE，或在类型/构建检查能够确定时提前拒绝。普通策略计数可显式初始化为 0。
+### 3.2 写入与成功输出
 
-### 3.2 显式赋值与成功输出
+behavior 的写入就是 JS 赋值；执行器不维护局部槽、输出槽或待产出标记，也不会把赋值转换为命令、状态发布或观测元数据。外部可观察的结果只有命令恢复值、run 终态与事件。
 
-除初始化外，业务值的写入只有三种入口：assign、query/act 的声明输出、子树的声明输出。写入由执行器落实，表达式和 act 不能直接修改局部帧。
+| 通道 | 成功 | 失败或取消 |
+| --- | --- | --- |
+| `yield ctx.query(op, args)` | 恢复 `{ value, meta }` | 抛出 `P2Error`；没有恢复值 |
+| `yield ctx.act(ref, args)` | 恢复 act 的 output | 抛出；act 可能已产生游戏副作用 |
+| `yield ctx.decide(ref, inputs)` | 恢复受限 JSON | 抛出；不进入 act 清理流程 |
+| `yield ctx.wait(ms)` | 恢复值为空 | 随取消或预算耗尽结束 |
+| `yield ctx.progress(obj)` / `yield ctx.log(...)` | 恢复值为空 | 不改变业务结果 |
+| `return ctx.succeed(evidence)` | 终结 run 并记录成功证据 | — |
+| `return ctx.fail(code, message)` | 终结 run 并记录业务失败 | — |
 
-- **assign**：完整求值并校验目标 schema 后才替换目标值；求值或校验失败时保留原值，不产生部分更新，不调用游戏或占用动作控制权。
-- **输出槽准备**：每次 query、act 或子树调用进入时，先固定所需输入，再将本次绑定的输出槽标记为待产出。上一轮值不能冒充本次结果；需要保留旧结果时，作者必须事先显式保存，且不能丢弃其观测元数据。
-- **query 输出**：仅在结果通过请求归属、schema、完整性政策与新鲜度校验后写入。合法空结果仍可写入；失败、超时或取消不发布成功输出。
-- **act 输出**：output 可省略。业务 complete 先形成候选结果，只有业务成功、结果合法且 act 与 broker 收尾均已确认，才发布成功输出。清理失败或取消不发布该候选结果；诊断可以保留已发生的事实，但不伪装为成功输出。
-- **子树输出**：成功结束后求值并校验声明的返回结果，再由执行器写入调用者绑定的输出槽；失败或取消不发布成功输出。
-- **运行归属**：结果关联生产者的运行标识和目标局部帧。同一次运行的结果只接受一次；重复或迟到响应不重复写入、不再次推进后续累计节点，也不能写入已结束或重建的帧。
+- **局部写入**：`mined += 1`、`state.phase = 'return'` 等赋值立即生效，只影响本 generator 的局部状态。执行器不校验赋值类型，不生成观测元数据，也不因赋值使外部缓存失效。
+- **query**：`value` 是查询结果，`meta` 是该次观测的来源与时效信息，应一起保存。失败、超时或取消没有恢复值，也不能把上一轮局部变量当作本次结果。
+- **act**：成功恢复为 output，失败抛出。output 只表示该 act 按契约成功完成，不自动成为当前观测；act 失败不等于游戏世界未改变，需要新的查询或执行证据确认实际状态。
+- **decide**：成功恢复 policy 的返回值，失败抛出。返回值不会自动写入任何变量，作者需要显式赋值。
+- **终态**：`ctx.succeed(evidence)` 与 `ctx.fail(code, message)` 是作者可产生的一对互斥终态；终态产生后 ctx 拒绝新命令。业务失败不被其他成功信号覆盖，成功终态也不追认此前的 act 结果为当前事实。
+- **时效**：`meta` 不会因为被保存到局部变量、复制对象、传给 `decide` 或作为 act 参数而更新。跨 `yield` 复用旧快照前，作者必须用 `ctx.fresh(snapshot, maxAgeMs?)` 证明其仍有效；只保留 `value` 而丢弃 `meta` 会使时效无法证明。
+- **恢复**：作者可以用 `try/catch` 对 act/query/decide 错误做局部恢复；重试预算、错误分类与放弃条件由作者代码决定，运行时只记录。未捕获的 `P2Error` 使 run 失败，未知异常按 `BEHAVIOR_SCRIPT_ERROR` 处理。
+- **迟到结果**：每次 `yield` 只有一个待恢复点。超时、取消或已结束 run 的晚到结果不会恢复进 generator，也不会被写成新的成功输出。
 
-输出失败后不会恢复上一轮值作为本次结果，后续使用须经显式恢复流程取得新结果。节点运行的写入状态与普通 local 的业务含义分开；新一轮 repeat/recover 创建新运行标识，可以合法再次执行 assign。
+### 3.3 具体到 JS 的输入/输出边界
 
-合格写入按执行器顺序立即生效，同一 tick 的后续节点读取新值；轮末只汇总发布状态与事件。单次赋值原子替换，整个 tick 不提供回滚事务。槽位写入及就绪状态变化更新其版本，使依赖旧版本的条件判定失效；新 act 启动和终态提交经过[统一检查点](RUNTIME.md#31-新动作与终态的统一检查点)。这不提前发布待产出的输出，也不免除观测时效校验。
+下列边界都发生在 `yield` 或 `return` 处，按值传递；跨越边界的值必须是受限 JSON，不携带可调用对象或宿主引用。
 
-### 3.3 子树输入与输出
+| 边界 | 方向与形态 | 规则 |
+| --- | --- | --- |
+| `ctx.params` | 启动 → run | 按 `parameters` schema 校验后的只读快照；run 内修改不构成受支持的写入，也不影响其他实例。 |
+| `yield ctx.query(op, args)` | run → QueryOp → run | `args` 为受限 JSON；恢复 `{ value, meta }`；QueryOp 不做隐藏重试。 |
+| `yield ctx.act(ref, args)` | run → act → run | `args` 为受限 JSON；`ref` 在产物中为确切 artifactId；成功恢复 output，失败抛出。 |
+| `yield ctx.decide(ref, inputs)` | run → policy → run | `inputs` 为按值传入的只读 JSON；返回值必须是受限 JSON；每次调用独立。 |
+| `yield ctx.progress(obj)` | run → status | 有界小对象，进入 status 的进度字段；不是查询结果，也不能作为当前事实或完成证据。 |
+| `yield ctx.log(message, data?)` | run → 日志 | 有界诊断信息；日志缺失、丢弃或不可用不改变业务结果。 |
+| `return ctx.succeed(evidence)` | run → run 结果 | `evidence` 为有界 JSON；表示 behavior 声明的成功证据，不替代当前查询。 |
+| `return ctx.fail(code, message)` | run → run 结果 | 业务失败码与文本；不被其他成功信号覆盖。 |
 
-builder 的子树定义声明输入 schema、内部 locals、根节点，以及可选的结果 schema 和返回表达式；调用点声明输入表达式及可选输出绑定。无返回值的子树仅传播节点结果。构建展开后保留这些帧与映射信息，不增加独立的行为调度者。
-
-进入时捕获输入并初始化本次局部帧，成功结束时计算返回值。两个调用点及同一调用点的不同次运行都不共享可变 locals。取消后重新进入或重试子树会创建新帧；需要跨次累计的值放在外层 behavior locals，通过显式输入与成功输出传递，不能依赖被取消子树的内部状态继续存在。
-
-子树输出绑定与 query/act 使用相同的未就绪、类型校验、来源和成功发布规则；返回表达式仍是受限纯表达式，不执行游戏动作。
+- **参数**：只从 `ctx.params` 读取启动参数。运行时在启动前完成 schema 校验，缺参或类型不符由启动校验按 schema 拒绝，不在 `run` 内静默补值。参数是只读快照，不能作为跨 run 的持久存储。
+- **decide 输入**：字段按 policy manifest 的输入声明组织，按值复制；policy 修改输入不影响 behavior，policy 的输出也不会自动写回任何变量。
+- **act 参数**：act 只接收已经确定的参数，不在 act 内替 behavior 选择长期目标。参数与输出都以受限 JSON 跨越边界，act 内部状态不随 output 返回。
+- **进度与日志**：`progress` 应小且有界，并周期性上报；`log` 用于诊断。两者都不是控制通道，不证明动作完成，也不会自动进入证据或观测。
+- **evidence**：只记录本次 run 的成功声明；必须有界、可序列化，不能代替对背包、位置等当前事实的查询。
+- **时间**：`ctx.now()` 是进程内单调时间，只用于超时、预算与间隔判断；它不是观测采样时间，不能用来刷新 `meta.sampledAt`。
+- **非法值**：跨边界值不合法时按对应契约失败，不把函数、Promise、循环对象或未声明字段强制转换成合法值。
 
 ### 3.4 策略状态、当前观测与执行证据
 
-locals 是 behavior 执行实例用于记住和传递值的局部存储，不是持续同步的游戏世界副本。第一版沿用允许将查询快照保存为 local 的方案；这一选择保留后续评估空间，不能理解为已经消除了对快照存储方式的设计疑虑。快照不会自动随游戏变化更新，也不由此建立全量世界缓存或历史观测库。
+behavior 的局部变量可能同时保存三类含义不同的数据；运行时不会替作者区分，作者必须按下表使用。
 
 | 数据含义 | 处理规则 |
 | --- | --- |
-| 策略状态 | 尝试次数、阶段、计划目标等实例状态；不因时间经过统一失效，但不能冒充当前世界事实。 |
-| 当前观测 | 背包数量、目标位置、可见对象等；保留来源、观测年龄与世界/连接作用域，消费时按要求校验。 |
-| 执行证据 | 某次动作已经确认完成了什么；用于明确含义的历史累计，不自动说明当前仍持有这些物品或目标仍处于原状态。 |
+| 策略状态 | 尝试次数、阶段、计划目标等实例状态；由 `run` 的局部变量或闭包保存，不因时间经过统一失效，但不能冒充当前世界事实，run 结束后不保留。 |
+| 当前观测 | 背包数量、目标位置、可见对象等；来自 `yield ctx.query` 的 `{ value, meta }`，保留来源、观测年龄与世界/连接作用域，消费时按要求校验。 |
+| 执行证据 | 某次动作已经确认完成了什么；来自 act 成功 output 或 `ctx.succeed(evidence)`，用于有明确含义的历史累计，不自动说明当前仍持有这些物品或目标仍处于原状态。 |
 
-当前观测经过选择、计算、assign 或子树传递时，仍沿用输入中最保守的年龄和适用作用域，不能以赋值、返回或复制时间重置观测时间。参数只读或数据被保存为 local，也不免除其作为当前事实被消费时的校验。
+`meta` 是观测的一部分，至少包含：
 
-act 的普通结果按其声明契约解释，不自动获得当前观测的可信含义。若结果表示当前观测，必须保留受控查询通道的来源和时效信息；单纯返回一个数值或自行填写时间不能证明当前事实。body 管理这些数据通道，不声称静态证明自定义 act 内部判断正确。
+| 字段 | 语义 |
+| --- | --- |
+| source | 产生该观测的通道或操作，例如 QueryOp 或带观测语义的 act 输出。 |
+| scope | 观测适用的世界与连接作用域（worldScope、connectionEpoch 等）；作用域不符即不能当作当前事实。 |
+| sampledAt | 采样时刻，使用进程内单调时间；复制、计算、保存或跨 `yield` 传递都不会改变它。 |
+| validUntil | 可证明有效的截止时刻；缺失或无法计算表示时效无法证明。 |
 
-例如，成功完成一次采集 act 后将计数加一，只表示“成功完成的采集次数”。“背包拥有 32 个原木”仍须查询背包；累计实际交付量也须有对应动作契约和确认依据。失败或取消不写成功输出，不意味着此前没有改变游戏世界；实际变化应按当前查询及已确认执行证据处理。
+- `ctx.fresh(snapshot, maxAgeMs?)` 检查快照的 `scope`、`sampledAt`、`validUntil` 与可选 `maxAgeMs`。已过期抛 `STALE_OBSERVATION`；缺少可证明的元数据、作用域不符或无法比较抛 `FRESHNESS_UNPROVABLE`。它不会自动重新查询，也不会修改快照。
+- 当前观测经过局部变量保存、对象复制、纯计算、`decide` 输入/输出或 act 参数传递后，仍沿用输入中最保守的年龄与作用域；不能以赋值时间、计算时间或 `ctx.now()` 重置 `sampledAt`。多个输入合成时，取最旧或最早失效的时效。
+- 纯计算（距离、比较、格式化、评分）只派生值，不产生新观测。若派生结果仍被当作当前事实消费，必须携带并校验原观测的 `meta`。
+- 参数只读、查询值被保存为局部变量或经 policy 返回，都不免除其作为当前事实被消费时的校验。`ctx.params` 是启动输入，不是当前世界观测。
+- act 的普通 output 按 act 契约解释，不自动获得观测可信度。若 output 表示当前观测，必须保留受控查询通道的来源与时效；只返回数值或自行填写时间不能证明当前事实。
+- 执行证据不因时间经过自动失效，但不能替代查询。例如成功完成一次采集后将计数加一，只表示“成功完成的采集次数”；“背包拥有 32 个原木”仍须查询背包，累计交付量也须有对应动作契约与确认依据。
+- 失败或取消不写成功 output，也不意味着此前的执行没有改变游戏世界；实际变化应按当前查询及已确认执行证据处理。
+- 局部变量可以保存查询快照，但只是保存而非同步；它不是 P2 的世界副本，不建立全量缓存或历史观测库，需要当前事实时必须重新查询。
 
 ## 4. act 与 policy 作者接口
 
@@ -181,7 +267,7 @@ hook 的一次执行必须有界并返回；异步 op 使用 handle 发起，后
 
 cleanup返回complete只确认作者侧清理完成，不替代broker确认；cleanup返回failed或超时导致控制故障。业务预期结果与清理结果分开保存，不能用一次成功清理把业务失败改成成功。
 
-start/update 的 complete.result 是业务候选结果，由执行器校验为受限 JSON，并按[成功输出规则](#32-显式赋值与成功输出)在成功收尾后写入节点绑定的 output；首版不做完整结果 schema 校验，声明仅用于诊断，后续补全。stop/cleanup 的 complete 只表示作者侧收尾完成，其 result 不替换业务结果。running.progress 用于进度诊断，不隐式写入 behavior locals；act 内部变量也不能绕过输出绑定写回。
+start/update 的 complete.result 是业务候选结果，由执行器校验为受限 JSON，并按[成功输出规则](#32-写入与成功输出)在成功收尾后写入 act 输出；首版不做完整结果 schema 校验，声明仅用于诊断，后续补全。stop/cleanup 的 complete 只表示作者侧收尾完成，其 result 不替换业务结果。running.progress 用于进度诊断，不隐式写入 behavior locals；act 内部变量也不能绕过输出绑定写回。
 
 ActContext 暴露当前 run 信息、受限时钟/随机源、query.submit/result、control.submit/result、progress；不提供 Node 全局、任意导入、文件、网络或 DSH 对象。manifest 声明 op、业务超时与能力说明；参数/结果 schema 在后续版本补全，首版仅作诊断性声明。仅声明不保证逻辑正确。
 
@@ -210,14 +296,14 @@ type PolicyManifest = {
 | 项 | 规则 |
 | --- | --- |
 | 能力 | 无。不提供 op 桥、文件、网络、宿主对象；只注入数学与纯辅助函数。 |
-| 调用方式 | 只能由 `decide` 节点调用：一次提交、异步等待、结果写入 local；不能出现在 guard、assign、act 参数等表达式位置。 |
+| 调用方式 | 只能由 `ctx.decide` 调用：一次提交、异步等待，结果按值返回给 behavior；不能作为其他命令的参数，也不能跨调用缓存。 |
 | 生命周期 | 一次调用一次返回，无 start/update/stop/cleanup，不保存跨调用状态；等待期间不阻塞 tick，取消可立即推进。 |
-| 失败语义 | 抛错、超时或返回值不合法使 `decide` 节点失败；不进入 act 清理流程，也不记为控制故障。 |
+| 失败语义 | 抛错、超时或返回值不合法使本次 `ctx.decide` 失败；不进入 act 清理流程，也不记为控制故障。 |
 | 结果校验 | 只接受受限 JSON；函数、Promise、循环对象、超限尺寸一律拒绝（`POLICY_RESULT_INVALID`）。 |
 | 复用 | 作为内容产物锁定 digest，可被多个 behavior 引用并进入依赖闭包；不单独 enable。 |
-| 禁止 | 不能调用 policy／act／op，不能读写 locals，不能修改 query 结果或观测元数据。 |
+| 禁止 | 不能调用 policy／act／op，不能读写 behavior 的运行内状态，不能修改 query 结果或观测元数据。 |
 
-policy 的引入不改变「执行器只运行内建控制结构与受限表达式」这一约束：执行器仍是唯一调度者，policy 只是取值来源之一。运行期预算、失败分类与调用时机见[运行时 §3](RUNTIME.md#3-每轮调度与资源上限)。
+policy 的引入不改变「执行器只负责调度与执行 ctx 命令」这一约束：执行器仍是唯一调度者，policy 只是取值来源之一。运行期预算、失败分类与调用时机见[运行时 §3](RUNTIME.md#3-每轮调度与资源上限)。
 
 ## 5. operation provider 契约
 
@@ -229,7 +315,7 @@ policy 的引入不改变「执行器只运行内建控制结构与受限表达�
 
 op 声明以静态文件随 provider 包发布，检查阶段只读它、不加载 provider、不连接游戏；连接握手时核验实际实现与静态声明一致，不一致返回 `CAPABILITY_MISMATCH`。声明摘要进入 bindingId，实现升级产生新 binding。
 
-> M5.5 现状（2026-10-28）：op 声明的**能力标记**已进入 `src/operation/index.ts` 并由 `DeclaredOpBroker` 在运行期校验（缺失返回 `CAPABILITY_MISSING`）；provider 通过 `PROVIDER_CAPABILITIES` 声明实际实现，`describe`/`hello`/`status` 会回报。但 `bindingId` 仍由 body manifest 计算，**尚未纳入 provider 能力摘要**——这是已知缺口，不影响 IR/JS 对照（两边共用同一基线）。
+> 现状：op 声明的**能力标记**已进入 `src/operation/index.ts` 并由 `DeclaredOpBroker` 在运行期校验（缺失返回 `CAPABILITY_MISSING`）；provider 通过 `PROVIDER_CAPABILITIES` 声明实际实现，`describe`/`hello`/`status` 会回报。但 `bindingId` 仍由 body manifest 计算，**尚未纳入 provider 能力摘要**——这是已知缺口。
 
 ```ts
 type QueryReply<T> =
@@ -269,7 +355,7 @@ type P2Error = {
 | UNKNOWN_OP、OP_KIND_MISMATCH、OP_NOT_DECLARED、CAPABILITY_MISSING、CAPABILITY_MISMATCH | 检查/启用阶段拒绝候选；运行期未声明调用使该 act 失败（失败关闭），不转移控制权。 |
 | FORBIDDEN_SYNTAX、INVALID_ACT_MANIFEST、POLICY_RESULT_INVALID、SOURCE_CHANGED | 检查阶段拒绝；不生成凭据，不影响已启用产物与当前运行。 |
 | ACT_TIMEOUT、POLICY_TIMEOUT、BUDGET_EXCEEDED | 结束相关运行并完成收尾；属于执行预算耗尽，不按普通环境失败处理。 |
-| QUERY_TIMEOUT、QUERY_INCOMPLETE、STALE_OBSERVATION | 查询节点失败；不自动重试。 |
+| QUERY_TIMEOUT、QUERY_INCOMPLETE、STALE_OBSERVATION | 查询命令失败；不自动重试。 |
 | PATH_UNREACHABLE、MATERIAL_MISSING 等游戏错误 | act 解释，默认失败传播或显式恢复；若同时已有有效目标达成证据，按运行时结束裁决准备成功，不改写 act 的失败事实。 |
 | GOAL_NOT_MET、NO_BRANCH、RECOVERY_EXHAUSTED | 业务失败，结构化上报。 |
 | CONFIRMATION_REQUIRED、EXTERNAL_INPUT_REQUIRED | 先清理，再 blocked，等待明确外部决定。 |
@@ -300,7 +386,7 @@ error.retry 是允许范围，不自动触发 retry。调用者不得把 never �
 
 ### 7.1 外部完成验收契约
 
-externalConfirmation 是有限 behavior 在树根成功且 act/broker 收尾完成后的一次外部验收，不是执行错误的豁免入口或通用恢复命令。body 每个 run 最多创建一条待确认记录；状态转换、竞争及失效规则见 [RUNTIME §4.4](RUNTIME.md#44-外部完成验收)。
+externalConfirmation 是有限 behavior 在 run 成功且 act/broker 收尾完成后的一次外部验收，不是执行错误的豁免入口或通用恢复命令。body 每个 run 最多创建一条待确认记录；状态转换、竞争及失效规则见 [RUNTIME §4.4](RUNTIME.md#44-外部完成验收)。
 
 | 数据 | 必需语义 |
 | --- | --- |
@@ -315,7 +401,7 @@ commandId 标识一次命令，confirmationId 标识被处理的验收请求；�
 
 来源由 bridge 根据实际调用通道填写，body 校验桥连接授权、owner 和请求归属。模型工具调用始终记录为 agent 判断；模型传入的 source 字段、行为源码或游戏文本不能自行声明玩家身份。只有可核验的人类交互入口才能记录玩家确认；第一版没有这种入口时，仅支持 agent 判断。外部判断可以引用查询或执行证据，但完成依据仍记录为 externalConfirmation，不冒充 predicate 的游戏自动验证。
 
-确认不执行游戏操作或恢复节点栈。有效确认使原 run succeeded；有效否定使原 run failed/EXTERNAL_GOAL_REJECTED；需要继续工作时新建 run。对 pending 请求的查询、受理和重复返回不代表业务终态，必须区分 accepted 与已提交的决定。D3 在此固定语义和信息要求，首版消息和方法见[协议 §8](#8-bridgebody-消息协议)，可信来源接入见 [DSH 设计](DSH-INTEGRATION.md#5-模型工具与界面反馈)；D6 首版仅提供调试日志和内存队列，可靠提交与崩溃恢复延期。
+确认不执行游戏操作或恢复执行。有效确认使原 run succeeded；有效否定使原 run failed/EXTERNAL_GOAL_REJECTED；需要继续工作时新建 run。对 pending 请求的查询、受理和重复返回不代表业务终态，必须区分 accepted 与已提交的决定。D3 在此固定语义和信息要求，首版消息和方法见[协议 §8](#8-bridgebody-消息协议)，可信来源接入见 [DSH 设计](DSH-INTEGRATION.md#5-模型工具与界面反馈)；D6 首版仅提供调试日志和内存队列，可靠提交与崩溃恢复延期。
 
 ## 8. bridge—body 消息协议
 
@@ -359,7 +445,7 @@ hello 在专用父子管道上协商协议，绑定 bridge 从实际 DSH 上下�
 | hello | 协议集合、可信 OwnerContext | 协议、epoch、角色、binding、能力；不启动 behavior。 |
 | heartbeat | 递增 heartbeatSeq | 存活应答；同序号重发不重复延长存活期限。 |
 | describe | 可选目标 bindingId | 本地静态声明及限制，不加载 provider。 |
-| status | 无业务参数 | owner、health、connection、activeRun、阶段（declared progress 或当前节点名）、当前 act、当前节点 id 与目标坐标（activeNode/activeTarget，act 求值后的参数）、等待原因（query/policy/act/confirmation）、最近失败、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
+| status | 无业务参数 | owner、health、connection、activeRun、阶段（progress 或 currentStep）、当前 act、当前步骤与目标坐标（activeNode/activeTarget，act 求值后的参数）、等待原因（query/policy/act/confirmation）、最近失败、pending switch、待确认记录、最近命令及对应快照的事件游标；另列 loggingUnavailable、droppedLogCount，不改变控制健康状态。 |
 | observe | 查询声明、参数、时效要求 | 值及来源/年龄/作用域，或错误；零隐藏重试。 |
 | check | commandId、源路径、artifactKind、预期 sourceDigest、目标 binding、精确依赖 | 报告及通过时的 artifactId；源摘要不符返回 SOURCE_CHANGED；重复命令不重复构建。 |
 | activate | commandId、artifactId | 目标 binding 下的启用结果。 |

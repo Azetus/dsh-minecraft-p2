@@ -28,7 +28,7 @@
 
 ## 3. 不可变 binding
 
-binding 只固定执行环境：body/IR 与运行契约版本、选定 provider 包及内容摘要、operation 契约与静态能力清单（含 op 声明摘要）、驱动版本，以及影响执行语义的配置。运行环境中的引擎/核心实现按确切版本和内容锁定；构建工具版本另外进入 artifact。act／policy 的 revision、注册表内容和默认启用版本不属于环境 binding，新增 act 或 policy 不改变 bindingId。初版 provider 随包交付，binding 仍记录其 manifest 摘要；外层包版本不自动进入 binding。仅 bridge 或 authoring 包版本变化、而 body/provider/IR/op contract 摘要不变时，不改变环境 binding。
+binding 只固定执行环境：body 运行时与运行契约版本、选定 provider 包及内容摘要、operation 契约与静态能力清单（含 op 声明摘要）、驱动版本，以及影响执行语义的配置。运行环境中的引擎/核心实现按确切版本和内容锁定；构建工具版本另外进入 artifact。act／policy 的 revision、注册表内容和默认启用版本不属于环境 binding，新增 act 或 policy 不改变 bindingId。初版 provider 随包交付，binding 仍记录其 manifest 摘要；外层包版本不自动进入 binding。仅 bridge 或 authoring 包版本变化、而 body/provider/behavior/op contract 摘要不变时，不改变环境 binding。
 
 bindingId取规范化清单摘要。checker接收该binding的静态声明，不连接游戏；启动前body核验真实加载包和运行握手与binding一致。检查通过但实际能力缺失时返回CAPABILITY_MISSING，不改写“检查通过”等于游戏可用的含义。
 
@@ -55,16 +55,16 @@ bindingId取规范化清单摘要。checker接收该binding的静态声明，不
 | sourceDigest | 源快照清单的摘要：入口相对路径、排序后的源码/本地构建输入相对路径及各文件原始字节摘要。外部包的精确选择由依赖清单锁定。 |
 | revision | 定义的源码版本；首版在 definitionId 内采用 sourceDigest，不代表某个环境中的唯一可执行产物。 |
 | bindingId | 环境清单的摘要：版本、包内容摘要、operation 契约和静态能力、驱动与有效配置；不包含 behavior／act／policy 集合。 |
-| artifactDigest | 规范化产物清单的摘要：类型（behavior／act／policy）、definitionId、源码摘要、IR 或打包代码/文件摘要、manifest、相对源位置映射、精确依赖清单、构建工具版本及 bindingId。依赖闭包的确切内容均须由摘要覆盖。 |
+| artifactDigest | 规范化产物清单的摘要：类型（behavior／act／policy）、definitionId、源码摘要、模块或打包代码/文件摘要、manifest、相对源位置映射、精确依赖清单、构建工具版本及 bindingId。依赖闭包的确切内容均须由摘要覆盖。 |
 | artifactId | 由 artifactDigest 加类型化标识前缀形成，不另外计算一套不同的内容摘要。 |
 
-所有摘要采用 SHA-256；待摘要清单带格式版本和对象种类，以规范化 JSON 的 UTF-8 字节计算。对象键按固定顺序排序，字符串转义和有限数值表示由同一版本的规范化器统一处理；行为节点、分支等有序数组保留顺序，文件/依赖等集合按声明的唯一键排序并拒绝重复。M0 必须用固定样例验证规范化结果，不能依赖调用方字段插入顺序或各自序列化。
+所有摘要采用 SHA-256；待摘要清单带格式版本和对象种类，以规范化 JSON 的 UTF-8 字节计算。对象键按固定顺序排序，字符串转义和有限数值表示由同一版本的规范化器统一处理；有序数组（如参数顺序）保留顺序，文件/依赖等集合按声明的唯一键排序并拒绝重复。M0 必须用固定样例验证规范化结果，不能依赖调用方字段插入顺序或各自序列化。
 
 文件内容按实际字节计算，不静默改换行或源码。清单路径使用相对根目录的规范化路径和 `/` 分隔符，拒绝越界及规范化后重名，不纳入本机绝对目录。源文件换行改变会改变 sourceDigest；相同内容搬到另一工作区不应仅因绝对路径而改变身份。
 
 摘要输入排除自身的 ID/digest 字段、检查凭据、检查时间、日志、owner、runId、connection/body epoch、注册表默认映射和 enabled/retired 状态；这些是独立元数据，不得回填到内容清单后再次参与自身摘要。配置只纳入影响绑定的有效项；秘密明文及其直接内容摘要不写入 artifact/session，影响绑定的秘密引用使用非秘密标识和明确版本。即时连接状态和世界引用不属于静态 binding，仍须在运行时独立核验。
 
-同一源码在不同依赖或 binding 下构建可以保留同一 revision，但得到不同 artifactId。检查凭据独立绑定 artifactDigest、bindingId 和 checker 版本；检查时间可用于审计，不改变产物身份。相同输入若产生不同代码/IR，则是不同产物，不能仅凭 sourceDigest 复用检查结论。
+同一源码在不同依赖或 binding 下构建可以保留同一 revision，但得到不同 artifactId。检查凭据独立绑定 artifactDigest、bindingId 和 checker 版本；检查时间可用于审计，不改变产物身份。相同输入若产生不同代码，则是不同产物，不能仅凭 sourceDigest 复用检查结论。
 
 ### 3.3 变更影响范围
 
@@ -130,6 +130,6 @@ manifest对每个游戏组合区分declared（声明）、experimental（实验�
 
 正式宣称支持某个游戏组合前，必须通过候选文档G0—G6相关门槛。只证明能登录不能宣称正常生存，只有参数类型匹配不能宣称取消可靠。
 
-D4 的软件验收另覆盖：对象键重排和集合重排不改变摘要，有序节点/分支重排改变摘要；工作区绝对路径、检查时间和注册状态变化不改变内容身份；源码字节、依赖或 binding 变化改变相应摘要；新 act 或 policy 不改变环境 binding；自引用摘要、直接依赖环以及 `call` 形成的行为依赖环被拒绝。固定输入应得到固定摘要，摘要检查不替代游戏兼容验收。
+D4 的软件验收另覆盖：对象键重排和集合重排不改变摘要，有序数组重排改变摘要；工作区绝对路径、检查时间和注册状态变化不改变内容身份；源码字节、依赖或 binding 变化改变相应摘要；新 act 或 policy 不改变环境 binding；自引用摘要、直接依赖环以及 `call` 形成的行为依赖环被拒绝。固定输入应得到固定摘要，摘要检查不替代游戏兼容验收。
 
-初版单包验收另覆盖：`bundles/` 中的 tarball 可在干净 DSH profile 安装并加载；项目安装同一 tarball 后 authoring 版本一致；包版本变化但 body/provider/IR/op contract 摘要不变时 binding 不变；内置 provider manifest 与实际加载实现一致。
+初版单包验收另覆盖：`bundles/` 中的 tarball 可在干净 DSH profile 安装并加载；项目安装同一 tarball 后 authoring 版本一致；包版本变化但 body/provider/behavior/op contract 摘要不变时 binding 不变；内置 provider manifest 与实际加载实现一致。
