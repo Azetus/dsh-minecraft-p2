@@ -46,6 +46,9 @@ import type {
   TraceResult,
   GuardCondition,
   GuardQuery,
+  SnapshotOp,
+  SnapshotPart,
+  SnapshotResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -160,6 +163,7 @@ export class BodyRuntime {
       && envelope.method !== 'watch.add'
       && envelope.method !== 'watch.remove'
       && envelope.method !== 'observe'
+      && envelope.method !== 'snapshot'
       && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
     }
@@ -211,6 +215,67 @@ export class BodyRuntime {
           ...(observed.meta === undefined ? {} : { meta: observed.meta }),
         } as unknown as JsonValue,
       }
+    }
+
+    if (envelope.method === 'snapshot') {
+      const ops = parseSnapshotOps(params.ops)
+      if (ops === undefined) {
+        return { ...base, error: invalidMessageError('snapshot ops must be 1-8 { key, op, args? } entries') }
+      }
+      const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)
+        ? Math.min(5000, Math.max(0, params.timeoutMs))
+        : 1000
+      const outcomes = ops.map(entry => {
+        try {
+          return this.behavior?.observe(entry.op, asRecord(entry.args ?? {}) ?? {}) ?? {
+            status: 'failed' as const,
+            error: p2Error('BEHAVIOR_UNAVAILABLE', 'runtime', 'body has no behavior host', { module: 'body.behavior' }),
+          }
+        } catch (error) {
+          return {
+            status: 'failed' as const,
+            error: p2Error('SNAPSHOT_PART_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'body.snapshot', opId: entry.op }),
+          }
+        }
+      })
+      const deadline = Date.now() + timeoutMs
+      while (outcomes.some(outcome => outcome.status === 'pending') && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        for (let index = 0; index < outcomes.length; index += 1) {
+          const outcome = outcomes[index]
+          if (outcome?.status === 'pending') outcomes[index] = outcome.poll()
+        }
+      }
+      const parts: SnapshotPart[] = ops.map((entry, index) => {
+        const outcome = outcomes[index]
+        if (outcome === undefined) {
+          return {
+            key: entry.key,
+            op: entry.op,
+            status: 'failed',
+            error: p2Error('SNAPSHOT_PART_FAILED', 'runtime', 'snapshot part is missing', { module: 'body.snapshot', opId: entry.op }),
+          }
+        }
+        if (outcome.status === 'ok') {
+          return {
+            key: entry.key,
+            op: entry.op,
+            status: 'ok',
+            value: outcome.value,
+            ...(outcome.meta === undefined ? {} : { meta: outcome.meta }),
+          }
+        }
+        if (outcome.status === 'failed') {
+          return { key: entry.key, op: entry.op, status: 'failed', error: outcome.error }
+        }
+        return { key: entry.key, op: entry.op, status: 'pending' }
+      })
+      const result: SnapshotResult = {
+        parts,
+        partial: parts.some(part => part.status !== 'ok'),
+        sampledAt: Date.now(),
+      }
+      return { ...base, result: result as unknown as JsonValue }
     }
 
     const commandId = this.requireCommandId(envelope)
@@ -746,8 +811,30 @@ function parseStopParams(params: JsonValue): { value: StopParams } | { error: P2
 
 const TRACE_KINDS: ReadonlySet<string> = new Set(['run', 'behavior', 'act', 'op', 'guard', 'watch'])
 
-function parseWatchQueries(value: JsonValue | undefined): GuardQuery[] | undefined {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return undefined
+function parseSnapshotOps(value: JsonValue | undefined): SnapshotOp[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8) return undefined
+  const seen = new Set<string>()
+  const ops: SnapshotOp[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
+    const record = entry as Record<string, JsonValue>
+    if (typeof record.key !== 'string' || record.key.length === 0 || record.key.length > 64) return undefined
+    if (typeof record.op !== 'string' || record.op.length === 0) return undefined
+    if (seen.has(record.key)) return undefined
+    seen.add(record.key)
+    if (record.args !== undefined && (typeof record.args !== 'object' || record.args === null || Array.isArray(record.args))) {
+      return undefined
+    }
+    ops.push({
+      key: record.key,
+      op: record.op,
+      ...(record.args === undefined ? {} : { args: record.args }),
+    })
+  }
+  return ops
+}
+
+function parseWatchQueries(value: JsonValue | undefined): GuardQuery[] | undefined {  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return undefined
   const queries: GuardQuery[] = []
   for (const entry of value) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined

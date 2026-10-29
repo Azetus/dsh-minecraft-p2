@@ -30,6 +30,7 @@ export const METHODS = [
   'watch.add',
   'watch.remove',
   'watch.list',
+  'snapshot',
   'trace',
   'stop',
   'shutdown',
@@ -347,6 +348,35 @@ export type ObserveResult = {
   op: string
   value: JsonValue
   meta?: ValueMeta
+}
+
+export type SnapshotOp = {
+  key: string
+  op: string
+  args?: JsonValue
+}
+
+export type SnapshotParams = {
+  ops: SnapshotOp[]
+  timeoutMs?: number
+}
+
+export type SnapshotPart = {
+  key: string
+  op: string
+  status: 'ok' | 'failed' | 'pending'
+  value?: JsonValue
+  meta?: ValueMeta
+  error?: P2Error
+  /** Bridge-side pure summary (inventory counts, entity hostility). */
+  summary?: JsonValue
+}
+
+export type SnapshotResult = {
+  parts: SnapshotPart[]
+  /** True when at least one part did not complete successfully. */
+  partial: boolean
+  sampledAt: number
 }
 
 export type CheckResult = {

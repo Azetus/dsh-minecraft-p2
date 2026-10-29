@@ -156,6 +156,13 @@ export class BodyClient {
     return this.request('observe', { op, args })
   }
 
+  snapshot(ops: JsonValue, timeoutMs?: number): Promise<JsonValue> {
+    return this.request('snapshot', {
+      ops,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    })
+  }
+
   trace(params: JsonValue = {}): Promise<JsonValue> {
     return this.request('trace', params)
   }

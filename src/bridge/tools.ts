@@ -1,5 +1,6 @@
-import type { GuardCondition, JsonValue } from '../contracts/index.ts'
+import type { GuardCondition, JsonValue, SnapshotPart, SnapshotResult } from '../contracts/index.ts'
 import type { BodyManager } from './process-manager.ts'
+import { summarizeEntities, summarizeInventory } from './summaries.ts'
 
 type ToolText = { type: 'text'; text: string }
 
@@ -82,6 +83,51 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
       String(args.op),
       (args.args ?? {}) as JsonValue,
     )),
+  })
+
+  register({
+    name: 'p2_snapshot',
+    description: 'One-round-trip batch observation: position, health, inventory summary, nearby blocks and entities. Each part carries status/value/meta; partial reports any failed part.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radius: { type: 'number', description: 'Block search radius (default 8)' },
+        count: { type: 'number', description: 'Block and entity limit (default 16)' },
+        names: { type: 'array', items: { type: 'string' }, description: 'Optional block names to find' },
+        timeoutMs: { type: 'number', description: 'Deadline for pending parts (default 1000)' },
+      },
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => {
+      const radius = typeof args.radius === 'number' ? args.radius : 8
+      const count = typeof args.count === 'number' ? args.count : 16
+      const names = Array.isArray(args.names)
+        ? args.names.filter((name): name is string => typeof name === 'string')
+        : undefined
+      const ops: JsonValue = [
+        { key: 'position', op: 'position' },
+        { key: 'health', op: 'health' },
+        { key: 'inventory', op: 'inventory' },
+        { key: 'blocks', op: 'blocks', args: { radius, count, ...(names === undefined ? {} : { names }) } },
+        { key: 'entities', op: 'entities', args: { count, sort: 'distance' } },
+      ]
+      const raw = await manager.snapshot(
+        ops,
+        typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+      ) as unknown as SnapshotResult
+      const parts: SnapshotPart[] = raw.parts.map(part => {
+        if (part.status !== 'ok') return part
+        if (part.key === 'inventory') {
+          return { ...part, summary: summarizeInventory(part.value ?? null) as unknown as JsonValue }
+        }
+        if (part.key === 'entities') {
+          return { ...part, summary: summarizeEntities(part.value ?? null) as unknown as JsonValue }
+        }
+        return part
+      })
+      return { ...raw, parts } as unknown as JsonValue
+    }),
   })
 
   register({

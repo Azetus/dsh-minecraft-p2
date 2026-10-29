@@ -299,6 +299,10 @@ export class BodyManager {
     return this.activeClient().observe(op, args)
   }
 
+  snapshot(ops: JsonValue, timeoutMs?: number): Promise<JsonValue> {
+    return this.activeClient().snapshot(ops, timeoutMs)
+  }
+
   trace(params: JsonValue = {}): Promise<JsonValue> {
     return this.activeClient().trace(params)
   }

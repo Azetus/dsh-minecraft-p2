@@ -130,6 +130,7 @@ describe('protocol vocabulary', () => {
       'watch.add',
       'watch.remove',
       'watch.list',
+      'snapshot',
       'trace',
       'stop',
       'shutdown',
