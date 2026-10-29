@@ -412,6 +412,7 @@ export class BehaviorHost {
       effects: artifact.effects,
       stop: artifact.stop,
       capabilities: [...artifact.capabilities],
+      ...(artifact.limits === undefined ? {} : { limits: artifact.limits }),
     }
   }
 

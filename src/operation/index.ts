@@ -26,6 +26,8 @@ export type OperationContract = {
   capabilities: string[]
   /** May run alongside one exclusive control (for example `jump` before `place`). */
   concurrent?: boolean
+  /** Authored-op execution budget; absent means the broker imposes no deadline. */
+  limits?: { totalMs?: number }
 }
 
 export const OPERATION_CONTRACT_VERSION = '4'

@@ -11,7 +11,7 @@ import type { GuardEvent, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
-import type { BodySpawner, StartResult, StopResult } from './process-manager.ts'
+import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
 import { registerP2Tools } from './tools.ts'
 import type { AgentLike, ToolRegistration } from './tools.ts'
 
@@ -44,16 +44,16 @@ type P2Context = Context & { commands: CommandsService; tools?: ToolsService; ag
  * the loop appends to the durable session log and replays to the model. A
  * partial object is accepted at runtime and poisons every later request.
  */
-type GuardWakeMessage = {
+type WakeMessage = {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'p2-guard' }
+  source: { kind: 'p2-guard' | 'p2-runtime' | 'p2-watch' }
 }
 
 type AgentsService = {
   get(id: string): {
-    followup(message: GuardWakeMessage): void
+    followup(message: WakeMessage): void
   } | undefined
 }
 
@@ -77,6 +77,8 @@ export type P2PluginOptions = {
   spawnBody?: BodySpawner
   heartbeatMs?: number
   stopTimeoutMs?: number
+  /** Timeout for one body request; tests use a short value for fast faults. */
+  requestTimeoutMs?: number
   log?: (line: string) => void
   /**
    * Development-only: register the global `p2_body` start/stop/status tool.
@@ -85,6 +87,10 @@ export type P2PluginOptions = {
   devBodyControl?: boolean
   /** Development-only: register the `p2_trace` execution-trace tool. */
   devTrace?: boolean
+  /** Development-only: bounded automatic body restart after a fault. */
+  devAutoRestart?: boolean
+  /** Development-only: auto-restart backoff schedule (tests use a zero schedule). */
+  restartBackoffMs?: number[]
 }
 
 export function createP2Plugin(options: P2PluginOptions = {}): {
@@ -93,12 +99,21 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
   apply(ctx: P2Context): void
 } {
   let notifyGuardEvent: ((event: GuardEvent) => void) | undefined
+  let notifyBodyFault: ((fault: BodyFault) => void) | undefined
+  let notifyBodyRestart: ((info: RestartInfo) => void) | undefined
   const manager = new BodyManager({
     bodyEntry: options.bodyEntry ?? fileURLToPath(new URL('./body/body.mjs', import.meta.url)),
     ...(options.spawnBody === undefined ? {} : { spawnBody: options.spawnBody }),
     ...(options.heartbeatMs === undefined ? {} : { heartbeatMs: options.heartbeatMs }),
     ...(options.stopTimeoutMs === undefined ? {} : { stopTimeoutMs: options.stopTimeoutMs }),
+    ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
     ...(options.log === undefined ? {} : { log: options.log }),
+    autoRestart: {
+      enabled: options.devAutoRestart === true,
+      ...(options.restartBackoffMs === undefined ? {} : { backoffMs: options.restartBackoffMs }),
+    },
+    onFault: fault => notifyBodyFault?.(fault),
+    onRestart: info => notifyBodyRestart?.(info),
     onGuardEvent: event => notifyGuardEvent?.(event),
     onGuardGap: (fromSeq, toSeq) => {
       options.log?.(`p2 guard event gap: ${fromSeq}..${toSeq}`)
@@ -109,27 +124,48 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     name: 'dsh-minecraft-p2',
     inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
-      notifyGuardEvent = event => {
-        if (event.phase !== 'fired') return
+      const wakeOwner = (text: string, kind: WakeMessage['source']['kind']): void => {
         const owner = manager.currentOwner
         if (owner === undefined) return
         const agent = ctx.agents?.get(owner.sessionId)
         if (agent === undefined) return
-        const evidence = event.evidence === undefined ? 'n/a' : JSON.stringify(event.evidence)
         try {
           agent.followup({
             id: randomUUID(),
             role: 'user',
-            content: [{
-              type: 'text',
-              text: `[p2 guard] ${event.guardId} fired (${event.attemptId ?? 'no attempt'}); target=${event.targetArtifactId ?? 'unknown'}; evidence=${evidence}. Inspect p2_events and p2_status for the switch phase.`,
-            }],
-            source: { kind: 'p2-guard' },
+            content: [{ type: 'text', text }],
+            source: { kind },
           })
         } catch (cause) {
           // Waking is best effort, but a silent swallow hides a broken wake path.
-          options.log?.(`p2 guard wake failed: ${formatError(cause)}`)
+          const label = kind === 'p2-guard' ? 'p2 guard' : 'p2 runtime'
+          options.log?.(`${label} wake failed: ${formatError(cause)}`)
         }
+      }
+      notifyGuardEvent = event => {
+        if (event.phase !== 'fired') return
+        const evidence = event.evidence === undefined ? 'n/a' : JSON.stringify(event.evidence)
+        wakeOwner(
+          `[p2 guard] ${event.guardId} fired (${event.attemptId ?? 'no attempt'}); target=${event.targetArtifactId ?? 'unknown'}; evidence=${evidence}. Inspect p2_events and p2_status for the switch phase.`,
+          'p2-guard',
+        )
+      }
+      notifyBodyFault = fault => {
+        const next = fault.autoRestart === 'scheduled'
+          ? 'Auto-restarting within the development budget.'
+          : fault.autoRestart === 'exhausted'
+            ? 'Auto-restart budget is exhausted; start a new body manually with /p2 start.'
+            : 'Start a new body manually with /p2 start.'
+        wakeOwner(
+          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'} run=${fault.activeRunId ?? 'none'}; the previous run is faulted, control state is unknown, and guards/watches were cleared by the epoch change. ${next}`,
+          'p2-runtime',
+        )
+      }
+      notifyBodyRestart = info => {
+        wakeOwner(
+          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts}). Previous run ${info.fault.activeRunId ?? 'none'} is faulted and its control state is unknown; re-register guards/watches as needed.`,
+          'p2-runtime',
+        )
       }
       const registrations = new Map<string, ToolRegistration>()
       const globalDisposers: Array<() => void> = []
@@ -173,6 +209,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       ctx.effect(
         () => async () => {
           notifyGuardEvent = undefined
+          notifyBodyFault = undefined
+          notifyBodyRestart = undefined
           disposeTools()
           disposeGlobals()
           await manager.dispose()

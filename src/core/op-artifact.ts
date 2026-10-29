@@ -147,6 +147,7 @@ export function createAuthoredOpSource(
     effects: artifact.effects,
     stop: artifact.stop,
     capabilities: [...artifact.capabilities],
+    ...(artifact.limits === undefined ? {} : { limits: artifact.limits }),
   })
 
   const markUntracked = (artifact: AuthoredOpArtifact, identity: ControlIdentity | undefined): void => {

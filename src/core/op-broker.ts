@@ -156,6 +156,7 @@ export class DeclaredOpBroker {
     }
     this.trace?.finish(token, 'end')
     entry.handle = handle
+    const limitMs = contract.limits?.totalMs
     let terminalReported = false
     const reportTerminal = (result: ActPoll): void => {
       if (terminalReported || result.status === 'running') return
@@ -177,6 +178,34 @@ export class DeclaredOpBroker {
         },
       }),
       poll: (): ActPoll => {
+        // Declared budget: fail the operation and request release, but keep the
+        // ledger entry until the provider proves the effect is gone.
+        if (limitMs !== undefined && !terminalReported && this.now() - startedAt > limitMs) {
+          // Keep the entry in the ledger: it still polls running until the
+          // provider proves the effect is gone, so a new control stays blocked.
+          if (entry.phase !== 'stopping' && entry.phase !== 'unknown') {
+            try {
+              handle.stop()
+            } catch {
+              entry.phase = 'unknown'
+            }
+          }
+          terminalReported = true
+          const error = p2Error(
+            'OP_TIMEOUT',
+            'timeout',
+            `control operation ${name} exceeded ${limitMs}ms`,
+            { module: 'core.op-broker', opId: name },
+            { operation: name, limitMs },
+          )
+          this.trace?.record('op', 'error', name, {
+            ...(identity === undefined ? {} : { runId: identity.runId }),
+            opId: entry.id,
+            durationMs: this.now() - startedAt,
+            detail: { opKind: 'control', code: 'OP_TIMEOUT' },
+          })
+          return { status: 'failed', error }
+        }
         const result = handle.poll()
         reportTerminal(result)
         if (result.status !== 'running') this.entries.delete(entry)
