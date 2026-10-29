@@ -1,5 +1,6 @@
 import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
 import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
+import type { CleanupState, ControlHealth, CurrentStep, SwitchState } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { CheckerError, checkBehavior } from './checker.ts'
@@ -67,6 +68,13 @@ export type HostStatus = {
   activeTarget: { x: number; z: number } | null
   waiting: string | null
   lastFailure: P2Error | null
+  currentStep: CurrentStep | null
+  stepCount: number
+  progress: JsonValue | null
+  lastError: P2Error | null
+  cleanupState: CleanupState
+  controlHealth: ControlHealth
+  switchState: SwitchState
 }
 
 export type BehaviorHostOptions = {
@@ -443,6 +451,8 @@ export class BehaviorHost {
     // A terminal run keeps its last progress report; only an active run may
     // describe what is running now. Stale act/node/target fields read as残留控制.
     const active = run !== undefined && !isTerminal(run.status) ? run : undefined
+    const observation = active?.observation()
+    const history = run?.observation()
     return {
       bindingId: this.bindingId,
       activeRun: active === undefined
@@ -464,6 +474,13 @@ export class BehaviorHost {
       activeTarget: active?.describe().activeTarget ?? null,
       waiting: active?.describe().waiting ?? null,
       lastFailure: active?.describe().lastFailure ?? null,
+      currentStep: observation?.currentStep ?? null,
+      stepCount: history?.stepCount ?? 0,
+      progress: history?.progress ?? null,
+      lastError: history?.lastError ?? null,
+      cleanupState: observation?.cleanupState ?? 'none',
+      controlHealth: observation?.controlHealth ?? 'ok',
+      switchState: this.pendingSwitch !== undefined ? 'queued' : (observation?.switchState ?? 'none'),
     }
   }
 
@@ -479,10 +496,13 @@ export class BehaviorHost {
   private rememberLastRun(): void {
     const run = this.run
     if (run === undefined || !isTerminal(run.status)) return
+    const observation = run.observation()
     this.lastRun = {
       runId: run.runId,
       status: run.status,
       ...(run.error === undefined ? {} : { error: run.error }),
+      progress: observation.progress,
+      ...(observation.evidence === undefined ? {} : { evidence: observation.evidence }),
     }
   }
 }

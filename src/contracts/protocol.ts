@@ -122,6 +122,30 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type CurrentStep = {
+  kind: 'query' | 'act' | 'decide' | 'wait' | 'progress' | 'log'
+  ref: string | null
+  op: string | null
+  summary: string
+}
+
+export type CleanupState = 'none' | 'running' | 'released' | 'unconfirmed'
+export type ControlHealth = 'ok' | 'unknown' | 'faulted'
+export type SwitchState = 'none' | 'queued' | 'stopping' | 'released' | 'unconfirmed'
+
+export type RunObservation = {
+  currentStep: CurrentStep | null
+  stepCount: number
+  progress: JsonValue | null
+  lastError: P2Error | null
+  cleanupState: CleanupState
+  controlHealth: ControlHealth
+  switchState: SwitchState
+  logCount: number
+  logDropped: number
+  evidence?: JsonValue
+}
+
 export type StatusResult = {
   bodyEpoch: BodyEpoch
   /** Package/body version from body.manifest.json, e.g. 0.3.2-exp-ir.1. */
@@ -142,6 +166,13 @@ export type StatusResult = {
   activeTarget?: { x: number; z: number } | null
   waiting?: string | null
   lastFailure?: P2Error | null
+  currentStep?: CurrentStep | null
+  stepCount?: number
+  progress?: JsonValue | null
+  lastError?: P2Error | null
+  cleanupState?: CleanupState
+  controlHealth?: ControlHealth
+  switchState?: SwitchState
   /** Experiment-only rescue channel state; null when the body has no provider. */
   rescue?: { enabled: boolean; tpRadius: number } | null
   /** Developer-mode external operations; null when the hook is disabled. */
@@ -161,6 +192,8 @@ export type LastRunSummary = {
   runId: string
   status: 'succeeded' | 'failed' | 'cancelled'
   error?: P2Error
+  progress?: JsonValue | null
+  evidence?: JsonValue
 }
 
 export type PendingConfirmationSummary = {

@@ -318,3 +318,62 @@ describe('stop revocation and release', () => {
     expect(run.allowsTakeover).toBe(true)
   })
 })
+
+describe('observation and bounded payloads', () => {
+  it('reports currentStep, stepCount, progress and success evidence', async () => {
+    const artifact = await checked(behavior(`
+      yield ctx.progress({ phase: 'mine' })
+      yield ctx.query('position', {})
+      yield ctx.act('move-to', { x: 1, z: 2 })
+      return ctx.succeed({ mined: 3 })
+    `))
+    const act = fakeAct()
+    const run = makeRun(artifact, {
+      act: { start: () => act.handle },
+      resolveAct: () => 'p2:act:move',
+    })
+    expect(run.tick(0)).toBe('running')
+    expect(run.observation()).toMatchObject({
+      currentStep: { kind: 'act', ref: 'move-to', op: null, summary: 'act:move-to' },
+      stepCount: 3,
+      progress: { phase: 'mine' },
+      cleanupState: 'none',
+      controlHealth: 'ok',
+      switchState: 'none',
+      logDropped: 0,
+    })
+    expect(run.tick(1)).toBe('running')
+    expect(run.tick(2)).toBe('succeeded')
+    const observation = run.observation()
+    expect(observation.currentStep).toBeNull()
+    expect(observation.evidence).toEqual({ mined: 3 })
+    expect(observation.lastError).toBeNull()
+  })
+
+  it('rejects oversized or non-serializable progress and evidence', async () => {
+    const big = await checked(behavior("yield ctx.progress({ pad: 'x'.repeat(5000) })"))
+    const bigRun = makeRun(big)
+    expect(bigRun.tick(0)).toBe('failed')
+    expect(bigRun.error?.code).toBe('BEHAVIOR_VALUE_TOO_LARGE')
+
+    const cyclic = await checked(behavior('yield ctx.progress(10n)'))
+    const cyclicRun = makeRun(cyclic)
+    expect(cyclicRun.tick(0)).toBe('failed')
+    expect(cyclicRun.error?.code).toBe('BEHAVIOR_VALUE_INVALID')
+
+    const evidence = await checked(behavior("return ctx.succeed({ pad: 'x'.repeat(20000) })"))
+    const evidenceRun = makeRun(evidence)
+    expect(evidenceRun.tick(0)).toBe('failed')
+    expect(evidenceRun.error?.code).toBe('BEHAVIOR_VALUE_TOO_LARGE')
+  })
+
+  it('keeps logs in a bounded ring buffer with a dropped counter', async () => {
+    const artifact = await checked(behavior("while (true) { yield ctx.log('x'.repeat(4000)) }"))
+    const run = makeRun(artifact)
+    expect(run.tick(0)).toBe('running')
+    const observation = run.observation()
+    expect(observation.logCount).toBeLessThanOrEqual(66)
+    expect(observation.logDropped).toBeGreaterThan(0)
+    expect(observation.currentStep).toMatchObject({ kind: 'log' })
+  })
+})

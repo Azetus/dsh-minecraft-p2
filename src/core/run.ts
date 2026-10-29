@@ -1,11 +1,12 @@
 import type { BehaviorDefinition } from '../contracts/ir.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
+import type { CurrentStep, RunObservation } from '../contracts/protocol.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { BehaviorExecutor } from './executor.ts'
 import type { ExecutorStatus } from './executor.ts'
 import type { IngressEvent } from './ingress.ts'
 import type { ActPort, PolicyPort, QueryPort } from './node-runtime.ts'
-import { StopControl, stopUnconfirmedError } from './stop-control.ts'
+import { StopControl, cleanupStateOf, controlHealthOf, stopUnconfirmedError, switchStateOf } from './stop-control.ts'
 import type { StopState } from './stop-control.ts'
 
 export type RunStatus = 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
@@ -70,6 +71,7 @@ export class BehaviorRun {
   private readonly act: ActPort
   private readonly stopControl = new StopControl()
   private stopFailure: P2Error | undefined
+  private stepCount = 0
 
   constructor(options: BehaviorRunOptions) {
     this.runId = options.runId
@@ -117,8 +119,30 @@ export class BehaviorRun {
     }
   }
 
+  observation(): RunObservation {
+    const report = this.executor.runtimeReport
+    const state = this.stopControl.state
+    const step: CurrentStep | null = report.act !== null
+      ? { kind: 'act', ref: report.act, op: null, summary: `act:${report.act}` }
+      : report.node !== null
+        ? { kind: 'wait', ref: null, op: null, summary: report.node }
+        : null
+    return {
+      currentStep: step,
+      stepCount: this.stepCount,
+      progress: null,
+      lastError: this.error ?? null,
+      cleanupState: cleanupStateOf(state),
+      controlHealth: controlHealthOf(state),
+      switchState: switchStateOf(state),
+      logCount: 0,
+      logDropped: 0,
+    }
+  }
+
   tick(now = Date.now()): RunStatus {
     if (this.statusValue !== 'running' && this.statusValue !== 'blocked') return this.statusValue
+    this.stepCount += 1
     const control = this.stopControl.state
     if (control !== 'running' && control !== 'queued') {
       this.executor.tick(now)

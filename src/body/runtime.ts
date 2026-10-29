@@ -397,6 +397,13 @@ export class BodyRuntime {
       activeTarget: this.behavior?.status().activeTarget ?? null,
       waiting: this.behavior?.status().waiting ?? null,
       lastFailure: this.behavior?.status().lastFailure ?? null,
+      currentStep: this.behavior?.status().currentStep ?? null,
+      stepCount: this.behavior?.status().stepCount ?? 0,
+      progress: this.behavior?.status().progress ?? null,
+      lastError: this.behavior?.status().lastError ?? null,
+      cleanupState: this.behavior?.status().cleanupState ?? 'none',
+      controlHealth: this.behavior?.status().controlHealth ?? 'ok',
+      switchState: this.behavior?.status().switchState ?? 'none',
       rescue: this.rescueState ?? null,
       devOps: this.devOpsState?.() ?? null,
       ...(this.debugLog === undefined ? {} : {

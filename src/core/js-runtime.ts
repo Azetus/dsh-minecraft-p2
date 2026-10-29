@@ -4,9 +4,10 @@ import { p2Error } from '../contracts/protocol.ts'
 import type { BehaviorArtifact } from '../contracts/ir.ts'
 import type { ArtifactRef } from '../contracts/ir.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
+import type { CurrentStep, RunObservation } from '../contracts/protocol.ts'
 import type { ActHandle, ActPoll, ActPort, PolicyOutcome, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 import type { RunStatus } from './run.ts'
-import { StopControl, stopUnconfirmedError } from './stop-control.ts'
+import { StopControl, cleanupStateOf, controlHealthOf, stopUnconfirmedError, switchStateOf } from './stop-control.ts'
 import type { StopState } from './stop-control.ts'
 
 type JsCommand =
@@ -43,6 +44,10 @@ export type JsBehaviorRunOptions = {
 const STEP_TIMEOUT_MS = 50
 const STEP_BUDGET = 100
 const LOAD_TIMEOUT_MS = 1000
+const MAX_PROGRESS_BYTES = 4 * 1024
+const MAX_LOG_MESSAGE_BYTES = 4 * 1024
+const MAX_EVIDENCE_BYTES = 16 * 1024
+const LOG_BUFFER_BYTES = 256 * 1024
 
 /**
  * JS behavior driver. One tick advances at most one bounded scheduling pass over
@@ -66,10 +71,15 @@ export class JsBehaviorRun {
   private waitUntil: number | undefined
   private clock = 0
   private currentError: P2Error | undefined
-  private stepLabel: string | null = null
+  private currentStep: CurrentStep | null = null
+  private stepCount = 0
   private activeAct: string | null = null
   private activeTarget: { x: number; z: number } | null = null
   private progressValue: JsonValue | undefined
+  private evidenceValue: JsonValue | undefined
+  private readonly logEntries: string[] = []
+  private logBytes = 0
+  private logDropped = 0
   private readonly stopControl = new StopControl()
   private actSequence = 0
 
@@ -105,10 +115,26 @@ export class JsBehaviorRun {
   describe(): { activeAct: string | null; activeNode: string | null; activeTarget: { x: number; z: number } | null; waiting: string | null; lastFailure: P2Error | undefined } {
     return {
       activeAct: this.activeAct,
-      activeNode: this.stepLabel,
+      activeNode: this.currentStep?.summary ?? null,
       activeTarget: this.activeTarget,
       waiting: this.pending === undefined ? (this.waitUntil === undefined ? null : 'wait') : this.pending.kind,
       lastFailure: this.currentError,
+    }
+  }
+
+  observation(): RunObservation {
+    const state = this.stopControl.state
+    return {
+      currentStep: this.currentStep,
+      stepCount: this.stepCount,
+      progress: this.progressValue ?? null,
+      lastError: this.currentError ?? null,
+      cleanupState: cleanupStateOf(state),
+      controlHealth: controlHealthOf(state),
+      switchState: switchStateOf(state),
+      logCount: this.logEntries.length,
+      logDropped: this.logDropped,
+      ...(this.evidenceValue === undefined ? {} : { evidence: this.evidenceValue }),
     }
   }
 
@@ -233,6 +259,7 @@ export class JsBehaviorRun {
   private step(slot: ResumeSlot): void {
     const generator = this.generator
     if (generator === undefined) return
+    this.stepCount += 1
     const state = { input: slot.value, thrown: slot.thrown }
     this.context.__p2_step = () => (state.thrown ? generator.throw(state.input) : generator.next(state.input))
     let result: unknown
@@ -259,6 +286,16 @@ export class JsBehaviorRun {
       return
     }
     if (value.type === 'succeed') {
+      const evidence = value.evidence
+      if (evidence !== undefined) {
+        const error = boundedJsonError(evidence, MAX_EVIDENCE_BYTES, 'evidence')
+        if (error !== undefined) {
+          this.fail(error)
+          return
+        }
+        this.evidenceValue = evidence as JsonValue
+      }
+      this.currentStep = null
       this.statusValue = 'succeeded'
       return
     }
@@ -291,7 +328,7 @@ export class JsBehaviorRun {
           this.fail(invalidCommand('query command requires an args object'))
           return
         }
-        this.stepLabel = `query:${op}`
+        this.setStep('query', `query:${op}`, null, op)
         const outcome = this.options.query({ op, args: {} }, value.args as Record<string, JsonValue>)
         this.completeQuery(outcome)
         return
@@ -314,7 +351,7 @@ export class JsBehaviorRun {
           }
           return
         }
-        this.stepLabel = `act:${ref.definitionId}`
+        this.setStep('act', `act:${ref.definitionId}`, ref.definitionId, null)
         this.activeAct = ref.definitionId
         const x = value.args.x
         const z = value.args.z
@@ -360,7 +397,7 @@ export class JsBehaviorRun {
           }
           return
         }
-        this.stepLabel = `decide:${ref.definitionId}`
+        this.setStep('decide', `decide:${ref.definitionId}`, ref.definitionId, null)
         const outcome = this.options.policy.call({ definitionId: ref.definitionId, artifactId }, value.inputs as Record<string, JsonValue>)
         this.completePolicy(outcome)
         return
@@ -371,7 +408,7 @@ export class JsBehaviorRun {
           this.fail(invalidCommand('wait command requires a finite durationMs'))
           return
         }
-        this.stepLabel = `wait ${Math.max(0, durationMs)}`
+        this.setStep('wait', `wait ${Math.max(0, durationMs)}`)
         this.waitUntil = this.clock + Math.max(0, durationMs)
         return
       }
@@ -380,7 +417,13 @@ export class JsBehaviorRun {
           this.fail(invalidCommand('progress command requires a value'))
           return
         }
-        this.progressValue = value.value as JsonValue | undefined
+        const error = boundedJsonError(value.value, MAX_PROGRESS_BYTES, 'progress')
+        if (error !== undefined) {
+          this.fail(error)
+          return
+        }
+        this.progressValue = value.value as JsonValue
+        this.setStep('progress', 'progress')
         this.resumeSlot = { value: undefined, thrown: false }
         return
       }
@@ -389,6 +432,13 @@ export class JsBehaviorRun {
           this.fail(invalidCommand('log command requires a message string'))
           return
         }
+        const error = boundedJsonError(value.message, MAX_LOG_MESSAGE_BYTES, 'log message')
+        if (error !== undefined) {
+          this.fail(error)
+          return
+        }
+        this.appendLog(value.message)
+        this.setStep('log', 'log')
         this.resumeSlot = { value: undefined, thrown: false }
         return
       }
@@ -399,6 +449,26 @@ export class JsBehaviorRun {
       default:
         this.fail(invalidCommand('yielded value has an unknown command type'))
     }
+  }
+
+  private setStep(kind: CurrentStep['kind'], summary: string, ref: string | null = null, op: string | null = null): void {
+    this.currentStep = { kind, ref, op, summary }
+  }
+
+  private appendLog(message: string): void {
+    const bytes = Buffer.byteLength(message, 'utf8')
+    if (bytes > LOG_BUFFER_BYTES) {
+      this.logDropped += 1
+      return
+    }
+    while (this.logBytes + bytes > LOG_BUFFER_BYTES && this.logEntries.length > 0) {
+      const removed = this.logEntries.shift()
+      if (removed === undefined) break
+      this.logBytes -= Buffer.byteLength(removed, 'utf8')
+      this.logDropped += 1
+    }
+    this.logEntries.push(message)
+    this.logBytes += bytes
   }
 
   private completeQuery(outcome: QueryOutcome): void {
@@ -561,4 +631,28 @@ function invalidCommand(message: string): P2Error {
 
 function invalidReturn(message: string): P2Error {
   return p2Error('BEHAVIOR_INVALID_RETURN', 'runtime', message, { module: 'core.js-run' }, { phase: 'return' })
+}
+
+/** Bounds optional JSON payloads; business meaning is never inspected. */
+function boundedJsonError(value: unknown, maxBytes: number, label: string): P2Error | undefined {
+  let text: string | undefined
+  try {
+    text = JSON.stringify(value)
+  } catch {
+    return p2Error('BEHAVIOR_VALUE_INVALID', 'runtime', `${label} must be JSON-serializable`, { module: 'core.js-run' }, { field: label })
+  }
+  if (text === undefined) {
+    return p2Error('BEHAVIOR_VALUE_INVALID', 'runtime', `${label} must be JSON-serializable`, { module: 'core.js-run' }, { field: label })
+  }
+  const bytes = Buffer.byteLength(text, 'utf8')
+  if (bytes > maxBytes) {
+    return p2Error(
+      'BEHAVIOR_VALUE_TOO_LARGE',
+      'runtime',
+      `${label} exceeds ${maxBytes} bytes`,
+      { module: 'core.js-run' },
+      { field: label, bytes, limit: maxBytes },
+    )
+  }
+  return undefined
 }

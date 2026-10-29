@@ -45,6 +45,13 @@ export default {
 }
 `
 
+const jsObservation = `
+defineBehavior({
+  manifest: { id: 'obs-js', mode: 'finite', parameters: {} },
+  *run(ctx) { yield ctx.progress({ n: 1 }); return ctx.succeed({ ok: true }) },
+})
+`
+
 function releasableAct(): { act: ActPort; release: (state: ReleaseStatus) => void } {
   let state: ReleaseStatus = 'stopping'
   return {
@@ -112,6 +119,26 @@ describe('BehaviorHost workflow', () => {
     expect(missing.error?.code).toBe('ARTIFACT_NOT_ACTIVE')
   })
 
+  it('reports progress, evidence and observation fields through status', async () => {
+    const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
+    const artifact = await host.check({ sourcePath: source('obs.mjs', jsObservation), format: 'js' })
+    host.activate(artifact.artifactId)
+    const run = host.switch({ artifactId: artifact.artifactId, params: {}, commandId: 'obs' })
+    expect(host.tick(0)).toBe('succeeded')
+    const status = host.status()
+    expect(status.lastRun).toMatchObject({
+      runId: run.runId,
+      status: 'succeeded',
+      progress: { n: 1 },
+      evidence: { ok: true },
+    })
+    expect(status.currentStep).toBeNull()
+    expect(status.stepCount).toBe(2)
+    expect(status.cleanupState).toBe('none')
+    expect(status.controlHealth).toBe('ok')
+    expect(status.switchState).toBe('none')
+  })
+
   it('requires a checker credential before activation', async () => {
     const host = new BehaviorHost({ bindingId: 'binding-1', query, act })
     expect(() => host.activate('p2:behavior:unknown')).toThrow(/credential/)
@@ -163,6 +190,8 @@ describe('BehaviorHost stop and takeover', () => {
     expect(second.status).toBe('stopping')
     expect(second.runId).toBe(first.runId)
     expect(host.status().activeRun?.artifactId).toBe(oldArtifact)
+    expect(host.status().switchState).toBe('queued')
+    expect(host.status().cleanupState).toBe('running')
 
     control.release('released')
     host.tick(10)

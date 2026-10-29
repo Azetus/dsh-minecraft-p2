@@ -1,4 +1,5 @@
 import { p2Error } from '../contracts/protocol.ts'
+import type { CleanupState, ControlHealth, SwitchState } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import type { ReleaseStatus } from './node-runtime.ts'
 
@@ -128,4 +129,38 @@ export function stopUnconfirmedError(state: StopState): P2Error | undefined {
     'control release was not confirmed; new control work is not allowed',
     { module: 'core.stop-control' },
   )
+}
+
+export function cleanupStateOf(state: StopState): CleanupState {
+  switch (state) {
+    case 'accepted':
+    case 'stopping':
+      return 'running'
+    case 'released':
+      return 'released'
+    case 'stop-unconfirmed':
+      return 'unconfirmed'
+    default:
+      return 'none'
+  }
+}
+
+export function controlHealthOf(state: StopState): ControlHealth {
+  return state === 'stop-unconfirmed' ? 'unknown' : 'ok'
+}
+
+export function switchStateOf(state: StopState): SwitchState {
+  switch (state) {
+    case 'queued':
+      return 'queued'
+    case 'accepted':
+    case 'stopping':
+      return 'stopping'
+    case 'released':
+      return 'released'
+    case 'stop-unconfirmed':
+      return 'unconfirmed'
+    default:
+      return 'none'
+  }
 }
