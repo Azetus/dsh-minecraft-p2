@@ -8,10 +8,15 @@ import type {
   GuardCondition,
   GuardEvent,
   GuardEventPhase,
+  GuardQuery,
   GuardState,
   GuardStatus,
   GuardSwitchSummary,
   SwitchState,
+  WatchEdge,
+  WatchEvent,
+  WatchState,
+  WatchStatus,
 } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
@@ -35,7 +40,7 @@ import { ArtifactRegistry, RegistryError } from './registry.ts'
 import type { ArtifactRecord } from './registry.ts'
 import type { ActPort, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
 import { ConditionEvaluator, policyCall } from './condition-evaluator.ts'
-import type { DeclaredQuery, PredicateCall, PredicateInput } from './condition-evaluator.ts'
+import type { ConditionOutcome, DeclaredQuery, PredicateCall, PredicateInput } from './condition-evaluator.ts'
 import type { ActSource } from './act-port.ts'
 import type { PolicySource } from './policy-port.ts'
 
@@ -101,6 +106,19 @@ export type HostStatus = {
   lastSwitch: GuardSwitchSummary | null
   guardEvents: GuardEvent[]
   guardEventSeq: number
+  watches: WatchStatus[]
+  watchEvents: WatchEvent[]
+  watchEventSeq: number
+}
+
+export type WatchAddInput = {
+  queries: GuardQuery[]
+  predicate: string
+  edge?: WatchEdge
+  cooldownMs?: number
+  ttlMs?: number
+  name?: string
+  priority?: number
 }
 
 export type GuardSetInput = {
@@ -144,6 +162,29 @@ type PendingSwitch = {
   fromRunId?: string | null
 }
 
+/** One observation-only watch registration. It has no control capability. */
+type ActiveWatch = {
+  id: string
+  name: string | null
+  priority: number
+  queries: DeclaredQuery[]
+  predicate: string
+  edge: WatchEdge
+  cooldownMs: number
+  armedAt: number
+  expiresAt: number
+  state: WatchState
+  lastFire: number | undefined
+  lastKey: string | undefined
+  lastValue: boolean | undefined
+  suppressed: number
+  dropped: number
+  failures: number
+  nextEvalAt: number
+  evaluator: ConditionEvaluator | undefined
+  lastError?: P2Error
+}
+
 const GUARD_EVAL_INTERVAL_MS = 250
 const GUARD_QUERY_TIMEOUT_MS = 1000
 const GUARD_ERROR_LIMIT = 3
@@ -152,6 +193,20 @@ const GUARD_LIMIT = 8
 const GUARD_MAX_QUERIES = 4
 const GUARD_SAMPLING_LIMIT = 2
 const GUARD_MAX_PRIORITY = 1000
+
+const WATCH_EVAL_INTERVAL_MS = 500
+const WATCH_SAMPLING_LIMIT = 4
+const WATCH_ERROR_LIMIT = 3
+const WATCH_EVENT_LIMIT = 64
+const WATCH_LIMIT = 16
+const WATCH_MAX_QUERIES = 4
+const WATCH_RATE_LIMIT = 60
+const WATCH_RATE_WINDOW_MS = 60_000
+const WATCH_COOLDOWN_MIN_MS = 1000
+const WATCH_COOLDOWN_DEFAULT_MS = 5000
+const WATCH_TTL_DEFAULT_MS = 3_600_000
+const WATCH_SUMMARY_MAX = 256
+const WATCH_KEY_MAX = 128
 
 export type BehaviorHostOptions = {
   bindingId: string
@@ -203,6 +258,11 @@ export class BehaviorHost {
   private lastSwitch: GuardSwitchSummary | null = null
   private readonly guardEvents: GuardEvent[] = []
   private guardEventSeq = 0
+  private watches: ActiveWatch[] = []
+  private watchSequence = 0
+  private watchEventSeq = 0
+  private readonly watchEvents: WatchEvent[] = []
+  private watchNotifications: number[] = []
 
   constructor(options: BehaviorHostOptions) {
     this.bindingId = options.bindingId
@@ -619,6 +679,7 @@ export class BehaviorHost {
     this.checkGuardPending(now)
     this.activatePending(now)
     this.evaluateGuards(now)
+    this.evaluateWatches(now)
     return status
   }
 
@@ -996,6 +1057,204 @@ export class BehaviorHost {
     requireOperation(op, 'query', 'core.host')
   }
 
+  // ---- watch: observation-only notifications, no control capability ----
+
+  addWatch(input: WatchAddInput, now = Date.now()): WatchStatus {
+    const queries = validateWatchQueries(input.queries)
+    for (const query of queries) this.requireGuardQuery(query.op)
+    const predicate = this.registry.get(input.predicate)
+    if (predicate === undefined || predicate.artifact.kind !== 'policy') {
+      throw p2Error('WATCH_PREDICATE_NOT_FOUND', 'validation', 'watch predicate must be a checked policy artifact', { module: 'core.host' })
+    }
+    const edge = input.edge ?? 'rising'
+    if (edge !== 'rising' && edge !== 'falling' && edge !== 'both') {
+      throw p2Error('WATCH_EDGE_INVALID', 'validation', 'watch edge must be rising, falling or both', { module: 'core.host' })
+    }
+    const cooldownMs = input.cooldownMs ?? WATCH_COOLDOWN_DEFAULT_MS
+    if (!Number.isFinite(cooldownMs) || cooldownMs < WATCH_COOLDOWN_MIN_MS) {
+      throw p2Error('WATCH_COOLDOWN_INVALID', 'validation', `watch cooldownMs must be at least ${WATCH_COOLDOWN_MIN_MS}`, { module: 'core.host' })
+    }
+    const ttlMs = input.ttlMs ?? WATCH_TTL_DEFAULT_MS
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      throw p2Error('WATCH_TTL_INVALID', 'validation', 'watch ttlMs must be a positive number', { module: 'core.host' })
+    }
+    const priority = input.priority ?? 0
+    if (!Number.isInteger(priority) || Math.abs(priority) > GUARD_MAX_PRIORITY) {
+      throw p2Error('WATCH_PRIORITY_INVALID', 'validation', `watch priority must be an integer within ±${GUARD_MAX_PRIORITY}`, { module: 'core.host' })
+    }
+    const name = input.name
+    if (name !== undefined && (name.length === 0 || name.length > 64)) {
+      throw p2Error('WATCH_NAME_INVALID', 'validation', 'watch name must be 1-64 characters', { module: 'core.host' })
+    }
+    if (this.watches.filter(watch => watch.state === 'active').length >= WATCH_LIMIT) {
+      throw p2Error('WATCH_LIMIT', 'capability', `at most ${WATCH_LIMIT} active watches may exist`, { module: 'core.host' })
+    }
+    this.pruneWatchRecords()
+    const watch: ActiveWatch = {
+      id: `watch-${++this.watchSequence}`,
+      name: name ?? null,
+      priority,
+      queries,
+      predicate: input.predicate,
+      edge,
+      cooldownMs,
+      armedAt: now,
+      expiresAt: now + ttlMs,
+      state: 'active',
+      lastFire: undefined,
+      lastKey: undefined,
+      lastValue: undefined,
+      suppressed: 0,
+      dropped: 0,
+      failures: 0,
+      nextEvalAt: now,
+      evaluator: undefined,
+    }
+    this.watches.push(watch)
+    return watchStatusOf(watch)
+  }
+
+  removeWatch(watchId?: string): { removed: number; watches: WatchStatus[] } {
+    const targets = watchId === undefined ? [...this.watches] : this.watches.filter(watch => watch.id === watchId)
+    if (targets.length === 0) return { removed: 0, watches: [] }
+    this.watches = this.watches.filter(watch => !targets.includes(watch))
+    return { removed: targets.length, watches: targets.map(watchStatusOf) }
+  }
+
+  listWatches(): WatchStatus[] {
+    return this.watches.map(watchStatusOf)
+  }
+
+  watchEventLog(): WatchEvent[] {
+    return [...this.watchEvents]
+  }
+
+  watchHighWatermark(): number {
+    return this.watchEventSeq
+  }
+
+  private pruneWatchRecords(): void {
+    if (this.watches.length < WATCH_LIMIT * 4) return
+    this.watches = this.watches.filter(watch => watch.state === 'active' || watch.state === 'expired')
+  }
+
+  private evaluateWatches(now: number): void {
+    for (const watch of [...this.watches]) {
+      if (watch.state !== 'active') continue
+      this.evaluateWatch(watch, now)
+    }
+  }
+
+  private watchSamplingInFlight(): number {
+    let count = 0
+    for (const watch of this.watches) if (watch.evaluator !== undefined) count += 1
+    return count
+  }
+
+  private evaluateWatch(watch: ActiveWatch, now: number): void {
+    if (now >= watch.expiresAt) {
+      watch.state = 'expired'
+      watch.evaluator = undefined
+      return
+    }
+    if (watch.evaluator === undefined) {
+      if (now < watch.nextEvalAt) return
+      if (this.watchSamplingInFlight() >= WATCH_SAMPLING_LIMIT) return
+      watch.nextEvalAt = now + WATCH_EVAL_INTERVAL_MS
+      watch.evaluator = new ConditionEvaluator({
+        queries: watch.queries,
+        query: this.query,
+        queryTimeoutMs: GUARD_QUERY_TIMEOUT_MS,
+        predicateTimeoutMs: GUARD_QUERY_TIMEOUT_MS,
+        evaluate: input => this.evaluateWatchPredicate(watch, input),
+      })
+      watch.evaluator.start()
+    }
+    const outcome = watch.evaluator.advance(now)
+    if (outcome === undefined) return
+    watch.evaluator = undefined
+    if (outcome.status === 'failed') {
+      watch.failures += 1
+      watch.lastError = outcome.error
+      if (watch.failures >= WATCH_ERROR_LIMIT) watch.state = 'error'
+      return
+    }
+    watch.failures = 0
+    this.considerWatchEdge(watch, outcome, now)
+  }
+
+  private evaluateWatchPredicate(watch: ActiveWatch, input: PredicateInput): PredicateCall {
+    const record = this.registry.get(watch.predicate)
+    if (record === undefined || record.artifact.kind !== 'policy') {
+      return {
+        status: 'failed',
+        error: p2Error('WATCH_PREDICATE_NOT_FOUND', 'validation', `watch ${watch.id} predicate policy is not registered`, { module: 'core.host' }),
+      }
+    }
+    try {
+      return policyCall(this.policy.call(
+        { definitionId: record.artifact.definitionId, artifactId: record.artifact.artifactId },
+        { samples: input.samples, now: input.now },
+      ))
+    } catch (error) {
+      return {
+        status: 'failed',
+        error: p2Error('WATCH_POLICY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.host' }),
+      }
+    }
+  }
+
+  private considerWatchEdge(
+    watch: ActiveWatch,
+    outcome: Extract<ConditionOutcome, { status: 'fire' | 'quiet' }>,
+    now: number,
+  ): void {
+    const current = outcome.status === 'fire'
+    const key = outcome.key?.slice(0, WATCH_KEY_MAX)
+    const rising = current && watch.lastValue !== true
+    const falling = !current && watch.lastValue === true
+    const keyChanged = current && key !== undefined && key !== watch.lastKey
+    let hit = false
+    if (watch.edge === 'rising') hit = rising
+    else if (watch.edge === 'falling') hit = falling
+    else hit = watch.lastValue === undefined ? current : current !== watch.lastValue
+    if (keyChanged && current) hit = true
+    watch.lastValue = current
+    watch.lastKey = key
+    if (!hit) return
+    this.emitWatchEvent(watch, outcome, now)
+  }
+
+  private emitWatchEvent(
+    watch: ActiveWatch,
+    outcome: Extract<ConditionOutcome, { status: 'fire' | 'quiet' }>,
+    now: number,
+  ): void {
+    if (watch.lastFire !== undefined && now - watch.lastFire < watch.cooldownMs) {
+      watch.suppressed += 1
+      return
+    }
+    this.watchNotifications = this.watchNotifications.filter(at => now - at < WATCH_RATE_WINDOW_MS)
+    if (this.watchNotifications.length >= WATCH_RATE_LIMIT) {
+      watch.dropped += 1
+      return
+    }
+    this.watchNotifications.push(now)
+    watch.lastFire = now
+    this.watchEventSeq += 1
+    const event: WatchEvent = {
+      seq: this.watchEventSeq,
+      watchId: watch.id,
+      key: outcome.key ?? null,
+      summary: outcome.summary === undefined ? null : outcome.summary.slice(0, WATCH_SUMMARY_MAX),
+      evidence: { samples: outcome.samples, sampledAt: outcome.sampledAt },
+      firedAt: now,
+      dropped: watch.dropped,
+    }
+    this.watchEvents.push(event)
+    while (this.watchEvents.length > WATCH_EVENT_LIMIT) this.watchEvents.shift()
+  }
+
   private emitGuard(phase: GuardEventPhase, input: {
     guardId: string
     attemptId?: string | undefined
@@ -1226,12 +1485,18 @@ export class BehaviorHost {
       guardEvents: [...this.guardEvents],
       guardEventSeq: this.guardEventSeq,
       guards: this.guardStatus(),
+      watches: this.listWatches(),
+      watchEvents: [...this.watchEvents],
+      watchEventSeq: this.watchEventSeq,
     }
   }
 
   dispose(): void {
     this.pendingSwitch = undefined
     this.guards = []
+    this.watches = []
+    this.watchEvents.length = 0
+    this.watchNotifications = []
     if (this.run !== undefined && !isTerminal(this.run.status)) {
       this.run.stop()
       this.run.tick()
@@ -1333,6 +1598,50 @@ function guardSwitchOf(
     at: now,
     phase,
   }
+}
+
+function watchStatusOf(watch: ActiveWatch): WatchStatus {
+  return {
+    id: watch.id,
+    name: watch.name,
+    priority: watch.priority,
+    state: watch.state,
+    queries: watch.queries.map(query => ({
+      op: query.op,
+      ...(query.args === undefined ? {} : { args: query.args }),
+    })),
+    predicate: watch.predicate,
+    edge: watch.edge,
+    cooldownMs: watch.cooldownMs,
+    armedAt: watch.armedAt,
+    expiresAt: watch.expiresAt,
+    lastFire: watch.lastFire ?? null,
+    lastKey: watch.lastKey ?? null,
+    suppressed: watch.suppressed,
+    dropped: watch.dropped,
+    ...(watch.lastError === undefined ? {} : { lastError: watch.lastError }),
+  }
+}
+
+function validateWatchQueries(queries: GuardQuery[]): DeclaredQuery[] {
+  if (!Array.isArray(queries) || queries.length === 0) {
+    throw p2Error('WATCH_CONDITION_INVALID', 'validation', 'watch requires at least one query', { module: 'core.host' })
+  }
+  if (queries.length > WATCH_MAX_QUERIES) {
+    throw p2Error('WATCH_CONDITION_INVALID', 'validation', `watch allows at most ${WATCH_MAX_QUERIES} queries`, { module: 'core.host' })
+  }
+  return queries.map(query => {
+    if (typeof query !== 'object' || query === null || typeof query.op !== 'string' || query.op.length === 0) {
+      throw p2Error('WATCH_CONDITION_INVALID', 'validation', 'each watch query requires an op name', { module: 'core.host' })
+    }
+    if (query.args !== undefined && (typeof query.args !== 'object' || query.args === null || Array.isArray(query.args))) {
+      throw p2Error('WATCH_CONDITION_INVALID', 'validation', 'watch query args must be an object', { module: 'core.host' })
+    }
+    return {
+      op: query.op,
+      ...(query.args === undefined ? {} : { args: query.args as Record<string, JsonValue> }),
+    }
+  })
 }
 
 function validateParams(artifact: BehaviorArtifact, params: Record<string, JsonValue>): Record<string, JsonValue> {  const result: Record<string, JsonValue> = { ...params }

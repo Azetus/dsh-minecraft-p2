@@ -193,6 +193,39 @@ export type GuardStatus = {
   lastError?: P2Error
 }
 
+export type WatchEdge = 'rising' | 'falling' | 'both'
+export type WatchState = 'active' | 'error' | 'expired'
+
+/** Observation-only notification registration; it has no control capability. */
+export type WatchStatus = {
+  id: string
+  name: string | null
+  priority: number
+  state: WatchState
+  queries: GuardQuery[]
+  predicate: string
+  edge: WatchEdge
+  cooldownMs: number
+  armedAt: number
+  expiresAt: number
+  lastFire: number | null
+  lastKey: string | null
+  suppressed: number
+  dropped: number
+  lastError?: P2Error
+}
+
+export type WatchEvent = {
+  seq: number
+  watchId: string
+  key: string | null
+  summary: string | null
+  evidence?: JsonValue
+  firedAt: number
+  /** Cumulative dropped count for this watch at emission time. */
+  dropped: number
+}
+
 export type GuardSwitchSummary = {
   guardId: string
   attemptId: string
@@ -262,6 +295,9 @@ export type StatusResult = {
   lastSwitch?: GuardSwitchSummary | null
   guardEvents?: GuardEvent[]
   guardEventSeq?: number
+  watches?: WatchStatus[]
+  watchEvents?: WatchEvent[]
+  watchEventSeq?: number
   /** Experiment-only rescue channel state; null when the body has no provider. */
   rescue?: { enabled: boolean; tpRadius: number } | null
   /** Developer-mode external operations; null when the hook is disabled. */

@@ -22,7 +22,9 @@ export type PredicateInput = {
   now: number
 }
 
-export type PredicateValue = boolean | { fire: boolean; evidence?: JsonValue }
+export type PredicateValue =
+  | boolean
+  | { fire: boolean; evidence?: JsonValue; key?: string; summary?: string }
 
 export type PredicateCall =
   | { status: 'ok'; value: PredicateValue }
@@ -44,6 +46,8 @@ export type ConditionOutcome =
       samples: Record<string, JsonValue>
       sampledAt: number
       evidence?: JsonValue
+      key?: string
+      summary?: string
     }
   | {
       status: 'failed'
@@ -241,7 +245,16 @@ export class ConditionEvaluator {
     }
     if (typeof value === 'object' && value !== null && !Array.isArray(value)
       && typeof (value as { fire?: unknown }).fire === 'boolean') {
-      return this.complete((value as { fire: boolean }).fire, (value as { evidence?: JsonValue }).evidence, now)
+      const record = value as { fire: boolean; evidence?: JsonValue; key?: unknown; summary?: unknown }
+      if ((record.key !== undefined && typeof record.key !== 'string')
+        || (record.summary !== undefined && typeof record.summary !== 'string')) {
+        return {
+          status: 'failed',
+          error: p2Error('GUARD_POLICY_RESULT_INVALID', 'runtime', 'predicate key/summary must be strings', { module: 'core.condition' }),
+          samples: this.payload(),
+        }
+      }
+      return this.complete(record.fire, record.evidence, now, record.key, record.summary)
     }
     return {
       status: 'failed',
@@ -250,13 +263,21 @@ export class ConditionEvaluator {
     }
   }
 
-  private complete(fire: boolean, evidence: JsonValue | undefined, now: number): ConditionOutcome {
+  private complete(
+    fire: boolean,
+    evidence: JsonValue | undefined,
+    now: number,
+    key?: string,
+    summary?: string,
+  ): ConditionOutcome {
     this.running = false
     return {
       status: fire ? 'fire' : 'quiet',
       samples: this.payload(),
       sampledAt: now,
       ...(evidence === undefined ? {} : { evidence }),
+      ...(key === undefined ? {} : { key }),
+      ...(summary === undefined ? {} : { summary }),
     }
   }
 

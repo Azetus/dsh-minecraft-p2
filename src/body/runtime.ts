@@ -448,6 +448,9 @@ export class BodyRuntime {
       lastSwitch: behavior?.lastSwitch ?? null,
       guardEvents: behavior?.guardEvents ?? [],
       guardEventSeq: behavior?.guardEventSeq ?? 0,
+      watches: behavior?.watches ?? [],
+      watchEvents: behavior?.watchEvents ?? [],
+      watchEventSeq: behavior?.watchEventSeq ?? 0,
       rescue: this.rescueState ?? null,
       devOps: this.devOpsState?.() ?? null,
       ...(this.debugLog === undefined ? {} : {
