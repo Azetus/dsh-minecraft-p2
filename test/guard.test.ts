@@ -356,3 +356,150 @@ describe('guard contract', () => {
     expect(status.guardEvents?.filter(event => event.phase === 'error')).toHaveLength(4)
   })
 })
+
+describe('policy guard conditions', () => {
+  const poisonedPolicy = `
+definePolicy({
+  manifest: { id: 'poisoned', inputs: ['samples', 'now'], outputs: [] },
+  run: () => false,
+})
+`
+
+  async function policyHost(
+    bindingId: string,
+    query: QueryPort,
+    decide: (samples: Record<string, { value?: JsonValue }>) => JsonValue,
+  ): Promise<{ host: BehaviorHost; targetArtifactId: string; predicate: string }> {
+    const host = new BehaviorHost({
+      bindingId,
+      query,
+      act,
+      policy: {
+        call: (_ref, inputs) => ({
+          status: 'ok',
+          value: decide((inputs.samples ?? {}) as unknown as Record<string, { value?: JsonValue }>),
+        }),
+      },
+      loadManifest: async () => ({ id: 'poisoned', inputs: ['samples', 'now'], outputs: [] }),
+    })
+    const target = await host.check({ sourcePath: source('target.mjs', done) })
+    host.activate(target.artifactId)
+    const predicate = await host.check({
+      sourcePath: source('poison.mjs', poisonedPolicy),
+      artifactKind: 'policy',
+    })
+    return { host, targetArtifactId: target.artifactId, predicate: predicate.artifactId }
+  }
+
+  it('fires from declared query samples and carries policy evidence', async () => {
+    const query: QueryPort = ref => ref.op === 'entities'
+      ? {
+          status: 'ok',
+          value: { nearest: 'creeper', distance: 3 },
+          meta: { source: 'query', scope: 'entities', sampledAt: 1_000 },
+        }
+      : { status: 'ok', value: { health: 20 } }
+    const { host, targetArtifactId, predicate } = await policyHost(
+      'guard-policy-1',
+      query,
+      samples => ({
+        fire: ((samples['0']?.value as { distance?: number } | undefined)?.distance ?? 99) < 5,
+        evidence: { threat: 'creeper' },
+      }),
+    )
+
+    host.setGuard({
+      guardId: 'poison',
+      condition: { kind: 'policy', queries: [{ op: 'entities' }], predicate },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 1_000)
+    host.tick(1_000)
+
+    const status = host.status()
+    expect(status.guards[0]?.state).toBe('fired')
+    expect(status.lastSwitch?.phase).toBe('started')
+    const fired = status.guardEvents?.find(event => event.phase === 'fired')
+    expect(fired?.evidence).toMatchObject({
+      samples: { '0': { status: 'ok', value: { nearest: 'creeper', distance: 3 } } },
+      sampledAt: 1_000,
+      policy: { threat: 'creeper' },
+    })
+  })
+
+  it('does not fire on a failed query and errors after three completed failures', async () => {
+    const query: QueryPort = () => ({
+      status: 'failed',
+      error: p2Error('QUERY_FAILED', 'runtime', 'entities unavailable', { module: 'test.guard' }),
+    })
+    const { host, targetArtifactId, predicate } = await policyHost('guard-policy-2', query, () => true)
+    host.setGuard({
+      guardId: 'poison',
+      condition: { kind: 'policy', queries: [{ op: 'entities' }], predicate },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)
+
+    host.tick(0)
+    host.tick(250)
+    expect(host.status().guards[0]?.state).toBe('active')
+    expect(host.status().guardEvents?.some(event => event.phase === 'fired')).toBe(false)
+    host.tick(500)
+    expect(host.status().guards[0]?.state).toBe('error')
+    expect(host.status().lastSwitch).toBeNull()
+  })
+
+  it('does not fire on stale samples', async () => {
+    const query: QueryPort = () => ({
+      status: 'ok',
+      value: { nearest: 'creeper', distance: 3 },
+      meta: { source: 'query', scope: 'entities', sampledAt: 0, validUntil: 50 },
+    })
+    const { host, targetArtifactId, predicate } = await policyHost('guard-policy-3', query, () => true)
+    host.setGuard({
+      guardId: 'poison',
+      condition: { kind: 'policy', queries: [{ op: 'entities' }], predicate },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)
+
+    host.tick(1_000)
+    const status = host.status()
+    expect(status.guards[0]?.state).toBe('active')
+    expect(status.guards[0]?.lastError?.code).toBe('STALE_OBSERVATION')
+    expect(status.guardEvents?.some(event => event.phase === 'fired')).toBe(false)
+  })
+
+  it('rejects more than four queries, unknown queries and unchecked predicates', async () => {
+    const { host, targetArtifactId, predicate } = await policyHost(
+      'guard-policy-4',
+      healthQuery(() => 6),
+      () => false,
+    )
+    expect(() => host.setGuard({
+      condition: {
+        kind: 'policy',
+        queries: [{ op: 'health' }, { op: 'position' }, { op: 'inventory' }, { op: 'time' }, { op: 'entities' }],
+        predicate,
+      },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)).toThrow(/at most 4/u)
+    expect(() => host.setGuard({
+      condition: { kind: 'policy', queries: [{ op: 'nope' }], predicate },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)).toThrow(/unknown operation/u)
+    expect(() => host.setGuard({
+      condition: { kind: 'policy', queries: [{ op: 'health' }], predicate: 'p2:policy:missing' },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)).toThrow(/predicate/u)
+  })
+})
