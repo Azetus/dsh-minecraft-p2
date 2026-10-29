@@ -136,6 +136,18 @@ export class BodyClient {
     return this.command('guard.clear', guardId === undefined ? {} : { guardId })
   }
 
+  watchAdd(input: JsonValue): Promise<JsonValue> {
+    return this.command('watch.add', input)
+  }
+
+  watchRemove(watchId?: string): Promise<JsonValue> {
+    return this.command('watch.remove', watchId === undefined ? {} : { watchId })
+  }
+
+  watchList(): Promise<JsonValue> {
+    return this.request('watch.list', {})
+  }
+
   commandGet(commandId: string): Promise<JsonValue> {
     return this.request('command.get', { commandId })
   }

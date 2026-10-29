@@ -300,6 +300,62 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
     }),
   })
 
+  register({
+    name: 'p2_watch',
+    description: 'Manage observation-only watches: declared queries + a pure policy predicate produce one notification per edge, subject to cooldown and a global rate cap. A watch cannot stop or switch behavior; inspect p2_events for delivered events.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove', 'list', 'clear'], description: 'Watch action' },
+        watchId: { type: 'string', description: 'Watch id for remove' },
+        name: { type: 'string', description: 'Optional human-readable name' },
+        priority: { type: 'number', description: 'Ordering hint only; watches never control' },
+        queries: {
+          type: 'array',
+          description: 'Up to 4 queries sampled by the host',
+          items: {
+            type: 'object',
+            properties: {
+              op: { type: 'string', description: 'Query operation name' },
+              args: { type: 'object', description: 'Query arguments', additionalProperties: true },
+            },
+            required: ['op'],
+            additionalProperties: false,
+          },
+        },
+        predicate: { type: 'string', description: 'Checked policy artifactId; returns boolean or { fire, key?, summary? }' },
+        edge: { type: 'string', enum: ['rising', 'falling', 'both'], description: 'Edge to notify (default rising)' },
+        cooldownMs: { type: 'number', description: 'Minimum gap between events (default 5000, min 1000)' },
+        ttlMs: { type: 'number', description: 'Watch lifetime in milliseconds (default 3600000)' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => {
+      const action = String(args.action)
+      if (action === 'list') return await manager.watchList()
+      if (action === 'remove') {
+        if (typeof args.watchId !== 'string') throw new Error('p2_watch remove requires watchId')
+        return await manager.watchRemove(args.watchId)
+      }
+      if (action === 'clear') return await manager.watchRemove()
+      if (action !== 'add') throw new Error(`unknown p2_watch action: ${action}`)
+      if (!Array.isArray(args.queries) || typeof args.predicate !== 'string') {
+        throw new Error('p2_watch add requires queries and a predicate artifactId')
+      }
+      return await manager.watchAdd({
+        queries: args.queries as JsonValue,
+        predicate: args.predicate,
+        ...(args.edge === 'rising' || args.edge === 'falling' || args.edge === 'both' ? { edge: args.edge } : {}),
+        ...(typeof args.cooldownMs === 'number' ? { cooldownMs: args.cooldownMs } : {}),
+        ...(typeof args.ttlMs === 'number' ? { ttlMs: args.ttlMs } : {}),
+        ...(typeof args.name === 'string' ? { name: args.name } : {}),
+        ...(typeof args.priority === 'number' ? { priority: args.priority } : {}),
+      } as JsonValue)
+    }),
+  })
+
   if (options.devTrace === true) {
     register({
       name: 'p2_trace',

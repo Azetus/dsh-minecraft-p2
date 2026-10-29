@@ -45,6 +45,7 @@ import type {
   TraceParams,
   TraceResult,
   GuardCondition,
+  GuardQuery,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -132,6 +133,11 @@ export class BodyRuntime {
         return { ...base, result: this.status() }
       case 'trace':
         return { ...base, result: this.traceResult(envelope.params) as unknown as JsonValue }
+      case 'watch.list':
+        return {
+          ...base,
+          result: { watches: this.behavior?.listWatches() ?? [] } as unknown as JsonValue,
+        }
       case 'stop':
         return this.handleStop(base, envelope)
       case 'shutdown':
@@ -151,6 +157,8 @@ export class BodyRuntime {
       && envelope.method !== 'behavior.stop'
       && envelope.method !== 'guard.set'
       && envelope.method !== 'guard.clear'
+      && envelope.method !== 'watch.add'
+      && envelope.method !== 'watch.remove'
       && envelope.method !== 'observe'
       && envelope.method !== 'rescue') {
       return this.handleRequest(envelope)
@@ -363,6 +371,39 @@ export class BodyRuntime {
           const cleared = this.behavior.clearGuard(guardId)
           this.recordCommand(commandId, 'guard.clear', cleared)
           return { ...base, result: cleared as unknown as JsonValue }
+        }
+        case 'watch.add': {
+          const queries = parseWatchQueries(params.queries)
+          const predicate = typeof params.predicate === 'string' ? params.predicate : undefined
+          if (queries === undefined || predicate === undefined || predicate.length === 0) {
+            return { ...base, error: invalidMessageError('queries and predicate are required') }
+          }
+          const rawEdge = params.edge
+          if (rawEdge !== undefined && rawEdge !== 'rising' && rawEdge !== 'falling' && rawEdge !== 'both') {
+            return { ...base, error: invalidMessageError('watch edge must be rising, falling or both') }
+          }
+          const edge = rawEdge as 'rising' | 'falling' | 'both' | undefined
+          const cooldownMs = typeof params.cooldownMs === 'number' ? params.cooldownMs : undefined
+          const ttlMs = typeof params.ttlMs === 'number' ? params.ttlMs : undefined
+          const name = typeof params.name === 'string' ? params.name : undefined
+          const priority = typeof params.priority === 'number' ? params.priority : undefined
+          const watch = this.behavior.addWatch({
+            queries,
+            predicate,
+            ...(edge === undefined ? {} : { edge }),
+            ...(cooldownMs === undefined ? {} : { cooldownMs }),
+            ...(ttlMs === undefined ? {} : { ttlMs }),
+            ...(name === undefined ? {} : { name }),
+            ...(priority === undefined ? {} : { priority }),
+          })
+          this.recordCommand(commandId, 'watch.add', watch)
+          return { ...base, result: watch as unknown as JsonValue }
+        }
+        case 'watch.remove': {
+          const watchId = typeof params.watchId === 'string' ? params.watchId : undefined
+          const removed = this.behavior.removeWatch(watchId)
+          this.recordCommand(commandId, 'watch.remove', removed)
+          return { ...base, result: removed as unknown as JsonValue }
         }
         default:
           return { ...base, error: unknownMethodError(envelope.method) }
@@ -704,6 +745,23 @@ function parseStopParams(params: JsonValue): { value: StopParams } | { error: P2
 }
 
 const TRACE_KINDS: ReadonlySet<string> = new Set(['run', 'behavior', 'act', 'op', 'guard', 'watch'])
+
+function parseWatchQueries(value: JsonValue | undefined): GuardQuery[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return undefined
+  const queries: GuardQuery[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
+    const record = entry as Record<string, JsonValue>
+    if (typeof record.op !== 'string' || record.op.length === 0) return undefined
+    if (record.args === undefined) {
+      queries.push({ op: record.op })
+      continue
+    }
+    if (typeof record.args !== 'object' || record.args === null || Array.isArray(record.args)) return undefined
+    queries.push({ op: record.op, args: record.args })
+  }
+  return queries
+}
 
 /** Wire-level guard condition shape; semantic checks stay in the host. */
 function parseGuardCondition(value: JsonValue | undefined): GuardCondition | undefined {

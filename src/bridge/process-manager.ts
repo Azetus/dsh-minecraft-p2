@@ -12,6 +12,7 @@ import type {
   MessageTransport,
   OwnerContext,
   StatusResult,
+  WatchEvent,
 } from '../contracts/index.ts'
 import { EventQueue } from '../core/events.ts'
 import type { RuntimeEvent } from '../core/events.ts'
@@ -80,6 +81,9 @@ export type BodyManagerOptions = {
   onGuardEvent?: (event: GuardEvent) => void
   /** Called when the body event cursor skipped events it no longer retained. */
   onGuardGap?: (fromSeq: number, toSeq: number) => void
+  /** Called once per watch notification, after deduplication by body seq. */
+  onWatchEvent?: (event: WatchEvent) => void
+  onWatchGap?: (fromSeq: number, toSeq: number) => void
 }
 
 export type StartResult = {
@@ -114,6 +118,7 @@ export class BodyManager {
   private eventSeq = 0
   private lastStatusSignature: string | undefined
   private lastGuardSeq = 0
+  private lastWatchSeq = 0
   private readonly requestTimeoutMs: number
   private readonly livenessMs: number
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
@@ -194,6 +199,7 @@ export class BodyManager {
       this.state = 'active'
       this.lastContactAt = this.now()
       this.lastGuardSeq = 0
+      this.lastWatchSeq = 0
       this.lastStatusSignature = undefined
       this.startHeartbeat()
       this.watchExit(handle)
@@ -221,6 +227,7 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.lastActiveRunId = status.activeRun?.runId ?? null
       this.processGuardEvents(status)
+      this.processWatchEvents(status)
       return {
         state: 'active',
         status,
@@ -270,6 +277,18 @@ export class BodyManager {
 
   guardClear(guardId?: string): Promise<JsonValue> {
     return this.activeClient().guardClear(guardId)
+  }
+
+  watchAdd(input: JsonValue): Promise<JsonValue> {
+    return this.activeClient().watchAdd(input)
+  }
+
+  watchRemove(watchId?: string): Promise<JsonValue> {
+    return this.activeClient().watchRemove(watchId)
+  }
+
+  watchList(): Promise<JsonValue> {
+    return this.activeClient().watchList()
   }
 
   commandGet(commandId: string): Promise<JsonValue> {
@@ -387,6 +406,7 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.lastActiveRunId = status.activeRun?.runId ?? null
       this.processGuardEvents(status)
+      this.processWatchEvents(status)
       const signature = JSON.stringify({
         run: status.activeRun,
         lastRun: status.lastRun,
@@ -425,6 +445,25 @@ export class BodyManager {
         data: event as unknown as JsonValue,
       })
       this.options.onGuardEvent?.(event)
+    }
+  }
+
+  private processWatchEvents(status: StatusResult): void {
+    const events = status.watchEvents ?? []
+    for (const event of events) {
+      if (event.seq <= this.lastWatchSeq) continue
+      if (this.lastWatchSeq > 0 && event.seq > this.lastWatchSeq + 1) {
+        this.options.onWatchGap?.(this.lastWatchSeq + 1, event.seq - 1)
+      }
+      this.lastWatchSeq = event.seq
+      this.eventSeq += 1
+      this.events.push({
+        eventId: `${this.epoch ?? 'epoch'}:watch:${event.seq}`,
+        seq: this.eventSeq,
+        kind: 'watch',
+        data: event as unknown as JsonValue,
+      })
+      this.options.onWatchEvent?.(event)
     }
   }
 

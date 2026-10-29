@@ -9,7 +9,7 @@ import { BodyManager } from '../src/bridge/process-manager.ts'
 import type { BodyHandle } from '../src/bridge/process-manager.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
 import { BehaviorHost } from '../src/core/host.ts'
-import type { GuardEvent } from '../src/contracts/protocol.ts'
+import type { GuardEvent, WatchEvent } from '../src/contracts/protocol.ts'
 import {
   PROTOCOL_VERSION,
   bodyManifestDigest,
@@ -290,6 +290,64 @@ describe('BodyManager', () => {
     await expect(manager.start(owner)).rejects.toThrow()
     expect(manager.currentState).toBe('inactive')
   })
+
+  it('reports a watch event gap when the retained ring skips events', async () => {
+    let counter = 0
+    const host = new BehaviorHost({
+      bindingId: 'watch-gap',
+      query: () => ({ status: 'ok', value: { poisoned: true } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+      policy: {
+        call: () => ({ status: 'ok', value: { fire: true, key: `k-${++counter}` } }),
+      },
+      loadManifest: async () => ({ id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] }),
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watch-gap-'))
+    const path = join(dir, 'predicate.mjs')
+    writeFileSync(path, `
+      definePolicy({
+        manifest: { id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] },
+        run: () => false,
+      })
+    `)
+    try {
+      const predicate = await host.check({ sourcePath: path, artifactKind: 'policy' })
+      const fake = fakeBody(host)
+      const gaps: Array<[number, number]> = []
+      const events: WatchEvent[] = []
+      const manager = new BodyManager({
+        bodyEntry: 'unused-body.mjs',
+        heartbeatMs: 60_000,
+        spawnBody: () => fake.handle,
+        log: () => {},
+        onWatchEvent: event => events.push(event),
+        onWatchGap: (from, to) => gaps.push([from, to]),
+      })
+      await manager.start(owner)
+      await manager.watchAdd({
+        queries: [{ op: 'health' }],
+        predicate: predicate.artifactId,
+        cooldownMs: 1_000,
+        ttlMs: 600_000,
+      })
+
+      const t0 = Date.now()
+      fake.runtime.tickBehavior(t0)
+      await manager.status()
+      expect(events).toHaveLength(1)
+
+      for (let index = 1; index <= 70; index += 1) {
+        fake.runtime.tickBehavior(t0 + index * 1_000)
+      }
+      await manager.status()
+      expect(gaps.length).toBeGreaterThan(0)
+      expect(gaps[0]?.[0]).toBe(2)
+      expect(events.length).toBe(65)
+      await manager.stop()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('P2 commands', () => {
@@ -489,7 +547,8 @@ describe('P2 commands', () => {
     const command = definitions[0] as Definition
     expect(await command.handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
     expect(tools.map(tool => tool.name)).toEqual([
-      'p2_status', 'p2_observe', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_guard', 'p2_events', 'p2_rescue', 'p2_command',
+      'p2_status', 'p2_observe', 'p2_check', 'p2_activate', 'p2_switch', 'p2_confirm', 'p2_stop', 'p2_guard',
+      'p2_events', 'p2_watch', 'p2_rescue', 'p2_command',
     ])
     const status = tools[0] as { execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown> }
     expect(await status.execute({}, { agent })).toBeDefined()
@@ -505,5 +564,107 @@ describe('P2 commands', () => {
 
     expect(await command.handler({ agent, rawInput: ' stop' })).toMatchObject({ kind: 'success' })
     expect(disposed.length).toBeGreaterThan(0)
+  })
+
+  it('delivers each watch notification once and wakes the owner', async () => {
+    let counter = 0
+    const host = new BehaviorHost({
+      bindingId: 'watch-bridge',
+      query: () => ({ status: 'ok', value: { poisoned: true } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+      policy: {
+        call: () => ({
+          status: 'ok',
+          value: { fire: true, key: `k-${++counter}`, summary: 'poison detected' },
+        }),
+      },
+      loadManifest: async () => ({ id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] }),
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watch-bridge-'))
+    const path = join(dir, 'predicate.mjs')
+    writeFileSync(path, `
+      definePolicy({
+        manifest: { id: 'watch-predicate', inputs: ['samples', 'now'], outputs: [] },
+        run: () => false,
+      })
+    `)
+    try {
+      const predicate = await host.check({ sourcePath: path, artifactKind: 'policy' })
+      const fake = fakeBody(host)
+      const definitions: Definition[] = []
+      const tools: Array<Record<string, unknown>> = []
+      const followups: Array<{
+        role: string
+        content: Array<{ type: string; text: string }>
+        source: { kind: string }
+      }> = []
+      const ctx = {
+        commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+        tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
+        agents: {
+          get: (id: string) => id === owner.sessionId
+            ? { followup: (message: typeof followups[number]) => followups.push(message) }
+            : undefined,
+        },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      }
+      const plugin = createP2Plugin({ bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+      ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+      const agent = {
+        id: owner.agentId,
+        session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+        ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
+      }
+      expect(await (definitions[0] as Definition).handler({ agent, rawInput: ' start' })).toMatchObject({ kind: 'success' })
+
+      const watchTool = tools.find(tool => tool.name === 'p2_watch') as {
+        parameters: { properties: Record<string, unknown> }
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      const statusTool = tools.find(tool => tool.name === 'p2_status') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      expect(Object.keys(watchTool.parameters.properties).sort()).toEqual(
+        ['action', 'cooldownMs', 'edge', 'name', 'predicate', 'priority', 'queries', 'ttlMs', 'watchId'].sort(),
+      )
+      expect((watchTool.parameters.properties.action as { enum: string[] }).enum)
+        .toEqual(['add', 'remove', 'list', 'clear'])
+
+      const added = await watchTool.execute({
+        action: 'add',
+        queries: [{ op: 'health' }],
+        predicate: predicate.artifactId,
+        cooldownMs: 1_000,
+        ttlMs: 60_000,
+      }, { agent }) as { id: string; state: string }
+      expect(added).toMatchObject({ state: 'active' })
+
+      const startedAt = Date.now()
+      fake.runtime.tickBehavior(startedAt)
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(1)
+      expect(followups[0]?.source).toEqual({ kind: 'p2-watch' })
+      expect(followups[0]?.content[0]?.text).toContain(added.id)
+      expect(followups[0]?.content[0]?.text).toContain('poison detected')
+      expect(followups[0]?.content[0]?.text).toContain('not an instruction')
+
+      // Re-polling the same cursor must not wake the owner again.
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(1)
+
+      fake.runtime.tickBehavior(startedAt + 1_000)
+      await statusTool.execute({}, { agent })
+      expect(followups).toHaveLength(2)
+
+      const listed = await watchTool.execute({ action: 'list' }, { agent }) as { watches: unknown[] }
+      expect(listed.watches).toHaveLength(1)
+      expect(await watchTool.execute({ action: 'remove', watchId: added.id }, { agent }))
+        .toMatchObject({ removed: 1 })
+      const empty = await watchTool.execute({ action: 'list' }, { agent }) as { watches: unknown[] }
+      expect(empty.watches).toHaveLength(0)
+      await (definitions[0] as Definition).handler({ agent, rawInput: ' stop' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
