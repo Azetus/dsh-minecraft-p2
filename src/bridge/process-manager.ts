@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
+  GuardCondition,
   GuardEvent,
   JsonValue,
   MessageTransport,
@@ -257,7 +258,9 @@ export class BodyManager {
   }
 
   guardSet(input: {
-    condition: { kind: 'health'; hpBelow: number }
+    guardId?: string
+    priority?: number
+    condition: GuardCondition
     targetArtifactId: string
     params: JsonValue
     ttlMs: number
@@ -265,8 +268,8 @@ export class BodyManager {
     return this.activeClient().guardSet(input)
   }
 
-  guardClear(): Promise<JsonValue> {
-    return this.activeClient().guardClear()
+  guardClear(guardId?: string): Promise<JsonValue> {
+    return this.activeClient().guardClear(guardId)
   }
 
   commandGet(commandId: string): Promise<JsonValue> {

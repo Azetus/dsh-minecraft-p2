@@ -54,71 +54,146 @@ function releasableAct(): { act: ActPort; release: (state: ReleaseStatus) => voi
   }
 }
 
+async function targetHost(bindingId: string, query: QueryPort = healthQuery(() => 6), actPort: ActPort = act): Promise<{
+  host: BehaviorHost
+  targetArtifactId: string
+}> {
+  const host = new BehaviorHost({ bindingId, query, act: actPort })
+  const target = await host.check({ sourcePath: source('target.mjs', done) })
+  host.activate(target.artifactId)
+  return { host, targetArtifactId: target.artifactId }
+}
+
 describe('guard contract', () => {
   it('fires once from idle and starts the target', async () => {
     let health: JsonValue = 6
-    const host = new BehaviorHost({ bindingId: 'guard-1', query: healthQuery(() => health), act })
-    const target = await host.check({ sourcePath: source('target.mjs', done) })
-    host.activate(target.artifactId)
-
+    const { host, targetArtifactId } = await targetHost('guard-1', healthQuery(() => health))
     const guard = host.setGuard({
+      guardId: 'low-health',
       condition: { kind: 'health', hpBelow: 10 },
-      targetArtifactId: target.artifactId,
+      targetArtifactId,
       params: {},
       ttlMs: 60_000,
     }, 1_000)
-    expect(guard.state).toBe('active')
+    expect(guard).toMatchObject({ id: 'low-health', priority: 0, state: 'active' })
 
     host.tick(1_000)
     const fired = host.status()
-    expect(fired.guard).toMatchObject({ state: 'fired', condition: { kind: 'health', hpBelow: 10 } })
-    expect(fired.lastSwitch).toMatchObject({ phase: 'started', targetArtifactId: target.artifactId, fromRunId: null })
-    expect(fired.activeRun?.artifactId).toBe(target.artifactId)
+    expect(fired.guards[0]).toMatchObject({ state: 'fired', condition: { kind: 'health', hpBelow: 10 } })
+    expect(fired.lastSwitch).toMatchObject({ phase: 'started', targetArtifactId, fromRunId: null })
+    expect(fired.activeRun?.artifactId).toBe(targetArtifactId)
     expect(fired.guardEvents?.map(event => event.phase)).toEqual(['armed', 'fired', 'started'])
-    const firstAttempt = fired.guard?.attemptId
+    const firstAttempt = fired.guards[0]?.attemptId
 
     health = 1
     host.tick(2_000)
     const after = host.status()
-    expect(after.guard?.attemptId).toBe(firstAttempt)
+    expect(after.guards[0]?.attemptId).toBe(firstAttempt)
     expect(after.guardEvents?.filter(event => event.phase === 'fired')).toHaveLength(1)
     expect(after.guardEvents?.filter(event => event.phase === 'started')).toHaveLength(1)
   })
 
   it('expires without firing when ttl elapses', async () => {
-    const host = new BehaviorHost({ bindingId: 'guard-2', query: healthQuery(() => 6), act })
-    const target = await host.check({ sourcePath: source('target.mjs', done) })
-    host.activate(target.artifactId)
+    const { host, targetArtifactId } = await targetHost('guard-2', healthQuery(() => 6))
     host.setGuard({
       condition: { kind: 'health', hpBelow: 10 },
-      targetArtifactId: target.artifactId,
+      targetArtifactId,
       params: {},
       ttlMs: 10_000,
     }, 0)
 
     host.tick(10_001)
     const status = host.status()
-    expect(status.guard?.state).toBe('expired')
+    expect(status.guards[0]?.state).toBe('expired')
     expect(status.lastSwitch).toBeNull()
     expect(status.activeRun).toBeNull()
     expect(status.guardEvents?.some(event => event.phase === 'fired')).toBe(false)
   })
 
-  it('clears the guard without touching the behavior', async () => {
-    const host = new BehaviorHost({ bindingId: 'guard-3', query: healthQuery(() => 6), act })
-    const target = await host.check({ sourcePath: source('target.mjs', done) })
-    host.activate(target.artifactId)
+  it('clears one guard or all guards without touching the behavior', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-3')
     host.setGuard({
+      guardId: 'a',
       condition: { kind: 'health', hpBelow: 10 },
-      targetArtifactId: target.artifactId,
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)
+    host.setGuard({
+      guardId: 'b',
+      condition: { kind: 'health', hpBelow: 15 },
+      targetArtifactId,
       params: {},
       ttlMs: 60_000,
     }, 0)
 
-    const cleared = host.clearGuard(100)
-    expect(cleared.cleared).toBe(true)
-    expect(host.status().guard).toBeNull()
+    expect(host.clearGuard('a', 100)).toMatchObject({ cleared: 1 })
+    expect(host.status().guards.map(guard => guard.id)).toEqual(['b'])
     expect(host.status().guardEvents?.at(-1)?.phase).toBe('cleared')
+
+    expect(host.clearGuard(undefined, 200)).toMatchObject({ cleared: 1 })
+    expect(host.status().guards).toEqual([])
+  })
+
+  it('replaces a guard with the same id and keeps its position', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-3b')
+    host.setGuard({ guardId: 'first', condition: { kind: 'health', hpBelow: 10 }, targetArtifactId, params: {}, ttlMs: 60_000 }, 0)
+    host.setGuard({ guardId: 'second', condition: { kind: 'health', hpBelow: 5 }, targetArtifactId, params: {}, ttlMs: 60_000 }, 0)
+    const replaced = host.setGuard({
+      guardId: 'first',
+      priority: 7,
+      condition: { kind: 'health', hpBelow: 4 },
+      targetArtifactId,
+      params: {},
+      ttlMs: 30_000,
+    }, 1_000)
+
+    expect(replaced).toMatchObject({ id: 'first', priority: 7, armedAt: 1_000, state: 'active' })
+    expect(host.status().guards.map(guard => guard.id)).toEqual(['first', 'second'])
+    expect(host.status().guards[0]?.condition).toEqual({ kind: 'health', hpBelow: 4 })
+    expect(host.status().guardEvents?.filter(event => event.phase === 'armed')).toHaveLength(3)
+  })
+
+  it('accepts multiple guards and rejects the ninth', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-3c')
+    for (let index = 0; index < 8; index += 1) {
+      host.setGuard({
+        guardId: `g${index}`,
+        priority: index,
+        condition: { kind: 'health', hpBelow: 10 },
+        targetArtifactId,
+        params: {},
+        ttlMs: 60_000,
+      }, 0)
+    }
+    expect(host.status().guards).toHaveLength(8)
+    expect(() => host.setGuard({
+      guardId: 'g8',
+      condition: { kind: 'health', hpBelow: 10 },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 0)).toThrow(/at most 8/u)
+
+    // Settled records are pruned before the limit is enforced.
+    for (let index = 0; index < 8; index += 1) host.tick(120_000 + index)
+    expect(host.status().guards.every(guard => guard.state === 'expired')).toBe(true)
+    expect(() => host.setGuard({
+      guardId: 'g8',
+      condition: { kind: 'health', hpBelow: 10 },
+      targetArtifactId,
+      params: {},
+      ttlMs: 60_000,
+    }, 200_000)).not.toThrow()
+    expect(host.status().guards.map(guard => guard.id)).toEqual(['g8'])
+  })
+
+  it('clears all guards when the host is disposed', async () => {
+    const { host, targetArtifactId } = await targetHost('guard-3d')
+    host.setGuard({ condition: { kind: 'health', hpBelow: 10 }, targetArtifactId, params: {}, ttlMs: 60_000 }, 0)
+    expect(host.status().guards).toHaveLength(1)
+    host.dispose()
+    expect(host.status().guards).toEqual([])
   })
 
   it('keeps one in-flight query and does not count pending as a failure', async () => {
@@ -130,12 +205,10 @@ describe('guard contract', () => {
       const poll = (): QueryOutcome => pending ? { status: 'pending', poll } : { status: 'ok', value: { health: 6 } }
       return { status: 'pending', poll }
     }
-    const host = new BehaviorHost({ bindingId: 'guard-4', query, act })
-    const target = await host.check({ sourcePath: source('target.mjs', done) })
-    host.activate(target.artifactId)
+    const { host, targetArtifactId } = await targetHost('guard-4', query)
     host.setGuard({
       condition: { kind: 'health', hpBelow: 10 },
-      targetArtifactId: target.artifactId,
+      targetArtifactId,
       params: {},
       ttlMs: 60_000,
     }, 0)
@@ -144,16 +217,16 @@ describe('guard contract', () => {
     host.tick(250)
     host.tick(500)
     expect(calls).toBe(1)
-    expect(host.status().guard?.state).toBe('active')
+    expect(host.status().guards[0]?.state).toBe('active')
 
     pending = false
     host.tick(750)
     expect(calls).toBe(1)
-    expect(host.status().guard?.state).toBe('fired')
+    expect(host.status().guards[0]?.state).toBe('fired')
   })
 
   it('clears a fired guard before its pending target starts', async () => {
-    const host = new BehaviorHost({ bindingId: 'guard-6', query: healthQuery(() => 6), act })
+    const { host } = await targetHost('guard-6')
     const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
     const target = await host.check({ sourcePath: source('target.mjs', done) })
     host.activate(current.artifactId)
@@ -163,23 +236,24 @@ describe('guard contract', () => {
     host.tick(0)
 
     host.setGuard({
+      guardId: 'pending',
       condition: { kind: 'health', hpBelow: 10 },
       targetArtifactId: target.artifactId,
       params: {},
       ttlMs: 60_000,
     }, 1_000)
     host.tick(1_000)
-    expect(host.status().guard?.state).toBe('firing')
+    expect(host.status().guards[0]?.state).toBe('firing')
     expect(host.status().lastSwitch?.phase).toBe('stopping')
 
-    host.clearGuard(1_001)
+    host.clearGuard('pending', 1_001)
     host.tick(1_001)
-    expect(host.status().guard).toBeNull()
+    expect(host.status().guards).toEqual([])
     expect(host.status().activeRun?.artifactId).not.toBe(target.artifactId)
   })
 
   it('does not stop the current behavior when the target is invalid before stop', async () => {
-    const host = new BehaviorHost({ bindingId: 'guard-7', query: healthQuery(() => 6), act })
+    const { host } = await targetHost('guard-7')
     const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
     const target = await host.check({ sourcePath: source('target.mjs', done) })
     host.activate(current.artifactId)
@@ -197,13 +271,13 @@ describe('guard contract', () => {
     host.tick(1_000)
     const status = host.status()
     expect(status.lastSwitch).toMatchObject({ phase: 'precheck-failed' })
-    expect(status.guard?.state).toBe('fired')
+    expect(status.guards[0]?.state).toBe('fired')
     expect(status.activeRun?.artifactId).toBe(current.artifactId)
   })
 
   it('reports the run a guard switched away from', async () => {
     const control = releasableAct()
-    const host = new BehaviorHost({ bindingId: 'guard-9', query: healthQuery(() => 6), act: control.act })
+    const { host } = await targetHost('guard-9', healthQuery(() => 6), control.act)
     const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
     const target = await host.check({ sourcePath: source('target.mjs', done) })
     host.activate(current.artifactId)
@@ -214,6 +288,7 @@ describe('guard contract', () => {
     expect(fromRunId).toBeTruthy()
 
     host.setGuard({
+      guardId: 'switch-away',
       condition: { kind: 'health', hpBelow: 10 },
       targetArtifactId: target.artifactId,
       params: {},
@@ -228,13 +303,13 @@ describe('guard contract', () => {
     const status = host.status()
     expect(status.lastSwitch).toMatchObject({ phase: 'started', fromRunId })
     expect(status.lastSwitch?.toRunId).toBeTruthy()
-    expect(status.guard?.state).toBe('fired')
+    expect(status.guards[0]?.state).toBe('fired')
   })
 
   it('reports stop-unconfirmed without starting the target', async () => {
     const control = releasableAct()
     control.release('unconfirmed')
-    const host = new BehaviorHost({ bindingId: 'guard-8', query: healthQuery(() => 6), act: control.act })
+    const { host } = await targetHost('guard-8', healthQuery(() => 6), control.act)
     const current = await host.check({ sourcePath: source('waiting.mjs', waiting) })
     const target = await host.check({ sourcePath: source('target.mjs', done) })
     host.activate(current.artifactId)
@@ -242,6 +317,7 @@ describe('guard contract', () => {
     host.switch({ artifactId: current.artifactId, params: {}, commandId: 'owner' })
     host.tick(0)
     host.setGuard({
+      guardId: 'stop-fault',
       condition: { kind: 'health', hpBelow: 10 },
       targetArtifactId: target.artifactId,
       params: {},
@@ -251,32 +327,31 @@ describe('guard contract', () => {
     host.tick(1_000)
     host.tick(1_001)
     const status = host.status()
-    expect(status.guard?.state).toBe('error')
+    expect(status.guards[0]?.state).toBe('error')
     expect(status.lastSwitch?.phase).toBe('failed')
     expect(status.activeRun?.artifactId).not.toBe(target.artifactId)
   })
 
-  it('disables the guard after three completed failures', async () => {
+  it('disables a guard after three completed failures', async () => {
     const query: QueryPort = () => ({
       status: 'failed',
       error: p2Error('QUERY_FAILED', 'runtime', 'health unavailable', { module: 'test.guard' }),
     })
-    const host = new BehaviorHost({ bindingId: 'guard-5', query, act })
-    const target = await host.check({ sourcePath: source('target.mjs', done) })
-    host.activate(target.artifactId)
+    const { host, targetArtifactId } = await targetHost('guard-5', query)
     host.setGuard({
+      guardId: 'flaky',
       condition: { kind: 'health', hpBelow: 10 },
-      targetArtifactId: target.artifactId,
+      targetArtifactId,
       params: {},
       ttlMs: 60_000,
     }, 0)
 
     host.tick(0)
     host.tick(250)
-    expect(host.status().guard?.state).toBe('active')
+    expect(host.status().guards[0]?.state).toBe('active')
     host.tick(500)
     const status = host.status()
-    expect(status.guard?.state).toBe('error')
+    expect(status.guards[0]?.state).toBe('error')
     expect(status.lastSwitch).toBeNull()
     expect(status.guardEvents?.filter(event => event.phase === 'error')).toHaveLength(4)
   })

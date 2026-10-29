@@ -136,13 +136,22 @@ export type CurrentStep = {
   summary: string
 }
 
-export type GuardCondition = { kind: 'health'; hpBelow: number }
+/** One query a guard/watch declares; sampled by the host, never by content. */
+export type GuardQuery = {
+  op: string
+  args?: JsonValue
+}
 
-export type GuardState = 'active' | 'firing' | 'fired' | 'expired' | 'cleared' | 'error'
+export type GuardCondition =
+  | { kind: 'policy'; queries: GuardQuery[]; predicate: string }
+  | { kind: 'health'; hpBelow: number }
+
+export type GuardState = 'active' | 'firing' | 'fired' | 'deferred' | 'expired' | 'cleared' | 'error'
 
 export type GuardEventPhase =
   | 'armed'
   | 'fired'
+  | 'deferred'
   | 'precheck-failed'
   | 'stopping'
   | 'started'
@@ -167,10 +176,17 @@ export type GuardEvent = {
   error?: P2Error
 }
 
+export type GuardTarget = {
+  artifactId: string
+  params: JsonValue
+}
+
 export type GuardStatus = {
   id: string
+  priority: number
   state: GuardState
   condition: GuardCondition
+  target: GuardTarget
   armedAt: number
   expiresAt: number
   attemptId?: string
@@ -242,7 +258,7 @@ export type StatusResult = {
   cleanupState?: CleanupState
   controlHealth?: ControlHealth
   switchState?: SwitchState
-  guard?: GuardStatus | null
+  guards?: GuardStatus[]
   lastSwitch?: GuardSwitchSummary | null
   guardEvents?: GuardEvent[]
   guardEventSeq?: number

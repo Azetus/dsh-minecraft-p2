@@ -1,4 +1,4 @@
-import type { JsonValue } from '../contracts/index.ts'
+import type { GuardCondition, JsonValue } from '../contracts/index.ts'
 import type { BodyManager } from './process-manager.ts'
 
 type ToolText = { type: 'text'; text: string }
@@ -188,18 +188,34 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_guard',
-    description: 'Manage the one-shot guard that switches to an activated behavior when health drops below a threshold. Set requires condition, target, and ttlMs; clear keeps the current behavior.',
+    description: 'Manage one-shot guards: multiple guards sample declared queries, evaluate a pure policy (or the health sugar), and switch to an activated behavior when authorized. Set requires condition, target, and ttlMs; clear removes one guardId or all guards and keeps the current behavior.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['set', 'clear', 'status'], description: 'Guard action' },
+        guardId: { type: 'string', description: 'Stable guard id; set replaces the same id, clear removes it' },
+        priority: { type: 'number', description: 'Higher fires first (integer, ±1000, default 0)' },
         condition: {
           type: 'object',
           properties: {
-            kind: { type: 'string', enum: ['health'], description: 'Condition kind; only health in the first version' },
-            hpBelow: { type: 'number', description: 'Fire when health is at or below this value' },
+            kind: { type: 'string', enum: ['health', 'policy'], description: 'Condition kind' },
+            hpBelow: { type: 'number', description: 'health sugar: fire when health is at or below this value' },
+            queries: {
+              type: 'array',
+              description: 'policy: up to 4 queries sampled by the host',
+              items: {
+                type: 'object',
+                properties: {
+                  op: { type: 'string', description: 'Query operation name' },
+                  args: { type: 'object', description: 'Query arguments', additionalProperties: true },
+                },
+                required: ['op'],
+                additionalProperties: false,
+              },
+            },
+            predicate: { type: 'string', description: 'policy: checked policy artifactId' },
           },
-          required: ['kind', 'hpBelow'],
+          required: ['kind'],
           additionalProperties: false,
         },
         target: {
@@ -222,18 +238,36 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
       if (action === 'status') {
         const status = await manager.status()
         return status.state === 'active'
-          ? { state: 'active', guard: status.status.guard ?? null, lastSwitch: status.status.lastSwitch ?? null, guardEventSeq: status.status.guardEventSeq ?? 0 }
-          : { state: status.state, guard: null }
+          ? {
+              state: 'active',
+              guards: status.status.guards ?? [],
+              lastSwitch: status.status.lastSwitch ?? null,
+              guardEventSeq: status.status.guardEventSeq ?? 0,
+            }
+          : { state: status.state, guards: [] }
       }
       if (action === 'clear') {
-        return await manager.guardClear()
+        const guardId = typeof args.guardId === 'string' ? args.guardId : undefined
+        return await manager.guardClear(guardId)
       }
       if (action !== 'set') throw new Error(`unknown p2_guard action: ${action}`)
-      const condition = args.condition as { kind?: unknown; hpBelow?: unknown } | undefined
-      const target = args.target as { artifactId?: unknown; params?: unknown } | undefined
-      if (condition?.kind !== 'health' || typeof condition.hpBelow !== 'number') {
-        throw new Error('p2_guard set requires condition { kind: "health", hpBelow }')
+      const condition = args.condition as Record<string, unknown> | undefined
+      let parsed: GuardCondition | undefined
+      if (condition?.kind === 'health' && typeof condition.hpBelow === 'number') {
+        parsed = { kind: 'health', hpBelow: condition.hpBelow }
+      } else if (condition?.kind === 'policy'
+        && typeof condition.predicate === 'string'
+        && Array.isArray(condition.queries)) {
+        parsed = {
+          kind: 'policy',
+          predicate: condition.predicate,
+          queries: condition.queries as Array<{ op: string; args?: JsonValue }>,
+        }
       }
+      if (parsed === undefined) {
+        throw new Error('p2_guard set requires condition { kind: "health", hpBelow } or { kind: "policy", queries, predicate }')
+      }
+      const target = args.target as { artifactId?: unknown; params?: unknown } | undefined
       if (target === undefined || typeof target.artifactId !== 'string') {
         throw new Error('p2_guard set requires target { artifactId, params? }')
       }
@@ -241,7 +275,9 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
         throw new Error('p2_guard set requires ttlMs')
       }
       return await manager.guardSet({
-        condition: { kind: 'health', hpBelow: condition.hpBelow },
+        ...(typeof args.guardId === 'string' ? { guardId: args.guardId } : {}),
+        ...(typeof args.priority === 'number' ? { priority: args.priority } : {}),
+        condition: parsed,
         targetArtifactId: target.artifactId,
         params: (target.params ?? {}) as JsonValue,
         ttlMs: args.ttlMs,

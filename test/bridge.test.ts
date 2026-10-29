@@ -123,7 +123,7 @@ describe('BodyManager', () => {
       fake.runtime.tickBehavior(1_000)
       const status = await manager.status()
       expect(status.state).toBe('active')
-      if (status.state === 'active') expect(status.status.guard?.state).toBe('fired')
+      if (status.state === 'active') expect(status.status.guards?.[0]?.state).toBe('fired')
       expect(events.map(event => event.phase)).toEqual(expect.arrayContaining(['armed', 'fired', 'started']))
 
       const count = events.length
@@ -138,9 +138,9 @@ describe('BodyManager', () => {
       })
       expect(armed).toMatchObject({ state: 'active', condition: { kind: 'health', hpBelow: 5 } })
       const cleared = await manager.guardClear()
-      expect(cleared).toMatchObject({ cleared: true })
+      expect(cleared).toMatchObject({ cleared: 1 })
       const after = await manager.status()
-      if (after.state === 'active') expect(after.status.guard).toBeNull()
+      if (after.state === 'active') expect(after.status.guards).toEqual([])
       await manager.stop()
     } finally {
       rmSync(dir, { recursive: true, force: true })

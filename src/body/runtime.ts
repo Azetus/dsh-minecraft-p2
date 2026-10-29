@@ -44,6 +44,7 @@ import type {
   ActivateResult,
   TraceParams,
   TraceResult,
+  GuardCondition,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
@@ -335,21 +336,21 @@ export class BodyRuntime {
           return { ...base, result: stopped as unknown as JsonValue }
         }
         case 'guard.set': {
-          const condition = params.condition as { kind?: unknown; hpBelow?: unknown } | undefined
+          const condition = parseGuardCondition(params.condition)
           const target = params.target as { artifactId?: unknown; params?: unknown } | undefined
           const ttlMs = typeof params.ttlMs === 'number' ? params.ttlMs : undefined
-          if (
-            condition === undefined || condition.kind !== 'health' || typeof condition.hpBelow !== 'number'
-            || target === undefined || typeof target.artifactId !== 'string'
-            || ttlMs === undefined
-          ) {
-            return { ...base, error: invalidMessageError('condition (health), target.artifactId, and ttlMs are required') }
+          if (condition === undefined || target === undefined || typeof target.artifactId !== 'string' || ttlMs === undefined) {
+            return { ...base, error: invalidMessageError('condition, target.artifactId, and ttlMs are required') }
           }
           const targetParams = target.params !== undefined && typeof target.params === 'object' && target.params !== null && !Array.isArray(target.params)
             ? target.params as Record<string, JsonValue>
             : {}
+          const guardId = typeof params.guardId === 'string' ? params.guardId : undefined
+          const priority = typeof params.priority === 'number' ? params.priority : undefined
           const guarded = this.behavior.setGuard({
-            condition: { kind: 'health', hpBelow: condition.hpBelow },
+            ...(guardId === undefined ? {} : { guardId }),
+            ...(priority === undefined ? {} : { priority }),
+            condition,
             targetArtifactId: target.artifactId,
             params: targetParams,
             ttlMs,
@@ -358,7 +359,8 @@ export class BodyRuntime {
           return { ...base, result: guarded as unknown as JsonValue }
         }
         case 'guard.clear': {
-          const cleared = this.behavior.clearGuard()
+          const guardId = typeof params.guardId === 'string' ? params.guardId : undefined
+          const cleared = this.behavior.clearGuard(guardId)
           this.recordCommand(commandId, 'guard.clear', cleared)
           return { ...base, result: cleared as unknown as JsonValue }
         }
@@ -442,7 +444,7 @@ export class BodyRuntime {
       cleanupState: this.behavior?.status().cleanupState ?? 'none',
       controlHealth: this.behavior?.status().controlHealth ?? 'ok',
       switchState: this.behavior?.status().switchState ?? 'none',
-      guard: behavior?.guard ?? null,
+      guards: behavior?.guards ?? [],
       lastSwitch: behavior?.lastSwitch ?? null,
       guardEvents: behavior?.guardEvents ?? [],
       guardEventSeq: behavior?.guardEventSeq ?? 0,
@@ -699,6 +701,33 @@ function parseStopParams(params: JsonValue): { value: StopParams } | { error: P2
 }
 
 const TRACE_KINDS: ReadonlySet<string> = new Set(['run', 'behavior', 'act', 'op', 'guard', 'watch'])
+
+/** Wire-level guard condition shape; semantic checks stay in the host. */
+function parseGuardCondition(value: JsonValue | undefined): GuardCondition | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, JsonValue>
+  if (record.kind === 'health') {
+    return typeof record.hpBelow === 'number' && Number.isFinite(record.hpBelow) && record.hpBelow > 0
+      ? { kind: 'health', hpBelow: record.hpBelow }
+      : undefined
+  }
+  if (record.kind !== 'policy') return undefined
+  if (typeof record.predicate !== 'string' || record.predicate.length === 0) return undefined
+  if (!Array.isArray(record.queries) || record.queries.length === 0 || record.queries.length > 4) return undefined
+  const queries: Array<{ op: string; args?: JsonValue }> = []
+  for (const entry of record.queries) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
+    const query = entry as Record<string, JsonValue>
+    if (typeof query.op !== 'string' || query.op.length === 0) return undefined
+    if (query.args === undefined) {
+      queries.push({ op: query.op })
+      continue
+    }
+    if (typeof query.args !== 'object' || query.args === null || Array.isArray(query.args)) return undefined
+    queries.push({ op: query.op, args: query.args })
+  }
+  return { kind: 'policy', queries, predicate: record.predicate }
+}
 
 /** Invalid trace filters are ignored field by field; tracing never fails a request. */
 function parseTraceParams(params: JsonValue): TraceParams {

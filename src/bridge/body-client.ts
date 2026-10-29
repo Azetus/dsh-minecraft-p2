@@ -116,20 +116,24 @@ export class BodyClient {
   }
 
   guardSet(input: {
+    guardId?: string
+    priority?: number
     condition: GuardCondition
     targetArtifactId: string
     params: JsonValue
     ttlMs: number
   }): Promise<JsonValue> {
     return this.command('guard.set', {
+      ...(input.guardId === undefined ? {} : { guardId: input.guardId }),
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
       condition: input.condition,
       target: { artifactId: input.targetArtifactId, params: input.params },
       ttlMs: input.ttlMs,
     })
   }
 
-  guardClear(): Promise<JsonValue> {
-    return this.command('guard.clear', {})
+  guardClear(guardId?: string): Promise<JsonValue> {
+    return this.command('guard.clear', guardId === undefined ? {} : { guardId })
   }
 
   commandGet(commandId: string): Promise<JsonValue> {
