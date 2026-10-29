@@ -249,5 +249,8 @@ export function createCompositeOpSource(
       if (dev?.start !== undefined && host !== undefined) return dev.start(args, devContext(host, bot))
       return base.start(name, args)
     },
+    ...(base.controlState === undefined
+      ? {}
+      : { controlState: () => base.controlState?.() ?? 'unknown' }),
   }
 }

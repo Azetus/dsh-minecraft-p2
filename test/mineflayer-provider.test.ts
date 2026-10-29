@@ -127,6 +127,30 @@ describe('MineflayerProvider', () => {
     })
   })
 
+  it('reports control state and marks unconfirmed cleanup best-effort', () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    expect(provider.controlState()).toBe('idle')
+    const move = provider.start('move', { direction: 'forward', durationMs: 1000 })
+    expect(provider.controlState()).toBe('active')
+    expect(provider.liveStatus().controlRelease).toBeNull()
+    move.stop()
+    expect(provider.controlState()).toBe('idle')
+    expect(provider.liveStatus().controlRelease).toBe('confirmed')
+
+    ;(bot as unknown as { clearControlStates: () => void }).clearControlStates = () => { throw new Error('cannot clear') }
+    const stuck = provider.start('move', { direction: 'forward', durationMs: 1000 })
+    stuck.stop()
+    expect(provider.controlState()).toBe('unknown')
+    expect(provider.liveStatus().controlRelease).toBe('best-effort')
+
+    const { bot: disconnectedBot, emitter } = fakeBot()
+    const disconnected = new MineflayerProvider(disconnectedBot)
+    disconnected.start('move', { direction: 'forward', durationMs: 1000 })
+    emitter.emit('end', 'server closed')
+    expect(disconnected.controlState()).toBe('unknown')
+  })
+
   it('fails the active act and queries on connection end', () => {
     const { bot, emitter } = fakeBot()
     const provider = new MineflayerProvider(bot)

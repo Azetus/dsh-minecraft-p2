@@ -95,6 +95,10 @@ export type ProviderRuntimeStatus = {
   paused: boolean
   serverAge: number | null
   idleMs: number
+  /** Provider-visible control release state for the current handle. */
+  controlState?: 'idle' | 'active' | 'unknown'
+  /** `best-effort` means stop was issued but release could not be confirmed. */
+  controlRelease?: 'confirmed' | 'best-effort' | null
   /** Wall-clock time of the last observed bot death, when any. */
   lastDeathAt?: number | null
   /** Where the bot died, when the provider observed it. */

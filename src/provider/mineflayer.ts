@@ -352,14 +352,27 @@ export class MineflayerProvider implements ActPort {
 
   liveStatus(): ProviderRuntimeStatus {
     const serverAge = this.serverAge()
+    const current = this.current as MineflayerActHandle | undefined
     return {
       connected: this.disconnected === undefined,
       paused: this.paused,
       serverAge,
       idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
+      controlState: this.controlState(),
+      controlRelease: current?.controlRelease() ?? null,
       lastDeathAt: this.lastDeath?.at ?? null,
       lastDeathPosition: this.lastDeath?.position ?? null,
     }
+  }
+
+  /**
+   * Release verdict for the operation broker. A disconnected client cannot
+   * observe its effects, so the state stays `unknown` instead of claiming idle.
+   */
+  controlState(): 'idle' | 'active' | 'unknown' {
+    if (this.disconnected !== undefined) return 'unknown'
+    const current = this.current as MineflayerActHandle | undefined
+    return current === undefined ? 'idle' : current.controlState()
   }
 
   /**
@@ -963,6 +976,7 @@ class MineflayerActHandle implements ActHandle {
   private failedCode = 'ACT_FAILED'
   private cancelled = false
   private completed = false
+  private releaseUnknown = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly startedAt = Date.now()
   private wasAirborne = false
@@ -1026,35 +1040,44 @@ class MineflayerActHandle implements ActHandle {
 
   stop(): void {
     if (this.cancelled || this.completed) return
-    this.cancelled = true
-    if (this.timer !== undefined) clearTimeout(this.timer)
-    if (this.name === 'dig') {
-      try { this.bot.stopDigging() } catch { /* the connection may already be gone */ }
-    }
-    if (this.name === 'use') {
-      try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
-    }
-    if (this.name === 'goto' || this.name === 'follow') {
+    let unknown = false
+    const attempt = (fn: () => void): void => {
       try {
-        (this.bot as unknown as { pathfinder?: { stop(): void } }).pathfinder?.stop()
+        fn()
       } catch {
-        // The pathfinder may already be detached; clearControlStates still runs.
+        // A failed cleanup means release cannot be confirmed for this handle.
+        unknown = true
       }
     }
-    if (this.name === 'drive') {
-      try { this.bot.moveVehicle(0, 0) } catch { /* the vehicle may be gone */ }
+    if (this.timer !== undefined) clearTimeout(this.timer)
+    if (this.name === 'dig') attempt(() => this.bot.stopDigging())
+    if (this.name === 'use') attempt(() => this.bot.deactivateItem())
+    if (this.name === 'goto' || this.name === 'follow') {
+      attempt(() => (this.bot as unknown as { pathfinder?: { stop(): void } }).pathfinder?.stop() ?? undefined)
     }
-    if (this.name === 'fish') {
-      try { this.bot.deactivateItem() } catch { /* the connection may be gone */ }
-    }
+    if (this.name === 'drive') attempt(() => this.bot.moveVehicle(0, 0))
+    if (this.name === 'fish') attempt(() => this.bot.deactivateItem())
     if (this.name === 'sleep') {
       // Documented way out of a bed; stop() must not leave the bot asleep.
-      try { void this.bot.wake() } catch { /* the connection may be gone */ }
+      attempt(() => { void this.bot.wake() })
     }
-    if (this.name === 'pillar') {
-      try { this.bot.setControlState('jump', false) } catch { /* the connection may be gone */ }
-    }
-    this.bot.clearControlStates()
+    if (this.name === 'pillar') attempt(() => this.bot.setControlState('jump', false))
+    attempt(() => this.bot.clearControlStates())
+    this.releaseUnknown = unknown
+    this.cancelled = true
+  }
+
+  /** `unknown` is sticky: a cancel flag alone never proves the effect is gone. */
+  controlState(): 'idle' | 'active' | 'unknown' {
+    if (this.releaseUnknown) return 'unknown'
+    if (this.cancelled || this.completed || this.failed !== undefined) return 'idle'
+    return 'active'
+  }
+
+  controlRelease(): 'confirmed' | 'best-effort' | null {
+    if (this.releaseUnknown) return 'best-effort'
+    if (this.cancelled || this.completed || this.failed !== undefined) return 'confirmed'
+    return null
   }
 
   abort(error: Error, code = 'ACT_FAILED'): void {
