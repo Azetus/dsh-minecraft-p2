@@ -5,7 +5,7 @@ import vm from 'node:vm'
 
 import { artifactDigest, artifactId, sourceDigest } from '../contracts/digest.ts'
 import type { BehaviorArtifact, BehaviorDefinition } from '../contracts/ir.ts'
-import type { ArtifactManifest } from '../contracts/types.ts'
+import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
 import { forbiddenToken } from './act-checker.ts'
 import { CHECKER_VERSION, CheckerError } from './checker.ts'
 import type { CheckerCredential } from './checker.ts'
@@ -18,6 +18,8 @@ export type BehaviorJsCheckRequest = {
   timeoutMs?: number
   /** Resolve a declared act/policy definitionId to the exact artifact for this binding. */
   resolveDependency?: (kind: 'act' | 'policy', definitionId: string) => { artifactId: string; digest: string } | undefined
+  /** Load the module in the sandbox runner instead of a body-local vm. */
+  loadManifest?: (code: string, artifactId: string) => Promise<JsonValue>
 }
 
 export type BehaviorJsCheckResult = {
@@ -87,6 +89,24 @@ export function jsBehaviorDefinition(manifest: JsBehaviorManifest): BehaviorDefi
   }
 }
 
+function validateManifest(captured: unknown): JsBehaviorManifest {
+  if (typeof captured !== 'object' || captured === null) {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior must call defineBehavior({ manifest, run })')
+  }
+  const manifest = captured as Partial<JsBehaviorManifest>
+  if (typeof manifest.id !== 'string' || manifest.id.length === 0) {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior manifest.id is required')
+  }
+  if (manifest.mode !== 'finite' && manifest.mode !== 'continuous') {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior mode must be finite or continuous')
+  }
+  if (typeof manifest.parameters !== 'object' || manifest.parameters === null) {
+    throw new CheckerError('INVALID_MANIFEST', 'JS behavior parameters must be an object')
+  }
+  readDependencies(manifest.dependencies)
+  return manifest as JsBehaviorManifest
+}
+
 function readManifest(code: string, timeoutMs: number): JsBehaviorManifest {
   let captured: unknown
   const context = vm.createContext({
@@ -107,21 +127,7 @@ function readManifest(code: string, timeoutMs: number): JsBehaviorManifest {
   if (Object.prototype.toString.call(module.run) !== '[object GeneratorFunction]') {
     throw new CheckerError('INVALID_MANIFEST', 'JS behavior run(ctx) must be a synchronous generator function')
   }
-  if (typeof module.manifest !== 'object' || module.manifest === null) {
-    throw new CheckerError('INVALID_MANIFEST', 'JS behavior manifest must be an object')
-  }
-  const manifest = module.manifest as Partial<JsBehaviorManifest>
-  if (typeof manifest.id !== 'string' || manifest.id.length === 0) {
-    throw new CheckerError('INVALID_MANIFEST', 'JS behavior manifest.id is required')
-  }
-  if (manifest.mode !== 'finite' && manifest.mode !== 'continuous') {
-    throw new CheckerError('INVALID_MANIFEST', 'JS behavior mode must be finite or continuous')
-  }
-  if (typeof manifest.parameters !== 'object' || manifest.parameters === null) {
-    throw new CheckerError('INVALID_MANIFEST', 'JS behavior parameters must be an object')
-  }
-  readDependencies(manifest.dependencies)
-  return manifest as JsBehaviorManifest
+  return validateManifest(module.manifest)
 }
 
 function readDependencies(value: unknown): JsBehaviorDependencies {
@@ -174,7 +180,11 @@ export async function checkBehaviorJs(request: BehaviorJsCheckRequest): Promise<
       `line ${line}, column ${column}: JS behavior must not use ${forbidden.token}`,
     )
   }
-  const manifestInfo = readManifest(code, request.timeoutMs ?? 1000)
+  const normalizedRelative = relativePath.split(sep).join('/')
+  const sourceHash = sourceDigest([{ path: normalizedRelative, bytes }])
+  const manifestInfo = request.loadManifest === undefined
+    ? readManifest(code, request.timeoutMs ?? 1000)
+    : validateManifest(await request.loadManifest(code, `p2:behavior:check-${sourceHash.slice(0, 16)}`))
   const declared = readDependencies(manifestInfo.dependencies)
   const dependencies: ArtifactManifest['dependencies'] = []
   const resolved: { acts: Record<string, string>; policies: Record<string, string> } = { acts: {}, policies: {} }
@@ -195,8 +205,6 @@ export async function checkBehaviorJs(request: BehaviorJsCheckRequest): Promise<
       }
     }
   }
-  const normalizedRelative = relativePath.split(sep).join('/')
-  const sourceHash = sourceDigest([{ path: normalizedRelative, bytes }])
   const manifest: ArtifactManifest = {
     schemaVersion: 1,
     kind: 'behavior',

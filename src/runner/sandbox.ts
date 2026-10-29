@@ -2,17 +2,100 @@ import vm from 'node:vm'
 
 import type { JsonValue } from '../contracts/types.ts'
 import {
+  RUNNER_BEHAVIOR_STEP_TIMEOUT_MS,
   RUNNER_HOOK_TIMEOUT_MS,
   RUNNER_LOAD_TIMEOUT_MS,
   RUNNER_POLICY_TIMEOUT_MS,
 } from './protocol.ts'
-import type { RunnerHookResult } from './protocol.ts'
+import type { RunnerBehaviorResult, RunnerHookResult } from './protocol.ts'
 
 export type SandboxEmit = {
   op(kind: 'query' | 'control', name: string, args: JsonValue): number
   log(message: string): void
   now(): number
 }
+
+const BOOTSTRAP_BEHAVIOR = `
+'use strict';
+globalThis.__p2module = undefined;
+globalThis.__p2gen = undefined;
+globalThis.defineBehavior = function (m) {
+  if (globalThis.__p2module !== undefined) throw new Error('defineBehavior called twice');
+  globalThis.__p2module = m;
+};
+globalThis.__p2behaviorStart = function (paramsJson, runId) {
+  if (globalThis.__p2module === undefined) throw new Error('no behavior module was defined');
+  if (typeof globalThis.__p2module.run !== 'function') throw new Error('behavior has no run function');
+  var params = JSON.parse(paramsJson);
+  var ctx = Object.freeze({
+    params: Object.freeze(params),
+    runId: runId,
+    now: function () { return __p2now(); },
+    query: function (op, args) { return { type: 'query', op: op, args: args === undefined ? {} : args }; },
+    act: function (ref, args) { return { type: 'act', ref: ref, args: args === undefined ? {} : args }; },
+    decide: function (ref, inputs) { return { type: 'decide', ref: ref, inputs: inputs === undefined ? {} : inputs }; },
+    wait: function (durationMs) { return { type: 'wait', durationMs: durationMs }; },
+    progress: function (value) { return { type: 'progress', value: value }; },
+    log: function (message) { return { type: 'log', message: String(message) }; },
+    succeed: function (evidence) { return { type: 'succeed', evidence: evidence }; },
+    fail: function (code, message) { return { type: 'fail', code: code, message: message }; },
+    fresh: function (snapshot, maxAgeMs) {
+      var meta = snapshot && snapshot.meta;
+      var validUntil = meta && meta.validUntil;
+      if (typeof validUntil !== 'number' || __p2now() > validUntil) throw { code: 'STALE_OBSERVATION', category: 'runtime', message: 'observation is stale', source: { module: 'runner.behavior' }, retry: 'never' };
+      if (typeof maxAgeMs === 'number' && typeof meta.sampledAt === 'number' && __p2now() - meta.sampledAt > maxAgeMs) throw { code: 'STALE_OBSERVATION', category: 'runtime', message: 'observation is stale', source: { module: 'runner.behavior' }, retry: 'never' };
+      return snapshot.value;
+    }
+  });
+  globalThis.__p2gen = globalThis.__p2module.run(ctx);
+  if (globalThis.__p2gen === null || typeof globalThis.__p2gen !== 'object' || typeof globalThis.__p2gen.next !== 'function') {
+    throw new Error('run(ctx) must return a generator');
+  }
+  return 'ok';
+};
+globalThis.__p2behaviorStep = function (inputJson, thrown) {
+  if (globalThis.__p2gen === undefined) throw new Error('behavior has not started');
+  var input = inputJson === '' ? undefined : JSON.parse(inputJson);
+  var result;
+  try {
+    result = thrown ? globalThis.__p2gen.throw(input) : globalThis.__p2gen.next(input);
+  } catch (error) {
+    return JSON.stringify({ kind: 'threw', error: __p2error(error) });
+  }
+  if (result.done) return JSON.stringify(result.value === undefined ? { kind: 'done' } : { kind: 'done', value: result.value });
+  return JSON.stringify({ kind: 'yield', command: result.value });
+};
+globalThis.__p2behaviorStop = function () {
+  if (globalThis.__p2gen === undefined) return JSON.stringify({ kind: 'stopped' });
+  var result = globalThis.__p2gen.return(undefined);
+  return JSON.stringify(result.done ? { kind: 'stopped' } : { kind: 'stopped', yielded: true });
+};
+globalThis.__p2error = function (error) {
+  if (error !== null && typeof error === 'object' && typeof error.code === 'string' && typeof error.message === 'string') {
+    return {
+      code: error.code,
+      category: typeof error.category === 'string' ? error.category : 'runtime',
+      message: error.message,
+      source: error.source !== undefined ? error.source : { module: 'runner.behavior' },
+      retry: typeof error.retry === 'string' ? error.retry : 'never'
+    };
+  }
+  return {
+    code: 'BEHAVIOR_SCRIPT_ERROR',
+    category: 'runtime',
+    message: error instanceof Error ? error.message : String(error),
+    source: { module: 'runner.behavior' },
+    retry: 'never'
+  };
+};
+globalThis.__p2behaviorInspect = function () {
+  if (globalThis.__p2module === undefined) return JSON.stringify({ manifest: null, generator: false });
+  return JSON.stringify({
+    manifest: globalThis.__p2module.manifest === undefined ? null : globalThis.__p2module.manifest,
+    generator: typeof globalThis.__p2module.run === 'function' && Object.prototype.toString.call(globalThis.__p2module.run) === '[object GeneratorFunction]'
+  });
+};
+`
 
 const BOOTSTRAP = (kind: 'act' | 'policy'): string => `
 'use strict';
@@ -73,12 +156,12 @@ export class SandboxError extends Error {
 /** One isolated JavaScript context holding exactly one loaded artifact. */
 export class Sandbox {
   private context: vm.Context | undefined
-  private kind: 'act' | 'policy' | undefined
+  private kind: 'act' | 'policy' | 'behavior' | undefined
   private broken = false
 
   constructor(private readonly emit: SandboxEmit) {}
 
-  load(kind: 'act' | 'policy', code: string): JsonValue {
+  load(kind: 'act' | 'policy' | 'behavior', code: string): JsonValue {
     if (this.context !== undefined) throw new SandboxError('SANDBOX_BUSY', 'sandbox already holds an artifact')
     const sandbox = {
       __p2op: (opKind: 'query' | 'control', name: unknown, args: unknown): number => {
@@ -93,6 +176,19 @@ export class Sandbox {
       codeGeneration: { strings: false, wasm: false },
     })
     this.kind = kind
+    if (kind === 'behavior') {
+      this.run(BOOTSTRAP_BEHAVIOR, RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
+      this.run(code, RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
+      const raw = this.evaluate('__p2behaviorInspect()', RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
+      const inspected = parseJson(raw, 'LOAD_FAILED') as { manifest?: JsonValue; generator?: unknown }
+      if (inspected.manifest === null || typeof inspected.manifest !== 'object' || Array.isArray(inspected.manifest)) {
+        throw new SandboxError('INVALID_MANIFEST', 'behavior must call defineBehavior with a manifest object')
+      }
+      if (inspected.generator !== true) {
+        throw new SandboxError('INVALID_MANIFEST', 'behavior run(ctx) must be a synchronous generator function')
+      }
+      return inspected.manifest
+    }
     this.run(BOOTSTRAP(kind), RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
     this.run(code, RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
     const manifest = this.evaluate('JSON.stringify(__p2module && __p2module.manifest ? __p2module.manifest : null)', RUNNER_LOAD_TIMEOUT_MS, 'LOAD_FAILED')
@@ -101,6 +197,32 @@ export class Sandbox {
       throw new SandboxError('INVALID_MANIFEST', 'artifact must call defineAct/definePolicy with a manifest object')
     }
     return parsed
+  }
+
+  behaviorStart(params: JsonValue, runId: string): void {
+    if (this.kind !== 'behavior') throw new SandboxError('BEHAVIOR_INVALID', 'sandbox does not hold a behavior')
+    this.evaluate(
+      `__p2behaviorStart(${JSON.stringify(JSON.stringify(params))}, ${JSON.stringify(runId)}); 'ok'`,
+      RUNNER_BEHAVIOR_STEP_TIMEOUT_MS,
+      'BEHAVIOR_START_FAILED',
+    )
+  }
+
+  behaviorStep(input: { value?: JsonValue; thrown: boolean }): RunnerBehaviorResult {
+    if (this.kind !== 'behavior') throw new SandboxError('BEHAVIOR_INVALID', 'sandbox does not hold a behavior')
+    const valueJson = JSON.stringify(input.value)
+    const raw = this.evaluate(
+      `__p2behaviorStep(${JSON.stringify(valueJson === undefined ? '' : valueJson)}, ${input.thrown ? 'true' : 'false'})`,
+      RUNNER_BEHAVIOR_STEP_TIMEOUT_MS,
+      'BEHAVIOR_STEP_FAILED',
+    )
+    return parseBehaviorResult(raw)
+  }
+
+  behaviorStop(): RunnerBehaviorResult {
+    if (this.kind !== 'behavior') throw new SandboxError('BEHAVIOR_INVALID', 'sandbox does not hold a behavior')
+    const raw = this.evaluate('__p2behaviorStop()', RUNNER_BEHAVIOR_STEP_TIMEOUT_MS, 'BEHAVIOR_STOP_FAILED')
+    return parseBehaviorResult(raw)
   }
 
   start(args: JsonValue): RunnerHookResult {
@@ -167,7 +289,9 @@ export class Sandbox {
       const message = error instanceof Error ? error.message : String(error)
       if (/timed out|ERR_SCRIPT_EXECUTION_TIMEOUT/iu.test(message)) {
         this.broken = true
-        throw new SandboxError(code === 'LOAD_FAILED' ? 'LOAD_TIMEOUT' : 'ACT_TIMEOUT', `artifact exceeded ${timeout}ms`)
+        if (code === 'LOAD_FAILED') throw new SandboxError('LOAD_TIMEOUT', `artifact exceeded ${timeout}ms`)
+        if (code.startsWith('BEHAVIOR')) throw new SandboxError('BEHAVIOR_STEP_TIMEOUT', `behavior exceeded ${timeout}ms`)
+        throw new SandboxError('ACT_TIMEOUT', `artifact exceeded ${timeout}ms`)
       }
       throw new SandboxError(code, message)
     }
@@ -185,6 +309,18 @@ function parseJson(raw: string, code: string): JsonValue {
   } catch {
     throw new SandboxError(code, 'artifact returned invalid JSON')
   }
+}
+
+function parseBehaviorResult(raw: string): RunnerBehaviorResult {
+  const parsed = parseJson(raw, 'BEHAVIOR_RESULT_INVALID')
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new SandboxError('BEHAVIOR_RESULT_INVALID', 'behavior returned an invalid envelope')
+  }
+  const record = parsed as { kind?: unknown }
+  if (record.kind !== 'yield' && record.kind !== 'done' && record.kind !== 'threw' && record.kind !== 'stopped') {
+    throw new SandboxError('BEHAVIOR_RESULT_INVALID', 'behavior result kind is invalid')
+  }
+  return parsed as RunnerBehaviorResult
 }
 
 function toJson(value: unknown): JsonValue {

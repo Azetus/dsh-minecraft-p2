@@ -3,7 +3,8 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 
 import type { JsonValue } from '../contracts/types.ts'
-import type { RunnerEvent, RunnerRequest } from '../runner/protocol.ts'
+import type { RunnerBehaviorResult, RunnerEvent, RunnerRequest } from '../runner/protocol.ts'
+import { RUNNER_MAX_PENDING } from '../runner/protocol.ts'
 
 export type RunnerOpEvent = Extract<RunnerEvent, { type: 'op' }>
 
@@ -12,6 +13,8 @@ export type RunnerClientOptions = {
   entry: string
   nodePath?: string
   requestTimeoutMs?: number
+  /** Periodic liveness ping; 0 disables the timer. */
+  heartbeatMs?: number
   onOp: (event: RunnerOpEvent) => void
   onLog?: (line: string) => void
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void
@@ -49,6 +52,7 @@ export class RunnerClient {
   private nextId = 1
   private closed = false
   private readonly requestTimeoutMs: number
+  private readonly heartbeat: ReturnType<typeof setInterval> | undefined
 
   constructor(private readonly options: RunnerClientOptions) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000
@@ -63,19 +67,44 @@ export class RunnerClient {
     this.child.once('error', error => this.failAll(error))
     this.child.once('exit', (code, signal) => {
       this.closed = true
+      if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
       this.failAll(new RunnerError('RUNNER_EXITED', `runner exited with code ${String(code)}`))
       options.onExit?.(code, signal)
     })
+    const heartbeatMs = options.heartbeatMs ?? 1000
+    if (heartbeatMs > 0) {
+      this.heartbeat = setInterval(() => {
+        if (this.closed) return
+        void this.ping().catch(() => this.heartbeatFailed())
+      }, heartbeatMs)
+      this.heartbeat.unref?.()
+    }
   }
 
   get isClosed(): boolean {
     return this.closed
   }
 
-  async load(kind: 'act' | 'policy', artifactId: string, code: string): Promise<JsonValue> {
+  async load(kind: 'act' | 'policy' | 'behavior', artifactId: string, code: string): Promise<JsonValue> {
     const event = await this.request({ type: 'load', kind, artifactId, code })
     if (event.type !== 'loaded') throw new RunnerError('RUNNER_PROTOCOL', 'load did not return a manifest')
     return event.manifest
+  }
+
+  async behaviorStart(artifactId: string, runId: string, actInstanceId: string, generation: number, params: JsonValue): Promise<void> {
+    const event = await this.request({ type: 'behavior.start', artifactId, runId, actInstanceId, generation, params })
+    if (event.type === 'error') throw new RunnerError(event.code, event.message)
+    if (event.type !== 'behaviorResult' || event.result.kind !== 'started') {
+      throw new RunnerError('RUNNER_PROTOCOL', 'behavior.start did not return a started result')
+    }
+  }
+
+  async behaviorResume(runId: string, generation: number, input: { value?: JsonValue; thrown: boolean }): Promise<RunnerBehaviorResult> {
+    return this.behaviorRequest({ type: 'behavior.resume', runId, generation, input })
+  }
+
+  async behaviorStop(runId: string, generation: number): Promise<RunnerBehaviorResult> {
+    return this.behaviorRequest({ type: 'behavior.stop', runId, generation })
   }
 
   async actStart(artifactId: string, args: JsonValue): Promise<Extract<RunnerEvent, { type: 'hook' }>['result']> {
@@ -107,6 +136,7 @@ export class RunnerClient {
   }
 
   dispose(): void {
+    if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
     if (this.closed) return
     this.closed = true
     try {
@@ -139,8 +169,20 @@ export class RunnerClient {
     throw new RunnerError('RUNNER_PROTOCOL', `unexpected runner event: ${event.type}`)
   }
 
+  private async behaviorRequest(request: RunnerRequestInput): Promise<RunnerBehaviorResult> {
+    const event = await this.request(request)
+    if (event.type === 'error') throw new RunnerError(event.code, event.message)
+    if (event.type !== 'behaviorResult') {
+      throw new RunnerError('RUNNER_PROTOCOL', `unexpected runner event: ${event.type}`)
+    }
+    return event.result
+  }
+
   private request(request: RunnerRequestInput): Promise<RunnerEvent> {
     if (this.closed) return Promise.reject(new RunnerError('RUNNER_EXITED', 'runner is closed'))
+    if (this.pending.size >= RUNNER_MAX_PENDING) {
+      return Promise.reject(new RunnerError('RUNNER_QUEUE_FULL', 'runner request queue is full'))
+    }
     const id = this.nextId++
     return new Promise<RunnerEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -189,5 +231,15 @@ export class RunnerClient {
       clearTimeout(pending.timer)
       pending.reject(error)
     }
+  }
+
+  /** A missed liveness ping is treated as an unreportable runner exit. */
+  private heartbeatFailed(): void {
+    if (this.closed) return
+    this.closed = true
+    if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
+    this.failAll(new RunnerError('RUNNER_UNRESPONSIVE', 'runner did not answer its heartbeat'))
+    this.options.onExit?.(null, null)
+    this.kill()
   }
 }

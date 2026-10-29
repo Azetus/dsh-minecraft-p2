@@ -11,6 +11,8 @@ import { checkBehaviorJs } from './js-checker.ts'
 import { CommandLedger } from './logging.ts'
 import { BehaviorRun } from './run.ts'
 import { JsBehaviorRun } from './js-runtime.ts'
+import { RunnerBehaviorDriver } from './behavior-driver.ts'
+import type { RunnerClient } from './runner-client.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
 import type { ArtifactRecord } from './registry.ts'
@@ -88,8 +90,12 @@ export type BehaviorHostOptions = {
   newRunId?: () => string
   /** Load act/policy code in a sandbox to extract its manifest. */
   loadManifest?: (kind: 'act' | 'policy', code: string, artifactId: string) => Promise<JsonValue>
+  /** Load behavior code in the sandbox runner to extract its manifest. */
+  loadBehaviorManifest?: (code: string, artifactId: string) => Promise<JsonValue>
   /** Experiment-only rescue channel; behavior/act cannot reach it. */
   rescue?: (request: RescueParams, context: { owner: string }) => Promise<RescueResult>
+  /** Sandbox runner used for author JS behavior code in production. */
+  behaviorRunner?: RunnerClient
 }
 
 /** Library-level behavior host used by M1 tests; body wiring remains separate. */
@@ -103,7 +109,9 @@ export class BehaviorHost {
   private readonly policy: PolicyPort
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly loadManifest: BehaviorHostOptions['loadManifest']
+  private readonly loadBehaviorManifest: BehaviorHostOptions['loadBehaviorManifest']
   private readonly rescue: BehaviorHostOptions['rescue']
+  private readonly behaviorRunner: RunnerClient | undefined
   private owner: string
   private readonly newRunId: () => string
   private run: BehaviorRun | JsBehaviorRun | undefined
@@ -126,7 +134,9 @@ export class BehaviorHost {
     }))
     this.providerStatus = options.providerStatus
     this.loadManifest = options.loadManifest
+    this.loadBehaviorManifest = options.loadBehaviorManifest
     this.rescue = options.rescue
+    this.behaviorRunner = options.behaviorRunner
     this.owner = options.owner ?? 'host'
     this.newRunId = options.newRunId ?? (() => `run-${++this.sequence}`)
   }
@@ -160,11 +170,15 @@ export class BehaviorHost {
   }
 
   private async checkJsBehavior(request: CheckHostRequest): Promise<CheckHostResult> {
+    const loadManifest = this.loadBehaviorManifest
     const result = await checkBehaviorJs({
       sourcePath: request.sourcePath,
       ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
       bindingId: this.bindingId,
+      ...(loadManifest === undefined
+        ? {}
+        : { loadManifest: (code: string, artifactId: string) => loadManifest(code, artifactId) }),
       resolveDependency: (kind, definitionId) => {
         const artifact = kind === 'act'
           ? this.registry.resolveDefault('act', definitionId)
@@ -384,6 +398,9 @@ export class BehaviorHost {
         allowedPolicies: new Set(Object.values(policies)),
         resolveAct: definitionId => acts[definitionId],
         resolvePolicy: definitionId => policies[definitionId],
+        ...(this.behaviorRunner === undefined
+          ? {}
+          : { driver: new RunnerBehaviorDriver(this.behaviorRunner, artifact, runId) }),
       })
     } else {
       this.run = new BehaviorRun({
@@ -455,6 +472,11 @@ export class BehaviorHost {
 
   retire(artifactId: string): void {
     this.registry.retire(artifactId)
+  }
+
+  /** Report a sandbox runner exit to the active JS run, if any. */
+  runnerExited(message: string): void {
+    if (this.run instanceof JsBehaviorRun) this.run.runnerExited(message)
   }
 
   status(): HostStatus {

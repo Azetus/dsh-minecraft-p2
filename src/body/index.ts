@@ -123,6 +123,7 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       entry: runnerEntry,
       onOp: event => actPort?.handleOp(event),
       onLog: line => process.stderr.write(`[runner] ${line}\n`),
+      onExit: (code) => host?.runnerExited(`runner exited with code ${String(code)}`),
     })
     actPort = new RunnerActPort(client, ops, artifactId => host?.actSource(artifactId))
     policyPort = new RunnerPolicyPort(client, artifactId => host?.policySource(artifactId))
@@ -138,6 +139,8 @@ async function createBehaviorHost(body: BodyInfo): Promise<HostBundle> {
       },
       providerStatus: () => provider.liveStatus(),
       loadManifest: (kind, code, artifactId) => client.load(kind, artifactId, code),
+      loadBehaviorManifest: (code, artifactId) => client.load('behavior', artifactId, code),
+      behaviorRunner: client,
       rescue: (request, context) => executeRescue(provider, request, {
         allowRescue: loaded.config.allowRescue,
         tpRadius: loaded.config.rescueTpRadius,

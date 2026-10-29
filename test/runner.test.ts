@@ -1,10 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
 import { checkAct, forbiddenToken } from '../src/core/act-checker.ts'
+import { BehaviorHost } from '../src/core/host.ts'
+import { RunnerClient } from '../src/core/runner-client.ts'
 import { Sandbox, SandboxError } from '../src/runner/sandbox.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
 
@@ -128,6 +131,60 @@ describe('runner sandbox', () => {
   })
 })
 
+describe('runner sandbox behavior role', () => {
+  const BEHAVIOR = `
+    defineBehavior({
+      manifest: { id: 'test-behavior', mode: 'continuous', parameters: { n: { type: 'number' } } },
+      *run(ctx) {
+        const pos = yield ctx.query('position', {})
+        yield ctx.progress({ n: ctx.params.n })
+        if (pos.value && pos.value.x === 1) return ctx.succeed({ ok: true })
+        return ctx.fail('NO_TARGET', 'no target')
+      },
+    })
+  `
+
+  it('loads a behavior and steps its generator across requests', () => {
+    const { sandbox: box, ops } = sandbox()
+    const manifest = box.load('behavior', BEHAVIOR) as { id: string }
+    expect(manifest.id).toBe('test-behavior')
+    box.behaviorStart({ n: 2 }, 'run-1')
+    expect(box.behaviorStep({ thrown: false })).toEqual({
+      kind: 'yield',
+      command: { type: 'query', op: 'position', args: {} },
+    })
+    expect(ops).toEqual([])
+    expect(box.behaviorStep({ value: { value: { x: 1 }, meta: {} }, thrown: false })).toEqual({
+      kind: 'yield',
+      command: { type: 'progress', value: { n: 2 } },
+    })
+    expect(box.behaviorStep({ thrown: false })).toEqual({
+      kind: 'done',
+      value: { type: 'succeed', evidence: { ok: true } },
+    })
+  })
+
+  it('returns thrown author errors and rejects non-generator modules', () => {
+    const { sandbox: box } = sandbox()
+    expect(() => box.load('behavior', `
+      defineBehavior({ manifest: { id: 'bad', mode: 'continuous', parameters: {} }, run() {} })
+    `)).toThrow(/synchronous generator/u)
+
+    const { sandbox: throwing } = sandbox()
+    throwing.load('behavior', `
+      defineBehavior({
+        manifest: { id: 'throws', mode: 'continuous', parameters: {} },
+        *run() { throw { code: 'CUSTOM_FAIL', category: 'runtime', message: 'boom', source: { module: 'test' }, retry: 'never' } },
+      })
+    `)
+    throwing.behaviorStart({}, 'run-1')
+    expect(throwing.behaviorStep({ thrown: false })).toMatchObject({
+      kind: 'threw',
+      error: { code: 'CUSTOM_FAIL', message: 'boom' },
+    })
+  })
+})
+
 describe('act checker', () => {
   function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
     const dir = mkdtempSync(join(tmpdir(), 'p2-act-check-'))
@@ -170,5 +227,77 @@ describe('act checker', () => {
   it('detects forbidden tokens before executing the code', () => {
     expect(forbiddenToken('var x = require("fs")')).toBe('require')
     expect(forbiddenToken('ctx.control("moveTo", {})')).toBeUndefined()
+  })
+})
+
+describe('runner process behavior binding', () => {
+  const CODE = `
+    defineBehavior({
+      manifest: { id: 'process-behavior', mode: 'continuous', parameters: {} },
+      *run(ctx) {
+        const pos = yield ctx.query('position', {})
+        return ctx.succeed({ x: pos.value.x })
+      },
+    })
+  `
+
+  it('binds messages to runId/generation and rejects stale steps', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    const client = new RunnerClient({ entry, onOp: () => {} })
+    try {
+      await client.load('behavior', 'p2:behavior:process', CODE)
+      await client.behaviorStart('p2:behavior:process', 'run-1', 'act-1', 0, {})
+      expect(await client.behaviorResume('run-1', 0, { thrown: false })).toEqual({
+        kind: 'yield',
+        command: { type: 'query', op: 'position', args: {} },
+      })
+      await expect(client.behaviorResume('run-1', 1, { thrown: false }))
+        .rejects.toMatchObject({ code: 'STALE_BEHAVIOR' })
+      expect(await client.behaviorResume('run-1', 0, { value: { value: { x: 7 }, meta: {} }, thrown: false }))
+        .toEqual({ kind: 'done', value: { type: 'succeed', evidence: { x: 7 } } })
+      expect(await client.behaviorStop('run-1', 0)).toEqual({ kind: 'stopped' })
+    } finally {
+      client.dispose()
+    }
+  })
+})
+
+describe('body host with sandbox behavior driver', () => {
+  it('checks and runs author code entirely in the runner process', async () => {
+    const entry = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
+    const client = new RunnerClient({ entry, onOp: () => {} })
+    const host = new BehaviorHost({
+      bindingId: 'binding-runner',
+      query: () => ({ status: 'ok', value: { x: 7 }, meta: { source: 'query', scope: 'test', sampledAt: 0 } }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+      behaviorRunner: client,
+      loadBehaviorManifest: (code, artifactId) => client.load('behavior', artifactId, code),
+    })
+    const directory = mkdtempSync(join(tmpdir(), 'p2-runner-behavior-'))
+    const path = join(directory, 'behavior.mjs')
+    writeFileSync(path, `
+      defineBehavior({
+        manifest: { id: 'runner-behavior', mode: 'finite', parameters: {} },
+        *run(ctx) {
+          const pos = yield ctx.query('position', {})
+          return ctx.succeed({ x: pos.value.x })
+        },
+      })
+    `)
+    try {
+      const checked = await host.check({ sourcePath: path, format: 'js' })
+      host.activate(checked.artifactId)
+      host.switch({ artifactId: checked.artifactId, params: {}, commandId: 'runner-switch' })
+      for (let index = 0; index < 50 && host.status().lastRun === null; index += 1) {
+        host.tick(index)
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      const status = host.status()
+      expect(status.lastRun).toMatchObject({ status: 'succeeded', evidence: { x: 7 } })
+    } finally {
+      host.dispose()
+      client.dispose()
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
