@@ -33,7 +33,9 @@ import type { RunnerClient } from './runner-client.ts'
 import type { ConfirmInput, ConfirmResult, RunStatus } from './run.ts'
 import { ArtifactRegistry, RegistryError } from './registry.ts'
 import type { ArtifactRecord } from './registry.ts'
-import type { ActPort, PolicyOutcome, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
+import type { ActPort, PolicyPort, QueryOutcome, QueryPort } from './node-runtime.ts'
+import { ConditionEvaluator, policyCall } from './condition-evaluator.ts'
+import type { DeclaredQuery, PredicateCall, PredicateInput } from './condition-evaluator.ts'
 import type { ActSource } from './act-port.ts'
 import type { PolicySource } from './policy-port.ts'
 
@@ -110,23 +112,6 @@ export type GuardSetInput = {
   ttlMs: number
 }
 
-/** One host-sampled query result handed to a guard predicate. */
-type GuardSample = {
-  status: 'ok' | 'failed'
-  value?: JsonValue
-  meta?: ValueMeta
-  error?: P2Error
-}
-
-type GuardRound = {
-  index: number
-  samples: GuardSample[]
-  startedAt: number
-  inFlight: { poll: () => QueryOutcome; startedAt: number } | undefined
-  phase: 'query' | 'policy'
-  policy: { poll: () => PolicyOutcome; startedAt: number } | undefined
-}
-
 /** One armed guard authorization; the target snapshot is fixed at set time. */
 type ActiveGuard = {
   id: string
@@ -141,7 +126,7 @@ type ActiveGuard = {
   lastError?: P2Error
   failures: number
   nextEvalAt: number
-  round: GuardRound | undefined
+  evaluator: ConditionEvaluator | undefined
   /** A completed evaluation that wants to fire; resolved by priority dispatch. */
   candidate: { evidence: JsonValue } | undefined
   /** Attempt id already reported as deferred, to avoid repeating the event. */
@@ -750,34 +735,44 @@ export class BehaviorHost {
     if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     if (now >= guard.expiresAt) {
       guard.state = 'expired'
-      guard.round = undefined
+      guard.evaluator = undefined
       this.emitGuard('expired', { guardId: guard.id, at: now })
       return
     }
-    if (guard.round === undefined) {
+    if (guard.evaluator === undefined) {
       if (now < guard.nextEvalAt) return
       if (this.samplingInFlight() >= GUARD_SAMPLING_LIMIT) return
       guard.state = 'active'
       guard.nextEvalAt = now + GUARD_EVAL_INTERVAL_MS
-      guard.round = {
-        index: 0,
-        samples: [],
-        startedAt: now,
-        inFlight: undefined,
-        phase: 'query',
-        policy: undefined,
+      guard.evaluator = this.createGuardEvaluator(guard)
+      guard.evaluator.start()
+    }
+    const outcome = guard.evaluator.advance(now)
+    if (outcome === undefined) return
+    guard.evaluator = undefined
+    if (outcome.status === 'failed') {
+      this.failGuardRound(guard, now, outcome.error)
+      return
+    }
+    guard.failures = 0
+    if (outcome.status === 'fire') {
+      guard.candidate = {
+        evidence: {
+          samples: outcome.samples,
+          sampledAt: outcome.sampledAt,
+          ...(outcome.evidence === undefined ? {} : { policy: outcome.evidence }),
+        },
       }
     }
-    this.advanceGuardRound(guard, guard.round, now)
   }
 
   private samplingInFlight(): number {
     let count = 0
-    for (const guard of this.guards) if (guard.round !== undefined) count += 1
+    for (const guard of this.guards) if (guard.evaluator !== undefined) count += 1
     return count
   }
 
-  private guardQueries(guard: ActiveGuard): Array<{ op: string; args?: Record<string, JsonValue> }> {
+  private guardQueries(guard: ActiveGuard): DeclaredQuery[] {
     if (guard.condition.kind === 'health') return [{ op: 'health' }]
     return guard.condition.queries.map(query => ({
       op: query.op,
@@ -785,174 +780,55 @@ export class BehaviorHost {
     }))
   }
 
-  private pushSample(round: GuardRound, sample: GuardSample): void {
-    round.samples.push(sample)
-    round.index += 1
+  private createGuardEvaluator(guard: ActiveGuard): ConditionEvaluator {
+    return new ConditionEvaluator({
+      queries: this.guardQueries(guard),
+      query: this.query,
+      queryTimeoutMs: GUARD_QUERY_TIMEOUT_MS,
+      predicateTimeoutMs: GUARD_QUERY_TIMEOUT_MS,
+      evaluate: input => this.evaluateGuardPredicate(guard, input),
+    })
   }
 
-  private pushQueryOutcome(round: GuardRound, outcome: Exclude<QueryOutcome, { status: 'pending' }>): void {
-    if (outcome.status === 'ok') {
-      this.pushSample(round, {
-        status: 'ok',
-        value: outcome.value,
-        ...(outcome.meta === undefined ? {} : { meta: outcome.meta }),
-      })
-      return
-    }
-    this.pushSample(round, { status: 'failed', error: outcome.error })
-  }
-
-  /** Sequential per-guard sampling: at most one query in flight, 1s deadline. */
-  private advanceGuardRound(guard: ActiveGuard, round: GuardRound, now: number): void {
-    if (round.phase === 'query') {
-      if (round.inFlight !== undefined) {
-        if (now - round.inFlight.startedAt > GUARD_QUERY_TIMEOUT_MS) {
-          round.inFlight = undefined
-          this.pushSample(round, {
-            status: 'failed',
-            error: p2Error('GUARD_QUERY_TIMEOUT', 'timeout', `guard ${guard.id} query timed out`, { module: 'core.host' }),
-          })
-        } else {
-          const outcome = round.inFlight.poll()
-          if (outcome.status === 'pending') return
-          round.inFlight = undefined
-          this.pushQueryOutcome(round, outcome)
-        }
-      }
-      const queries = this.guardQueries(guard)
-      while (round.index < queries.length) {
-        const query = queries[round.index] as { op: string; args?: Record<string, JsonValue> }
-        let outcome: QueryOutcome
-        try {
-          outcome = this.query({ op: query.op, args: {} }, query.args ?? {})
-        } catch (error) {
-          outcome = {
-            status: 'failed',
-            error: p2Error('GUARD_QUERY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.host' }),
-          }
-        }
-        if (outcome.status === 'pending') {
-          round.inFlight = { poll: outcome.poll, startedAt: now }
-          return
-        }
-        this.pushQueryOutcome(round, outcome)
-      }
-      round.phase = 'policy'
-    }
-    this.evaluateGuardSamples(guard, round, now)
-  }
-
-  private evaluateGuardSamples(guard: ActiveGuard, round: GuardRound, now: number): void {
-    if (round.samples.length < this.guardQueries(guard).length) return
-    const failed = round.samples.find(sample => sample.status === 'failed')
-    if (failed !== undefined) {
-      this.failGuardRound(guard, now, failed.error ?? p2Error('GUARD_QUERY_FAILED', 'runtime', `guard ${guard.id} query failed`, { module: 'core.host' }))
-      return
-    }
-    const stale = round.samples.findIndex(sample => sample.meta?.validUntil !== undefined && now > sample.meta.validUntil)
-    if (stale >= 0) {
-      this.failGuardRound(guard, now, p2Error('STALE_OBSERVATION', 'runtime', `guard ${guard.id} sample ${stale} is stale`, { module: 'core.host' }))
-      return
-    }
+  private evaluateGuardPredicate(guard: ActiveGuard, input: PredicateInput): PredicateCall {
     if (guard.condition.kind === 'health') {
-      const value = round.samples[0]?.value
+      const sample = input.samples['0']
+      const value = typeof sample === 'object' && sample !== null && !Array.isArray(sample)
+        ? (sample as { value?: JsonValue }).value
+        : undefined
       const health = typeof value === 'object' && value !== null && !Array.isArray(value)
         ? (value as { health?: unknown }).health
         : undefined
       if (typeof health !== 'number' || !Number.isFinite(health) || health <= 0) {
-        this.failGuardRound(guard, now, p2Error('GUARD_HEALTH_UNKNOWN', 'runtime', `guard ${guard.id} health is unavailable`, { module: 'core.host' }))
-        return
+        return {
+          status: 'failed',
+          error: p2Error('GUARD_HEALTH_UNKNOWN', 'runtime', `guard ${guard.id} health is unavailable`, { module: 'core.host' }),
+        }
       }
-      guard.failures = 0
-      guard.round = undefined
-      if (health <= guard.condition.hpBelow) {
-        guard.candidate = { evidence: { health, sampledAt: round.samples[0]?.meta?.sampledAt ?? now } }
-      }
-      return
-    }
-    this.evaluateGuardPolicy(guard, round, now)
-  }
-
-  private evaluateGuardPolicy(guard: ActiveGuard, round: GuardRound, now: number): void {
-    if (guard.condition.kind !== 'policy') return
-    if (round.policy !== undefined) {
-      if (now - round.policy.startedAt > GUARD_QUERY_TIMEOUT_MS) {
-        round.policy = undefined
-        this.failGuardRound(guard, now, p2Error('GUARD_POLICY_TIMEOUT', 'timeout', `guard ${guard.id} predicate timed out`, { module: 'core.host' }))
-        return
-      }
-      const outcome = round.policy.poll()
-      if (outcome.status === 'pending') return
-      round.policy = undefined
-      this.handleGuardPolicy(guard, round, outcome, now)
-      return
+      return { status: 'ok', value: health <= guard.condition.hpBelow }
     }
     const record = this.registry.get(guard.condition.predicate)
     if (record === undefined || record.artifact.kind !== 'policy') {
-      this.failGuardRound(guard, now, p2Error('GUARD_PREDICATE_NOT_FOUND', 'validation', `guard ${guard.id} predicate policy is not registered`, { module: 'core.host' }))
-      return
-    }
-    const inputs = { samples: this.samplesPayload(round), now }
-    let outcome: PolicyOutcome
-    try {
-      outcome = this.policy.call({ definitionId: record.artifact.definitionId, artifactId: record.artifact.artifactId }, inputs)
-    } catch (error) {
-      this.failGuardRound(guard, now, p2Error('GUARD_POLICY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.host' }))
-      return
-    }
-    if (outcome.status === 'pending') {
-      round.policy = { poll: outcome.poll, startedAt: now }
-      return
-    }
-    this.handleGuardPolicy(guard, round, outcome, now)
-  }
-
-  private handleGuardPolicy(guard: ActiveGuard, round: GuardRound, outcome: PolicyOutcome, now: number): void {
-    if (outcome.status === 'failed') {
-      this.failGuardRound(guard, now, outcome.error)
-      return
-    }
-    if (outcome.status !== 'ok') return
-    let fire = false
-    let policyEvidence: JsonValue | undefined
-    if (typeof outcome.value === 'boolean') {
-      fire = outcome.value
-    } else if (typeof outcome.value === 'object' && outcome.value !== null && !Array.isArray(outcome.value)
-      && typeof (outcome.value as { fire?: unknown }).fire === 'boolean') {
-      const value = outcome.value as { fire: boolean; evidence?: JsonValue }
-      fire = value.fire
-      policyEvidence = value.evidence
-    } else {
-      this.failGuardRound(guard, now, p2Error('GUARD_POLICY_RESULT_INVALID', 'runtime', `guard ${guard.id} predicate returned an invalid value`, { module: 'core.host' }))
-      return
-    }
-    guard.failures = 0
-    guard.round = undefined
-    if (!fire) return
-    guard.candidate = {
-      evidence: {
-        samples: this.samplesPayload(round),
-        sampledAt: now,
-        ...(policyEvidence === undefined ? {} : { policy: policyEvidence }),
-      },
-    }
-  }
-
-  private samplesPayload(round: GuardRound): JsonValue {
-    const samples: Record<string, JsonValue> = {}
-    round.samples.forEach((sample, index) => {
-      samples[String(index)] = {
-        status: sample.status,
-        ...(sample.value === undefined ? {} : { value: sample.value }),
-        ...(sample.meta === undefined ? {} : { meta: sample.meta as unknown as JsonValue }),
-        ...(sample.error === undefined ? {} : { error: sample.error as unknown as JsonValue }),
+      return {
+        status: 'failed',
+        error: p2Error('GUARD_PREDICATE_NOT_FOUND', 'validation', `guard ${guard.id} predicate policy is not registered`, { module: 'core.host' }),
       }
-    })
-    return samples
+    }
+    try {
+      return policyCall(this.policy.call(
+        { definitionId: record.artifact.definitionId, artifactId: record.artifact.artifactId },
+        { samples: input.samples, now: input.now },
+      ))
+    } catch (error) {
+      return {
+        status: 'failed',
+        error: p2Error('GUARD_POLICY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.host' }),
+      }
+    }
   }
 
   private failGuardRound(guard: ActiveGuard, now: number, error: P2Error): void {
-    guard.round = undefined
+    guard.evaluator = undefined
     if (!this.isEvaluable(guard) || this.findGuard(guard.id) !== guard) return
     guard.failures += 1
     guard.lastError = error
@@ -974,7 +850,7 @@ export class BehaviorHost {
     const attemptId = `attempt-${++this.attemptSequence}`
     guard.state = 'firing'
     guard.attemptId = attemptId
-    guard.round = undefined
+    guard.evaluator = undefined
     guard.candidate = undefined
     guard.deferredAttempt = undefined
     const fromRunId = this.run?.runId ?? null
@@ -1255,7 +1131,7 @@ export class BehaviorHost {
       state: 'active',
       failures: 0,
       nextEvalAt: now,
-      round: undefined,
+      evaluator: undefined,
       candidate: undefined,
       deferredAttempt: undefined,
     }
@@ -1281,7 +1157,7 @@ export class BehaviorHost {
         this.suppressGuardPending('guard cleared')
         this.pendingSwitch = undefined
       }
-      guard.round = undefined
+      guard.evaluator = undefined
       this.guards = this.guards.filter(candidate => candidate !== guard)
       this.emitGuard('cleared', { guardId: guard.id, at: now })
     }
