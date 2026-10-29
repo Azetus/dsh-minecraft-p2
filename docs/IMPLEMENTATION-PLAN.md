@@ -32,9 +32,9 @@
 | A18 | D5 首版方案已确认：stdio 子进程、协议与传输解耦、固定单 owner、显式生命周期 | [首版协议](CONTRACTS.md#8-bridgebody-消息协议)、[接入流程](DSH-INTEGRATION.md#4-启动与关闭状态机)；已讨论 WS 设计保存在 [WS-FUTURE.md](WS-FUTURE.md)，以后实现。 |
 | A19 | D6 首版已确认：日志只服务开发调试，业务不等落盘，队列有界且停止优先 | [反馈设计 §3](FEEDBACK-AND-RECOVERY.md#3-当前状态日志与内存预算)；仅内存去重与通知，持久索引/可靠投递/崩溃恢复延期。 |
 | A20 | 三层职责纠正：op 是原子能力（声明归 P2 核心、实现归 provider），act 是唯一控制层，behavior 不得直接引用 ControlOp | [主架构 §3](ARCHITECTURE.md#3-核心概念)、[运行时 §5](RUNTIME.md#5-act-与操作控制权)；现有 provider 动作下沉为 op。 |
-| A21 | behavior = 计划（v1 小内核 IR）+ 决策（`decide` 调用的 policy）+ 状态；集合算子、`forEach`、`call` 为候选，由 [M5 验证](M5-VALIDATION.md) 的结论决定是否加入 | [IR](IR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；先证明小内核够用，再按证据扩展。 |
+| A21 | behavior = 计划（v1 小内核 IR）+ 决策（`decide` 调用的 policy）+ 状态；集合算子、`forEach`、`call` 为候选，由 [M5 验证](history/M5-VALIDATION.md) 的结论决定是否加入 | [IR](IR.md)、[契约 §4.1](CONTRACTS.md#41-policy-作者接口)；先证明小内核够用，再按证据扩展。 |
 | A22 | 安全口径只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全，不为第三方来源背书 | [隔离设计](ISOLATION.md)；`imported` 产物默认不启用。 |
-| A23 | G3 判定：继续采用小 IR；不引入集合算子、`forEach`、`call`，为多阶段与引用成本预设观察项 | [M5 G3 判定](M5-G3-DECISION.md)；M5 阶段仍待隔离与真实扰动证据。 |
+| A23 | G3 判定：继续采用小 IR；不引入集合算子、`forEach`、`call`，为多阶段与引用成本预设观察项 | [M5 G3 判定](history/M5-G3-DECISION.md)；M5 阶段仍待隔离与真实扰动证据。 |
 | A24 | 启动 behavior 表示方式对照实验：IR 仍是 `dev` 主线，JS 只在实验分支评估；结论前不合并 JS | [实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)；分支 `exp/behavior-ir`、`exp/behavior-js`，结论由 DSH 实操后给出、用户确认合并。 |
 
 这些是当前架构基线，新增部分仍是可复审的设计决定，不是源码实现事实。修改长期约束时应更新关联文档与验收，而不是只改示例代码。
@@ -93,7 +93,7 @@ D6 在 M2 使用有界内存事件队列，不做持久 pending 或 events.ack�
 
 ### M5：三层补齐与验证
 
-M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架构结论。完整规格见 [M5 验证计划](M5-VALIDATION.md)；本节只列阶段与门槛。
+M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架构结论。完整规格见 [M5 验证计划](history/M5-VALIDATION.md)；本节只列阶段与门槛。
 
 **G1 基础设施（冻结集）**
 
@@ -113,7 +113,7 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 
 **G3 结论（已完成）**
 
-判定为**继续采用小 IR**，不进入替代方案对照；不引入集合算子、`forEach`、`call`，也不拆独立 policy runner。观察项与触发条件见 [M5 G3 判定](M5-G3-DECISION.md)：多阶段/退出原语、精确引用成本、隔离证据、共享 runner 故障耦合。
+判定为**继续采用小 IR**，不进入替代方案对照；不引入集合算子、`forEach`、`call`，也不拆独立 policy runner。观察项与触发条件见 [M5 G3 判定](history/M5-G3-DECISION.md)：多阶段/退出原语、精确引用成本、隔离证据、共享 runner 故障耦合。
 
 2026-10-28 起，该结论进入 **IR vs 受限 JS 的对照实验（M5.5）**复核；实验期间 IR 仍是 `dev` 主线，若实验结论不同，将以新 decision 显式修订本条，不默认推翻。
 
@@ -162,7 +162,7 @@ M5 的目标不是“把 IR 语言做全”，而是取得一个可审核的架�
 | --- | --- | --- |
 | Minecraft客户端接入 | Mineflayer首版验证已选；真实客户端为后续方向 | 固定测试版本、连接与授权条件，取得G0—G6证据；真实客户端另测驱动、模组交互与运行资源。 |
 | 生成代码执行引擎 | 独立进程+受限JS上下文（act 走 op 桥，policy 走纯桥），候选需核验 | 中断/内存/能力桥原型与逃逸面审查；只承诺宿主能力、资源、账本三项，见[隔离设计](ISOLATION.md)；未完成不开放自定义 act／policy。 |
-| IR 与 policy 表达力 | v1 小内核 + `decide` 调用的 policy；集合算子与 `forEach`/`call` 为候选 | 按 [M5 验证计划](M5-VALIDATION.md) 执行四个场景、四个变体与公共扰动；记录核心修改次数、策略归属、取消责任与可读性，G3 给出结论。 |
+| IR 与 policy 表达力 | v1 小内核 + `decide` 调用的 policy；集合算子与 `forEach`/`call` 为候选 | 按 [M5 验证计划](history/M5-VALIDATION.md) 执行四个场景、四个变体与公共扰动；记录核心修改次数、策略归属、取消责任与可读性，G3 给出结论。 |
 | 具体超时与数据年龄 | RUNTIME配置初值 | Windows及选定游戏组合的分位数和卡顿数据。 |
 | DSH新版本兼容 | 源码核验 0.2.1-rc.2；安装端为 0.2.1-rc.3（卸载器版本），M0 以实际 runtime 为准 | 实际安装、命令、工具、session和HMR测试。 |
 | Windows 托管进程生命周期 | 人工 start 后由插件持有 body，stdio 通信 | 正常 stop、热重载、DSH 异常退出、管道失效、runner 卡住和进程树回收实验。 |

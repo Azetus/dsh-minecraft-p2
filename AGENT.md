@@ -31,19 +31,20 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 | [OPERATIONS-AND-RELEASE.md](docs/OPERATIONS-AND-RELEASE.md) | 能力声明、精确绑定、依赖与发行。 |
 | [MINECRAFT-INTEGRATION-OPTIONS.md](docs/MINECRAFT-INTEGRATION-OPTIONS.md) | 已选客户端路线、适配边界与接入验收。 |
 | [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | M0—M6 实施顺序与验收门槛。 |
-| [M5-VALIDATION.md](docs/M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
+| [M5-VALIDATION.md](docs/history/M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
+| [M5.5-EXPERIMENT-RESULT.md](docs/history/M5.5-EXPERIMENT-RESULT.md) | **决策 memo**：两轮实机实验结论（behavior 采用受限 JS）、JS 运行时要补齐的能力、未验证边界。实现切换前先读本文。 |
 | [DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖、构建工具、版本选择与包管理约定。 |
-| [M0-ACCEPTANCE.md](docs/M0-ACCEPTANCE.md) | M0 实施与验收记录。 |
-| [M1-ACCEPTANCE.md](docs/M1-ACCEPTANCE.md) | M1 软件核心实施与边界记录。 |
-| [M2-ACCEPTANCE.md](docs/M2-ACCEPTANCE.md) | M2 DSH 软件闭环实施与边界记录。 |
-| [M3-ENVIRONMENT.md](docs/M3-ENVIRONMENT.md) | M3 首个 Vanilla 1.21.1 LAN 环境与连接探针记录。 |
-| [M3-G2.md](docs/M3-G2.md) | M3 G2 第一轮 look/move/jump/stop 实测记录。 |
-| [M3-G2-MAPPED.md](docs/M3-G2-MAPPED.md) | M3 G2 通过 P2 executor/provider 的映射记录。 |
-| [M3-G3.md](docs/M3-G3.md) | M3 G3 body 外部 stop 第一轮记录。 |
-| [M3-FEASIBILITY.md](docs/M3-FEASIBILITY.md) | M3 可行性报告：环境、G0—G3、DSH 工具 stop、边界与 M4 前置。 |
-| [M4-PREP.md](docs/M4-PREP.md) | M4 前置：provider 配置文件、serverAge 与暂停语义。 |
-| [M4-BEHAVIORS.md](docs/M4-BEHAVIORS.md) | M4 首个有限/持续行为、moveTo 与真实目标切换实测。 |
-| [M4-ACCEPTANCE.md](docs/M4-ACCEPTANCE.md) | M4 阶段验收：行为、DSH、受阻/取消、暂停/查询失败、世界固定与备份。 |
+| [M0-ACCEPTANCE.md](docs/history/M0-ACCEPTANCE.md) | M0 实施与验收记录。 |
+| [M1-ACCEPTANCE.md](docs/history/M1-ACCEPTANCE.md) | M1 软件核心实施与边界记录。 |
+| [M2-ACCEPTANCE.md](docs/history/M2-ACCEPTANCE.md) | M2 DSH 软件闭环实施与边界记录。 |
+| [M3-ENVIRONMENT.md](docs/history/M3-ENVIRONMENT.md) | M3 首个 Vanilla 1.21.1 LAN 环境与连接探针记录。 |
+| [M3-G2.md](docs/history/M3-G2.md) | M3 G2 第一轮 look/move/jump/stop 实测记录。 |
+| [M3-G2-MAPPED.md](docs/history/M3-G2-MAPPED.md) | M3 G2 通过 P2 executor/provider 的映射记录。 |
+| [M3-G3.md](docs/history/M3-G3.md) | M3 G3 body 外部 stop 第一轮记录。 |
+| [M3-FEASIBILITY.md](docs/history/M3-FEASIBILITY.md) | M3 可行性报告：环境、G0—G3、DSH 工具 stop、边界与 M4 前置。 |
+| [M4-PREP.md](docs/history/M4-PREP.md) | M4 前置：provider 配置文件、serverAge 与暂停语义。 |
+| [M4-BEHAVIORS.md](docs/history/M4-BEHAVIORS.md) | M4 首个有限/持续行为、moveTo 与真实目标切换实测。 |
+| [M4-ACCEPTANCE.md](docs/history/M4-ACCEPTANCE.md) | M4 阶段验收：行为、DSH、受阻/取消、暂停/查询失败、世界固定与备份。 |
 | [WS-FUTURE.md](docs/WS-FUTURE.md) | 已讨论的 WS、独立 launcher、鉴权/租约及重连设计；以后实现，不阻塞首版。 |
 
 主架构中的长期约束优先，具体机制查对应详细设计；发现冲突时指出差异并讨论，不靠猜测合并。历史研究和已评估路线不覆盖当前决定，文档内的“暂定”不自动变成定案。

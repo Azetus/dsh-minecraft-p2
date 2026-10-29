@@ -2,7 +2,7 @@
 
 > 状态：**G1 已实现，G2 主轨迹、反例、变体与可读性已完成；真实游戏公共扰动未逐项执行**。本文定义 G1 基础设施冻结集、G2 验证规格、G3 结论规则；实测见 [G2 验证记录](M5-G2-EVIDENCE.md)与 [G2 报告](M5-G2-REPORT.md)。
 >
-> 关联：[实施计划 M5](IMPLEMENTATION-PLAN.md#m5三层补齐与验证)、[IR 参考](IR.md)、[运行时](RUNTIME.md)、[隔离设计](ISOLATION.md)。
+> 关联：[实施计划 M5](../IMPLEMENTATION-PLAN.md#m5三层补齐与验证)、[IR 参考](../IR.md)、[运行时](../RUNTIME.md)、[隔离设计](../ISOLATION.md)。
 
 ## 1. 目标
 
@@ -51,7 +51,7 @@ G1 完成前不开始计时“核心零修改”。冻结前的补齐属于基�
 
 | # | 项 | 现状问题 | 场景影响 |
 | --- | --- | --- | --- |
-| F1 | 反应式分支切换必须等待旧分支收尾确认 | [ReactiveRuntime](../src/core/node-runtime.ts#L350) 调用 `cancel()` 后忽略返回值，立即启动新分支 | S4 会在旧移动未收尾时启动拾取，违反“确认后才接管” |
+| F1 | 反应式分支切换必须等待旧分支收尾确认 | [ReactiveRuntime](../../src/core/node-runtime.ts#L350) 调用 `cancel()` 后忽略返回值，立即启动新分支 | S4 会在旧移动未收尾时启动拾取，违反“确认后才接管” |
 | F2 | 启动新 act 前检查 predicate 完成条件 | 执行器只在根结束/失败裁决时读取 completion | S1/S3 的“达标即停”依赖这条 |
 | F3 | `fail` 节点：计划主动失败 | 节点集没有业务失败原语，只能用表达式错误伪造 | S1 无候选、S3 资源不足、S4 声明失败 |
 | F4 | 查询输出校验时效；guard 复用新鲜证据 | 只有 guard 检查 `validUntil`，查询节点输出不检查；guard 每 tick 重发查询 | 规格要求“观测年龄 ≤500ms”；S4 会每 tick 查询 |
@@ -234,7 +234,7 @@ act 只能处理一个已选目标，不得出现承包整个配额的动作。
 
 ## 10. 与其他部分的关系
 
-- **隔离**：G2 的 runner 只要求共享模式与纯桥/op 桥分离；独立 policy runner 是否拆分在 G3 后决定，见[隔离设计](ISOLATION.md)。
+- **隔离**：G2 的 runner 只要求共享模式与纯桥/op 桥分离；独立 policy runner 是否拆分在 G3 后决定，见[隔离设计](../ISOLATION.md)。
 - **来源与启用**：G2 的 act/policy 均由本会话编写（session-authored），不涉及 `imported`。
 - **发布**：G2 不是发行验收，不宣称可玩或支持整合包。
 
@@ -242,4 +242,4 @@ act 只能处理一个已选目标，不得出现承包整个配额的动作。
 
 2026-10-28 完成 G3：**继续采用小 IR**，不进入替代方案对照。依据、观察项 C1—C4 与 M5 剩余门槛见 [M5 G3 判定](M5-G3-DECISION.md)。
 
-2026-10-28 起，该判定进入 behavior IR vs 受限 JS 的对照实验复核；实验期间 IR 仍是 `dev` 主线，见[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)。
+2026-10-28 起，该判定进入 behavior IR vs 受限 JS 的对照实验复核；实验期间 IR 仍是 `dev` 主线，见[实验计划](../EXPERIMENT-BEHAVIOR-SUBSTRATE.md)。

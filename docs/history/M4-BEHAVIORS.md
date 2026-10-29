@@ -29,7 +29,7 @@
 
 ## 2. 有限行为
 
-文件：[behaviors/approach-target.mjs](../behaviors/approach-target.mjs)
+文件：[behaviors/approach-target.mjs](../../behaviors/approach-target.mjs)
 
 ```text
 moveTo(x, z, tolerance)
@@ -56,7 +56,7 @@ P2 在目标 0.37 格内停止，所有控制释放；`lastRun` 明确为 succee
 
 ## 3. 持续行为
 
-文件：[behaviors/hold-position.mjs](../behaviors/hold-position.mjs)
+文件：[behaviors/hold-position.mjs](../../behaviors/hold-position.mjs)
 
 ```text
 repeat:

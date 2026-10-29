@@ -1,6 +1,6 @@
 # M0 验收记录
 
-> 2026-10-27，dev 分支，包版本 `0.1.0`。记录实际执行的验证和仍未覆盖的边界；计划本身见 [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。
+> 2026-10-27，dev 分支，包版本 `0.1.0`。记录实际执行的验证和仍未覆盖的边界；计划本身见 [IMPLEMENTATION-PLAN.md](../IMPLEMENTATION-PLAN.md)。
 
 ## 1. 范围
 

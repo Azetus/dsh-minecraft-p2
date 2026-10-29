@@ -18,9 +18,10 @@
 | [OPERATIONS-AND-RELEASE.md](OPERATIONS-AND-RELEASE.md) | 包、能力清单、精确binding、安装升级及独立发行。 |
 | [MINECRAFT-INTEGRATION-OPTIONS.md](MINECRAFT-INTEGRATION-OPTIONS.md) | 客户端路线决策、Mineflayer 首版验证与解耦边界、真实客户端方向、历史方案及验证门槛。 |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | 决策索引、M0—M6实施阶段、验收矩阵与未验证项。 |
-| [M5-VALIDATION.md](M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
+| [M5-VALIDATION.md](history/M5-VALIDATION.md) | M5 验证计划：冻结集、S1—S4、变体、指标与 G3 结论规则。 |
 | [BEHAVIOR-JS.md](BEHAVIOR-JS.md) | 实验草案：behavior 作为受限 JS 协程的初版架构、ctx API、生命周期与取舍。 |
 | [EXPERIMENT-BEHAVIOR-SUBSTRATE.md](EXPERIMENT-BEHAVIOR-SUBSTRATE.md) | 实验计划：IR vs 受限 JS 的共享基线、分支、安装、协议与判定。 |
+| [M5.5-EXPERIMENT-RESULT.md](history/M5.5-EXPERIMENT-RESULT.md) | 实验结论：behavior 表示方式选型（采用受限 JS）、运行时要补齐的能力与未验证边界。 |
 | [BASELINE-OP-ACT-SMOKE.md](BASELINE-OP-ACT-SMOKE.md) | 共享基线：基本 op/act 清单、smoke 清单与冻结条件。 |
 | [WS-FUTURE.md](WS-FUTURE.md) | 保留的 WebSocket、独立常驻 body、鉴权/租约与重连方案，后续实现，不是首版门槛。 |
 
@@ -369,7 +370,7 @@ pm run bundle` 把 tarball 输出到 `bundles/`，通过 DSH 插件管理安装�
 - **构建期计算**：用宿主语言（如 TypeScript）写循环、函数与常量展开，生成静态节点图。它影响的是图长什么样，不读取游戏状态。
 - **运行期计算**：图的节点在执行时读取 query 结果、locals 与参数，做有限求值。v1 由内建表达式（比较、四则、逻辑、字段读取）与 `decide` 调用的 policy 承担。
 
-只有运行期计算能影响「这一次运行怎么走」。v1 的内建表达式保持很小，筛选、排序、评分与分配交给 policy；集合算子（`select`/`aggregate`/`forEach`/`call`）属于候选，是否加入由 [M5 验证](M5-VALIDATION.md) 的结论决定，不预先补齐。
+只有运行期计算能影响「这一次运行怎么走」。v1 的内建表达式保持很小，筛选、排序、评分与分配交给 policy；集合算子（`select`/`aggregate`/`forEach`/`call`）属于候选，是否加入由 [M5 验证](history/M5-VALIDATION.md) 的结论决定，不预先补齐。
 
 省去 XML 的解析与映射，不代表省去 behaviorTree 执行器。
 
@@ -836,7 +837,7 @@ export default defineBehavior({
 | operation发布、兼容、版本与能力集合绑定 | [发布设计](OPERATIONS-AND-RELEASE.md)：精确binding、静态声明与连接核验、非热更新、发布验收。 |
 | 默认恢复、受阻与agent调度 | [生命周期](BEHAVIOR-LIFECYCLE.md)及[反馈](FEEDBACK-AND-RECOVERY.md)：零默认行为重试、显式恢复、合并与预算。 |
 | behavior/act/policy 检查、启用 | [生命周期](BEHAVIOR-LIFECYCLE.md)：不可变源码快照、检查产物、启用与启动分离、隔离门槛。 |
-| behavior 表达力与决策 | [IR](IR.md)及[运行时](RUNTIME.md)：v1 小内核（控制结构 + 受限表达式）、`decide` 调用的 policy、`fail` 业务失败；集合算子与子行为调用为候选，由 [M5 验证](M5-VALIDATION.md)决定。 |
+| behavior 表达力与决策 | [IR](IR.md)及[运行时](RUNTIME.md)：v1 小内核（控制结构 + 受限表达式）、`decide` 调用的 policy、`fail` 业务失败；集合算子与子行为调用为候选，由 [M5 验证](history/M5-VALIDATION.md)决定。 |
 | 游戏内反馈与agent迭代 | [生命周期](BEHAVIOR-LIFECYCLE.md)：运行诊断→新revision→检查→启用，独立于checker。 |
 | DSH 会话与托管 body | [DSH 接入](DSH-INTEGRATION.md)：人工 start、固定 owner、stdio 子进程、局部工具、存活检测与插件释放；body 调度独立于模型。 |
 | D1：局部状态与数据流 | [接口契约](CONTRACTS.md#31-数据归属与寿命)及[运行规则](RUNTIME.md#43-局部状态与结果写入)：显式 assign、query/act 成功输出、独立子树帧与输入/输出、观测元数据传播。 |

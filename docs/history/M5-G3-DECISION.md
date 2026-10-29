@@ -2,7 +2,7 @@
 
 > 2026-10-28。依据 [G2 报告](M5-G2-REPORT.md)、[G2 证据](M5-G2-EVIDENCE.md) 与 M5 G2 冻结基线。
 > 本文只判定「IR 与 policy 的表达路线是否继续」，不把 M5 阶段宣布为完成：隔离与真实扰动门槛仍未闭合（§6）。
-> **后续（2026-10-28）**：现已启动 behavior IR vs 受限 JS 的对照实验（[实验计划](EXPERIMENT-BEHAVIOR-SUBSTRATE.md)）。实验期间 IR 仍是 `dev` 主线；若实验结论不同，将以新 decision 显式修订本文，不默认推翻。
+> **后续（2026-10-28）**：现已启动 behavior IR vs 受限 JS 的对照实验（[实验计划](../EXPERIMENT-BEHAVIOR-SUBSTRATE.md)）。实验期间 IR 仍是 `dev` 主线；若实验结论不同，将以新 decision 显式修订本文，不默认推翻。
 
 ## 1. 判定
 
