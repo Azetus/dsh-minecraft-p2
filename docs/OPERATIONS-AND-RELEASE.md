@@ -133,3 +133,13 @@ manifest对每个游戏组合区分declared（声明）、experimental（实验�
 D4 的软件验收另覆盖：对象键重排和集合重排不改变摘要，有序数组重排改变摘要；工作区绝对路径、检查时间和注册状态变化不改变内容身份；源码字节、依赖或 binding 变化改变相应摘要；新 act 或 policy 不改变环境 binding；自引用摘要、直接依赖环以及 `call` 形成的行为依赖环被拒绝。固定输入应得到固定摘要，摘要检查不替代游戏兼容验收。
 
 初版单包验收另覆盖：`bundles/` 中的 tarball 可在干净 DSH profile 安装并加载；项目安装同一 tarball 后 authoring 版本一致；包版本变化但 body/provider/behavior/op contract 摘要不变时 binding 不变；内置 provider manifest 与实际加载实现一致。
+
+## 8. 开发阶段例外：现场编写 op（2026-10-29 决定）
+
+为加快基础设施迭代，开发阶段对 op 的固定目录与发布门槛做如下例外，正式发布策略另行恢复：
+
+- op 与 behavior/act/policy 一样是可检查、可激活的内容产物；agent 可在运行中编写并激活，`p2_check --artifact-kind op` 只做语法与 manifest 形状检查。
+- op 在 **body 进程内**执行，直接持有 provider 能力；不进入 runner 沙箱，也不做安全审核。
+- 通过 broker 提交的效果照旧记账；直接调用 provider 的 op 不被账本跟踪，因此相关 run 的释放结论必须是 `unknown/unconfirmed`，不能报告 `released`。
+- op 挂死由 body 看门狗有界重启兜底（见 ARCHITECTURE §2.5）；异步超时由 op `limits.totalMs` 或 broker 预算判失败。
+- 发布时可配置为“只允许已提升的 op”；当前阶段不加限制。已提升 op 的版本、兼容范围与验收要求仍按 §1–§7 执行。

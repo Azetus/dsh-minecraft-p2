@@ -11,15 +11,15 @@
 | behavior | 人类或 agent | 源码 → 加载模块并静态检查（含依赖闭包）→ 不可变 artifact（`format="js"`）→ 注册 → 显式启动。 |
 | act | 人类或 agent | 源码及 op 声明 → 检查（封闭模块、op 存在性与类别）→ 隔离运行包 → 注册 → behavior 引用。 |
 | policy | 人类或 agent | 纯函数源码及输入/输出声明 → 检查（无 op、无副作用）→ 不可变 artifact → 作为 behavior 依赖引用。 |
-| operation | 基础库维护者，AI 可协助写候选 | 库开发、独立测试、兼容验证与版本发布；游戏中 agent 不能自动安装。 |
+| operation | 人类或 agent（开发阶段） | 源码及 op manifest → 检查（语法与 manifest 形状）→ 不可变 artifact（`kind="op"`）→ 在 binding 激活 → 供 act 使用；在 body 进程内执行。 |
 
 表内 checker、runner 等是模块职责；初版它们同包交付，authoring 是同一包的项目入口，不代表独立发行物。
 
-behavior 不承担 op 实现，act 只用已发布 op。缺能力时返回 CAPABILITY_MISSING 及最小能力需求，agent 可以改变目标或提出基础库变更，不能绕过 broker 使用原始游戏 API。
+behavior 不承担 op 实现，act 只用已激活 op。缺能力时返回缺失能力信息，agent 可以改变目标，或在开发阶段现场编写 op 产物（[契约 §5.2](CONTRACTS.md#52-op-产物开发阶段开放编写)）；op 仍通过 broker 提交效果，不得绕过账本冒充已释放。
 
 policy 是 behavior 层内部的纯决策单元，不是第四级：它没有 op 能力、没有生命周期、不能决定控制流。behavior 的分层与边界见[主架构 §3.6](ARCHITECTURE.md#36-policybehavior-内部的决策单元)。
 
-三类内容产物的检查都不连接游戏：behavior 加载模块并检查导出形态、禁用 token 与引用，act 检查代码形态与声明的 op，policy 检查纯函数形态与声明；三者的通过都只说明产物在契约下可接受。
+四类内容产物的检查都不连接游戏：behavior 加载模块并检查导出形态、禁用 token 与引用，act 检查代码形态与声明的 op，policy 检查纯函数形态与声明，op 只检查语法与 manifest 形状；四者的通过都只说明产物在契约下可接受。
 
 ## 2. 候选及产物生命周期
 

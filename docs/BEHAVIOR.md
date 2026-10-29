@@ -83,6 +83,9 @@ export default {
 | --- | --- |
 | `yield ctx.query(op, args)` | 执行一次 QueryOp，恢复为 `{ value, meta }`；失败抛出 `P2Error`。 |
 | `yield ctx.act(ref, args)` | 执行一次 act，成功恢复为 output；失败抛出；取消不可被吞掉。 |
+| `yield ctx.act(ref, args, { async: true })` | 启动 act 并立即恢复为 `{ actId }`；同一时刻至多一个控制 act 在飞，冲突抛 `ACT_IN_FLIGHT`。 |
+| `yield ctx.actWait(actId)` | 等待该 act 终态；恢复为其 output 或抛出。 |
+| `yield ctx.actStop(actId, reason)` | 主动中断该 act，返回释放结论；随后仍可用 `actWait` 取终态。 |
 | `yield ctx.decide(ref, inputs)` | 调用一次 policy，返回受限 JSON；失败抛出。 |
 | `yield ctx.wait(ms)` | 可取消等待。 |
 | `yield ctx.progress(obj)` | 上报进度，进入 status。 |
@@ -97,6 +100,9 @@ export default {
 - `ctx.query` 返回的 `meta` 必须参与时效判断；直接使用旧快照前必须 `ctx.fresh(snapshot)`，否则按作者责任处理。时效不会自动传播。
 - `ctx.decide` 是唯一跨进程纯计算入口；允许 behavior 内联纯计算，但跨 behavior 复用的决策应做成 policy 产物。
 - `ctx.act` 的 ref 解析：definitionId + 启用映射，产物可带 artifactId。
+- act 句柄只属于当前 run：behavior 结束时执行器先停止所有未完成句柄并确认释放，再进入终态；句柄不能跨 run 保存或传递。
+- 持有句柄期间可以 `query`/`decide`/`log`/`progress`/`wait`，但不能启动第二个控制 act；需要换动作时先 `actStop`，待释放确认后再启动。
+- 终止条件是调用方（behavior）的职责；act 自身只报告固有失效（前置条件不成立、目标消失等），不内置策略条件。
 
 ## 4. 执行模型
 

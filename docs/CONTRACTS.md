@@ -88,6 +88,9 @@ type BehaviorModule = {
 | --- | --- |
 | `yield ctx.query(op, args)` | 执行一次 QueryOp，恢复为 `{ value, meta }`；失败抛出 `P2Error`。 |
 | `yield ctx.act(ref, args)` | 执行一次 act，成功恢复为 output；失败抛出；取消不可被吞掉。 |
+| `yield ctx.act(ref, args, { async: true })` | 启动 act，被接受后立即恢复为 `{ actId }`；同一 run 至多一个控制 act，冲突抛 `ACT_IN_FLIGHT`。 |
+| `yield ctx.actWait(actId)` | 等待该 act 终态，恢复为 output 或抛出；对已终态句柄幂等。 |
+| `yield ctx.actStop(actId, reason?)` | 请求停止并等待释放结论；`unconfirmed` 时不启动新 act。 |
 | `yield ctx.decide(ref, inputs)` | 调用一次 policy，恢复为受限 JSON；失败抛出。 |
 | `yield ctx.wait(ms)` | 可取消等待，恢复值为空。 |
 | `yield ctx.progress(obj)` | 上报有界进度，进入 run status，恢复值为空。 |
@@ -160,6 +163,9 @@ behavior 的写入就是 JS 赋值；执行器不维护局部槽、输出槽或�
 | --- | --- | --- |
 | `yield ctx.query(op, args)` | 恢复 `{ value, meta }` | 抛出 `P2Error`；没有恢复值 |
 | `yield ctx.act(ref, args)` | 恢复 act 的 output | 抛出；act 可能已产生游戏副作用 |
+| `yield ctx.act(..., { async: true })` | 恢复 `{ actId }` | 抛出；冲突为 `ACT_IN_FLIGHT` |
+| `yield ctx.actWait(actId)` | 恢复该 act 的 output | 抛出该 act 的终态错误 |
+| `yield ctx.actStop(actId)` | 恢复 `{ release }` | `released` / `unconfirmed`；后者不得启动新 act |
 | `yield ctx.decide(ref, inputs)` | 恢复受限 JSON | 抛出；不进入 act 清理流程 |
 | `yield ctx.wait(ms)` | 恢复值为空 | 随取消或预算耗尽结束 |
 | `yield ctx.progress(obj)` / `yield ctx.log(...)` | 恢复值为空 | 不改变业务结果 |
@@ -184,6 +190,8 @@ behavior 的写入就是 JS 赋值；执行器不维护局部槽、输出槽或�
 | `ctx.params` | 启动 → run | 按 `parameters` schema 校验后的只读快照；run 内修改不构成受支持的写入，也不影响其他实例。 |
 | `yield ctx.query(op, args)` | run → QueryOp → run | `args` 为受限 JSON；恢复 `{ value, meta }`；QueryOp 不做隐藏重试。 |
 | `yield ctx.act(ref, args)` | run → act → run | `args` 为受限 JSON；`ref` 在产物中为确切 artifactId；成功恢复 output，失败抛出。 |
+| `yield ctx.act(ref, args, { async: true })` | run → act → run | 恢复 `{ actId }`；句柄只在当前 run 内有效；同一 run 至多一个控制 act。 |
+| `yield ctx.actWait/actStop(actId)` | run → 执行器 → run | 只接受当前 run 的句柄；停止走统一释放确认。 |
 | `yield ctx.decide(ref, inputs)` | run → policy → run | `inputs` 为按值传入的只读 JSON；返回值必须是受限 JSON；每次调用独立。 |
 | `yield ctx.progress(obj)` | run → status | 有界小对象，进入 status 的进度字段；不是查询结果，也不能作为当前事实或完成证据。 |
 | `yield ctx.log(message, data?)` | run → 日志 | 有界诊断信息；日志缺失、丢弃或不可用不改变业务结果。 |
@@ -305,6 +313,29 @@ type PolicyManifest = {
 
 policy 的引入不改变「执行器只负责调度与执行 ctx 命令」这一约束：执行器仍是唯一调度者，policy 只是取值来源之一。运行期预算、失败分类与调用时机见[运行时 §3](RUNTIME.md#3-每轮调度与资源上限)。
 
+### 4.2 act 句柄（非阻塞调用）
+
+behavior 可以用非阻塞方式启动 act，并在运行中等待或主动中断：
+
+```ts
+// BehaviorContext 新增
+act(ref: ActRefLike, args: JsonValue, options?: { async?: boolean }): { actId: string } | JsonValue
+actWait(actId: string): JsonValue
+actStop(actId: string, reason?: string): { release: "released" | "unconfirmed"; error?: P2Error }
+```
+
+| 项 | 规则 |
+| --- | --- |
+| 启动 | `async: true` 时在 act **被接受**后立即返回 `{ actId }`；启动失败仍同步抛出。 |
+| 并发 | 同一 run 同一时刻至多一个**控制** act 在飞；重复启动返回 `ACT_IN_FLIGHT`，不排队。 |
+| 等待 | `actWait` 恢复为该 act 的业务 output 或抛出其终态错误；对已终态句柄幂等。 |
+| 中断 | `actStop` 走统一两阶段停止：请求停止 → 等待释放确认；返回 `unconfirmed` 时不启动新 act。 |
+| 释放 | run 进入终态或取消前，执行器必须停止并确认所有未完成句柄；未确认则 run 不得报告成功。 |
+| 作用域 | 句柄属于当前 run，不跨 run 保存、不写入 status、不作为其他命令参数。 |
+| 查询 | 持有句柄期间允许 query/decide/log/progress/wait；不允许启动第二个控制 act。 |
+
+act 自身仍只报告固有完成/失败/不可用原因；终止条件由 behavior 在调用语境中决定。
+
 ## 5. operation provider 契约
 
 每个 provider 暴露描述、连接、查询、控制提交、结果读取、停止/对账、关闭等能力；具体方法名可调整，但职责不能省略。连接/断连是管理面，不伪装成 agent 自由调用的游戏 op。
@@ -353,6 +384,39 @@ type ProviderControlState = {
 - 核心只消费这个粗粒度结论，不推断 provider 内部实现（不区分物理 tick、在途包等细节）。
 
 游戏底层可能需要协议缓存或游戏自有状态；它们属于 provider 实现，P2 不另行复制维护一份世界模型。跨版本 entity/block 引用使用带 worldScope、connectionEpoch 的不透明值。
+
+### 5.2 op 产物（开发阶段开放编写）
+
+开发阶段允许 agent 编写 control/query op 并在当前 binding 激活使用；op 目录不再是固定清单。
+
+```ts
+type OpManifest = {
+  schemaVersion: 1;
+  kind: "op";
+  name: string;                       // op 名，裸标识
+  opKind: "query" | "control";
+  description?: string;
+  parameters?: JsonSchemaNode;
+  result?: JsonSchemaNode;
+  effects?: "none" | "active";        // control：调用后是否仍留持续效果
+  limits?: { totalMs?: number };
+};
+
+// 模块导出
+type QueryOpModule = { manifest: OpManifest; query(ctx: OpContext, args: JsonValue): JsonValue | Promise<JsonValue> };
+type ControlOpModule = { manifest: OpManifest; start(ctx: OpContext, args: JsonValue): OpHandle };
+```
+
+| 项 | 规则 |
+| --- | --- |
+| 执行位置 | **body 进程内**；op 直接持有 provider 能力（连接、bot、底层库）。不进入 runner 沙箱。 |
+| 检查 | 仅做语法与 manifest 形状检查；不连接游戏、不做兼容性验证、不做安全审核。 |
+| 激活 | 与 act/policy 相同的 digest + binding + enable 流程；同名时按激活状态覆盖内置实现。 |
+| 记账 | 经 broker 提交的 op 照旧记账、停止、核对；**直接调用 provider 的 op 不被账本跟踪**。 |
+| 释放诚实 | 一个 run 使用过未跟踪控制时，该 run 的释放结论必须是 `unknown/unconfirmed`；status 不得报告 `released`。 |
+| 停止 | control op 的停止/清理契约由作者实现；`stop` 仍是隐式撤回原语。 |
+| 生命周期 | op 模块随 binding 缓存；源码变化产生新产物，旧运行实例不热替换。 |
+| 崩溃 | op 同步挂死由 body 看门狗处理（心跳缺失→有界重启）；异步超时由 `limits.totalMs` 或 broker 预算判失败。 |
 
 ## 6. 统一错误与处理归属
 
@@ -403,7 +467,7 @@ error.retry 是允许范围，不自动触发 retry。调用者不得把 never �
 | confirm | 对指定 bodyEpoch、runId、confirmationId 提交确认或否定及依据；来源由可信 bridge 通道确定。 |
 | command.get / events.subscribe | 查询当前 epoch 的内存命令结果和有界事件；首版不实现持久接收 ack。 |
 
-具体工具是否合并由 bridge 调整，身体协议保持清晰。编写代码通过工作区普通文件能力，不增加直接执行任意JS的 p2 工具。operation 安装/升级不暴露给游戏运行中的 agent。
+具体工具是否合并由 bridge 调整，身体协议保持清晰。编写代码通过工作区普通文件能力；不增加直接执行任意 JS 的 p2 工具。开发阶段的 op 现场编写与激活见 §5.2：源码经 checker 检查后由 binding 激活，不在聊天里直接执行。
 
 ### 7.1 外部完成验收契约
 

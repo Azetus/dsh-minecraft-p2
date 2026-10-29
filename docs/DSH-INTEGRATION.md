@@ -83,7 +83,20 @@ bridge 不创建/恢复用户 agent，不改 session header，不自动 fork/mov
 
 ## 5. 模型工具与界面反馈
 
-工具只在 active 的 owner agent 可见：observe、status、check、activate、switch、stop、confirm 等，名称以最终 SDK 为准。check 需要显式区分 `artifactKind`（behavior／act／policy），policy 不单独 activate；启用 `imported` 来源的 act 或 policy 属于人工操作，不提供模型工具入口。源码编辑复用 DSH 工作区能力；进程启动、shutdown、operation 安装和驱动原始调用不暴露给模型。
+工具只在 active 的 owner agent 可见：observe、status、check、activate、switch、stop、confirm、guard、watch、events、snapshot、trace 等，名称以最终 SDK 为准。check 需要显式区分 `artifactKind`（behavior／act／policy／op）；op 可在当前 binding 激活使用（开发阶段），policy 不单独 activate。源码编辑复用 DSH 工作区能力；进程启动、shutdown 和驱动原始调用不暴露给模型（临时 `p2_body` 开发入口除外）。
+
+工具分层约定：
+
+| 工具 | 用途 | 返回 |
+| --- | --- | --- |
+| `p2_status` | 全量状态（run、guard、watch、provider、观测摘要） | 结构化 JSON |
+| `p2_card` | 高频轮询用的紧凑状态卡（run 摘要、health、位置、附近敌对、guard/watch 计数） | 小对象 |
+| `p2_observe` | 单次 QueryOp | `{ value, meta }` |
+| `p2_snapshot` | 批量观测（position/health/inventory 摘要/blocks/entities），逐项 meta 与 partial | `{ parts, partial }` |
+| `p2_trace` | dev-only 有界执行轨迹（run/act/op/guard/watch 时序与耗时） | 事件数组 + 统计 |
+| `p2_guard` | 多 guard set/clear/status | guard 摘要 |
+| `p2_watch` | watch add/remove/list/clear | watch 摘要 |
+| `p2_events` | 游标读取 guard/watch/run 事件 | 事件数组 + gap/dropped |
 
 当前阶段限制必须对 agent 明示：哪些内容类型允许编写与检查、哪些允许启用、隔离引擎门槛是否已通过、`imported` 是否允许。能力清单与阶段限制随 status/describe 返回，不能只写在文档里而让 agent 试探。
 

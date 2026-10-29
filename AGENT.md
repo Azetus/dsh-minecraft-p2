@@ -31,7 +31,7 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 - 首版本机一个 body、一个角色、一个固定 owner session。人工 /p2 start 后由 bridge 创建 stdio body 子进程；body 调度独立于模型，生命周期跟随插件，不接管用户 agent。安装/加载/热重载不自动创建 P2 进程。
 - 已选独立客户端路线，首版使用 Mineflayer 验证。真实客户端及其有窗口／无头方式为后续方向；服务器假玩家是历史方案，不能未经讨论切换到该路线。
 - Mineflayer 及其插件属于 operation 实现依赖，不向 core、观测层、公共契约、behavior/act/policy 泄漏对象、类型、事件或控制句柄。op 的声明留在 P2 核心，实现归 provider；v1 同包但分目录，后续 provider 可整包拆出。
-- operation 由基础库维护发布。游戏内 agent 可扩展 behavior/act/policy、提出缺失能力，不得现场生成并自动安装 op，也不得绕过 broker 直接访问游戏。
+- operation 由基础库维护发布。**开发阶段**允许游戏内 agent 现场编写 op 产物并在 body 内激活（直接持有 provider，不做安全审核；见 ARCHITECTURE §3.3 与 CONTRACTS §5.2）；运行实例不热替换。behavior/act/policy 可扩展；任何一层都不得绕过 broker 冒充控制已释放。
 - 观测层查询当前事实并通过纯函数生成摘要；不建立 P2 世界副本、不保存全量历史观测、不产生环境变化事件。底层协议缓存与执行反馈有各自职责，不与这些限制混淆。
 
 ### 执行与控制权
@@ -48,12 +48,12 @@ P2 以独立的第二名玩家身份与人类协作。DSH agent 选择或编写�
 - 顺序写入后同轮立即可读；新 act 启动与终态提交前统一检查条件与结束原因。取消优先，程序错误不被目标成立掩盖，有效目标证据可优先于普通环境失败；控制故障阻止终态提交。条件依赖变化须重评，整个 tick 不回滚已成功写入。
 - externalConfirmation 仅在有限 behavior 根成功且收尾后请求验收。确认或否定结束原 run，补做工作新建 run；使用 bodyEpoch、runId、confirmationId 明确对象，来源由可信通道确定，模型不能自报玩家身份。重复决定不重复生效，取消优先，终态不可改写；等待受首版存活期限及授权约束，管道关闭不恢复旧请求。
 - binding 只固定环境，不包含内容产物集合；artifact 锁定实际依赖（act、policy、`call` 引用的 behavior），启用按目标 binding 记录，启动明确指定 artifactId。新增 act/policy 不重绑环境或重查无关内容；退休依赖阻止新 run，已有 run 仍按原闭包结束。摘要规则统一见发布设计，不能把检查时间、默认映射或运行标识纳入内容身份。
-- act 的 `queryOps`/`controlOps` 必须强制声明（`stop` 隐式），运行期拒绝未声明 op；policy 只能做纯计算。隔离只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全或第三方来源可信。
+- act 的 `queryOps`/`controlOps` 必须强制声明（`stop` 隐式），运行期拒绝未声明 op；policy 只能做纯计算。**behavior/act/policy** 的隔离只承诺三项：不能访问宿主能力、不能超出资源预算、不能绕过控制账本；不承诺语义安全或第三方来源可信。开发阶段 op 在 body 进程内执行，直接持有 provider，**不承诺隔离**（见 CONTRACTS §5.2）。
 
 ### 检查、隔离与会话
 
 - checker 是被动的语法、类型和构建检查工具，不调用真实 QueryOp/ControlOp，不模拟游戏，不自行修复代码或启动模型。检查覆盖 behavior、act 与 policy。
-- 生成代码使用独立进程、受限 JS 上下文和显式能力桥。隔离引擎未通过中断、内存与宿主能力限制验证前，先用维护者 act；不得用 body 内 eval 代替隔离。act 走 op 桥，policy 走纯桥。behavior 当前在进程内 `node:vm` 基线中执行，迁入隔离 runner 之前不能视为安全隔离。
+- **behavior/act/policy** 使用独立进程、受限 JS 上下文和显式能力桥。隔离引擎未通过中断、内存与宿主能力限制验证前，先用维护者 act；不得用 body 内 eval 代替隔离。act 走 op 桥，policy 走纯桥。**开发阶段的 op 在 body 进程内执行，不走隔离 runner**；op 挂死由 body 看门狗有界重启兜底。behavior 当前在进程内 `node:vm` 基线中执行，迁入隔离 runner 之前不能视为安全隔离。
 - 构建通过只说明产物在对应契约下可接受，不证明策略正确、目标可达、游戏兼容或代码绝对安全。
 - 插件安装/加载不创建 P2 子进程或连接游戏；人工 start 创建 body，不自动启动 behavior。模型 stop 只停止行为，人工 stop/插件释放关闭整个托管进程树；强制结束不证明游戏停止。重启创建新 epoch，不重放旧控制命令。
 - 首版协议与传输解耦：仅实现 stdio 和内存测试传输，stdout 只输出协议、stderr 日志。WS、配对鉴权、跨连接租约与独立 launcher 保存在后续设计，不作为首版要求。
