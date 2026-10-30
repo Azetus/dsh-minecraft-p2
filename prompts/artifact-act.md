@@ -6,7 +6,7 @@
 ## 1. 什么该做成 act
 
 - 一个动作、无策略：`goto`、`mine-one`、`place-block`、`equip-item`、`attack-target`、`furnace-load`。
-- **不该**做成 act：寻路规划、合成决策、挖矿策略、战斗策略（这些属于 behavior 或上层 nav/crafting 模块）。
+- **不该**做成 act：寻路规划、合成决策、挖矿策略、战斗策略（这些属于 strategy 或上层 nav/crafting 模块）。
 - act 必须**幂等**：重复调用不应造成二次破坏（例如重复 `place` 已占格应快速失败而非消耗物品）。
 
 ## 2. 必须的形态
@@ -50,7 +50,7 @@ defineAct({
 | `start` 里发控制、`update` 里永不检查句柄 | run 永远 running，靠上限超时才结束 |
 | `stop` 里直接返回 complete | 账本无法确认释放，可能触发 `STOP_UNCONFIRMED` |
 | 成功判定用"控制返回 ok" | 底层 ok 只表示命令已受理 |
-| 一个 act 里做三步组合（goto→挖→放） | 应拆成 behavior；否则中断粒度太粗 |
+| 一个 act 里做三步组合（goto→挖→放） | 应拆成 strategy；否则中断粒度太粗 |
 
 ## 5. 自检清单
 
@@ -71,3 +71,4 @@ queryOps / controlOps：
 失败码列表：
 已知不确定点：
 ```
+

@@ -82,13 +82,13 @@
 2. **合成取消**：`craft` 数量 8，在第一件完成后停止。
    - 期望 `act` 结果为 `cancelled`，背包只增加 1 件；失败判定：停止后继续产出。
 3. **睡眠/挖掘停止**：`sleep` 后 `stop`，`isSleeping` 必须变 false 才释放；`dig` 停止后 `targetDigBlock` 必须清空。
-4. **既有回归**：现有 behavior/act 冒烟与 guard/watch 不变。
+4. **既有回归**：act 冒烟与 watch 不变。
 
 ### 5.2 Controller 接线后要看的指标
 
 | 指标 | 采集点 | 期望/失败判定 |
 | --- | --- | --- |
-| `t_detect` | 事实 `sampledAt` → S0 判定 | 与 guard 节拍同量级；持续 >1s 需查观测刷新 |
+| `t_detect` | 事实 `sampledAt` → S0 判定 | 与 S0 判定节拍同量级；持续 >1s 需查观测刷新 |
 | `t_release` | `stop-request` 事件 → `release-confirmed` | 默认 2s 内；超时即 `control-fault` |
 | `t_effective` | `granted` → 首个动作成功 | 与 act 启动开销同量级 |
 | 重复危险 | `memory.hazards` 同名 hazard 60 分钟内重复进入 | 目标 0；>0 查逃生后的重核验 |

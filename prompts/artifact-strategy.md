@@ -5,7 +5,7 @@
 
 ## 1. 它是什么
 
-`strategy` 是 P2Controller 的策略载体：**单文件、无 import、同步纯函数**。它只接收 JSON 事实并返回 JSON 判定；不能调用 op/act、不能持有句柄、不能 async、不能用定时器。**不要用 behavior 充当策略**（behavior 计划废弃，二者不兼容）。
+`strategy` 是 P2Controller 的策略载体：**单文件、无 import、同步纯函数**。它只接收 JSON 事实并返回 JSON 判定；不能调用 op/act、不能持有句柄、不能 async、不能用定时器。不要用已删除的 behavior 充当策略。
 
 ```js
 defineStrategy({
@@ -70,7 +70,7 @@ body 默认事实源：`position`（x/y/z/dimension/inWater）、`health`（heal
 
 ## 5. 工作流
 
-1. 写文件（例如 `behaviors/` 同级或 `strategies/` 目录，必须在 owner 工程内）。
+1. 写文件（例如 `strategies/` 目录，必须在 owner 工程内）。
 2. 依赖的 act 先 `p2_check` + `p2_activate`；策略检查时只接受**已启用**的 act。
 3. `p2_check {sourcePath, artifactKind:'strategy'}` → 拿到 `artifactId`。
 4. `p2_activate {artifactId}`。
@@ -101,3 +101,4 @@ body 默认事实源：`position`（x/y/z/dimension/inWater）、`health`（heal
 | `blocked: invalid verdict` | 返回了非 JSON 或未知 kind；检查是否返回了函数/Promise |
 | 承诺永远不成功 | post 的 factKey/item/count 不匹配；baseline 缺失；请查 `commitment.blocked` |
 | 紧急策略不触发 | S0 的 `facts` 缺 `position.inWater` / `health.oxygen`，或 `unknown` 被当成“无危险” |
+

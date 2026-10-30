@@ -10,7 +10,7 @@
 - 聚合观测（一次往返拿到位置/血量/背包/时间/敌对数）→ query op；
 - 底层确实提供、但没有对应 act 的动作原语 → control op。
 
-**不要**写：寻路、合成决策、战斗策略、任务编排——这些属于 nav/crafting/behavior。
+**不要**写：寻路、合成决策、战斗策略、任务编排——这些属于 nav/crafting/strategy。
 
 ## 2. 两类 op 的形态
 
@@ -39,7 +39,7 @@ defineOp({
 - `implements: <InterfaceName>`：声明它实现契约的哪一组接口（如 `SenseOps`/`DigOps`）。
 - `portability: 'portable' | 'native'`：
   - `portable`：只用语义查询名（position/health/inventory/block/blocks/entities/time），换 provider 后仍应可用；
-  - `native`：允许使用该 provider 私有能力，**禁止被 kernel/behavior 引用**，只在迁移/诊断时使用。
+  - `native`：允许使用该 provider 私有能力，**禁止被 kernel/strategy 引用**，只在迁移/诊断时使用。
 - 参数与返回必须与接口的 type guard 一致，否则 `p2_check` 拒绝。
 
 ## 4. 反例
@@ -72,3 +72,4 @@ implements / portability：
 是否需要 owner 在 p2_check 前激活其它依赖：
 已知不确定点：
 ```
+
