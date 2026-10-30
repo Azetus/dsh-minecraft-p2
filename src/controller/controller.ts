@@ -343,6 +343,10 @@ export class P2Controller {
     if (this.activeRequest !== undefined && this.activeRequest.holder.endsWith(`:${commitment.strategyKey}`)) {
       this.machine.cancel(at)
     }
+    const pending = this.machine.pendingRequest
+    if (pending !== undefined && pending.holder.endsWith(`:${commitment.strategyKey}`)) {
+      this.machine.dropPending('commitment-cancelled', at)
+    }
     this.commitments.cancel(id, reason, at)
     this.verificationValue = undefined
     this.stallValue = undefined
@@ -382,6 +386,11 @@ export class P2Controller {
     this.decisionValue = decision
     this.applyDecision(decision, now)
     return this.status(now)
+  }
+
+  /** Best-effort shutdown: release the slot; never reports a successful stop. */
+  dispose(at = this.now()): void {
+    this.machine.dispose(at)
   }
 
   status(now = this.now()): ControllerStatus {
@@ -452,6 +461,7 @@ export class P2Controller {
 
   /** Cross-version replacement defaults to re-verification; migration is explicit. */
   private reconcileStrategyChange(commitment: Commitment, strategy: Strategy, previousVersion: string, now: number): void {
+    if (isTerminal(commitment.state)) return
     if (this.registry.canMigrate(strategy, previousVersion) && typeof strategy.migrate === 'function') {
       const migrated = strategy.migrate(commitment.checkpoint, previousVersion)
       if (migrated !== undefined) {

@@ -259,6 +259,7 @@ type StrategyVerdict =
 | 失效 | `invalidateScope(prefix)` 使作用域内旧事实 `known=false`；空前缀同时清空危险记忆（死亡/重生/换维度） |
 
 - 默认：TTL 500ms、窗口 500ms、刷新 100ms（可覆盖，待实测）。
+- 策略读取的事实必须在 `facts` 配置中注册（`{ op, args?, scope?, ttlMs? }`）；未注册/取样失败的事实保持 `unknown`，不会由 Controller 猜测或补默认值。
 - `unknown` 不写成 `false`，也不从 `values` 中给默认值；策略必须显式处理 `unknown`。
 
 ### 13.3 承诺仓库（M1）
