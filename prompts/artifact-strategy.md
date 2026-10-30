@@ -61,6 +61,10 @@ body 默认事实源：`position`（x/y/z/dimension/inWater）、`health`（heal
 
 任意判定可附加 `checkpoint`（JSON，≤16KiB）：host 写入当前承诺，跨 tick/跨动作保留。跨策略版本**默认不迁移**，不要依赖它做跨版本状态。
 
+**S0 危险记忆**：S0 的 `propose`/`recover` 可附加
+`hazard: { id, kind, x, y, z, radius?, dimension?, ttlMs? }`。host 会写入
+`ctx.memory.hazards`（同一 id 刷新，不重复），S2 应读取 `ctx.memory.hazards` 并避开这些区域；非 S0 携带 `hazard` 会被判为非法判定。
+
 ## 4. 完成判定
 
 - 策略只能给候选，不能降低验收标准；post 由承诺定义（`count-at-least` / `fact-equals` / `standing`）。

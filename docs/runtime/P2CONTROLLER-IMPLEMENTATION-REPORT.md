@@ -165,3 +165,24 @@
 | disable 冻结 | `disable` 立即 `mode=off`、lease `released`；之后 2s 内 `controller.events` 无任何新事件（seq 停在 12），provider `controlState=idle/confirmed` |
 
 测试后 bot 仍在浅水池中，已 rescue 回基地（(-9.5,72,12.5)，0 近身敌对，controller off）。水池仍留在基地北侧，后续可改为 jump/swim-up 逃生内容后复用。
+
+### 6.7 0.3.1：IR 残留清理、hazard-aware resume 与 harvest 验收
+
+清理：`ArtifactManifest` 删除 `irVersion/irDigest`，artifact 身份不再包含 IR 字段；checker/测试同步。
+
+hazard-aware resume：
+- strategy verdict 新增可选 `hazard`（仅 S0，propose/recover）；adapter 校验后写入 `ActionMemory`。
+- S2 通过 `ctx.memory.hazards` 避开危险区域；`probe-walk` 对目标落在 hazard 内返回 `blocked(HAZARD_TARGET)`，不再“脱险后立刻走回去”。
+- 单元测试覆盖 artifact S0 写入 memory。
+
+harvest v4（生产化）：
+- 工具选择（石→镐）、多目标、失败目标列表、掉落物 goto 重试、`returnTo` 归位；
+- 只按 inventory baseline 增量完成，挖到不等于成功；
+- 侧向取块（距离 1.5–4.2，不挖脚下），避免自埋/回程路被自己挖断。
+
+实机验收（0.3.1，真实游戏）：
+- 任务：从 16 dirt 基线再收 8 dirt 并回到 (-7,72,10)。
+- 结果：8 次 dig + pickup（2 次 pickup GOTO_NO_PATH 后换目标），`return` 成功，`commitment-succeeded`，证据 `fact-4649`，inventory 24 dirt。
+- 过程中发现并修正：`nearbyBlocks` unknown 不应在“已够数/归位”阶段挡住完成；原地挖脚会破坏回程；返回点若本身是坑则 goto 失败。这些修正后一次通过。
+
+bundle：`bundles/dsh-minecraft-p2-0.3.1.tgz`；`npm run check` 30 文件 / 271 tests。
