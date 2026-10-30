@@ -22,7 +22,7 @@
 
 | 需求 | 放哪 | 判据 |
 | --- | --- | --- |
-| 每秒级策略（生存循环、任务步进） | **P2Controller 分支**（阶段 2 前为 continuous behavior） | 单 body 常驻，Controller 常开 |
+| 每秒级策略（生存循环、任务步进） | **P2Controller**（已实现、**尚未接线**）→ 现阶段仍用 continuous behavior | 单 body 常驻；接线前假设只有 behavior/guard 一条调度路径 |
 | 一次明确任务（挖 N 格、建墙、取铁） | finite behavior + postcondition | 有明确完成判据 |
 | 单个离散动作的语义封装 | **act** | 无策略、可幂等、有读回校验 |
 | 缺失的观测/控制语义 | **query/control op** | 只有底层能提供、且无法用现有 op 组合 |
@@ -30,6 +30,8 @@
 | 只通知不夺权 | **watch** | 边沿 + 冷却 + TTL |
 | 动作级"不许发生" | **act preconditions / invariant**（计划中） | 事前否决优于事后止损 |
 | 策略分析、artifact 编写 | **subagent** | 见 §6 |
+
+**控制模式互斥**：同一 body 一次只启用旧执行器模式或 P2Controller 模式之一，不得同时存在两条调度路径。当前 body 仍是旧执行器模式；Controller 需要显式接线与切换，不能靠"代码已在仓库里"当作已启用。
 
 **不要**把决策写进 act，也不要把单动作写进 behavior 的循环体之外；更不要把"该由 guard 做的事"放进 owner 的观察里（模型回路太慢）。
 

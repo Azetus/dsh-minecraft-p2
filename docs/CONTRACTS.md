@@ -462,6 +462,8 @@ type P2Error = {
 | EXTERNAL_GOAL_REJECTED | 有效外部否定结束原待验收 run，记录 failed 及原因；不同于非法确认命令被拒绝。 |
 | ACT_RUNTIME_ERROR、EXPRESSION_ERROR | 结束相关运行并收尾；记录位置和revision。 |
 | STOP_TIMEOUT、CONTROL_OUTCOME_UNKNOWN、STALE_CONTROLLER | 保留控制账本/故障，禁止新动作接管。 |
+| LEASE_REQUIRED | P2Controller 拒绝无租约 dispatch；不产生控制效果，租约账本不变。 |
+| COMMITMENT_DEADLINE、POSTCONDITION_FAILED、EVIDENCE_TIMEOUT、REVERIFY_TIMEOUT | P2Controller 结束/阻断承诺并记录证据与原因；不得据此提交成功。 |
 
 error.retry 是允许范围，不自动触发 retry。调用者不得把 never 升格为 cleanup-once；QueryOp 始终零自动重试。
 

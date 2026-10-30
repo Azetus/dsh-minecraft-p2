@@ -1,6 +1,6 @@
 # P2Controller v2（评审修订版）
 
-> 状态：**设计定稿，待实施**（2026-10-30）。已采纳独立评审的七项修正；本文替代 v1。
+> 状态：**M0–M3 已实施（fake/单测通过，未做本阶段实机验证）**（2026-10-30）。已采纳独立评审的七项修正；本文替代 v1。实现映射见 §13。
 > 关联：[operation/provider 契约](OP-PROVIDER-CONTRACT.md)、[威胁反应 guard v2](../THREAT-REACTION.md)、[通知 watch](../NOTIFICATIONS.md)、[操作员手册](../OPERATOR-PLAYBOOK.md)、[behavior 契约](../BEHAVIOR.md)、[运行时](../RUNTIME.md)、[Minecraft 接入决策](../MINECRAFT-INTEGRATION-OPTIONS.md)。
 > 命名：**P2Controller** = 常驻控制器（唯一动作控制槽 + 承诺/观测/交接）；`runtime` 保留给 body 执行层（`src/body/runtime.ts`），避免撞名。v1 的 "唯一 run" 表述已废弃（见 §3.1）。
 
@@ -161,6 +161,9 @@ type StrategyVerdict =
 - **只有动作槽是唯一的**：紧急评估、任务状态推进可以同时进行，未被选中的槽不得产生动作。
 - 同层**不引入权重**；冲突按固定顺序 + 显式冲突矩阵：`立即致命（窒息/岩浆/爆炸半径） > 失血/着火 > 被困`；同层按槽序；冲突写入 why。
 - 紧急分支有明确**退出条件**，避免阈值附近抖动；紧急条件仍成立但分支不可执行 → `blocked`（不得落回挖矿）。
+  - 实现口径：S0 的 `propose | recover | blocked | running` 一律视为"危险在场"并压制 S1–S3；S0 的 `unknown` 不算危险在场（记 `degraded`），否则缺一个观测就会永久冻结任务。危险在场且无可执行动作时，决策原因为 `emergency-blocked`；紧急动作仍在执行时为 `emergency-running`。
+- 同槽内不因算法重算而中途换动作：只有更高优先级槽可以抢占；同槽只在其动作结束后的边界推进下一步。
+- 重新核验期间只允许 S0 紧急动作 dispatch；S2 的动作要等下一次新鲜观测。
 - `STOP_UNCONFIRMED` → `control-fault`，不是等待。
 
 ## 7. 失败与降级
@@ -211,8 +214,115 @@ type StrategyVerdict =
 ## 12. 仍待定（实施中确认）
 
 1. 策略代码的沙箱与依赖契约细节（复用现有 behavior 沙箱？独立 artifact 类型？）。
+   - 本期口径：M1–M3 的策略是**受信代码模块**（`src/controller/strategies/*`），经 `install()` 装入；未引入沙箱或 artifact 类型。沙箱是接入 agent 现场编写策略的前置，未决。
 2. `coherenceWindow` 与查询预算的具体数值（需真实服测量，但先给保守默认）。
+   - 本期默认：事实 TTL 500ms、`coherenceWindow` 500ms、观测刷新间隔 100ms；均可在构造参数覆盖，待实测。
 3. 冲突矩阵是否需要扩展（多危险同时发生时）。
+   - 本期只实现三级类序（lethal > bleeding-fire > trapped）+ 槽序 + 注册序；同级多危险时后者只进候选列表，不产生动作。
 4. `blocked` 的上报阈值与 owner 唤醒策略（避免刷屏与漏报）。
+   - 本期：`unknown`/`blocked` 持续超过 `unknownDeadlineMs`（默认 3000ms）转 `blocked`；`candidate` 证据等待上限 `verificationTimeoutMs`（默认 2000ms）。owner 唤醒未接线（见 §13.7）。
 5. 旧 behavior 适配为任务策略的最小契约（是否需要 `ctx.call`）。
+   - 未决；本期策略是原生函数，不包装旧 Host。
 6. 指标基线的采集方式（t_release/t_effective 需要 provider 侧配合埋点）。
+   - 未实现；交接事件已记录 `requested/revoked/stop-requested/release-confirmed/granted/started` 时间戳，可在实机时先按这些事件近似四段时延。
+
+## 13. 实现映射（M0–M3）
+
+> 代码：`src/controller/`（provider 无关）。测试：`test/controller-*.test.ts`、`test/provider-stop-release.test.ts`。
+
+### 13.1 动作租约与交接（M0）
+
+| 项 | 实现值 |
+| --- | --- |
+| 租约状态 `LeaseState` | `none / granted / revoking / released / unknown` |
+| 交接阶段 `HandoverPhase` | `idle / revoking / stopping / confirming / granting / starting / active / control-fault` |
+| 租约 `LeaseGrant` | `{ leaseId, generation, holder }`；holder 形如 `S2:harvest` |
+| 动作请求 `ActionRequest` | `{ act, args, intent, slot, holder, attemptId? }` |
+| 动作结果 `ActionOutcome` | `running{progress} / succeeded{result} / failed{error} / cancelled{reason}` |
+| 控制端口 `ActuatorPort` | `start(request, grant) / stop(now) / release(now)`；`release` 只报 `released / stopping / unconfirmed` |
+| 控制故障码 | `STOP_TIMEOUT`（期限耗尽）、`CONTROL_OUTCOME_UNKNOWN`（无法确认释放 / 启动抛错） |
+| 交接期限 | 默认 2000ms，从撤销起算；重复请求不重置 |
+| 迟到结果 | `generation < current` 只记 `stale-result` 事件；`classifyResult` 返回 `stale`，不取得控制 |
+| fault 恢复 | 只有观察到 `released` 才解除；排队中的 wish 被丢弃，必须重新请求 |
+
+- `startAction` 在无有效租约或 generation/leaseId 不匹配时抛 `LEASE_REQUIRED` / `STALE_CONTROLLER`；"无租约不 dispatch" 是结构性约束，不是调用约定。
+- 撤销即 `generation++`；新动作只在新 generation 下启动。启动抛错按"控制结果未知"处理：先停止并等待释放，不重试。
+
+### 13.2 观测总线（M1）
+
+| 项 | 实现值 |
+| --- | --- |
+| 事实 `Fact` | `{ key, value, known, sampledAt, validUntil, scope, evidenceId, unknownReason? }` |
+| `unknownReason` | `missing / expired / invalidated / stale-before-recovery`（多事实不齐时读侧另有 `incoherent`） |
+| 多事实读取 `readMany` | 返回 `values / facts / known / unknown / reasons / coherent / coherenceGapMs`；超出窗口的旧样本被移入 `unknown` |
+| 新鲜度 | `freshSince` 早于阈值的样本按 `stale-before-recovery` 拒绝（恢复后重新核验） |
+| 失效 | `invalidateScope(prefix)` 使作用域内旧事实 `known=false`；空前缀同时清空危险记忆（死亡/重生/换维度） |
+
+- 默认：TTL 500ms、窗口 500ms、刷新 100ms（可覆盖，待实测）。
+- `unknown` 不写成 `false`，也不从 `values` 中给默认值；策略必须显式处理 `unknown`。
+
+### 13.3 承诺仓库（M1）
+
+| 项 | 实现值 |
+| --- | --- |
+| 状态 `CommitmentState` | `active / suspended / verifying / succeeded / failed / blocked / cancelled` |
+| 字段 | `id, kind(task|standing), goal, strategyKey, post, state, createdAt, deadline, cleanup?, resume:'reverify', baseline, checkpoint, candidateRejections, evidence[], suspendedAt?, suspendReason?, verifyingSince?, verificationDeadline?, candidateSince?, blocked?, error?, endedAt?` |
+| `post` 类型 | `count-at-least{factKey,item,count,fromBaseline?}`、`fact-equals{factKey,value}`、`standing`（无自然成功终态） |
+| `baseline` | `{ at, values, evidenceIds, missing[] }`，在 `commit()` 时对 `baselineKeys` 取样 |
+| 证据 `EvidenceRef` | `{ factKey, evidenceId, sampledAt, validUntil, scope, value, observed?, required?, baseline? }` |
+| 完成判定 | `候选完成 → 槽位空闲且无 fault（收尾确认）→ 新鲜、已知、同窗口证据 → 成功` |
+| 失败关闭 | baseline 缺失时 `fromBaseline` 判 `unknown`，等待到期后 `blocked(EVIDENCE_TIMEOUT)`，不提交成功 |
+| 拒绝 | 候选被证伪 3 次 → `failed(POSTCONDITION_FAILED)` |
+| 默认期限 | 承诺 10 分钟；证据等待 2000ms；重核验 2000ms |
+
+### 13.4 策略与替换（M1/M2）
+
+| 项 | 实现值 |
+| --- | --- |
+| 判定 `StrategyVerdict` | `idle / unknown / propose / running / wait / recover / candidate-complete / blocked`；`recover` 可带 `action` 与 `hazardClass` |
+| 上下文 | `now, slot, phase, attemptId, facts(), memory, commitment?, activeAction?, lastOutcome?, request(), propose(), diagnostic(), saveCheckpoint(), evidence()` |
+| 安装 | `install(strategy, 'boundary'|'interrupt')`；同 key 新版本进入 `pending-takeover` / `pending-interrupt` |
+| 已安装 ≠ 已接管 | 绑定字段 `installedVersion / activeVersion / attemptId / state`；事件 `strategy-installed / strategy-takeover-pending / strategy-taken-over` |
+| boundary | 等当前动作结束（槽位 idle）后接管 |
+| interrupt | 立即撤销并停止；丢弃旧 attempt 的排队动作；释放确认后接管 |
+| 跨版本 | 默认进入 `verifying`（`freshSince = 接管时刻 + 1`）；仅当新版声明 `compatibleWith` 且 `migrate` 返回状态时才迁移，否则重新核验 |
+| attempt 隔离 | 每次接管生成新 `attemptId`；动作结果按 attempt/generation 对账，旧 attempt 不驱动新策略 |
+
+### 13.5 槽位、决策与原因码（M1）
+
+| 原因码 `decision.reason` | 含义 |
+| --- | --- |
+| `emergency` | S0 危险在场且有可执行动作 |
+| `emergency-running` | 紧急动作仍持有租约，压制其他槽 |
+| `emergency-blocked` | 危险在场但紧急分支不可执行（不落回任务） |
+| `maintenance` | S1 有可执行动作 |
+| `commitment` / `commitment-<state>` | S2 推进 / 因承诺状态被压制 |
+| `standby` | 无承诺时的 S3 |
+| `no-candidate` / `no-selected-slot` | 无可执行动作 |
+
+- 唯一动作槽：同一时刻至多一个动作；S0/S1 可抢占 S2，同槽不中途换动作。
+- 重新核验或策略接管期间，非 S0 的 dispatch 被拒绝（记 `degraded:dispatch:verifying` / `dispatch:takeover-pending`）。
+
+### 13.6 有界行动记忆（M1）
+
+`ActionMemory`：危险区域（默认保留 32 条、TTL 10 分钟）、失败目标（16 条）、重试预算（默认窗口 5 分钟）、逃生阶段 `none/escaping/recovering/verifying`。只作决策辅助与诊断，不是世界模型。
+
+### 13.7 与 body 的边界（本期）
+
+- Controller 以库形式落地（`src/controller/index.ts`），**尚未接入 body 调度**：§3.3 要求同一 body 只启用一种控制模式，且策略沙箱载体（§12.1）未定。
+- 因此 M0–M3 的"实机验收"范围是：provider 停止语义修复（直接作用于现有 body 路径）+ Controller 的 fake 闭环；Controller 接线与实机长跑另行安排。
+- Nav/Crafting 本期不新增算法接口：进度用 `ActionProgress`、失败证据用 `P2Error.details`（例如 `head-blocked@x,y,z`）、期限由 act limits/租约约束、停止结论由 `release` 给出；算法仍留在 adapter（符合 §5 与 OP 契约的阶段 2）。
+
+### 13.8 错误码（实现值）
+
+| 码 | 归属 |
+| --- | --- |
+| `LEASE_REQUIRED` | dispatch 无有效租约（新增） |
+| `STALE_CONTROLLER` | generation/leaseId/attempt 过期（沿用） |
+| `STOP_TIMEOUT`、`CONTROL_OUTCOME_UNKNOWN` | 交接/释放超时或不可确认（沿用） |
+| `POSTCONDITION_FAILED` | 候选被证伪 3 次（沿用 C4 语义） |
+| `COMMITMENT_DEADLINE` | 承诺自身期限耗尽 |
+| `COMMITMENT_BUSY`、`COMMITMENT_NOT_FOUND`、`INVALID_POSTCONDITION` | 承诺仓库参数/状态错误 |
+| `STRATEGY_LIMIT`、`STRATEGY_SLOT_MISMATCH`、`STRATEGY_UNAVAILABLE` | 策略安装/槽位/卸载错误 |
+| `SENSE_FAILED` | 观测端口抛错 |
+| `EVIDENCE_TIMEOUT`、`REVERIFY_TIMEOUT`、`MISSING_OBSERVATION`、`STRATEGY_BLOCKED`、`RELEASE_UNCONFIRMED` | `blocked.reason`（不是 P2Error code） |
