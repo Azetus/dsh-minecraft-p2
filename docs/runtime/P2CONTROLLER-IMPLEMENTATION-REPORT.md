@@ -156,3 +156,12 @@
 2. **S0 无界重试**：artifact S0 读不到任务承诺的 checkpoint，逃生失败会无限重启。修复：核心按 `holder|intent` 限 60s 内 3 次启动；超出 → `blocked`（`S0_RETRY_EXHAUSTED`），承诺 `blocked: EMERGENCY_BLOCKED`，不落回任务。新增测试。
 
 内容问题（非核心）：`walk-back` 不能爬上 1 格石沿；水池逃生 act 应为跳跃/上浮类（例如先 `move direction=jump` 再后退），950ms 后退不足。测试后已 rescue 回基地，水域未再扩散。
+
+### 6.6 安全修复复测（第四次实机）
+
+| 复测 | 结果 |
+| --- | --- |
+| S0 有界重试 | S2 walk 进入水池 → `commitment-suspended`（preempted by water-escape）→ S0 恰好启动 3 次 `leave-water` → `commitment-blocked: EMERGENCY_BLOCKED`，诊断 `S0_RETRY_EXHAUSTED: started 3 times`；没有第 4 次动作 |
+| disable 冻结 | `disable` 立即 `mode=off`、lease `released`；之后 2s 内 `controller.events` 无任何新事件（seq 停在 12），provider `controlState=idle/confirmed` |
+
+测试后 bot 仍在浅水池中，已 rescue 回基地（(-9.5,72,12.5)，0 近身敌对，controller off）。水池仍留在基地北侧，后续可改为 jump/swim-up 逃生内容后复用。
