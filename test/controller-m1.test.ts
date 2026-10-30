@@ -209,6 +209,40 @@ describe('P2Controller M1', () => {
     expect(commitment?.error?.code).toBe('POSTCONDITION_FAILED')
     expect(harness.controller.eventLog.some(event => event.kind === 'candidate-rejected')).toBe(true)
   })
+
+  it('does not carry a previous commitment action outcome into a new commitment', () => {
+    const harness = createHarness({
+      world: {
+        inventory: [],
+        blocks: [{ name: 'stone', x: 2, y: 64, z: 0 }],
+      },
+    })
+    harvestCommitment(harness, 1)
+    harness.run(8)
+    expect(harness.controller.commitments.get('mine-stone')?.state).toBe('succeeded')
+
+    const seen: Array<unknown> = []
+    const watcher: Strategy = {
+      key: 'watcher',
+      version: '1',
+      slot: 'S2',
+      evaluate: context => {
+        seen.push(context.lastOutcome)
+        return { kind: 'idle' }
+      },
+    }
+    harness.controller.install(watcher)
+    harness.controller.commit({
+      kind: 'standing',
+      goal: 'watch',
+      strategyKey: 'watcher',
+      post: { kind: 'standing' },
+      baselineKeys: [],
+    })
+    harness.tick()
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen[0]).toBeUndefined()
+  })
 })
 
 

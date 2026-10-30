@@ -102,3 +102,34 @@
 - 承诺 `succeeded` 但 `evidence` 为空、`freshSince` 之前的样本、或 baseline 缺失。
 - 停止后仍发出旧 generation 的动作（provider 停止语义回退）。
 - `blocked` 无 `missing`/`diagnostics`，或长期 `unknown` 不转 `blocked`。
+
+## 6. M4 实机冒烟结果（2026-10-30，VANILLA 1.21.1 @127.0.0.1:25575）
+
+环境：body 0.2.6、`P2_Bot`、controller 模式，测试位置基地附近（y=72 草地）。
+
+### 6.1 通过项
+
+| 检查 | 证据 |
+| --- | --- |
+| enable → install → commit | `mode=active`；`strategies[].activeVersion` 与 `attemptId` 递增；承诺 `active` |
+| act dispatch + 租约身份 | `action-started` → `action-completed`；act 以 `runId=controller`、递增 `actInstanceId/generation` 执行 |
+| 完成判定（baseline + 收尾后证据） | `probe-pickup-2`：捡起掉落的 dirt 后 `commitment-succeeded`，evidence `sampledAt` 晚于动作结束、`baseline=0/observed=1` |
+| 无假成功 | 挖掉脚下草方块后掉落物未入包，承诺保持 `active` 直到走到掉落物；未提前成功 |
+| 策略替换 | v1→v2→v3→v4 boundary 接管；`installedVersion` 与 `activeVersion` 分离；`strategy-taken-over` 事件；旧 attempt 不再驱动 |
+| 动作失败可解释 | `GOTO_NO_PATH` 记录为 `action-completed: failed` + `memory.failures`，承诺不被伪造成成功 |
+| 中途停止 | 长距离 goto 进行中 `controller.cancel`：`action-started` → `commitment-cancelled` → `action-completed: cancelled`，provider `controlState=idle/controlRelease=confirmed` |
+| 承诺期限 | 超时承诺 `failed: COMMITMENT_DEADLINE`，不重试旧步骤 |
+| 模式互斥 | Controller active 时 `p2_switch` 返回 `CONTROL_MODE_CONFLICT`；disable 后同一请求返回 `ARTIFACT_NOT_ACTIVE`（仅剩产物校验） |
+| disable | `mode=off`，无租约/动作；provider idle |
+
+### 6.2 实机发现并修复的问题
+
+1. **跨 realm 异常显示为 `[object Object]`**：vm 抛出的错误不是宿主 `Error` 实例，诊断只拿到字符串化对象。修复：`messageOf` 读取对象 `message` 字段；新增契约测试。重打包后诊断可读。
+2. **`lastOutcome` 跨承诺/跨 attempt 泄漏**：同一次策略尝试下，上一个承诺的动作结局会让新承诺的策略误判“已完成/已到达”（实机表现为新 walk 不发起动作）。修复：`commit()` 与策略接管时清空 `lastOutcome`/`lastCompletionAt`；M1/M2 各加回归测试。
+3. 默认 `nearbyBlocks` 增加 `grass_block`（地表常见方块，掉落 dirt），便于采集策略直接使用。
+
+### 6.3 未覆盖 / 后续
+
+- S0 危险抢占（水中/苦力怕）未在实机触发：测试点附近无安全可控的水域/苦力怕；该路径仍只有 fake 覆盖。
+- 实机探针策略把 bot 带到基地西侧约 14 格（僵尸/骷髅 5–10 格），已用 `p2_rescue action=tp` 回基地（审计 id `f75b4308-…`）。实机测试应限制行走目标在已知安全半径内，或先安装 S0 策略。
+- 探针策略（`strategies/probe-*.js`）是测试内容，不属于产品；`probe-dig` 的“脚下挖掘”会在原地留下 1 格坑。

@@ -334,7 +334,13 @@ export class P2Controller {
       evidenceIds,
       missing: facts.unknown,
     }
-    return this.commitments.create(spec, baseline, at)
+    const commitment = this.commitments.create(spec, baseline, at)
+    // A new commitment starts without the previous one's action outcome; stale
+    // results must not steer a fresh goal (real-machine finding).
+    this.lastOutcomeValue = undefined
+    this.lastCompletionAt = undefined
+    this.stallValue = undefined
+    return commitment
   }
 
   cancelCommitment(id: string, reason: string, at = this.now()): Commitment {
@@ -445,6 +451,9 @@ export class P2Controller {
     for (const binding of [...this.registry.pending()]) {
       const taken = this.registry.takeOver(binding.key, now)
       if (taken === undefined) continue
+      // A new attempt must not inherit the previous attempt's last action.
+      this.lastOutcomeValue = undefined
+      this.lastCompletionAt = undefined
       const commitment = this.commitments.active()
       if (commitment !== undefined && commitment.strategyKey === taken.strategy.key) {
         this.reconcileStrategyChange(commitment, taken.strategy, taken.previousVersion, now)
@@ -1178,8 +1187,14 @@ function asRecord(value: JsonValue): Record<string, JsonValue> {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.length > 0) return message
+  }
+  if (error instanceof Error) return error.message
+  return String(error)
 }
+
 
 
 

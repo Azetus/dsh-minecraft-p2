@@ -241,8 +241,14 @@ function jsonSafe(value: unknown): JsonValue {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.length > 0) return message
+  }
+  if (error instanceof Error) return error.message
+  return String(error)
 }
+
 
 
 

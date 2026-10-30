@@ -163,4 +163,30 @@ describe('P2Controller M2', () => {
     expect(newEvents.some(event => event.kind === 'commitment-verifying')).toBe(false)
     expect(harness.controller.status().verification).toBeNull()
   })
+
+  it('does not expose the previous attempt action outcome after takeover', () => {
+    const harness = setup(2)
+    const v1 = { calls: 0 }
+    startHarvesting(harness, versionedHarvest('1', 'dig', v1))
+    harness.run(8) // one dig completed; the two-item goal is not met yet
+    const previous = harness.controller.eventLog.filter(event => event.kind === 'action-completed')
+    expect(previous.length).toBeGreaterThan(0)
+
+    const seen: Array<unknown> = []
+    const watcher: Strategy = {
+      key: 'harvest',
+      version: '2',
+      slot: 'S2',
+      evaluate: context => {
+        seen.push(context.lastOutcome)
+        return { kind: 'idle' }
+      },
+    }
+    harness.controller.install(watcher, 'boundary')
+    for (let index = 0; index < 10 && strategyRow(harness)?.activeVersion !== '2'; index += 1) harness.tick()
+    harness.tick()
+
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen[0]).toBeUndefined()
+  })
 })

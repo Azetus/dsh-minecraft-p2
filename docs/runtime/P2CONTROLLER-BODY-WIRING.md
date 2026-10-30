@@ -112,7 +112,8 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 ## 8. 已知限制
 
 - 策略沙箱是进程内 vm，不是隔离 runner；恶意代码可逃逸（与 JS behavior 相同的已知基线）。
-- `nearbyBlocks` 默认只含常见资源名；新方块需求要改事实源。
+- `nearbyBlocks` 默认只含常见资源名（含 `grass_block`）；新方块需求要改事实源。
 - `blocked` 只写状态/事件，不唤醒 owner（事件通道接线留待后续）。
 - `p2_stop` 不停止 Controller；必须用 `controller.cancel` / `controller.disable`。
 - 无自动重启/跨 body epoch 恢复：body 重建后需重新 enable/install/commit。
+- 策略上下文 `lastOutcome` 只覆盖“当前承诺 + 当前 attempt”；`commit()` 与策略接管会清空（实机发现旧结局会卡住新承诺）。

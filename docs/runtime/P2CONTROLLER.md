@@ -288,7 +288,7 @@ type StrategyVerdict =
 | boundary | 等当前动作结束（槽位 idle）后接管 |
 | interrupt | 立即撤销并停止；丢弃旧 attempt 的排队动作；释放确认后接管 |
 | 跨版本 | 默认进入 `verifying`（`freshSince = 接管时刻 + 1`）；仅当新版声明 `compatibleWith` 且 `migrate` 返回状态时才迁移，否则重新核验 |
-| attempt 隔离 | 每次接管生成新 `attemptId`；动作结果按 attempt/generation 对账，旧 attempt 不驱动新策略 |
+| attempt 隔离 | 每次接管生成新 `attemptId`；动作结果按 attempt/generation 对账，旧 attempt 不驱动新策略。`lastOutcome` 只属于当前 commitment + 当前 attempt：`commit()` 与策略接管时清空（2026-10-30 实机发现旧结局会卡住新承诺） |
 
 ### 13.5 槽位、决策与原因码（M1）
 

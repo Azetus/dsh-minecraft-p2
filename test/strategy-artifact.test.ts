@@ -216,6 +216,15 @@ describe('strategy runtime and adapter', () => {
     }).evaluate(context)
     expect(undeclared).toMatchObject({ kind: 'blocked' })
     expect(undeclared.kind === 'blocked' ? undeclared.diagnostics[0]?.code : undefined).toBe('ACT_UNDECLARED')
+
+    // Cross-realm errors are plain objects, not host `Error` instances; their
+    // message must still reach diagnostics instead of "[object Object]".
+    const thrown = createArtifactStrategy({
+      artifact,
+      evaluate: () => { throw { message: 'cross-realm boom' } },
+    }).evaluate(context)
+    expect(thrown).toMatchObject({ kind: 'blocked' })
+    expect(thrown.kind === 'blocked' ? thrown.diagnostics[0]?.message : undefined).toBe('cross-realm boom')
   })
 })
 

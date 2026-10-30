@@ -70,7 +70,7 @@ const DEFAULT_FACT_SOURCES: Record<string, FactSource> = {
       radius: 16,
       count: 24,
       exposed: true,
-      names: ['stone', 'deepslate', 'cobblestone', 'coal_ore', 'iron_ore', 'oak_log', 'birch_log', 'dirt', 'sand', 'gravel'],
+      names: ['stone', 'deepslate', 'cobblestone', 'coal_ore', 'iron_ore', 'oak_log', 'birch_log', 'grass_block', 'dirt', 'sand', 'gravel'],
     },
     scope: 'body',
     refreshMs: 700,
