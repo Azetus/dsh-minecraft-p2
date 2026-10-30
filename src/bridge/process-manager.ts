@@ -51,6 +51,7 @@ export type BodyFault = {
 export type RestartInfo = {
   fault: BodyFault
   epoch: string
+  /** Restarts planned in the current budget window (1..maxRestarts). */
   attempt: number
   maxRestarts: number
 }
@@ -125,7 +126,6 @@ export class BodyManager {
   private readonly restartTimes: number[] = []
   private readonly delay: (ms: number) => Promise<void>
   private readonly now: () => number
-  private restartAttempt = 0
   private lastFaultValue: BodyFault | undefined
   private lastActiveRunId: string | null = null
   private lastContactAt = 0
@@ -550,13 +550,12 @@ export class BodyManager {
   private async restart(fault: BodyFault): Promise<void> {
     const owner = this.owner
     if (owner === undefined || this.state !== 'faulted') return
-    this.restartAttempt += 1
     try {
       const started = await this.start(owner)
       const info: RestartInfo = {
         fault,
         epoch: started.epoch,
-        attempt: this.restartAttempt,
+        attempt: this.restartTimes.length,
         maxRestarts: this.autoRestart.maxRestarts,
       }
       this.emitEvent('restart', info)

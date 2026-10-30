@@ -216,7 +216,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       }
       notifyBodyRestart = info => {
         deliverWake(
-          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts}). Previous run ${info.fault.activeRunId ?? 'none'} is faulted and its control state is unknown; re-register guards/watches as needed.`,
+          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Previous run ${info.fault.activeRunId ?? 'none'} is faulted and its control state is unknown; re-register guards/watches as needed.`,
           'p2-runtime',
           'urgent',
         )

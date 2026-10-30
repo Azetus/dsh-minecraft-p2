@@ -85,7 +85,7 @@ type ManagerHarness = {
 
 function createManager(
   bodies: FakeBody[],
-  options: { autoRestart?: boolean; maxRestarts?: number } = {},
+  options: { autoRestart?: boolean; maxRestarts?: number; windowMs?: number } = {},
 ): ManagerHarness {
   const faults: BodyFault[] = []
   const restarts: RestartInfo[] = []
@@ -103,7 +103,7 @@ function createManager(
     autoRestart: {
       enabled: options.autoRestart ?? true,
       maxRestarts: options.maxRestarts ?? 3,
-      windowMs: 5_000,
+      windowMs: options.windowMs ?? 5_000,
       backoffMs: [0, 0, 0],
     },
     delay: async () => {},
@@ -146,6 +146,23 @@ describe('body watchdog', () => {
       autoRestart: 'scheduled',
     })
     expect(harness.restarts[0]).toMatchObject({ epoch: 'epoch-2', attempt: 1, maxRestarts: 3 })
+    await harness.manager.stop()
+  })
+
+  it('reports the current-window restart count, not a cumulative count', async () => {
+    const bodies = [createFakeBody('epoch-1'), createFakeBody('epoch-2'), createFakeBody('epoch-3')]
+    const harness = createManager(bodies, { windowMs: 50 })
+    await harness.manager.start(owner)
+
+    bodies[0]!.setSilent(true)
+    await wait(150)
+    expect(harness.restarts[0]).toMatchObject({ attempt: 1 })
+
+    // The first restart ages out of the 50ms window before the next fault.
+    await wait(150)
+    bodies[1]!.setSilent(true)
+    await wait(150)
+    expect(harness.restarts[1]).toMatchObject({ attempt: 1 })
     await harness.manager.stop()
   })
 

@@ -228,7 +228,7 @@ act 自称完成不等于控制权释放：只有 broker 确认持续操作已�
 - **热重载/再次启动**：插件释放旧 body 及其 runner/检查进程，重载后保持未启动。人工 start 创建新 bodyEpoch；旧进程树未回收或控制未决时，不启动新的控制者。换 owner session 也采用先关闭旧 body 再人工启动新 body。
 - **游戏连接断开**：立刻禁止新控制调用，连接 epoch 作废；不能假定游戏输入已解除，按驱动停止证明处理 fault。
 - **body 崩溃**：底层驱动的控制释放/watchdog 能力仍须验证；新 body 生成新 epoch，从空运行开始，只做当前启动与连接核验，不从日志重建旧控制账本或自动对账。未知游戏效果由开发者/人类核查，不将重新启动当成停止证明。
-- **body 挂死与有界重启（开发模式）**：bridge 连续 3 个心跳周期没有任何 body 回应，或子进程异常退出 → `faulted`；强杀整棵进程树后以新 epoch 重启，重注册工具、记录 fault/restart 事件并唤醒 owner；旧 run 记 `faulted`、在途控制 `unknown`、guard/watch 随 epoch 失效；窗口内最多 3 次并退避，耗尽或重连失败后保持 `faulted` 等人工处理（开发开关默认关闭，人工 stop 或 stopping 中不触发）。正式模式默认关闭。
+- **body 挂死与有界重启（开发模式）**：bridge 连续 3 个心跳周期没有任何 body 回应，或子进程异常退出 → `faulted`；强杀整棵进程树后以新 epoch 重启，重注册工具、记录 fault/restart 事件并唤醒 owner；旧 run 记 `faulted`、在途控制 `unknown`、guard/watch 随 epoch 失效；窗口内最多 3 次并退避，耗尽或重连失败后保持 `faulted` 等人工处理（开发开关默认关闭，人工 stop 或 stopping 中不触发）。restart 事件的 `attempt` 是**当前窗口内**的计数（1..max），不是累计值；正式模式默认关闭。
 - **runner 崩溃**：body 仍负责清理；act 业务失败为 ACT_RUNTIME_ERROR，behavior 失败为 BEHAVIOR_SCRIPT_ERROR；清理失败另报 executor fault。
 - **机器重启**：保留已正常保存的源码、artifact、显式目标及可用调试日志，不保证有上次运行终态；不恢复 generator 栈、命令或通知，不自动归档未完成运行。新的执行需人工启动，不能伪造上次已取消或成功。
 
