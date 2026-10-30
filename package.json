@@ -1,6 +1,6 @@
 {
   "name": "dsh-minecraft-p2",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "private": true,
   "description": "Single-package DSH Minecraft P2 runtime: bridge, body, P2Controller and built-in provider.",
   "license": "MIT",
@@ -59,4 +59,3 @@
     "mineflayer-pathfinder": "^2.4.5"
   }
 }
-

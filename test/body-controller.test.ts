@@ -327,6 +327,29 @@ describe('BodyController wiring', () => {
     const disabled = runtime.handleRequest(request('controller.disable', {}))
     expect(disabled.error).toBeUndefined()
   })
+
+  it('starts queued commitments when the previous one is terminal', () => {
+    const artifact = artifactWith(COMPLETE, ['inventory'])
+    const { controller, tick } = harness({ artifact, inventory: 1 })
+    controller.enable(1000)
+    controller.install({ artifactId: artifact.artifactId }, 1000)
+    const spec = (id: string) => ({
+      id,
+      goal: `queued ${id}`,
+      strategyKey: 'finish',
+      post: { kind: 'count-at-least', factKey: 'inventory', item: 'stone', count: 1 } as JsonValue,
+      baselineKeys: ['inventory'],
+    })
+    expect(controller.queue(spec('q1'), 1000).queueLength).toBe(1)
+    expect(controller.queue(spec('q2'), 1000).queueLength).toBe(2)
+    tick()
+    expect(controller.status().commitment?.id).toBe('q1')
+    for (let i = 0; i < 6; i += 1) tick()
+    const after = controller.status()
+    expect(after.commitments.find(row => row.id === 'q1')?.state).toBe('succeeded')
+    expect(after.commitments.find(row => row.id === 'q2')?.state).toBe('succeeded')
+    expect(after.queueLength).toBe(0)
+  })
 })
 
 

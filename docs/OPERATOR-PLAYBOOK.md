@@ -36,8 +36,8 @@ p2_controller action=commit {id, goal, strategyKey, post, baselineKeys, checkpoi
 | 承诺 `blocked` | 看 `blocked.missing/diagnostics`；不要重复 commit 同一策略 |
 | `control-fault` | `disable` → 检查 provider 状态 → 重新 enable |
 | 危险（水/苦力怕） | 先装 S0 策略；已触发时看 `suspended`，不要 disable 掉逃生动作 |
-| 卡住/掉入坑 | `p2_rescue`（tp/effect）；确认 `sent:true` 后必须读回位置 |
-| body 重启 | epoch 变化，controller/watch 清空，重新 enable/install/commit |
+| 卡住/掉入坑 | `p2_rescue`（tp/effect）；必要时 `force:true` 覆盖活动动作；确认 `sent:true` 后必须读回位置 |
+| body 重启 | `p2_body action=restart`（开发工具）；epoch 变化，controller/watch 清空，重新 enable/install/commit |
 
 ## 5. 验收纪律
 

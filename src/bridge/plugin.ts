@@ -289,7 +289,7 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'stop', 'status'], description: 'Body lifecycle action' },
+        action: { type: 'string', enum: ['start', 'stop', 'restart', 'status'], description: 'Body lifecycle action' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -313,6 +313,15 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         const status = await bodyStatus(manager)
         return { action, ...result, status }
+      }
+      if (action === 'restart') {
+        assertBodyOwner(manager, agent.session.id)
+        const stopped = await stopBody(manager)
+        if (stopped.state === 'faulted') return { action, ...stopped }
+        const result = await startBody(manager, agent)
+        hooks.ensureTools(agent)
+        void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
+        return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
         assertBodyOwner(manager, agent.session.id)
@@ -475,5 +484,6 @@ function formatError(cause: unknown): string {
 function formatP2Error(error: P2Error): string {
   return `${error.code}: ${error.message}`
 }
+
 
 

@@ -41,6 +41,7 @@ export type ControllerRuntime = {
   disable(now: number): ControllerView
   install(params: ControllerInstallParams, now: number): ControllerInstallResult
   commit(params: ControllerCommitParams, now: number): ControllerCommitmentView
+  queue(params: ControllerCommitParams, now: number): ControllerView
   cancel(params: ControllerCancelParams, now: number): ControllerCommitmentView
   events(params: ControllerEventsParams): ControllerEventsResult
   status(now?: number): ControllerView
@@ -95,6 +96,7 @@ export class BodyController implements ControllerRuntime {
   private actSequence = 0
   private eventSequence = 0
   private readonly eventLog: ControllerEventView[] = []
+  private readonly pendingCommits: ControllerCommitParams[] = []
   private lastDeathAt: number | null = null
   private lastDimension: string | null = null
   private readonly act: ActPort
@@ -194,7 +196,7 @@ export class BodyController implements ControllerRuntime {
     }
     const loaded = this.strategyRuntime.load(artifact)
     const strategy = createArtifactStrategy({ artifact, evaluate: loaded.evaluate })
-    const result = controller.install(strategy, params.mode ?? 'boundary', now)
+    const result = controller.install(strategy, params.mode ?? 'boundary', now, params.shadow === true)
     const binding = controller.registry.binding(artifact.definitionId)
     this.log(`controller strategy ${artifact.definitionId}@${artifact.version} -> ${result.status}`)
     return {
@@ -262,6 +264,21 @@ export class BodyController implements ControllerRuntime {
     return summarizeCommitment(commitment)
   }
 
+  /**
+   * Queue a commitment for the next free slot. Validation is intentionally
+   * deferred to the moment it actually starts, because the strategy set or
+   * facts may have changed; a failing item is logged and skipped, not retried.
+   */
+  queue(params: ControllerCommitParams, now = this.now()): ControllerView {
+    this.requireEnabled()
+    if (this.pendingCommits.length >= 32) {
+      throw p2Error('COMMITMENT_QUEUE_FULL', 'validation', 'commitment queue is full', { module: 'body.controller' })
+    }
+    this.pendingCommits.push({ ...params })
+    this.log(`controller queued commitment ${params.id ?? '(auto)'}: ${params.goal}`)
+    return this.status(now)
+  }
+
   cancel(params: ControllerCancelParams, now = this.now()): ControllerCommitmentView {
     const controller = this.requireEnabled()
     const active = controller.commitments.active()
@@ -293,10 +310,13 @@ export class BodyController implements ControllerRuntime {
     return {
       mode: this.modeValue,
       enabledAt: this.enabledAt,
+      queueLength: this.pendingCommits.length,
       phase: status.phase,
       lease: status.lease as unknown as JsonValue,
       action: (status.action ?? null) as unknown as JsonValue,
       decision: (status.decision ?? null) as unknown as JsonValue,
+      decisions: status.decisions as unknown as JsonValue[],
+      metrics: status.metrics as unknown as JsonValue,
       commitment: status.commitment === null ? null : {
         ...summarizeCommitment(status.commitment as unknown as Commitment),
       },
@@ -309,6 +329,7 @@ export class BodyController implements ControllerRuntime {
         activeVersion: row.activeVersion,
         attemptId: row.attemptId,
         ...(row.hazardClass === undefined ? {} : { hazardClass: row.hazardClass }),
+        ...(row.shadow === true ? { shadow: true } : {}),
       })),
       verification: (status.verification ?? null) as unknown as JsonValue,
       stall: (status.stall ?? null) as unknown as JsonValue,
@@ -326,6 +347,19 @@ export class BodyController implements ControllerRuntime {
     if (this.controller.machine.controlFault !== undefined) {
       this.modeValue = 'fault'
       return
+    }
+    if (this.modeValue === 'active' && this.pendingCommits.length > 0) {
+      const status = this.controller.status(now)
+      if (status.commitment === null && status.action === null && this.controller.commitments.active() === undefined) {
+        const next = this.pendingCommits.shift()
+        if (next !== undefined) {
+          try {
+            this.commit(next, now)
+          } catch (error) {
+            this.log(`queued commitment skipped: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      }
     }
     if (this.disableRequested) {
       if (this.controller.machine.phase === 'idle') {
@@ -431,7 +465,7 @@ export class BodyController implements ControllerRuntime {
     const provider = this.providerStatus?.()
     if (provider !== undefined && typeof provider.lastDeathAt === 'number' && provider.lastDeathAt !== this.lastDeathAt) {
       this.lastDeathAt = provider.lastDeathAt
-      controller.invalidateScope('body', now)
+      controller.recordDeath(provider.lastDeathPosition ?? null, now)
       this.log('controller observations invalidated after death')
     }
     const position = controller.observations.read('position', now)
@@ -499,10 +533,29 @@ function emptyView(
   return {
     mode,
     enabledAt,
+    queueLength: 0,
     phase: null,
     lease: null,
     action: null,
     decision: null,
+    decisions: [],
+    metrics: {
+      startedAt: 0,
+      ticks: 0,
+      lastTickAt: 0,
+      commitmentActiveMs: 0,
+      noProgressMs: 0,
+      idleMs: 0,
+      lastProgressAt: 0,
+      actionsStarted: 0,
+      actionsFailed: 0,
+      commitmentsSucceeded: 0,
+      commitmentsFailed: 0,
+      commitmentsBlocked: 0,
+      deaths: 0,
+      deathsByClass: {},
+      s0Latency: [],
+    },
     commitment: null,
     commitments: [],
     strategies: [],

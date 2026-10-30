@@ -132,7 +132,7 @@ export class BodyClient {
     return this.request('card', params)
   }
 
-  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
+  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'queue' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
     return this.request(`controller.${action}`, params)
   }
 
@@ -231,6 +231,7 @@ export class BodyClient {
     }
   }
 }
+
 
 
 

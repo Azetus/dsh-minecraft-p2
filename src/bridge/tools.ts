@@ -198,7 +198,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['enable', 'disable', 'status', 'install', 'commit', 'cancel', 'events'], description: 'Controller action' },
+        action: { type: 'string', enum: ['enable', 'disable', 'status', 'install', 'commit', 'queue', 'cancel', 'events'], description: 'Controller action' },
         artifactId: { type: 'string', description: 'install: activated strategy artifact id' },
         mode: { type: 'string', enum: ['boundary', 'interrupt'], description: 'install: replacement mode, defaults to boundary' },
         id: { type: 'string', description: 'commit: optional commitment id' },
@@ -241,7 +241,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
           ...(args.mode === undefined ? {} : { mode: args.mode }),
         })
       }
-      if (action === 'commit') {
+      if (action === 'commit' || action === 'queue') {
         if (typeof args.goal !== 'string' || typeof args.strategyKey !== 'string' || typeof args.post !== 'object' || args.post === null) {
           throw new Error('commit requires goal, strategyKey and post')
         }
@@ -251,7 +251,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
         if (args.kind !== undefined && args.kind !== 'task' && args.kind !== 'standing') {
           throw new Error('kind must be task or standing')
         }
-        return manager.controller('commit', {
+        return manager.controller(action, {
           goal: args.goal,
           strategyKey: args.strategyKey,
           post: args.post as JsonValue,
@@ -359,6 +359,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolReg
         amplifier: { type: 'number', description: 'Effect amplifier (0-1)' },
         reason: { type: 'string', minLength: 3, description: 'Why rescue is needed; recorded in the audit log' },
         category: { type: 'string', enum: ['stuck', 'trapped', 'death_loop', 'health', 'food', 'other'], description: 'Rescue category' },
+        force: { type: 'boolean', description: 'Allow positional rescue while a controller action is active (emergency only)' },
       },
       required: ['action', 'reason', 'category'],
       additionalProperties: false,
@@ -412,6 +413,8 @@ function jsonOutput(): ToolDefinition['output'] {
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
   }
 }
+
+
 
 
 

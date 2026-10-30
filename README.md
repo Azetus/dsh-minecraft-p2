@@ -2,7 +2,7 @@
 
 Minecraft 生存 agent 的 DSH 运行时：bridge 进程 + body 子进程 + Mineflayer provider。
 
-**版本 0.3.1：P2Controller 是唯一自主控制模式。Behavior/guard/switch/confirm 已删除。**
+**版本 0.3.3：P2Controller 是唯一自主控制模式。Behavior/guard/switch/confirm 已删除。**
 
 ## 快速开始
 
@@ -52,3 +52,5 @@ p2_controller action=commit {goal, strategyKey, post, baselineKeys, checkpoint?}
 npm run check   # build + typecheck + test
 npm run bundle  # bundles/dsh-minecraft-p2-<version>.tgz
 ```
+
+

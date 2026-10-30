@@ -108,6 +108,8 @@ export type SlotEvaluation = {
   attemptId: string
   registration: number
   hazardClass?: HazardClass
+  /** Shadow evaluations are diagnostic only and never take the lease. */
+  shadow?: boolean
   verdict: StrategyVerdict
 }
 
@@ -126,6 +128,43 @@ export type ControllerDecision = {
   candidates: DecisionCandidate[]
   suppressedSlots: SlotId[]
   detail?: string | undefined
+}
+
+/** One bounded per-tick decision record; evidence lists fact keys only. */
+export type DecisionTrace = {
+  at: number
+  tick: number
+  reason: string
+  selected: { slot: SlotId; strategyKey: string; intent: string; act: string } | null
+  candidates: DecisionCandidate[]
+  suppressedSlots: SlotId[]
+  evidence: string[]
+}
+
+export type S0LatencySample = {
+  detectedAt: number
+  decidedAt: number
+  preemptAt: number
+  effectiveAt: number
+  totalMs: number
+}
+
+export type ControllerMetrics = {
+  startedAt: number
+  ticks: number
+  lastTickAt: number
+  commitmentActiveMs: number
+  noProgressMs: number
+  idleMs: number
+  lastProgressAt: number
+  actionsStarted: number
+  actionsFailed: number
+  commitmentsSucceeded: number
+  commitmentsFailed: number
+  commitmentsBlocked: number
+  deaths: number
+  deathsByClass: Record<string, number>
+  s0Latency: S0LatencySample[]
 }
 
 export type VerificationState = {
@@ -167,6 +206,8 @@ export type ControllerStatus = {
   }
   action: { intent: string; act: string; slot: SlotId } | null
   decision: ControllerDecision | null
+  decisions: DecisionTrace[]
+  metrics: ControllerMetrics
   commitment: CommitmentSummary | null
   commitments: CommitmentSummary[]
   strategies: ReturnType<StrategyRegistry['summaries']>
@@ -218,6 +259,29 @@ export class P2Controller {
   private readonly events: ControllerEvent[] = []
   private readonly degraded = new Set<string>()
   private decisionValue: ControllerDecision | null = null
+  private ticks = 0
+  private lastTickAt = Date.now()
+  private readonly decisionTraces: DecisionTrace[] = []
+  private readonly metrics: ControllerMetrics = {
+    startedAt: Date.now(),
+    ticks: 0,
+    lastTickAt: Date.now(),
+    commitmentActiveMs: 0,
+    noProgressMs: 0,
+    idleMs: 0,
+    lastProgressAt: Date.now(),
+    actionsStarted: 0,
+    actionsFailed: 0,
+    commitmentsSucceeded: 0,
+    commitmentsFailed: 0,
+    commitmentsBlocked: 0,
+    deaths: 0,
+    deathsByClass: {},
+    s0Latency: [],
+  }
+  private emergencyFirstAt: number | undefined
+  private s0DecidedAt: number | undefined
+  private s0PreemptAt: number | undefined
   private verificationValue: VerificationState | undefined
   private stallValue: StallState | undefined
   private activeRequest: ActionRequest | undefined
@@ -236,6 +300,10 @@ export class P2Controller {
     this.sense = options.sense
     this.factSources = options.facts ?? {}
     this.now = options.now ?? Date.now
+    this.lastTickAt = this.now()
+    this.metrics.startedAt = this.now()
+    this.metrics.lastTickAt = this.now()
+    this.metrics.lastProgressAt = this.now()
     this.refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS
     this.factTtlMs = options.factTtlMs
     this.verificationTimeoutMs = options.verificationTimeoutMs ?? DEFAULT_VERIFICATION_TIMEOUT_MS
@@ -302,14 +370,14 @@ export class P2Controller {
     return count
   }
 
-  install(strategy: Strategy, mode: InstallMode = 'boundary', at = this.now()): InstallResult {
+  install(strategy: Strategy, mode: InstallMode = 'boundary', at = this.now(), shadow = false): InstallResult {
     const existing = this.registry.binding(strategy.key)
     if (existing !== undefined && existing.slot !== strategy.slot) {
       throw p2Error('STRATEGY_SLOT_MISMATCH', 'validation', `strategy ${strategy.key} is bound to ${existing.slot}`, {
         module: 'controller',
       }, { slot: strategy.slot })
     }
-    const result = this.registry.install(strategy, mode, at)
+    const result = this.registry.install(strategy, mode, at, shadow)
     if (result.status === 'installed') {
       this.recordEvent('strategy-installed', at, { strategyKey: strategy.key })
     } else if (result.status === 'pending-boundary' || result.status === 'pending-interrupt') {
@@ -351,6 +419,7 @@ export class P2Controller {
     this.stallValue = undefined
     this.s0HadEmergency = false
     this.s0ClearTicks = 0
+    this.noteProgress(at)
     return commitment
   }
 
@@ -378,6 +447,11 @@ export class P2Controller {
    * controller then stays quiet instead of inventing work.
    */
   tick(now = this.now()): ControllerStatus {
+    this.accountTime(now)
+    this.ticks += 1
+    this.metrics.ticks = this.ticks
+    this.metrics.lastTickAt = now
+    this.lastTickAt = now
     if (this.autonomyValue) this.advanceTakeovers(now)
 
     const activeBefore = this.activeRequest
@@ -408,6 +482,8 @@ export class P2Controller {
     this.updateCommitment(evaluations, now)
     const decision = this.arbitrate(evaluations, now)
     this.decisionValue = decision
+    if (decision.selected?.slot === 'S0' && this.s0DecidedAt === undefined) this.s0DecidedAt = now
+    this.recordDecision(decision, evaluations, now)
     this.applyDecision(decision, now)
     return this.status(now)
   }
@@ -447,6 +523,8 @@ export class P2Controller {
         ? null
         : { intent: this.activeRequest.intent, act: this.activeRequest.act, slot: this.activeSlot },
       decision: this.decisionValue,
+      decisions: [...this.decisionTraces],
+      metrics: { ...this.metrics, s0Latency: [...this.metrics.s0Latency] },
       commitment: commitment === undefined ? null : summarize(commitment),
       commitments: this.commitments.all().map(summarize),
       strategies: this.registry.summaries(),
@@ -570,6 +648,7 @@ export class P2Controller {
           }
         }
         verdict = this.guardS0Retry(slot, strategy.key, verdict, now)
+        verdict = this.guardHazardTarget(slot, verdict, now)
         evaluations.push({
           slot,
           strategyKey: strategy.key,
@@ -577,6 +656,7 @@ export class P2Controller {
           attemptId: binding.attemptId,
           registration: binding.registration,
           ...(strategy.hazardClass === undefined ? {} : { hazardClass: strategy.hazardClass }),
+          ...(binding.shadow === true ? { shadow: true } : {}),
           verdict,
         })
       }
@@ -668,6 +748,7 @@ export class P2Controller {
   private arbitrate(evaluations: SlotEvaluation[], now: number): ControllerDecision {
     const candidates: Array<{ evaluation: SlotEvaluation; action: ActionRequest; kind: 'propose' | 'recover' }> = []
     for (const evaluation of evaluations) {
+      if (evaluation.shadow === true) continue
       const verdict = evaluation.verdict
       if (verdict.kind === 'propose') {
         candidates.push({ evaluation, action: verdict.action, kind: 'propose' })
@@ -676,7 +757,7 @@ export class P2Controller {
       }
     }
     const summary = candidates.map(toDecisionCandidate)
-    const emergency = evaluations.filter(evaluation => evaluation.slot === 'S0' && isHazardSignal(evaluation.verdict))
+    const emergency = evaluations.filter(evaluation => evaluation.slot === 'S0' && evaluation.shadow !== true && isHazardSignal(evaluation.verdict))
     const commitment = this.commitments.active()
 
     if (emergency.length > 0) {
@@ -828,6 +909,7 @@ export class P2Controller {
       this.suspendCommitment(commitment, target, now)
     }
     if (target.slot === 'S0') this.memory.setEscapePhase('escaping', target.intent, now)
+    if (target.slot === 'S0' && this.activeRequest !== undefined) this.s0PreemptAt = now
     const result = this.machine.request(target, now)
     this.recordEvent('action-preempted', now, {
       slot: target.slot,
@@ -857,7 +939,8 @@ export class P2Controller {
       return
     }
 
-    const emergency = evaluations.filter(evaluation => evaluation.slot === 'S0' && isHazardSignal(evaluation.verdict))
+    const emergency = evaluations.filter(evaluation => evaluation.slot === 'S0' && evaluation.shadow !== true && isHazardSignal(evaluation.verdict))
+    if (emergency.length > 0 && this.emergencyFirstAt === undefined) this.emergencyFirstAt = now
     const s0Clear = this.s0EmergencyClear(emergency)
     const task = evaluations.find(evaluation => evaluation.slot === 'S2' && evaluation.strategyKey === commitment.strategyKey)
 
@@ -1029,6 +1112,8 @@ export class P2Controller {
     const verification = verifyPostCondition(commitment.post, facts, commitment.baseline)
     if (verification.status === 'true') {
       this.commitments.succeed(commitment.id, verification.evidence, now)
+      this.metrics.commitmentsSucceeded += 1
+      this.noteProgress(now)
       this.verificationValue = undefined
       this.stallValue = undefined
       this.recordEvent('commitment-succeeded', now, {
@@ -1083,6 +1168,8 @@ export class P2Controller {
 
   private failCommitment(commitment: Commitment, error: P2Error, now: number): void {
     this.commitments.fail(commitment.id, error, now)
+    this.metrics.commitmentsFailed += 1
+    this.noteProgress(now)
     this.verificationValue = undefined
     this.stallValue = undefined
     this.recordEvent('commitment-failed', now, { commitmentId: commitment.id, detail: error.code })
@@ -1093,6 +1180,24 @@ export class P2Controller {
   private recordStarted(request: ActionRequest): void {
     this.activeRequest = request
     this.activeSlot = request.slot
+    this.metrics.actionsStarted += 1
+    this.noteProgress(this.now())
+    if (request.slot === 'S0' && this.emergencyFirstAt !== undefined) {
+      const effectiveAt = this.now()
+      const decidedAt = this.s0DecidedAt ?? effectiveAt
+      const preemptAt = this.s0PreemptAt ?? decidedAt
+      this.metrics.s0Latency.push({
+        detectedAt: this.emergencyFirstAt,
+        decidedAt,
+        preemptAt,
+        effectiveAt,
+        totalMs: effectiveAt - this.emergencyFirstAt,
+      })
+      while (this.metrics.s0Latency.length > 16) this.metrics.s0Latency.shift()
+      this.emergencyFirstAt = undefined
+      this.s0DecidedAt = undefined
+      this.s0PreemptAt = undefined
+    }
     if (request.slot === 'S0') {
       const key = `${request.holder}|${request.intent}`
       const now = this.now()
@@ -1122,6 +1227,92 @@ export class P2Controller {
     this.s0HadEmergency = false
     this.s0ClearTicks = 0
     return true
+  }
+
+  /** Death is a hazard class of its own and must survive 60 minutes. */
+  recordDeath(position: { x: number; y: number; z: number } | null, now = this.now()): void {
+    this.metrics.deaths += 1
+    this.metrics.deathsByClass.death = (this.metrics.deathsByClass.death ?? 0) + 1
+    if (position !== null) {
+      this.memory.recordHazard({
+        hazardId: `death:${Math.floor(position.x)},${Math.floor(position.y)},${Math.floor(position.z)}`,
+        kind: 'death',
+        area: { x: position.x, y: position.y, z: position.z, radius: 4 },
+        at: now,
+        expiresAt: now + 60 * 60_000,
+      })
+    }
+    this.invalidateScope('body', now)
+  }
+
+  /** Task actions must not target an area already remembered as hazardous. */
+  private guardHazardTarget(slot: SlotId, verdict: StrategyVerdict, now: number): StrategyVerdict {
+    if (slot === 'S0') return verdict
+    const action = verdict.kind === 'propose'
+      ? verdict.action
+      : verdict.kind === 'recover'
+        ? verdict.action
+        : undefined
+    if (action === undefined) return verdict
+    const point = targetPoint(action.args)
+    if (point === undefined) return verdict
+    const hazard = this.memory.hazardsAt(point, undefined, now)[0]
+    if (hazard === undefined) return verdict
+    return {
+      kind: 'blocked',
+      missing: ['safe-target'],
+      since: now,
+      diagnostics: [{
+        code: 'HAZARD_TARGET',
+        message: `target is inside a remembered ${hazard.kind} hazard`,
+        at: now,
+        detail: { hazardId: hazard.hazardId, kind: hazard.kind },
+      }],
+    }
+  }
+
+  private noteProgress(now: number): void {
+    this.metrics.lastProgressAt = now
+  }
+
+  /** Account wall-clock time for no-progress and idle metrics. */
+  private accountTime(now: number): void {
+    const delta = Math.max(0, now - this.lastTickAt)
+    if (delta === 0) return
+    const commitment = this.commitments.active()
+    if (commitment !== undefined) {
+      this.metrics.commitmentActiveMs += delta
+      if (now - this.metrics.lastProgressAt > 1000) this.metrics.noProgressMs += delta
+    } else {
+      this.metrics.idleMs += delta
+    }
+  }
+
+  private recordDecision(decision: ControllerDecision, evaluations: SlotEvaluation[], now: number): void {
+    const evidence: string[] = []
+    for (const evaluation of evaluations) {
+      if (evaluation.verdict.kind === 'candidate-complete') {
+        for (const item of evaluation.verdict.evidence) evidence.push(item.factKey)
+      }
+    }
+    const trace: DecisionTrace = {
+      at: now,
+      tick: this.ticks,
+      reason: decision.reason,
+      selected: decision.selected === null
+        ? null
+        : {
+            slot: decision.selected.slot,
+            strategyKey: decision.selected.strategyKey,
+            intent: decision.selected.intent,
+            act: decision.selected.act,
+          },
+      candidates: decision.candidates.map(candidate => ({ ...candidate })),
+      suppressedSlots: [...decision.suppressedSlots],
+      evidence,
+    }
+    this.decisionTraces.push(trace)
+    while (this.decisionTraces.length > 64) this.decisionTraces.shift()
   }
 
   /**
@@ -1157,6 +1348,8 @@ export class P2Controller {
   private recordCompletion(request: ActionRequest | undefined, outcome: ActionOutcome, now: number): void {
     const intent = request?.intent ?? 'unknown'
     this.lastCompletionAt = now
+    this.noteProgress(now)
+    if (outcome.status === 'failed') this.metrics.actionsFailed += 1
     this.lastOutcomeValue = {
       intent,
       status: outcome.status,
@@ -1190,6 +1383,7 @@ export class P2Controller {
   /** A revoked action never produces a terminal poll result; record it once. */
   private recordRevoked(request: ActionRequest, now: number): void {
     this.lastCompletionAt = now
+    this.noteProgress(now)
     this.lastOutcomeValue = {
       intent: request.intent,
       status: 'cancelled',
@@ -1256,6 +1450,19 @@ function orderOf(evaluation: SlotEvaluation): { slot: SlotId; hazardClass?: Haza
   }
 }
 
+function targetPoint(value: JsonValue | undefined): { x: number; y: number; z: number } | undefined {
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, JsonValue>
+  if (typeof record.x === 'number' && typeof record.y === 'number' && typeof record.z === 'number') {
+    return { x: record.x, y: record.y, z: record.z }
+  }
+  for (const key of ['pos', 'position', 'target']) {
+    const nested = targetPoint(record[key])
+    if (nested !== undefined) return nested
+  }
+  return undefined
+}
+
 function isHazardSignal(verdict: StrategyVerdict): boolean {
   // `running` matters for S0: the escape action is still holding the lease, so
   // the hazard is present even though the strategy has nothing new to propose.
@@ -1303,6 +1510,8 @@ function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
 }
+
+
 
 
 

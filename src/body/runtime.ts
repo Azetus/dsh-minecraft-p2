@@ -174,6 +174,7 @@ export class BodyRuntime {
         case 'controller.status': result = this.controllerStatus(); break
         case 'controller.install': result = this.controllerInstall(envelope, params as unknown as ControllerInstallParams); break
         case 'controller.commit': result = this.controllerCommit(envelope, params as unknown as ControllerCommitParams); break
+        case 'controller.queue': result = this.controllerQueue(envelope, params as unknown as ControllerCommitParams); break
         case 'controller.cancel': result = this.controllerCancel(envelope, params as unknown as ControllerCancelParams); break
         case 'controller.events': result = this.controllerEvents(params as unknown as ControllerEventsParams); break
         case 'command.get': result = this.commandGet(params as unknown as CommandGetParams) as unknown as JsonValue; break
@@ -228,6 +229,7 @@ export class BodyRuntime {
       case 'controller.status': return this.controllerStatus() as unknown as JsonValue
       case 'controller.install': return this.controllerInstall(envelope, params as unknown as ControllerInstallParams) as unknown as JsonValue
       case 'controller.commit': return this.controllerCommit(envelope, params as unknown as ControllerCommitParams) as unknown as JsonValue
+      case 'controller.queue': return this.controllerQueue(envelope, params as unknown as ControllerCommitParams) as unknown as JsonValue
       case 'controller.cancel': return this.controllerCancel(envelope, params as unknown as ControllerCancelParams) as unknown as JsonValue
       case 'controller.events': return this.controllerEvents(params as unknown as ControllerEventsParams) as unknown as JsonValue
       case 'shutdown': this.closing = true; return { closing: true }
@@ -504,6 +506,16 @@ export class BodyRuntime {
     if (duplicate !== undefined) return duplicate.result as JsonValue
     const result = this.requireController().commit(params, this.now())
     this.recordCommand(commandId, 'controller.commit', result as unknown as JsonValue)
+    return result as unknown as JsonValue
+  }
+
+  private controllerQueue(envelope: RequestEnvelope, params: ControllerCommitParams): JsonValue {
+    this.requireOwner()
+    const commandId = this.requireCommandId(envelope)
+    const duplicate = this.ledger.get(commandId)
+    if (duplicate !== undefined) return duplicate.result as JsonValue
+    const result = this.requireController().queue(params, this.now())
+    this.recordCommand(commandId, 'controller.queue', result as unknown as JsonValue)
     return result as unknown as JsonValue
   }
 

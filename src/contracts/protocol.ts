@@ -36,6 +36,7 @@ export const METHODS = [
   'controller.status',
   'controller.install',
   'controller.commit',
+  'controller.queue',
   'controller.cancel',
   'controller.events',
   'shutdown',
@@ -187,6 +188,7 @@ export type ControllerStrategyView = {
   activeVersion: string
   attemptId: string
   hazardClass?: string
+  shadow?: boolean
 }
 
 export type ControllerEventView = {
@@ -216,10 +218,13 @@ export type ControllerCommitmentView = {
 export type ControllerView = {
   mode: ControllerMode
   enabledAt: number | null
+  queueLength: number
   phase: string | null
   lease: JsonValue
   action: JsonValue
   decision: JsonValue
+  decisions: JsonValue[]
+  metrics: JsonValue
   commitment: ControllerCommitmentView | null
   commitments: ControllerCommitmentView[]
   strategies: ControllerStrategyView[]
@@ -244,6 +249,8 @@ export type ControllerInstallResult = {
 export type ControllerInstallParams = {
   artifactId: string
   mode?: 'boundary' | 'interrupt'
+  /** Evaluate but never dispatch this strategy. */
+  shadow?: boolean
 }
 
 export type ControllerCommitParams = {
@@ -396,6 +403,8 @@ export type RescueParams = {
   amplifier?: number
   reason: string
   category: 'stuck' | 'trapped' | 'death_loop' | 'health' | 'food' | 'other'
+  /** Emergency override for positional rescue while an action is active. */
+  force?: boolean
 }
 
 export type RescueResult = {
@@ -510,5 +519,9 @@ export function unknownMethodError(method: string): P2Error {
     { method },
   )
 }
+
+
+
+
 
 

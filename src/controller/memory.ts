@@ -39,7 +39,7 @@ export type ActionMemoryOptions = {
 
 const DEFAULT_MAX_HAZARDS = 32
 const DEFAULT_MAX_FAILURES = 16
-const DEFAULT_HAZARD_TTL_MS = 10 * 60_000
+const DEFAULT_HAZARD_TTL_MS = 60 * 60_000
 const DEFAULT_RETRY_WINDOW_MS = 5 * 60_000
 
 type RetryEntry = { used: number; startedAt: number }

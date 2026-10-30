@@ -244,7 +244,7 @@ export class ArtifactHost {
   }
 
   async rescueRun(request: RescueParams): Promise<RescueResult> {
-    if (request.action !== 'effect' && this.rescueBusy !== undefined && this.rescueBusy()) {
+    if (request.action !== 'effect' && request.force !== true && this.rescueBusy !== undefined && this.rescueBusy()) {
       throw p2Error('RESCUE_BUSY', 'runtime', 'stop the active controller action before using positional rescue', { module: 'core.host' })
     }
     if (this.rescue === undefined) {
@@ -613,6 +613,7 @@ function validateWatchQueries(queries: WatchQuery[]): DeclaredQuery[] {
     }
   })
 }
+
 
 
 

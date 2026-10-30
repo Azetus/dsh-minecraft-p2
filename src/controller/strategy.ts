@@ -99,6 +99,8 @@ export type StrategyBinding = {
   activatedAt: number
   state: StrategyBindingState
   hazardClass?: HazardClass
+  /** Evaluated for diagnosis only; never allowed to take the lease. */
+  shadow?: boolean
   pending?: { strategy: Strategy; mode: InstallMode; installedAt: number } | undefined
 }
 
@@ -128,7 +130,7 @@ export class StrategyRegistry {
     this.maxStrategies = options.maxStrategies ?? DEFAULT_MAX_STRATEGIES
   }
 
-  install(strategy: Strategy, mode: InstallMode = 'boundary', at = this.now()): InstallResult {
+  install(strategy: Strategy, mode: InstallMode = 'boundary', at = this.now(), shadow = false): InstallResult {
     const existing = this.bindings.get(strategy.key)
     if (existing === undefined) {
       if (this.bindings.size >= this.maxStrategies) {
@@ -146,6 +148,7 @@ export class StrategyRegistry {
         installedAt: at,
         activatedAt: at,
         state: 'active',
+        ...(shadow ? { shadow: true } : {}),
         ...(strategy.hazardClass === undefined ? {} : { hazardClass: strategy.hazardClass }),
       }
       this.bindings.set(strategy.key, binding)
@@ -223,6 +226,7 @@ export class StrategyRegistry {
     activeVersion: string
     attemptId: string
     hazardClass?: HazardClass
+    shadow?: boolean
   }> {
     return [...this.bindings.values()].map(binding => ({
       key: binding.key,
@@ -232,6 +236,7 @@ export class StrategyRegistry {
       activeVersion: binding.activeVersion,
       attemptId: binding.attemptId,
       ...(binding.hazardClass === undefined ? {} : { hazardClass: binding.hazardClass }),
+      ...(binding.shadow === true ? { shadow: true } : {}),
     }))
   }
 
@@ -244,5 +249,6 @@ export class StrategyRegistry {
     return `${strategy.key}@${strategy.version}#${++this.attemptSequence}`
   }
 }
+
 
 

@@ -32,7 +32,7 @@ export type BodySpawner = (entry: string, cwd: string) => BodyHandle
 
 export type BodyManagerState = 'inactive' | 'starting' | 'active' | 'stopping' | 'faulted'
 
-export type BodyFaultReason = 'heartbeat-missed' | 'process-exit' | 'restart-failed'
+export type BodyFaultReason = 'heartbeat-missed' | 'process-exit' | 'restart-failed' | 'provider-disconnected'
 export type AutoRestartDecision = 'scheduled' | 'exhausted' | 'disabled'
 
 /** One fault record: the previous run's control conclusion is never `released`. */
@@ -123,6 +123,8 @@ export class BodyManager {
   private lastFaultValue: BodyFault | undefined
   private lastContactAt = 0
   private heartbeatInFlight = false
+  /** Consecutive status polls reporting a disconnected provider. */
+  private providerDisconnectPolls = 0
 
   constructor(private readonly options: BodyManagerOptions) {
     this.spawnBody = options.spawnBody ?? createProcessSpawner(options.log)
@@ -219,6 +221,18 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.processWatchEvents(status)
       this.processControllerEvents(status)
+      const hasProvider = status.provider !== null || status.providerState != null
+      const connected = status.providerState?.connected !== false && status.connection !== 'disconnected'
+      if (hasProvider && !connected) {
+        this.providerDisconnectPolls += 1
+        if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
+          this.providerDisconnectPolls = 0
+          this.log('provider disconnected; restarting body' )
+          void this.fault('provider-disconnected', 'provider connection lost for two status polls')
+        }
+      } else {
+        this.providerDisconnectPolls = 0
+      }
       return {
         state: 'active',
         status,
@@ -243,7 +257,7 @@ export class BodyManager {
     return this.activeClient().activate(artifactId)
   }
 
-  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
+  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'queue' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
     return this.activeClient().controller(action, params)
   }
 
@@ -378,6 +392,18 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.processWatchEvents(status)
       this.processControllerEvents(status)
+      const hasProvider = status.provider !== null || status.providerState != null
+      const connected = status.providerState?.connected !== false && status.connection !== 'disconnected'
+      if (hasProvider && !connected) {
+        this.providerDisconnectPolls += 1
+        if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
+          this.providerDisconnectPolls = 0
+          this.log('provider disconnected; restarting body' )
+          void this.fault('provider-disconnected', 'provider connection lost for two status polls')
+        }
+      } else {
+        this.providerDisconnectPolls = 0
+      }
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
     }
@@ -621,6 +647,10 @@ function delay(ms: number): Promise<void> {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+
+
+
 
 
 

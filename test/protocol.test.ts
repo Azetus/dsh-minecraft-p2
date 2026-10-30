@@ -132,6 +132,7 @@ describe('protocol vocabulary', () => {
       'controller.status',
       'controller.install',
       'controller.commit',
+      'controller.queue',
       'controller.cancel',
       'controller.events',
       'shutdown',
@@ -148,6 +149,7 @@ describe('protocol vocabulary', () => {
     expect(isOwnerContext({ sessionId: 's' })).toBe(false)
   })
 })
+
 
 
 
