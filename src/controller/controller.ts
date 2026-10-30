@@ -21,7 +21,6 @@ import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { ActionLeaseMachine, controlFaultError } from './lease.ts'
 import type { HandoverTickResult } from './lease.ts'
 import type {
-  ActionHandle,
   ActionOutcome,
   ActionRequest,
   ActuatorPort,
@@ -32,7 +31,7 @@ import type {
   SlotId,
 } from './types.ts'
 import { ObservationBus } from './observation.ts'
-import type { Fact, FactSample, FactSet, ReadOptions } from './observation.ts'
+import type { Fact, FactSample, ReadOptions } from './observation.ts'
 import { ActionMemory } from './memory.ts'
 import {
   CommitmentStore,
@@ -273,10 +272,6 @@ export class P2Controller {
     return this.observations.publish(sample)
   }
 
-  registerFact(key: string, source: FactSource): void {
-    this.factSources[key] = source
-  }
-
   /**
    * Death/respawn/dimension change: invalidate old observations (and, for a
    * full invalidation, hazard memory). The commitment goes to re-verification,
@@ -368,7 +363,7 @@ export class P2Controller {
       this.recordCompletion(activeBefore, handover.completed.outcome, now)
     }
     if (handover.started !== undefined && handover.startedRequest !== undefined) {
-      this.recordStarted(handover.startedRequest, handover.started.generation, now)
+      this.recordStarted(handover.startedRequest)
     }
     if (handover.fault !== undefined) this.noteFault(handover.fault, now)
     // A revoke drops the handle, so no terminal outcome will ever arrive for
@@ -759,7 +754,7 @@ export class P2Controller {
       return
     }
     if (result.outcome === 'started') {
-      this.recordStarted(target, result.grant?.generation, now)
+      this.recordStarted(target)
       this.recordEvent('action-started', now, {
         slot: target.slot,
         strategyKey: target.holder,
@@ -1022,12 +1017,10 @@ export class P2Controller {
 
   // ---------------------------------------------------------------- outcomes
 
-  private recordStarted(request: ActionRequest, generation: number | undefined, now: number): void {
+  private recordStarted(request: ActionRequest): void {
     this.activeRequest = request
     this.activeSlot = request.slot
-    void generation
     if (this.registry.pending().length === 0) this.degraded.delete(`dispatch:${request.holder}`)
-    void now
   }
 
   private recordCompletion(request: ActionRequest | undefined, outcome: ActionOutcome, now: number): void {
@@ -1174,4 +1167,6 @@ function asRecord(value: JsonValue): Record<string, JsonValue> {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+
 

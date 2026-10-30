@@ -7,7 +7,6 @@
  * diagnostic and decision aid, never a source of world truth.
  */
 
-import type { JsonValue } from '../contracts/types.ts'
 import type { EvidenceId } from './types.ts'
 
 export type HazardRecord = {
@@ -190,11 +189,8 @@ export class ActionMemory {
     this.escapeReasonValue = undefined
   }
 
-  /** Serialisable view used as a strategy checkpoint in tests and diagnostics. */
-  toJSON(): JsonValue {
-    return this.snapshot() as unknown as JsonValue
-  }
 }
+
 
 
 
