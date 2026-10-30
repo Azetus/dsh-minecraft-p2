@@ -49,7 +49,13 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
     execute: (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }) => Promise<JsonValue>,
   ) => async (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }): Promise<JsonValue> => {
     assertOwner(exec, owner)
-    return execute(args, exec)
+    try {
+      return await execute(args, exec)
+    } catch (cause) {
+      const structured = structuredToolError(cause)
+      if (structured !== undefined) throw new Error(`${structured.code}: ${structured.message}`)
+      throw cause
+    }
   }
   const register = (definition: ToolDefinition): void => {
     disposers.push(tools.register(definition))
@@ -498,6 +504,16 @@ function assertOwner(
     || exec.agent.id !== owner.agentId) {
     throw new Error('P2 tools are owned by a different agent')
   }
+}
+
+/** Turn a thrown P2Error/BodyClientError into a message the model can read. */
+function structuredToolError(cause: unknown): { code: string; message: string } | undefined {
+  if (typeof cause !== 'object' || cause === null) return undefined
+  const candidate = (cause as { error?: unknown }).error ?? cause
+  if (typeof candidate !== 'object' || candidate === null) return undefined
+  const { code, message } = candidate as { code?: unknown; message?: unknown }
+  if (typeof code !== 'string' || typeof message !== 'string') return undefined
+  return { code, message }
 }
 
 function jsonOutput(): ToolDefinition['output'] {

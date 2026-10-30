@@ -330,6 +330,55 @@ describe('BodyManager', () => {
     }
   })
 
+  it('renders structured check errors as code and message', async () => {
+    const host = new BehaviorHost({
+      bindingId: 'check-error',
+      query: () => ({ status: 'ok', value: {} }),
+      act: { start: () => ({ poll: () => ({ status: 'running' }), stop: () => {} }) },
+    })
+    const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-check-error-'))
+    const path = join(dir, 'bad-act.mjs')
+    writeFileSync(path, `
+      defineAct({
+        manifest: { id: 'bad-act', queryOps: [], controlOps: ['no-such-op'], limits: { totalMs: 10000 } },
+        create: () => ({
+          start: () => ({ kind: 'complete' }),
+          update: () => ({ kind: 'complete' }),
+          stop: () => ({ kind: 'complete' }),
+        }),
+      })
+    `)
+    try {
+      const fake = fakeBody(host)
+      const definitions: Definition[] = []
+      const tools: Array<Record<string, unknown>> = []
+      const ctx = {
+        commands: { register: (definition: Definition) => { definitions.push(definition); return () => {} } },
+        tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } },
+        agents: { get: () => undefined },
+        effect: (callback: () => unknown) => { callback(); return () => {} },
+      }
+      const plugin = createP2Plugin({ devBodyControl: true, bodyEntry: 'unused-body.mjs', spawnBody: () => fake.handle, log: () => {} })
+      ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+      const agent = {
+        id: owner.agentId,
+        session: { id: owner.sessionId, header: { cwd: owner.cwd } },
+        ctx: { tools: { register: (definition: Record<string, unknown>) => { tools.push(definition); return () => {} } } },
+      }
+      const bodyTool = tools.find(tool => tool.name === 'p2_body') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      await bodyTool.execute({ action: 'start' }, { agent })
+      const checkTool = tools.find(tool => tool.name === 'p2_check') as {
+        execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<unknown>
+      }
+      await expect(checkTool.execute({ sourcePath: path, artifactKind: 'act' }, { agent }))
+        .rejects.toThrow(/ACT_CHECK_UNAVAILABLE: /u)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('starts one body, reports status, and stops it', async () => {
     const fake = fakeBody()
     const manager = managerWith(fake)
