@@ -11,6 +11,7 @@ import type { TraceSink } from '../core/trace.ts'
 
 import {
   PROTOCOL_VERSION,
+  asP2Error,
   invalidMessageError,
   isOwnerContext,
   isRecord,
@@ -554,9 +555,10 @@ export class BodyRuntime {
           return { ...base, error: unknownMethodError(envelope.method) }
       }
     } catch (error) {
-      const p2 = error instanceof CheckerError || error instanceof RegistryError
+      const preserved = asP2Error(error)
+      const p2 = preserved ?? (error instanceof CheckerError || error instanceof RegistryError
         ? p2Error(error.code, 'validation', error.message, { module: 'body.behavior' })
-        : p2Error('BEHAVIOR_ERROR', 'runtime', error instanceof Error ? error.message : String(error), { module: 'body.behavior' })
+        : p2Error('BEHAVIOR_ERROR', 'runtime', error instanceof Error ? error.message : String(error), { module: 'body.behavior' }))
       this.commands.set(commandId, {
         commandId: commandId as CommandId,
         method: envelope.method,

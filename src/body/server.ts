@@ -1,5 +1,6 @@
 import {
   ErrorCodes,
+  asP2Error,
   encodeJsonLine,
   invalidMessageError,
   isRecord,
@@ -8,7 +9,6 @@ import {
 import type {
   JsonValue,
   MessageTransport,
-  P2Error,
   RequestEnvelope,
   ResponseEnvelope,
 } from '../contracts/index.ts'
@@ -16,20 +16,6 @@ import { BodyRuntime } from './runtime.ts'
 
 export type BodyServerOptions = {
   log?: (line: string) => void
-}
-
-/** Recognize a serialized P2Error thrown by a host method. */
-function asP2Error(error: unknown): P2Error | undefined {
-  if (!isRecord(error)) return undefined
-  const { code, category, message, retry, source } = error
-  if (typeof code !== 'string'
-    || typeof category !== 'string'
-    || typeof message !== 'string'
-    || typeof retry !== 'string'
-    || !isRecord(source)) {
-    return undefined
-  }
-  return error as unknown as P2Error
 }
 
 /** Protocol dispatcher over a MessageTransport; framing stays in the transport. */

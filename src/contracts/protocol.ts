@@ -600,6 +600,20 @@ export function isRecord(value: unknown): value is Record<string, JsonValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Recognize a P2Error value thrown across a host boundary. */
+export function asP2Error(value: unknown): P2Error | undefined {
+  if (!isRecord(value)) return undefined
+  const { code, category, message, retry, source } = value
+  if (typeof code !== 'string'
+    || typeof category !== 'string'
+    || typeof message !== 'string'
+    || typeof retry !== 'string'
+    || !isRecord(source)) {
+    return undefined
+  }
+  return value as unknown as P2Error
+}
+
 export function isOwnerContext(value: unknown): value is OwnerContext {
   return isRecord(value)
     && typeof value.sessionId === 'string'

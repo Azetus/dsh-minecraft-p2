@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { BodyServer } from '../src/body/server.ts'
+import type { BehaviorHost } from '../src/core/host.ts'
 import {
   ErrorCodes,
   METHODS,
@@ -77,6 +78,23 @@ function hello(rt: BodyRuntime, sessionId = owner.sessionId): ResponseEnvelope {
 }
 
 describe('BodyRuntime', () => {
+  it('preserves a P2Error thrown by the behavior host', async () => {
+    const host = {
+      setOwner: () => {},
+      check: () => {
+        throw p2Error('UNKNOWN_OP', 'validation', 'unknown operation: rm-look', { module: 'core.host' })
+      },
+    } as unknown as BehaviorHost
+    const rt = new BodyRuntime({ body, behavior: host, newEpoch: () => 'epoch-1' })
+    expectResult(hello(rt))
+    const response = await rt.handleRequestAsync(request('check', { sourcePath: 'x.mjs' }, { commandId: 'cmd-check' }))
+    expect(response.error).toMatchObject({
+      code: 'UNKNOWN_OP',
+      category: 'validation',
+      message: 'unknown operation: rm-look',
+    })
+  })
+
   it('bootstraps hello and keeps the first owner stable', () => {
     const rt = runtime()
     const first = expectResult(hello(rt)) as unknown as HelloResult
