@@ -171,7 +171,7 @@ async function createArtifactHost(body: BodyInfo, trace: TraceSink): Promise<Hos
         auditPath: join(process.cwd(), '.m5-runs', 'rescue.jsonl'),
         owner: context.owner,
       }),
-      rescueBusy: () => controller !== undefined && controller.engaged,
+      rescueBusy: () => controller !== undefined && controller.status().action !== null,
     })
     host = artifactHost
     controller = new BodyController({
