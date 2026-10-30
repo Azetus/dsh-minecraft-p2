@@ -6,11 +6,11 @@
 defineStrategy({
   manifest: {
     id: 'water-escape',
-    version: '1',
+    version: '2',
     slot: 'S0',
     hazardClass: 'lethal',
     facts: ['position'],
-    acts: ['walk-back'],
+    acts: ['leave-water'],
     description: 'step out of water',
   },
   evaluate: function (ctx) {
@@ -33,9 +33,10 @@ defineStrategy({
     return {
       kind: 'propose',
       intent: 'leave-water',
-      act: 'walk-back',
-      args: { durationMs: 900 },
+      act: 'leave-water',
+      args: {},
       checkpoint: { escapeAttempts: attempts + 1 },
     }
   },
 })
+
