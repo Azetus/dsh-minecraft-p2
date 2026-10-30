@@ -1,6 +1,6 @@
 # P2Controller v2（评审修订版）
 
-> 状态：**M0–M3 已实施（fake/单测通过，未做本阶段实机验证）**（2026-10-30）。已采纳独立评审的七项修正；本文替代 v1。实现映射见 §13。
+> 状态：**M0–M4 已实施（M0–M3 fake/单测；M4 body 接线 + strategy artifact；未做本阶段实机验证）**（2026-10-30）。已采纳独立评审的七项修正；本文替代 v1。实现映射见 §13–§14。
 > 关联：[operation/provider 契约](OP-PROVIDER-CONTRACT.md)、[威胁反应 guard v2](../THREAT-REACTION.md)、[通知 watch](../NOTIFICATIONS.md)、[操作员手册](../OPERATOR-PLAYBOOK.md)、[behavior 契约](../BEHAVIOR.md)、[运行时](../RUNTIME.md)、[Minecraft 接入决策](../MINECRAFT-INTEGRATION-OPTIONS.md)。
 > 命名：**P2Controller** = 常驻控制器（唯一动作控制槽 + 承诺/观测/交接）；`runtime` 保留给 body 执行层（`src/body/runtime.ts`），避免撞名。v1 的 "唯一 run" 表述已废弃（见 §3.1）。
 
@@ -187,14 +187,14 @@ type StrategyVerdict =
 | 既有 | 处理 |
 | --- | --- |
 | broker / runner / artifact / events | 保留；租约与 generation 在其之上新增，不替换账本 |
-| `p2_switch` / `p2_stop` | 语义保留；`p2_stop` 的"停止自主行动"与"停止当前承诺"必须是两个明确契约 |
-| guard | API 保留，内部映射为 S0 请求 |
+| `p2_switch` / `p2_stop` | `p2_switch` 在 Controller 模式下返回 `CONTROL_MODE_CONFLICT`；`p2_stop` 仍只停止 behavior run。"停止自主行动" = `p2_controller action=disable`；"停止当前承诺" = `p2_controller action=cancel`（两个明确契约） |
+| guard | API 保留；Controller 模式要求先 `p2_guard clear`（S0 接管紧急抢占前，不允许 guard 与 Controller 竞争） |
 | watch | 不变 |
 | operation 契约 | M0 前置：typed 契约 + 动作前检查 + 读回；不要求一次改完 |
 | 导航/合成 | v2 只定语义接口；首个 adapter 可继续使用现有库；算法上移另立项 |
-| behavior 产物 | 作为任务策略接入；当前无 `ctx.call`，需适配层或提供受控调用契约 |
+| behavior 产物 | **不作为 Controller 的策略载体**；behavior 计划废弃，Controller 使用独立 `strategy` artifact（§14） |
 
-## 10. 里程碑（M0–M3 完成后才做统一实机测试）
+## 10. 里程碑（全部完成后才做统一实机测试）
 
 | 阶段 | 内容 | 出口条件（fake/单测为主） |
 | --- | --- | --- |
@@ -202,6 +202,7 @@ type StrategyVerdict =
 | **M1 骨架闭环** | 四槽骨架 + 观测总线（有效性）+ 承诺仓库（pre/post/baseline/checkpoint）；一个采集任务 + 一个水中逃生策略 | 危险可抢占；承诺 suspended；脱险后重新核验并继续；`blocked` 可解释 |
 | **M2 策略替换** | 运行中替换任务策略（boundary / interrupt） | 目标与进度保留；旧版本不再发动作；新版本重新核验后接管 |
 | **M3 复用验证** | 第二个任务 + 第二类危险 | 新增内容主要是策略，Controller 核心零改动 |
+| **M4 body 接线** | Controller 进入 body 单控制模式；新增 `strategy` artifact（检查/启用/安装/求值）；bridge `p2_controller` 命令面；death/dimension 失效 | 模式互斥可测；策略 artifact 契约测试；body 命令路由测试 |
 
 ## 11. 不做（本阶段）
 
@@ -214,7 +215,7 @@ type StrategyVerdict =
 ## 12. 仍待定（实施中确认）
 
 1. 策略代码的沙箱与依赖契约细节（复用现有 behavior 沙箱？独立 artifact 类型？）。
-   - 本期口径：M1–M3 的策略是**受信代码模块**（`src/controller/strategies/*`），经 `install()` 装入；未引入沙箱或 artifact 类型。沙箱是接入 agent 现场编写策略的前置，未决。
+   - 本期口径：策略载体是独立 `strategy` artifact（§14），在 body 内以 `node:vm` 基线同步求值；迁移隔离 runner 前不承诺安全隔离。agent 现场编写策略已可用，但沙箱强度仍未达隔离 runner 标准。
 2. `coherenceWindow` 与查询预算的具体数值（需真实服测量，但先给保守默认）。
    - 本期默认：事实 TTL 500ms、`coherenceWindow` 500ms、观测刷新间隔 100ms；均可在构造参数覆盖，待实测。
 3. 冲突矩阵是否需要扩展（多危险同时发生时）。
@@ -308,11 +309,16 @@ type StrategyVerdict =
 
 `ActionMemory`：危险区域（默认保留 32 条、TTL 10 分钟）、失败目标（16 条）、重试预算（默认窗口 5 分钟）、逃生阶段 `none/escaping/recovering/verifying`。只作决策辅助与诊断，不是世界模型。
 
-### 13.7 与 body 的边界（本期）
+### 13.7 与 body 的集成（M4，已完成）
 
-- Controller 以库形式落地（`src/controller/index.ts`），**尚未接入 body 调度**：§3.3 要求同一 body 只启用一种控制模式，且策略沙箱载体（§12.1）未定。
-- 因此 M0–M3 的"实机验收"范围是：provider 停止语义修复（直接作用于现有 body 路径）+ Controller 的 fake 闭环；Controller 接线与实机长跑另行安排。
-- Nav/Crafting 本期不新增算法接口：进度用 `ActionProgress`、失败证据用 `P2Error.details`（例如 `head-blocked@x,y,z`）、期限由 act limits/租约约束、停止结论由 `release` 给出；算法仍留在 adapter（符合 §5 与 OP 契约的阶段 2）。
+- Controller 已接入 body：`src/body/controller-host.ts`（`BodyController`）把现有 ActPort/QueryPort 适配为 `ActuatorPort`/`SensePort`，body 每 tick 在 Controller 模式下驱动它。
+- **控制模式互斥**：`controller.enable` 要求无活动 run 且无 guard；启用后 `p2_switch` 返回 `CONTROL_MODE_CONFLICT`。`controller.disable` 先取消承诺、撤销租约，释放确认后回到 off。
+- **命令面**（bridge 工具 `p2_controller`）：`enable / disable / status / install / commit / cancel / events`。`p2_status.controller` 返回同一份视图，`controller.events` 按 `seq` 游标读取。
+- **停止语义**：`p2_stop` 仍只停止 behavior run；停止自主行动用 `controller.disable`，停止当前承诺用 `controller.cancel`（§9 的两个契约）。
+- **策略载体**：新增 `strategy` artifact（见 §14），不使用/不兼容 behavior；actor 代码在 body 内以 `node:vm` 基线执行（与 JS behavior 相同的隔离基线，不是安全边界）。
+- **事实来源**：`position/health/inventory/nearbyBlocks/entities`，默认刷新间隔与 TTL 见 `controller-host.ts`；策略 manifest 只能读取已注册的事实键。`nearbyBlocks` 默认只扫描常见生存资源名，写新策略时按需在 body 配置扩展。
+- **失效**：死亡（`providerState.lastDeathAt` 变化）或维度变化时 `invalidateScope('body')`，旧目标与旧观测作废，承诺转 suspended→verifying，不自动继续旧步骤。
+- Nav/Crafting 仍不新增算法接口：进度用 `ActionProgress`、失败证据用 `P2Error.details`（例如 `head-blocked@x,y,z`）、期限由 act limits/租约约束、停止结论由 `release` 给出；算法留在 adapter（符合 §5 与 OP 契约的阶段 2）。
 
 ### 13.8 错误码（实现值）
 
@@ -327,3 +333,71 @@ type StrategyVerdict =
 | `STRATEGY_LIMIT`、`STRATEGY_SLOT_MISMATCH`、`STRATEGY_UNAVAILABLE` | 策略安装/槽位/卸载错误 |
 | `SENSE_FAILED` | 观测端口抛错 |
 | `EVIDENCE_TIMEOUT`、`REVERIFY_TIMEOUT`、`MISSING_OBSERVATION`、`STRATEGY_BLOCKED`、`RELEASE_UNCONFIRMED` | `blocked.reason`（不是 P2Error code） |
+| `CONTROL_MODE_CONFLICT`、`CONTROL_MODE_BUSY`、`CONTROLLER_UNAVAILABLE`、`CONTROLLER_DISABLED` | body 控制模式与命令门禁 |
+| `STRATEGY_NOT_ACTIVATED`、`STRATEGY_NOT_INSTALLED`、`STRATEGY_FACT_UNKNOWN`、`FACT_NOT_REGISTERED`、`INVALID_COMMITMENT` | 策略产物/承诺参数错误 |
+| `STRATEGY_LOAD_FAILED`、`STRATEGY_EVAL_FAILED`、`STRATEGY_TIMEOUT`、`STRATEGY_ASYNC`、`INVALID_STRATEGY_VERDICT`、`ACT_UNDECLARED`、`ACT_NOT_RESOLVED`、`EVIDENCE_UNDECLARED` | 策略装载/求值失败（失败关闭） |
+
+## 14. strategy artifact（策略载体）
+
+> 状态：**已实现**（2026-10-30）。策略不复用 behavior，也不与 behavior 兼容；behavior 计划废弃。
+
+### 14.1 形状
+
+策略是**单文件、无 import、同步**的 JS 模块，在顶层调用注入的 `defineStrategy`：
+
+```js
+defineStrategy({
+  manifest: {
+    id: 'stone-harvest',        // definitionId，也是 controller 的 strategyKey
+    version: '1',               // 语义版本；跨版本替换默认重新核验
+    slot: 'S2',                 // S0 / S1 / S2 / S3
+    hazardClass: 'lethal',      // 仅 S0 必填：lethal / bleeding-fire / trapped
+    facts: ['position', 'inventory', 'nearbyBlocks'],
+    acts: ['dig', 'goto'],      // 声明可提议的 act definitionId；检查期解析为确切 artifactId
+    description: '...'          // 可选
+  },
+  evaluate(ctx) {               // 同步、纯函数；入参和返回值都是 JSON
+    return { kind: 'idle' }
+  },
+})
+```
+
+- **入参 `ctx`**：`{ now, slot, phase, attemptId, facts: { values, facts, known, unknown, reasons, coherent, coherenceGapMs }, memory, commitment?, activeAction?, lastOutcome? }`。
+- **返回值**（纯 JSON，`checkpoint?` 可附加在任意判定上）：
+  - `{ kind: 'idle' }` / `{ kind: 'unknown', missing: string[] }`
+  - `{ kind: 'propose', intent, act, args? }` — `act` 必须是 manifest 声明的名字；host 解析为 artifactId 并盖上 slot/holder/attempt。
+  - `{ kind: 'running', intent, progress? }` / `{ kind: 'wait', until, deadlineMs }`
+  - `{ kind: 'recover', reason, leasePriority: 'interrupt'|'boundary', action? }`
+  - `{ kind: 'candidate-complete', evidence: string[] }` — `evidence` 是 manifest.facts 里的**事实键**；host 只接受已知、未过期、同窗口的样本，缺一即 `unknown`。
+  - `{ kind: 'blocked', missing, since?, diagnostics: [{ code, message, detail? }] }`
+- `checkpoint` 由 host 写入当前承诺的 `checkpoint`；跨版本默认不迁移，除非新版 `compatibleWith` 声明旧版本并实现 `migrate`（见 §13.4）。
+- 策略**不能**：import/require、`eval`/`Function`、`process`/`fetch`、async/await、定时器、直接调用 op 或 act、持有任何宿主句柄。违规在检查阶段拒绝（`FORBIDDEN_SYNTAX` / `INVALID_STRATEGY_MANIFEST`）。
+
+### 14.2 生命周期
+
+```text
+p2_check artifactKind=strategy  -> artifactId（依赖 act 必须已启用）
+p2_activate artifactId          -> strategy 变为 enabled（不安装、不运行）
+p2_controller action=install    -> 载入 vm、校验 facts 已注册、安装/替换
+p2_controller action=commit     -> 承诺 + baseline
+p2_controller action=status|events
+p2_controller action=cancel|disable
+```
+
+- 安装顺序：`enable` → `install` → `commit`。`enable` 要求无活动 run、无 guard。
+- `install` 的替换语义沿用 §13.4（boundary / interrupt，新 attemptId，跨版本重新核验）。
+- 求值预算：单次 `evaluate` 默认 20ms（vm timeout）；超时/异常 → 该策略 `blocked`，不产生动作。
+- 隔离基线：body 内 `node:vm`，与 JS behavior 相同的“非安全边界”基线；迁移隔离 runner 前不得把 agent 现场编写的策略当作可信隔离执行。
+
+### 14.3 内置策略与事实
+
+内置策略（`src/controller/strategies/`）是内容示例，也可直接用 strategy artifact 重写：
+
+| 策略 | 槽 | 事实 | 说明 |
+| --- | --- | --- | --- |
+| `harvest` | S2 | position / inventory / nearbyBlocks | 走到目标方块并挖；完成依据是 baseline 之上的产物增量 |
+| `water-escape` | S0 (lethal) | position / health | `inWater` + `health.oxygen` 判定，提议逃生 act |
+| `creeper-escape` | S0 (lethal) | position / entities | 苦力怕距离 ≤6 时撤离 |
+| `follow-owner` | S2 (standing) | position / entities | 跟随玩家；standing 承诺无自然成功终态 |
+
+body 默认事实源：`position/health/inventory/nearbyBlocks/entities`。`nearbyBlocks` 默认只扫描常见生存资源（stone/deepslate/cobblestone/coal_ore/iron_ore/oak_log/birch_log/dirt/sand/gravel）；新策略需要其它方块时，先在 `src/body/controller-host.ts` 的 `DEFAULT_FACT_SOURCES` 扩展。

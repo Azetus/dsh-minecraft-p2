@@ -22,16 +22,17 @@
 
 | 需求 | 放哪 | 判据 |
 | --- | --- | --- |
-| 每秒级策略（生存循环、任务步进） | **P2Controller**（已实现、**尚未接线**）→ 现阶段仍用 continuous behavior | 单 body 常驻；接线前假设只有 behavior/guard 一条调度路径 |
-| 一次明确任务（挖 N 格、建墙、取铁） | finite behavior + postcondition | 有明确完成判据 |
+| 每秒级策略（生存循环、任务步进） | **P2Controller**（已接线） | 常驻控制器；单 body 一次只启用一种控制模式 |
+| 策略内容（S0–S3） | **strategy artifact**（见 `artifact-strategy.md`） | 不复用 behavior；只收 JSON 事实、返回 JSON 判定 |
+| 一次明确任务（挖 N 格、建墙、取铁） | finite behavior + postcondition **或** Controller 承诺 | 二选一，同一 body 不并存 |
 | 单个离散动作的语义封装 | **act** | 无策略、可幂等、有读回校验 |
 | 缺失的观测/控制语义 | **query/control op** | 只有底层能提供、且无法用现有 op 组合 |
-| 必须秒级抢占的切换 | **guard** | 领先指标（低氧、苦力怕距离、夜间） |
+| 必须秒级抢占的切换 | **guard**（旧模式）/**S0 策略**（Controller 模式） | 领先指标（低氧、苦力怕距离、夜间） |
 | 只通知不夺权 | **watch** | 边沿 + 冷却 + TTL |
 | 动作级"不许发生" | **act preconditions / invariant**（计划中） | 事前否决优于事后止损 |
 | 策略分析、artifact 编写 | **subagent** | 见 §6 |
 
-**控制模式互斥**：同一 body 一次只启用旧执行器模式或 P2Controller 模式之一，不得同时存在两条调度路径。当前 body 仍是旧执行器模式；Controller 需要显式接线与切换，不能靠"代码已在仓库里"当作已启用。
+**控制模式互斥**：同一 body 一次只能是旧执行器模式或 P2Controller 模式。启用 Controller 前必须无 active run、无 guard；启用后 `p2_switch` 返回 `CONTROL_MODE_CONFLICT`。停止自主行动用 `p2_controller action=disable`，停止当前承诺用 `action=cancel`；`p2_stop` 只停 behavior run。
 
 **不要**把决策写进 act，也不要把单动作写进 behavior 的循环体之外；更不要把"该由 guard 做的事"放进 owner 的观察里（模型回路太慢）。
 
@@ -39,14 +40,14 @@
 
 1. `p2_body start` → `p2_status` 校验：`version`、`connection=connected`、`owner` 是本 session、`bodyEpoch` 非空。
 2. `p2_card` 与 `p2_observe position` 确认已进服、维度正确。
-3. **先激活 act 依赖再激活 behavior**：`p2_check`/`p2_activate` 需要的 `acts/*.mjs`，否则 behavior 报 `DEPENDENCY_NOT_FOUND`。
-4. 登记默认 guard（缺一个就补一个）：
-   - `low-hp`（hpBelow 6–8）→ 庇护/撤离 behavior
-   - `creeper-flee`（policy：creeper ≤6 格）→ 逃跑 behavior
-   - `low-oxygen`（policy：`inWater && oxygen<10`）→ 逃生链 behavior（**没有逃生链就先别下水**）
-5. 登记 watch：`night-edge`（time，edge=both，cooldown 60s，ttl ≤1h）、`creeper-near`、`oxygen-low`。
-6. 若已有据点：用 `p2_observe blocks` 逐项验收（顶/门/地板/光/重生路径），不靠印象。
-7. `schedule_create` 300s 巡检（太吵改 600s，发现太慢改 180s）。
+3. **先激活 act 依赖再激活上层内容**：`p2_check`/`p2_activate` 需要的 `acts/*.mjs`，否则 behavior 报 `DEPENDENCY_NOT_FOUND`，strategy 检查报 `DEPENDENCY_NOT_FOUND`。
+4. 选择控制模式（二选一，不并存）：
+   - **旧执行器模式**：登记默认 guard（`low-hp`、`creeper-flee`、`low-oxygen`）→ `p2_switch` 启动 behavior。
+   - **Controller 模式**：`p2_guard clear all`（S0 接管紧急抢占）→ `p2_check artifactKind=strategy` + `p2_activate` → `p2_controller action=enable` → `action=install` → `action=commit`。
+5. `p2_status.controller` 校验（Controller 模式）：`mode=active`、`strategies[].activeVersion`、`commitment.state`、`lease.fault` 为空；`p2_controller action=events` 看首轮决策。
+6. 登记 watch：`night-edge`（time，edge=both，cooldown 60s，ttl ≤1h）、`creeper-near`、`oxygen-low`。
+7. 若已有据点：用 `p2_observe blocks` 逐项验收（顶/门/地板/光/重生路径），不靠印象。
+8. `schedule_create` 300s 巡检（太吵改 600s，发现太慢改 180s）。
 
 ## 5. 验收纪律（这四句是硬规则）
 
@@ -84,12 +85,19 @@
 | `attack-target` 返回 complete 但怪还在 | 它只是"脱离触及"；用实体是否存在判定击杀 |
 | guard 武装后立刻该触发却没触发 | guard 按 false→true 边沿触发；武装时条件已为真不会补触发，需先 `clear` 再 `set` |
 | watch 数量变 0 | TTL 到期（≤1h）；巡检时续期，不要假设还在 |
+| `CONTROL_MODE_CONFLICT` | 先 `p2_stop` 停 run 或 `p2_guard clear all`；Controller 与 behavior/guard 不并存 |
+| `p2_controller enable` 后 `p2_switch` 失败 | 预期行为：先 `p2_controller action=disable`，等 `mode=off` 再 switch |
+| 策略一直 `unknown` 或承诺 `blocked` | 看 `p2_controller action=status` 的 `commitment.blocked.missing`、`degraded`、`p2_controller action=events`；不要靠猜 |
+| 策略 `ACT_NOT_RESOLVED` / `DEPENDENCY_NOT_FOUND` | 先检查并启用对应 act，再重新 check 策略（策略检查锁定 act 产物） |
+| `p2_controller install` 报 `STRATEGY_FACT_UNKNOWN` | 策略要的事实 body 未注册；改用已注册事实，或扩 body 事实源 |
+| 承诺成功但背包没变 | 证据问题：查 `commitment.evidence` 的 `evidenceId/sampledAt`；不要把 `candidate-complete` 当成功 |
 
 ## 9. 禁止
 
 - 用 `p2_switch`/`p2_stop` 之外的"等待"手段；禁止 sleep/轮询。
+- Controller 模式下用 `p2_switch` 绕过单控制槽；必须先 `disable`。
 - 在 body 活跃时跑构建、打包、大改代码。
 - 未确认 owner/epoch 就下发控制。
 - 把 `p2_trace` 当长窗口证据（watch 采样会把它写满）。
 - 在重生点/据点 4 格内竖直下挖（会打穿地板并破坏重生安全）。
-- 在未登记 `low-oxygen` 与逃生链的情况下进入水域或水下矿层。
+- 在未登记低氧保护（guard 或 S0 逃生策略）的情况下进入水域或水下矿层。

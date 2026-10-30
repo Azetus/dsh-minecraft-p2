@@ -10,6 +10,7 @@
 | `artifact-behavior.md` | subagent（author） | 编写 / 修改 behavior 的规范与自检清单 |
 | `artifact-act.md` | subagent | 编写 act 的规范（manifest、生命周期、preconditions、读回校验） |
 | `artifact-op.md` | subagent | 编写 query/control op 的规范（portability、limits、schema 一致） |
+| `artifact-strategy.md` | subagent + 主 session | 编写 P2Controller 策略（strategy artifact）的规范与自检清单 |
 | `artifact-guard-watch.md` | subagent + 主 session | 登记 guard/watch 与写 policy 的规范（领先指标、边沿语义、TTL） |
 
 ## 与 docs/ 的分工

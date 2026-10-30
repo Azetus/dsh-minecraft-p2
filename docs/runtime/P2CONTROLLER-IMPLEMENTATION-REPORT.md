@@ -1,6 +1,7 @@
 # P2Controller M0–M3 实现报告
 
 > 分支 `P2Controller`，版本 **0.2.6**，日期 2026-10-30。设计基线：[P2CONTROLLER.md](P2CONTROLLER.md) v2；契约：[OP-PROVIDER-CONTRACT.md](OP-PROVIDER-CONTRACT.md)。
+> **后续（M4）**：Controller 已接入 body，并新增 `strategy` artifact 载体；见 [P2CONTROLLER-BODY-WIRING.md](P2CONTROLLER-BODY-WIRING.md)。本报告保留 M0–M3 的实现记录。
 > 结论：M0–M3 的 fake/单测出口全部满足，`npm run check` 全绿（47 文件 / 471 tests）。**本阶段未连接真实游戏、未打包、未启动 body。**
 
 ## 1. 结论与范围

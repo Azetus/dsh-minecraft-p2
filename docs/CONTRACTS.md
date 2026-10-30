@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | contracts | behavior 契约、消息、错误、版本及运行状态类型/运行时解析器 | 加载 DSH 或游戏 |
 | op-contracts | QueryOp／ControlOp 的声明：名称、类别、参数/结果契约、持续效果、停止语义与能力标记 | 某版 MC 实现 |
-| checker | 请求式语法/类型/构建检查，覆盖 behavior、act 与 policy，产出 artifact 与报告 | 游戏行为测试、自动调用模型 |
+| checker | 请求式语法/类型/构建检查，覆盖 behavior、act、policy 与 strategy，产出 artifact 与报告 | 游戏行为测试、自动调用模型 |
 | registry | 不可变 artifact、源码 revision、校验凭据、按目标 binding 区分的启用记录与精确依赖 | 在游戏中验证策略正确性 |
 | body | 树调度、act 生命周期、控制权、操作 broker、状态/执行事件 | LLM 会话和自然语言策略 |
 | observation | QueryOp 调用门面及纯摘要函数 | 世界副本、历史差分、环境变化事件 |
@@ -21,7 +21,7 @@
 
 ## 2. 标识、时间与边界校验
 
-所有对外 ID 为不透明字符串，在 TypeScript 内使用不同品牌类型防混用。至少区分 definitionId、revision、artifactId、runId、nodeRunId、actEpoch、requestId、commandId、confirmationId、bodyEpoch、connectionEpoch、bindingId、eventSeq、ownerSessionId。revision 是定义的源码版本，首版采用 sourceDigest；artifactId 才标识确切可执行产物，同一 revision 可以有不同依赖或 binding 的多个 artifact。产物类型（behavior／act／policy）计入摘要，三种类型之间不能互相替代。
+所有对外 ID 为不透明字符串，在 TypeScript 内使用不同品牌类型防混用。至少区分 definitionId、revision、artifactId、runId、nodeRunId、actEpoch、requestId、commandId、confirmationId、bodyEpoch、connectionEpoch、bindingId、eventSeq、ownerSessionId。revision 是定义的源码版本，首版采用 sourceDigest；artifactId 才标识确切可执行产物，同一 revision 可以有不同依赖或 binding 的多个 artifact。产物类型（behavior／act／policy／op／strategy）计入摘要，不同类型之间不能互相替代。
 
 - 跨进程值只能是受限 JSON：禁止函数、原型对象、NaN、Infinity、循环对象和游戏内部对象。
 - schema 最小子集：有限数值、字符串/枚举、布尔、nullable、受限数组、封闭对象和判别联合。拒绝未知必需字段，扩展字段必须声明。
@@ -433,6 +433,31 @@ type OpContext = {
 | 生命周期 | op 模块随 binding 缓存；源码变化产生新产物，旧运行实例不热替换。 |
 | 崩溃 | op 同步挂死由 body 看门狗处理（心跳缺失→有界重启）；异步超时由 `limits.totalMs` 或 broker 预算判失败。 |
 
+### 5.3 strategy 产物（P2Controller 策略）
+
+策略是独立的第四类内容产物（不复用 behavior，也不与其兼容）。单文件、顶层调用注入的 `defineStrategy({ manifest, evaluate })`；`evaluate(ctx)` 必须同步、纯函数，入参与返回值都是 JSON。
+
+```ts
+type StrategyManifest = {
+  id: string;                 // definitionId，同时是 controller strategyKey
+  version: string;
+  slot: 'S0' | 'S1' | 'S2' | 'S3';
+  hazardClass?: 'lethal' | 'bleeding-fire' | 'trapped'; // 仅 S0 必填
+  facts: string[];            // 必须来自 body 已注册的事实源
+  acts?: string[];            // 声明可提议的 act definitionId
+  description?: string;
+};
+```
+
+- **检查**：`p2_check artifactKind=strategy` 在 body 内 vm 载入并校验 manifest；`acts` 必须已检查/启用，检查期解析为确切 artifactId 并进入依赖摘要。禁用语法（import/require/eval/Function/process/fetch/async/await/定时器）直接拒绝。
+- **启用**：`p2_activate` 与其它产物相同；启用后仍不安装、不运行。
+- **安装**：`p2_controller action=install` 由 body 载入 vm 并安装到 Controller；策略提议的 act 只能是 manifest 声明并由检查期解析的 artifact。
+- **判定**：`idle / unknown / propose / running / wait / recover / candidate-complete / blocked`，可附 `checkpoint`；`candidate-complete.evidence` 是事实键，host 只接受已知、未过期、同 `coherenceWindow` 的样本。
+- **隔离**：body 内 `node:vm`，与 JS behavior 相同的“非安全边界”基线；未迁移隔离 runner 前不承诺安全隔离。
+- **产物身份**：kind=`strategy`、definitionId、源码摘要、依赖 act 摘要、checker/binding 进入摘要；slot/version/hazardClass 由源码（manifest）决定，改它们即改 artifactId。
+
+<!-- 完整契约与命令流见 docs/runtime/P2CONTROLLER.md §14。 -->
+
 ## 6. 统一错误与处理归属
 
 ```ts
@@ -464,6 +489,10 @@ type P2Error = {
 | STOP_TIMEOUT、CONTROL_OUTCOME_UNKNOWN、STALE_CONTROLLER | 保留控制账本/故障，禁止新动作接管。 |
 | LEASE_REQUIRED | P2Controller 拒绝无租约 dispatch；不产生控制效果，租约账本不变。 |
 | COMMITMENT_DEADLINE、POSTCONDITION_FAILED、EVIDENCE_TIMEOUT、REVERIFY_TIMEOUT | P2Controller 结束/阻断承诺并记录证据与原因；不得据此提交成功。 |
+| CONTROL_MODE_CONFLICT、CONTROL_MODE_BUSY | body 单控制模式门禁：Controller 与 behavior run/guard 互斥；等待 settle 后再启用。 |
+| CONTROLLER_UNAVAILABLE、CONTROLLER_DISABLED | body 未接入控制器 / 控制器未启用；命令被拒绝。 |
+| STRATEGY_NOT_ACTIVATED、STRATEGY_NOT_INSTALLED、STRATEGY_FACT_UNKNOWN、FACT_NOT_REGISTERED | 策略产物未启用、未安装、事实未注册；安装/承诺前拒绝。 |
+| STRATEGY_LOAD_FAILED、STRATEGY_EVAL_FAILED、STRATEGY_TIMEOUT、STRATEGY_ASYNC、INVALID_STRATEGY_VERDICT、ACT_UNDECLARED、ACT_NOT_RESOLVED、EVIDENCE_UNDECLARED | 策略装载/求值失败；失败关闭，不产生动作。 |
 
 error.retry 是允许范围，不自动触发 retry。调用者不得把 never 升格为 cleanup-once；QueryOp 始终零自动重试。
 
@@ -477,11 +506,14 @@ error.retry 是允许范围，不自动触发 retry。调用者不得把 never �
 | hello / heartbeat / shutdown | 首版专用管道上的 owner 绑定、存活与退出管理；不是模型工具。attach/renew/detach 保留在后续 WS 方案。 |
 | observe | 一次 QueryOp 或有限查询组；返回结构化事实及可选纯摘要。 |
 | status | 当前运行、控制权/健康、阶段与当前 act、等待原因、最近失败、待确认记录、pending命令及最近结果。 |
-| check | 检测候选（behavior／act／policy），返回报告/artifact，不启用、不试运行。 |
+| check | 检测候选（behavior／act／policy／op／strategy），返回报告/artifact，不启用、不试运行。 |
 | activate | 指定 artifactId，复核凭据与依赖后在其目标 binding 下启用；不加载 provider、不立即启动。 |
 | switch | 指定 artifactId、params 和 commandId；核验当前环境、依赖及实际能力后接受串行切换，不能用 revision/latest 隐式选择产物。 |
 | stop | 请求停止并返回 commandId；响应不是停止完成证明。 |
 | confirm | 对指定 bodyEpoch、runId、confirmationId 提交确认或否定及依据；来源由可信 bridge 通道确定。 |
+| controller.enable / disable / status | 切换 body 的单控制模式；enable 要求无 active run 且无 guard；disable 先取消承诺并撤销租约，释放确认后回到 off。 |
+| controller.install / commit / cancel | 安装已启用的 strategy artifact、创建承诺（post/baseline/deadline）、取消当前承诺；语义见 [P2CONTROLLER §13–§14](runtime/P2CONTROLLER.md)。 |
+| controller.events | 按 `sinceSeq` 游标读取有界控制器事件；事件不是终态证明。 |
 | command.get / events.subscribe | 查询当前 epoch 的内存命令结果和有界事件；首版不实现持久接收 ack。 |
 
 具体工具是否合并由 bridge 调整，身体协议保持清晰。编写代码通过工作区普通文件能力；不增加直接执行任意 JS 的 p2 工具。开发阶段的 op 现场编写与激活见 §5.2：源码经 checker 检查后由 binding 激活，不在聊天里直接执行。
@@ -586,3 +618,4 @@ agent 写候选 behavior／act／policy 文件
 依靠 `call` 组合时，被引用的 behavior 先通过检查；依靠 act 或 policy 时，依赖产物必须已在同一目标 binding 下通过检查，act 还需已启用。
 
 accepted、activated和started是不同事实。模型会话不能因为工具返回 accepted 就向玩家宣布任务已完成。
+
