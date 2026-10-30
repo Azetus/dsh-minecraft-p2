@@ -65,6 +65,7 @@ export const OPERATION_CONTRACTS: readonly OperationContract[] = Object.freeze([
   { id: 'stop', kind: 'control', effects: 'none', stop: 'none', capabilities: [] },
   { id: 'dig', kind: 'control', effects: 'active', stop: 'poll', capabilities: ['dig'] },
   { id: 'place', kind: 'control', effects: 'none', stop: 'none', capabilities: ['place'] },
+  { id: 'replace', kind: 'control', effects: 'none', stop: 'none', capabilities: ['place'] },
   { id: 'attack', kind: 'control', effects: 'none', stop: 'none', capabilities: ['attack'] },
   { id: 'equip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },
   { id: 'unequip', kind: 'control', effects: 'none', stop: 'none', capabilities: ['equip'] },

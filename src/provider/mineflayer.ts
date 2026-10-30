@@ -186,6 +186,10 @@ function isAirName(name: string): boolean {
   return name === 'air' || name === 'cave_air' || name === 'void_air'
 }
 
+function isFluidName(name: string): boolean {
+  return name === 'water' || name === 'flowing_water' || name === 'lava' || name === 'flowing_lava'
+}
+
 function clampNumber(value: JsonValue | undefined, fallback: number, min: number, max: number): number {
   const number = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback
   return Math.min(max, Math.max(min, number))
@@ -1432,6 +1436,67 @@ class MineflayerActHandle implements ActHandle {
           void (async () => {
             // The client inventory model can lag behind the server; refresh it
             // before trusting `heldItem` or the placement will be refused.
+            await this.syncInventoryWindow()
+            const feet = this.bot.entity.position
+            const bodyX = Math.floor(feet.x)
+            const bodyZ = Math.floor(feet.z)
+            if (x === bodyX && z === bodyZ && (y === Math.floor(feet.y) || y === Math.floor(feet.y + 1))) {
+              throw Object.assign(new Error(`target ${x},${y},${z} is inside the bot's own body`), { code: 'PLACE_BLOCKED_BY_SELF' })
+            }
+            const held = this.bot.heldItem
+            if (held === null || held === undefined) {
+              throw Object.assign(new Error('no item is held for placement'), { code: 'PLACE_NO_ITEM' })
+            }
+            await this.bot.placeBlock(referenceBlock, new Vec3(vector[0], vector[1], vector[2]))
+            const placed = this.bot.blockAt(target)
+            if (placed === null || isAirName(placed.name) || placed.name !== held.name) {
+              throw Object.assign(new Error(`server did not place ${held.name} at ${x},${y},${z}`), { code: 'PLACE_FAILED' })
+            }
+            return { name: placed.name, x, y, z }
+          })().then(result => {
+            this.result = result
+            this.completed = true
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'PLACE_FAILED'
+          })
+          return
+        }
+        case 'replace': {
+          const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const y = typeof this.args.y === 'number' ? this.args.y : undefined
+          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+          if (x === undefined || y === undefined || z === undefined) throw new Error('replace requires numeric x, y and z')
+          const target = new Vec3(x, y, z)
+          const occupied = this.bot.blockAt(target)
+          if (occupied !== null && !isAirName(occupied.name) && !isFluidName(occupied.name)) {
+            this.failed = new Error(`target position is occupied by ${occupied.name}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            return
+          }
+          // Pick a support face whose reference block is solid. Unlike place,
+          // the target itself may be water/lava: placing a block replaces fluid.
+          const candidates = ['up', 'down', 'north', 'south', 'east', 'west']
+          let vector: readonly [number, number, number] | undefined
+          let referenceBlock: ReturnType<Bot['blockAt']> | null = null
+          for (const name of candidates) {
+            const face = PLACE_FACES[name]
+            if (face === undefined) continue
+            const ref = new Vec3(x - face[0], y - face[1], z - face[2])
+            const block = this.bot.blockAt(ref)
+            if (block === null || isAirName(block.name) || isFluidName(block.name)) continue
+            vector = face
+            referenceBlock = block
+            break
+          }
+          if (vector === undefined || referenceBlock === null) {
+            this.failed = new Error(`no support block around ${x},${y},${z}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            return
+          }
+          void (async () => {
             await this.syncInventoryWindow()
             const feet = this.bot.entity.position
             const bodyX = Math.floor(feet.x)

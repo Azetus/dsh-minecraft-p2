@@ -50,7 +50,7 @@ describe('operation declarations', () => {
     ])
     expect(operationIds('control')).toEqual([
       'look', 'lookAt', 'move', 'forward', 'back', 'left', 'right', 'jump', 'pillar', 'moveTo', 'goto', 'follow', 'stop',
-      'dig', 'place', 'attack', 'equip', 'unequip', 'use', 'consume',
+      'dig', 'place', 'replace', 'attack', 'equip', 'unequip', 'use', 'consume',
       'craft', 'container-transfer', 'toss', 'respawn', 'sleep', 'interact', 'activate', 'mount', 'dismount',
       'drive', 'place-entity', 'fish', 'trade',
     ])
@@ -60,7 +60,7 @@ describe('operation declarations', () => {
     expect(operationContract('craft')).toMatchObject({ kind: 'control', capabilities: ['craft'] })
     expect(operationContract('container')).toMatchObject({ kind: 'query', capabilities: ['container'] })
     expect(operationContract('goto')).toMatchObject({ kind: 'control', capabilities: ['pathfind'] })
-    expect(OPERATION_CONTRACTS.length).toBe(47)
+    expect(OPERATION_CONTRACTS.length).toBe(48)
   })
 
   it('rejects unknown operations and kind mismatches', () => {
@@ -120,5 +120,6 @@ describe('DeclaredOpBroker', () => {
     expect(source.started).toEqual([])
   })
 })
+
 
 
