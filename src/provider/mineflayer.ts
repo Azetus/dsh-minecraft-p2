@@ -996,9 +996,14 @@ class MineflayerActHandle implements ActHandle {
   private result: JsonValue | undefined
   private failed: Error | undefined
   private failedCode = 'ACT_FAILED'
+  /** Set only after release is observed; never merely because stop was requested. */
   private cancelled = false
   private completed = false
   private releaseUnknown = false
+  /** A stop was requested; input may still be in flight until release is proven. */
+  private stopRequested = false
+  /** The async craft chain is still between recipes, so release is not proven. */
+  private craftRunning = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly startedAt = Date.now()
   private wasAirborne = false
@@ -1025,6 +1030,7 @@ class MineflayerActHandle implements ActHandle {
   }
 
   poll(): ActPoll {
+    if (this.stopRequested && !this.cancelled) this.refreshRelease()
     if (this.cancelled) return { status: 'cancelled' }
     if (this.failed !== undefined) {
       return {
@@ -1061,7 +1067,8 @@ class MineflayerActHandle implements ActHandle {
   }
 
   stop(): void {
-    if (this.cancelled || this.completed) return
+    if (this.stopRequested || this.completed) return
+    this.stopRequested = true
     let unknown = false
     const attempt = (fn: () => void): void => {
       try {
@@ -1086,19 +1093,66 @@ class MineflayerActHandle implements ActHandle {
     if (this.name === 'pillar') attempt(() => this.bot.setControlState('jump', false))
     attempt(() => this.bot.clearControlStates())
     this.releaseUnknown = unknown
-    this.cancelled = true
+    // A cancel flag alone never proves the effect is gone: confirm only what
+    // the provider can still observe (pathfinder path, dig target, craft loop).
+    this.refreshRelease()
+  }
+
+  /**
+   * Fold the observable control state into a release conclusion. Until this
+   * succeeds the handle keeps reporting `running`/`active`, which is what makes
+   * a lazy pathfinder stop visible instead of a false "already stopped".
+   */
+  private refreshRelease(): void {
+    if (!this.stopRequested || this.cancelled || this.releaseUnknown) return
+    try {
+      if (this.releaseObserved()) this.cancelled = true
+    } catch {
+      this.releaseUnknown = true
+    }
+  }
+
+  private releaseObserved(): boolean {
+    if (this.name === 'goto' || this.name === 'follow') {
+      const pathfinder = (this.bot as unknown as { pathfinder?: { isMoving?: () => boolean } }).pathfinder
+      // `stop()` only sets a flag; the path is cleared on the next physics tick.
+      if (typeof pathfinder?.isMoving === 'function' && pathfinder.isMoving() === true) return false
+    }
+    if (this.name === 'dig') {
+      const target = (this.bot as unknown as { targetDigBlock?: unknown }).targetDigBlock
+      if (target !== null && target !== undefined) return false
+    }
+    if (this.name === 'craft' && this.craftRunning) return false
+    if (this.name === 'sleep' && (this.bot as unknown as { isSleeping?: boolean }).isSleeping === true) return false
+    const getControlState = (this.bot as unknown as { getControlState?: (name: string) => boolean }).getControlState
+    if (typeof getControlState === 'function') {
+      for (const state of ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint'] as const) {
+        if (getControlState.call(this.bot, state) === true) return false
+      }
+    }
+    return true
   }
 
   /** `unknown` is sticky: a cancel flag alone never proves the effect is gone. */
   controlState(): 'idle' | 'active' | 'unknown' {
     if (this.releaseUnknown) return 'unknown'
-    if (this.cancelled || this.completed || this.failed !== undefined) return 'idle'
-    return 'active'
+    if (this.cancelled || this.completed) return 'idle'
+    if (this.failed !== undefined) {
+      // A failed act can still leave a pathfinder path behind; only report idle
+      // when the provider can no longer observe an effect.
+      try {
+        return this.releaseObserved() ? 'idle' : 'active'
+      } catch {
+        return 'unknown'
+      }
+    }
+    if (this.stopRequested) this.refreshRelease()
+    return this.cancelled ? 'idle' : 'active'
   }
 
   controlRelease(): 'confirmed' | 'best-effort' | null {
     if (this.releaseUnknown) return 'best-effort'
-    if (this.cancelled || this.completed || this.failed !== undefined) return 'confirmed'
+    if (this.cancelled || this.completed) return 'confirmed'
     return null
   }
 
@@ -1161,6 +1215,7 @@ class MineflayerActHandle implements ActHandle {
           void (async () => {
             let placed = 0
             for (let index = 0; index < count; index += 1) {
+              this.ensureNotStopped()
               await this.syncInventoryWindow()
               const feet = this.bot.entity.position
               const x = Math.floor(feet.x)
@@ -1177,6 +1232,7 @@ class MineflayerActHandle implements ActHandle {
               let lifted = false
               let lastError: unknown
               for (let attempt = 0; attempt < 3 && !lifted; attempt += 1) {
+                this.ensureNotStopped()
                 // Place only once the feet are a full block above the start: below
                 // that the target cell intersects the player box and the server
                 // refuses the placement.
@@ -1188,10 +1244,11 @@ class MineflayerActHandle implements ActHandle {
                 this.bot.setControlState('jump', true)
                 try {
                   const deadline = Date.now() + 1200
-                  while (this.bot.entity.position.y < startY + 1.05 && Date.now() < deadline) await delay(10)
+                  while (!this.stopRequested && this.bot.entity.position.y < startY + 1.05 && Date.now() < deadline) await delay(10)
                 } finally {
                   this.bot.setControlState('jump', false)
                 }
+                this.ensureNotStopped()
                 if (this.bot.entity.position.y < startY + 1.0) {
                   await this.waitUntilGrounded()
                   continue
@@ -1919,7 +1976,21 @@ class MineflayerActHandle implements ActHandle {
 
   private async waitUntilGrounded(timeoutMs = 2000): Promise<void> {
     const deadline = Date.now() + timeoutMs
-    while (this.bot.entity.onGround !== true && Date.now() < deadline) await delay(10)
+    while (!this.stopRequested && this.bot.entity.onGround !== true && Date.now() < deadline) await delay(10)
+  }
+
+  /** Abortable delay so a stopped craft/pillar chain stops between recipes. */
+  private async waitAbortable(ms: number): Promise<void> {
+    const deadline = Date.now() + ms
+    while (!this.stopRequested && Date.now() < deadline) {
+      await delay(Math.min(25, Math.max(1, deadline - Date.now())))
+    }
+  }
+
+  private ensureNotStopped(): void {
+    if (this.stopRequested) {
+      throw Object.assign(new Error('act was cancelled'), { code: 'ACT_CANCELLED' })
+    }
   }
 
   /**
@@ -1937,49 +2008,61 @@ class MineflayerActHandle implements ActHandle {
     itemType: number,
     name: string,
   ): Promise<JsonValue> {
-    await this.syncInventoryWindow()
-    const before = this.inventoryCountOfType(itemType)
-    let crafted = 0
-    let lastError: unknown
-    for (let attempt = 0; attempt < requested; attempt += 1) {
-      // A craft fired immediately after the previous one is silently dropped by
-      // the server; give the window a moment to settle and wait for the result
-      // item to actually appear before starting the next one.
-      if (crafted > 0) await delay(400)
-      const beforeThis = this.inventoryCountOfType(itemType)
-      try {
-        await this.craftOnce(recipe, table)
-      } catch (error) {
-        lastError = error
+    this.craftRunning = true
+    try {
+      await this.syncInventoryWindow()
+      this.ensureNotStopped()
+      const before = this.inventoryCountOfType(itemType)
+      let crafted = 0
+      let lastError: unknown
+      for (let attempt = 0; attempt < requested; attempt += 1) {
+        this.ensureNotStopped()
+        // A craft fired immediately after the previous one is silently dropped by
+        // the server; give the window a moment to settle and wait for the result
+        // item to actually appear before starting the next one.
+        if (crafted > 0) await this.waitAbortable(400)
+        this.ensureNotStopped()
+        const beforeThis = this.inventoryCountOfType(itemType)
         try {
-          await this.closeCurrentWindow()
           await this.craftOnce(recipe, table)
-        } catch (retryError) {
-          lastError = retryError
-          break
+        } catch (error) {
+          this.ensureNotStopped()
+          lastError = error
+          try {
+            await this.closeCurrentWindow()
+            this.ensureNotStopped()
+            await this.craftOnce(recipe, table)
+          } catch (retryError) {
+            lastError = retryError
+            break
+          }
         }
-      }
-      if (!(await this.waitForItemCount(itemType, beforeThis, 800))) {
-        await this.syncInventoryWindow()
-        if (!(await this.waitForItemCount(itemType, beforeThis, 300))) {
-          lastError = lastError ?? new Error('craft produced no item')
-          break
+        if (!(await this.waitForItemCount(itemType, beforeThis, 800))) {
+          this.ensureNotStopped()
+          await this.syncInventoryWindow()
+          if (!(await this.waitForItemCount(itemType, beforeThis, 300))) {
+            lastError = lastError ?? new Error('craft produced no item')
+            break
+          }
         }
+        crafted += 1
       }
-      crafted += 1
+      this.ensureNotStopped()
+      const produced = this.inventoryCountOfType(itemType) - before
+      const expected = (recipe.result?.count ?? 1) * crafted
+      if (crafted < requested || produced < expected) {
+        throw Object.assign(
+          new Error(
+            `crafted ${crafted}/${requested} of ${name} (produced ${produced}, expected ${expected})`
+            + (lastError === undefined ? '' : `: ${errorMessage(lastError)}`),
+          ),
+          { code: 'CRAFT_INCOMPLETE' },
+        )
+      }
+      return { item: name, requested, crafted, produced }
+    } finally {
+      this.craftRunning = false
     }
-    const produced = this.inventoryCountOfType(itemType) - before
-    const expected = (recipe.result?.count ?? 1) * crafted
-    if (crafted < requested || produced < expected) {
-      throw Object.assign(
-        new Error(
-          `crafted ${crafted}/${requested} of ${name} (produced ${produced}, expected ${expected})`
-          + (lastError === undefined ? '' : `: ${errorMessage(lastError)}`),
-        ),
-        { code: 'CRAFT_INCOMPLETE' },
-      )
-    }
-    return { item: name, requested, crafted, produced }
   }
 
   private async craftOnce(recipe: Parameters<Bot['craft']>[0], table: Parameters<Bot['craft']>[2]): Promise<void> {
@@ -2019,11 +2102,11 @@ class MineflayerActHandle implements ActHandle {
 
   private async waitForItemCount(itemType: number, before: number, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !this.stopRequested) {
       if (this.inventoryCountOfType(itemType) > before) return true
-      await delay(50)
+      await this.waitAbortable(50)
     }
-    return this.inventoryCountOfType(itemType) > before
+    return !this.stopRequested && this.inventoryCountOfType(itemType) > before
   }
 
   private async transferContainer(block: Parameters<Bot['openFurnace']>[0]): Promise<JsonValue> {
