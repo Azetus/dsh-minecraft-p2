@@ -24,6 +24,19 @@ describe('EventQueue', () => {
     const drained = queue.drain()
     expect(drained.events.map(item => item.seq)).toEqual([2])
     expect(drained.gap).toBe(true)
+    expect(drained.dropped).toBe(1)
+    expect(queue.droppedCount).toBe(1)
+  })
+
+  it('reports drops per drain and cumulatively', () => {
+    const queue = new EventQueue(1)
+    queue.push(event(1))
+    queue.push(event(2))
+    expect(queue.drain()).toMatchObject({ dropped: 1 })
+    expect(queue.droppedCount).toBe(1)
+
+    queue.push(event(3))
+    expect(queue.drain()).toMatchObject({ dropped: 0, gap: false })
     expect(queue.droppedCount).toBe(1)
   })
 

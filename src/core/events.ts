@@ -10,6 +10,8 @@ export type RuntimeEvent = {
 export type EventDrain = {
   events: RuntimeEvent[]
   gap: boolean
+  /** Events dropped since the previous drain. */
+  dropped: number
 }
 
 /** Bounded current-epoch event buffer with id dedup and explicit gap reporting. */
@@ -18,6 +20,7 @@ export class EventQueue {
   private readonly seen = new Set<string>()
   private readonly max: number
   private dropped = 0
+  private droppedSinceDrain = 0
   private gap = false
   private nextSeq = 1
 
@@ -25,6 +28,7 @@ export class EventQueue {
     this.max = max
   }
 
+  /** Cumulative drops since the queue was created. */
   get droppedCount(): number {
     return this.dropped
   }
@@ -33,6 +37,7 @@ export class EventQueue {
     if (this.seen.has(event.eventId)) return 'duplicate'
     if (event.seq < this.nextSeq || this.events.some(existing => existing.seq === event.seq)) {
       this.dropped += 1
+      this.droppedSinceDrain += 1
       this.gap = true
       return 'gap'
     }
@@ -43,6 +48,7 @@ export class EventQueue {
       const removed = this.events.shift()
       if (removed !== undefined) this.seen.delete(removed.eventId)
       this.dropped += 1
+      this.droppedSinceDrain += 1
       this.gap = true
     }
     return 'accepted'
@@ -51,14 +57,17 @@ export class EventQueue {
   drain(): EventDrain {
     const events = this.events.splice(0)
     const gap = this.gap
+    const dropped = this.droppedSinceDrain
     this.gap = false
+    this.droppedSinceDrain = 0
     this.seen.clear()
-    return { events, gap }
+    return { events, gap, dropped }
   }
 
   clear(): void {
     this.events.length = 0
     this.seen.clear()
     this.gap = false
+    this.droppedSinceDrain = 0
   }
 }

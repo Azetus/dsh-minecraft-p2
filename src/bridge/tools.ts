@@ -357,7 +357,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_events',
-    description: 'Drain the bounded current-epoch P2 event buffer, including run status and guard events.',
+    description: 'Drain the bounded current-epoch execution event buffer (run, guard, watch, fault, restart). Current state is read with p2_status.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {
@@ -366,6 +366,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
         events: drained.events as unknown as JsonValue,
         gap: drained.gap,
         dropped: drained.dropped,
+        droppedTotal: drained.droppedTotal,
       }
     }),
   })

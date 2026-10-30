@@ -726,11 +726,18 @@ describe('P2 commands', () => {
 
     await new Promise(resolve => setTimeout(resolve, 0))
     const events = tools.find(tool => tool.name === 'p2_events') as {
-      execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<{ events: unknown[]; gap: boolean }>
+      execute: (args: Record<string, unknown>, exec: { agent: unknown }) => Promise<{
+        events: Array<{ kind: string }>
+        gap: boolean
+        dropped: number
+        droppedTotal: number
+      }>
     }
     const drained = await events.execute({}, { agent })
-    expect(drained.events.length).toBeGreaterThan(0)
+    expect(drained.events).toEqual([])
     expect(drained.gap).toBe(false)
+    expect(drained.dropped).toBe(0)
+    expect(drained.droppedTotal).toBe(0)
 
     expect(await command.handler({ agent, rawInput: ' stop' })).toMatchObject({ kind: 'success' })
     expect(disposed.length).toBeGreaterThan(0)

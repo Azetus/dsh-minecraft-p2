@@ -117,7 +117,6 @@ export class BodyManager {
   private readonly log: (line: string) => void
   private readonly events = new EventQueue(128)
   private eventSeq = 0
-  private lastStatusSignature: string | undefined
   private lastGuardSeq = 0
   private lastWatchSeq = 0
   private readonly requestTimeoutMs: number
@@ -164,9 +163,9 @@ export class BodyManager {
     return this.epoch
   }
 
-  drainEvents(): { events: RuntimeEvent[]; gap: boolean; dropped: number } {
+  drainEvents(): { events: RuntimeEvent[]; gap: boolean; dropped: number; droppedTotal: number } {
     const drained = this.events.drain()
-    return { ...drained, dropped: this.events.droppedCount }
+    return { ...drained, droppedTotal: this.events.droppedCount }
   }
 
   async start(owner: OwnerContext): Promise<StartResult> {
@@ -200,7 +199,6 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.lastGuardSeq = 0
       this.lastWatchSeq = 0
-      this.lastStatusSignature = undefined
       this.startHeartbeat()
       this.watchExit(handle)
       void this.pumpStatus()
@@ -415,23 +413,6 @@ export class BodyManager {
       this.lastActiveRunId = status.activeRun?.runId ?? null
       this.processGuardEvents(status)
       this.processWatchEvents(status)
-      const signature = JSON.stringify({
-        run: status.activeRun,
-        lastRun: status.lastRun,
-        confirmation: status.pendingConfirmation,
-        health: status.health,
-        providerPaused: status.providerState?.paused ?? null,
-        serverAge: status.providerState?.serverAge ?? null,
-      })
-      if (signature === this.lastStatusSignature) return
-      this.lastStatusSignature = signature
-      this.eventSeq += 1
-      this.events.push({
-        eventId: `${this.epoch ?? 'epoch'}:status:${this.eventSeq}`,
-        seq: this.eventSeq,
-        kind: 'status',
-        data: status as unknown as JsonValue,
-      })
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
     }
