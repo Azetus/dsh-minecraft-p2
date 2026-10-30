@@ -268,6 +268,101 @@ export type RunObservation = {
   activeActHandle?: ActiveActHandleSummary
 }
 
+export type ControllerMode = 'off' | 'active' | 'disabling' | 'fault'
+
+export type ControllerStrategyView = {
+  key: string
+  slot: string
+  state: string
+  installedVersion: string
+  activeVersion: string
+  attemptId: string
+  hazardClass?: string
+}
+
+export type ControllerEventView = {
+  seq: number
+  at: number
+  kind: string
+  slot?: string
+  strategyKey?: string
+  commitmentId?: string
+  detail?: string
+  data?: JsonValue
+}
+
+export type ControllerCommitmentView = {
+  id: string
+  goal: string
+  strategyKey: string
+  state: string
+  deadline: number
+  checkpoint: JsonValue
+  suspendedAt?: number
+  suspendReason?: string
+  blocked?: JsonValue
+  evidence: JsonValue[]
+}
+
+export type ControllerView = {
+  mode: ControllerMode
+  enabledAt: number | null
+  phase: string | null
+  lease: JsonValue
+  action: JsonValue
+  decision: JsonValue
+  commitment: ControllerCommitmentView | null
+  commitments: ControllerCommitmentView[]
+  strategies: ControllerStrategyView[]
+  verification: JsonValue
+  stall: JsonValue
+  memory: JsonValue
+  degraded: string[]
+  /** Most recent events (bounded); use controller.events for a cursor. */
+  events: ControllerEventView[]
+  eventSeq: number
+}
+
+export type ControllerInstallResult = {
+  key: string
+  status: string
+  attemptId: string
+  installedVersion: string
+  activeVersion: string
+  state: string
+}
+
+export type ControllerInstallParams = {
+  artifactId: string
+  mode?: 'boundary' | 'interrupt'
+}
+
+export type ControllerCommitParams = {
+  id?: string
+  kind?: 'task' | 'standing'
+  goal: string
+  strategyKey: string
+  post: JsonValue
+  baselineKeys?: string[]
+  deadlineMs?: number
+  checkpoint?: JsonValue
+}
+
+export type ControllerCancelParams = {
+  commitmentId?: string
+  reason?: string
+}
+
+export type ControllerEventsParams = {
+  sinceSeq?: number
+  limit?: number
+}
+
+export type ControllerEventsResult = {
+  events: ControllerEventView[]
+  seq: number
+}
+
 export type StatusResult = {
   bodyEpoch: BodyEpoch
   /** Package/body version from body.manifest.json, e.g. 0.3.2-exp-ir.1. */
@@ -307,6 +402,8 @@ export type StatusResult = {
   rescue?: { enabled: boolean; tpRadius: number } | null
   /** Developer-mode external operations; null when the hook is disabled. */
   devOps?: DevOpsStatus | null
+  /** P2Controller state; null when the body has no controller host. */
+  controller?: ControllerView | null
   loggingUnavailable?: boolean
   droppedLogCount?: number
 }
@@ -352,7 +449,7 @@ export type CheckParams = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
-  artifactKind?: 'behavior' | 'act' | 'policy' | 'op'
+  artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
   /** Experimental behavior format; ignored for act/policy/op. */
   format?: 'ir' | 'js'
 }
@@ -436,7 +533,7 @@ export type CheckResult = {
   definitionId: string
   sourceDigest: string
   bindingId: string
-  kind: 'behavior' | 'act' | 'policy' | 'op'
+  kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
   enabled: false
 }
 
@@ -661,3 +758,4 @@ export function unknownMethodError(method: string): P2Error {
     { method },
   )
 }
+

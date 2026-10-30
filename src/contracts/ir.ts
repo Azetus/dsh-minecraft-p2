@@ -130,7 +130,31 @@ export type ActArtifact = {
   sourceDigest: string
 }
 
-export type ContentArtifact = BehaviorArtifact | ActArtifact | PolicyArtifact | OpArtifact
+export type ContentArtifact = BehaviorArtifact | ActArtifact | PolicyArtifact | OpArtifact | StrategyArtifact
+
+/**
+ * Immutable strategy artifact: a single-file, synchronous `evaluate(ctx)`
+ * function. It receives plain JSON facts and returns a verdict; it cannot
+ * import, call operations or hold host handles.
+ */
+export type StrategyArtifact = {
+  kind: 'strategy'
+  definitionId: string
+  version: string
+  slot: 'S0' | 'S1' | 'S2' | 'S3'
+  hazardClass?: 'lethal' | 'bleeding-fire' | 'trapped'
+  /** Observation keys the strategy reads; the host supplies exactly these. */
+  facts: string[]
+  /** Declared act definition ids; resolved to exact artifact ids at check time. */
+  acts: string[]
+  resolvedActs: Record<string, string>
+  code: string
+  manifest: ArtifactManifest
+  artifactId: string
+  artifactDigest: string
+  bindingId: string
+  sourceDigest: string
+}
 
 /** Immutable policy artifact: single-file pure decision code. */
 export type PolicyArtifact = {

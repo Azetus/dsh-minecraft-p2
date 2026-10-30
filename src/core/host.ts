@@ -1,4 +1,4 @@
-import type { ArtifactRef, BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
+import type { ArtifactRef, BehaviorArtifact, ContentArtifact, StrategyArtifact } from '../contracts/ir.ts'
 import type { LastRunSummary, ProviderRuntimeStatus, RescueParams, RescueResult } from '../contracts/protocol.ts'
 import type {
   ActiveActHandleSummary,
@@ -26,6 +26,7 @@ import { checkAct } from './act-checker.ts'
 import { checkPolicy } from './policy-checker.ts'
 import { checkOp } from './op-checker.ts'
 import { checkBehaviorJs } from './js-checker.ts'
+import { checkStrategyJs } from './strategy-checker.ts'
 import type { AuthoredOpArtifact } from './op-artifact.ts'
 import { requireOperation } from '../operation/index.ts'
 import type { OperationContract } from '../operation/index.ts'
@@ -48,7 +49,7 @@ export type CheckHostRequest = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
-  artifactKind?: 'behavior' | 'act' | 'policy' | 'op'
+  artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
   /** Experimental behavior script format; default is IR. */
   format?: 'ir' | 'js'
 }
@@ -57,7 +58,7 @@ export type CheckHostResult = {
   artifactId: string
   definitionId: string
   sourceDigest: string
-  kind: 'behavior' | 'act' | 'policy' | 'op'
+  kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
   artifact: ContentArtifact
 }
 
@@ -291,6 +292,7 @@ export class BehaviorHost {
     if (kind === 'act') return this.checkAct(request)
     if (kind === 'policy') return this.checkPolicy(request)
     if (kind === 'op') return this.checkOp(request)
+    if (kind === 'strategy') return this.checkStrategy(request)
     if (request.format === 'js') return this.checkJsBehavior(request)
     return this.checkBehavior(request)
   }
@@ -368,8 +370,7 @@ export class BehaviorHost {
     }
   }
 
-  private async checkPolicy(request: CheckHostRequest): Promise<CheckHostResult> {
-    if (this.loadManifest === undefined) {
+  private async checkPolicy(request: CheckHostRequest): Promise<CheckHostResult> {    if (this.loadManifest === undefined) {
       throw new CheckerError('POLICY_CHECK_UNAVAILABLE', 'this host cannot load policy artifacts')
     }
     const loadManifest = this.loadManifest
@@ -408,6 +409,30 @@ export class BehaviorHost {
     }
   }
 
+  private async checkStrategy(request: CheckHostRequest): Promise<CheckHostResult> {
+    const result = await checkStrategyJs({
+      sourcePath: request.sourcePath,
+      ...(request.sourceRoot === undefined ? {} : { sourceRoot: request.sourceRoot }),
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      bindingId: this.bindingId,
+      resolveAct: definitionId => {
+        const artifact = this.registry.resolveDefault('act', definitionId)
+        return artifact === undefined
+          ? undefined
+          : { artifactId: artifact.artifactId, digest: artifact.artifactDigest }
+      },
+    })
+    this.credentials.set(result.artifact.artifactId, result.credential)
+    this.registry.add(result.artifact, result.credential)
+    return {
+      artifactId: result.artifact.artifactId,
+      definitionId: result.artifact.definitionId,
+      sourceDigest: result.artifact.sourceDigest,
+      kind: 'strategy',
+      artifact: result.artifact,
+    }
+  }
+
   setOwner(owner: string): void {
     this.owner = owner
   }
@@ -429,7 +454,7 @@ export class BehaviorHost {
     return this.query({ op, args: {} }, args)
   }
 
-  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true; kind: 'behavior' | 'act' | 'policy' | 'op' } {
+  activate(artifactId: string): { artifactId: string; bindingId: string; enabled: true; kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy' } {
     const record = this.registry.get(artifactId)
     if (record !== undefined && record.artifact.kind === 'policy') {
       throw new RegistryError('POLICY_NOT_ACTIVATABLE', 'policy artifacts are dependencies and are not enabled separately')
@@ -460,6 +485,13 @@ export class BehaviorHost {
     const record = this.registry.get(artifactId)
     if (record === undefined || record.artifact.kind !== 'policy') return undefined
     return { artifactId: record.artifact.artifactId, code: record.artifact.code }
+  }
+
+  /** Enabled strategy artifact, or undefined when it is not activated. */
+  strategySource(artifactId: string): StrategyArtifact | undefined {
+    const record = this.registry.get(artifactId)
+    if (record === undefined || record.artifact.kind !== 'strategy' || !record.enabled || record.retired) return undefined
+    return record.artifact
   }
 
   /**
@@ -1677,3 +1709,4 @@ function isTerminal(status: RunStatus): status is 'succeeded' | 'failed' | 'canc
 }
 
 export type { ArtifactRef }
+

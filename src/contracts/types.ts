@@ -96,7 +96,7 @@ export type BindingManifest = {
   config: JsonValue
 }
 
-export type ArtifactKind = 'behavior' | 'act' | 'policy' | 'op'
+export type ArtifactKind = 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
 
 /** Execution-relevant declaration of an authored operation artifact. */
 export type OpDeclaration = {

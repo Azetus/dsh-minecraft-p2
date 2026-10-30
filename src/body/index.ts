@@ -10,6 +10,7 @@ import { RunnerActPort } from '../core/act-port.ts'
 import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerManager } from '../core/runner-manager.ts'
 import { TraceSink } from '../core/trace.ts'
+import { BodyController } from './controller-host.ts'
 import { BodyServer } from './server.ts'
 import { BodyRuntime } from './runtime.ts'
 import { DevOpsHost, createCompositeOpSource } from './dev-ops.ts'
@@ -19,6 +20,7 @@ import { executeRescue } from './rescue.ts'
 
 type HostBundle = {
   host: BehaviorHost
+  controller?: BodyController
   rescue?: { enabled: boolean; tpRadius: number }
   devOps?: () => DevOpsStatus | null
   dispose: () => void
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   const runtime = new BodyRuntime({
     body,
     behavior: bundle.host,
+    ...(bundle.controller === undefined ? {} : { controller: bundle.controller }),
     heartbeatTimeoutMs: 10_000,
     trace,
     ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
@@ -149,12 +152,13 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
       },
     })
     actPort = new RunnerActPort(() => runner.ensure(), ops, artifactId => host?.actSource(artifactId), trace)
+    const act = actPort
     policyPort = new RunnerPolicyPort(() => runner.ensure(), artifactId => host?.policySource(artifactId))
-    host = new BehaviorHost({
+    const behaviorHost = new BehaviorHost({
       bindingId: body.bindingId ?? 'unbound',
       trace,
       query: ops.queryPort(),
-      act: actPort,
+      act,
       policy: {
         call: (ref, inputs) => policyPort?.call(ref, inputs) ?? {
           status: 'failed',
@@ -172,13 +176,23 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
         owner: context.owner,
       }),
     })
+    host = behaviorHost
+    const controller = new BodyController({
+      act,
+      query: ops.queryPort(),
+      strategySource: artifactId => behaviorHost.strategySource(artifactId),
+      providerStatus: () => provider.liveStatus(),
+      log: line => process.stderr.write(`[controller] ${line}\n`),
+    })
     return {
-      host,
+      host: behaviorHost,
+      controller,
       rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
       devOps: devOpsInfo,
       dispose: () => {
+        controller.dispose()
         devHost?.dispose()
-        host?.dispose()
+        behaviorHost.dispose()
         actPort?.dispose()
         runner.dispose()
       },
@@ -190,3 +204,4 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
 }
 
 await main()
+

@@ -156,12 +156,12 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_check',
-    description: 'Check a behavior, act, policy or op source file in the owner project without activating or running it.',
+    description: 'Check a behavior, act, policy, op or strategy source file in the owner project without activating or running it.',
     parameters: {
       type: 'object',
       properties: {
         sourcePath: { type: 'string', description: 'Path inside the owner project' },
-        artifactKind: { type: 'string', enum: ['behavior', 'act', 'policy', 'op'], description: 'Artifact kind; defaults to behavior' },
+        artifactKind: { type: 'string', enum: ['behavior', 'act', 'policy', 'op', 'strategy'], description: 'Artifact kind; defaults to behavior' },
         format: { type: 'string', enum: ['ir', 'js'], description: 'Behavior format; defaults to ir' },
         timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
       },
@@ -173,6 +173,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
       const kind = args.artifactKind === 'act'
         || args.artifactKind === 'policy'
         || args.artifactKind === 'op'
+        || args.artifactKind === 'strategy'
         || args.artifactKind === 'behavior'
         ? args.artifactKind
         : undefined
@@ -254,6 +255,86 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
     execute: guarded(async args => manager.stopBehavior(
       typeof args.runId === 'string' ? args.runId : undefined,
     )),
+  })
+
+  register({
+    name: 'p2_controller',
+    description: 'Manage the P2Controller control mode: enable/disable, install an activated strategy artifact, commit or cancel a goal, and read controller status/events. The controller owns the single action slot; behavior runs cannot start while it is engaged.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['enable', 'disable', 'status', 'install', 'commit', 'cancel', 'events'], description: 'Controller action' },
+        artifactId: { type: 'string', description: 'install: activated strategy artifact id' },
+        mode: { type: 'string', enum: ['boundary', 'interrupt'], description: 'install: replacement mode, defaults to boundary' },
+        id: { type: 'string', description: 'commit: optional commitment id' },
+        goal: { type: 'string', description: 'commit: human-readable goal' },
+        strategyKey: { type: 'string', description: 'commit: installed strategy key (definition id)' },
+        post: { type: 'object', description: 'commit: post-condition {kind:"count-at-least"|"fact-equals"|"standing",...}', additionalProperties: true },
+        baselineKeys: { type: 'array', items: { type: 'string' }, description: 'commit: fact keys sampled as the baseline' },
+        kind: { type: 'string', enum: ['task', 'standing'], description: 'commit: defaults from the post-condition' },
+        deadlineMs: { type: 'number', description: 'commit: commitment deadline' },
+        checkpoint: { type: 'object', description: 'commit: initial strategy checkpoint', additionalProperties: true },
+        commitmentId: { type: 'string', description: 'cancel: defaults to the active commitment' },
+        reason: { type: 'string', description: 'cancel: reason recorded in the checkpoint' },
+        sinceSeq: { type: 'number', description: 'events: return events after this seq' },
+        limit: { type: 'number', description: 'events: page size (max 100)' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: jsonOutput(),
+    execute: guarded(async args => {
+      const action = String(args.action)
+      if (action === 'enable' || action === 'disable' || action === 'status') {
+        return manager.controller(action, {})
+      }
+      if (action === 'events') {
+        return manager.controller('events', {
+          ...(typeof args.sinceSeq === 'number' ? { sinceSeq: args.sinceSeq } : {}),
+          ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+        })
+      }
+      if (action === 'install') {
+        if (typeof args.artifactId !== 'string' || args.artifactId.length === 0) {
+          throw new Error('install requires artifactId')
+        }
+        if (args.mode !== undefined && args.mode !== 'boundary' && args.mode !== 'interrupt') {
+          throw new Error('mode must be boundary or interrupt')
+        }
+        return manager.controller('install', {
+          artifactId: args.artifactId,
+          ...(args.mode === undefined ? {} : { mode: args.mode }),
+        })
+      }
+      if (action === 'commit') {
+        if (typeof args.goal !== 'string' || typeof args.strategyKey !== 'string' || typeof args.post !== 'object' || args.post === null) {
+          throw new Error('commit requires goal, strategyKey and post')
+        }
+        const baselineKeys = Array.isArray(args.baselineKeys)
+          ? args.baselineKeys.filter((key): key is string => typeof key === 'string')
+          : undefined
+        if (args.kind !== undefined && args.kind !== 'task' && args.kind !== 'standing') {
+          throw new Error('kind must be task or standing')
+        }
+        return manager.controller('commit', {
+          goal: args.goal,
+          strategyKey: args.strategyKey,
+          post: args.post as JsonValue,
+          ...(typeof args.id === 'string' ? { id: args.id } : {}),
+          ...(baselineKeys === undefined ? {} : { baselineKeys }),
+          ...(args.kind === undefined ? {} : { kind: args.kind }),
+          ...(typeof args.deadlineMs === 'number' ? { deadlineMs: args.deadlineMs } : {}),
+          ...(args.checkpoint === undefined ? {} : { checkpoint: args.checkpoint as JsonValue }),
+        })
+      }
+      if (action === 'cancel') {
+        return manager.controller('cancel', {
+          ...(typeof args.commitmentId === 'string' ? { commitmentId: args.commitmentId } : {}),
+          ...(typeof args.reason === 'string' ? { reason: args.reason } : {}),
+        })
+      }
+      throw new Error(`unknown controller action: ${action}`)
+    }),
   })
 
   register({

@@ -56,11 +56,19 @@ import type {
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, CommandId, JsonValue, P2Error, RunId } from '../contracts/types.ts'
+import type { ControllerRuntime } from './controller-host.ts'
+import type {
+  ControllerCancelParams,
+  ControllerCommitParams,
+  ControllerEventsParams,
+  ControllerInstallParams,
+} from '../contracts/protocol.ts'
 
 export class BodyRuntime {
   readonly body: BodyInfo
   readonly bodyEpoch: BodyEpoch
   private behavior: BehaviorHost | undefined
+  private readonly controller: ControllerRuntime | undefined
   private readonly debugLog: DebugLog | undefined
   private readonly workQuota: WorkQuota | undefined
   private lastBehaviorStatus: string | undefined
@@ -76,10 +84,11 @@ export class BodyRuntime {
   private readonly devOpsState: (() => DevOpsStatus | null) | undefined
   private readonly trace: TraceSink | undefined
 
-  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; debugLog?: DebugLog; workQuota?: WorkQuota; trace?: TraceSink }) {
+  constructor(options: BodyRuntimeOptions & { behavior?: BehaviorHost; controller?: ControllerRuntime; debugLog?: DebugLog; workQuota?: WorkQuota; trace?: TraceSink }) {
     this.body = options.body
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     this.behavior = options.behavior
+    this.controller = options.controller
     this.debugLog = options.debugLog
     this.workQuota = options.workQuota
     this.owner = options.owner ?? null
@@ -151,6 +160,14 @@ export class BodyRuntime {
         return this.handleShutdown(base, envelope)
       case 'command.get':
         return this.handleCommandGet(base, envelope)
+      case 'controller.enable':
+      case 'controller.disable':
+      case 'controller.status':
+      case 'controller.install':
+      case 'controller.commit':
+      case 'controller.cancel':
+      case 'controller.events':
+        return this.handleController(base, envelope.method, envelope.params)
       default:
         return { ...base, error: unknownMethodError(envelope.method) }
     }
@@ -401,10 +418,10 @@ export class BodyRuntime {
             return { ...base, error: quotaError }
           }
           const rawKind = params.artifactKind
-          if (rawKind !== undefined && rawKind !== 'behavior' && rawKind !== 'act' && rawKind !== 'policy' && rawKind !== 'op') {
-            return { ...base, error: invalidMessageError('artifactKind must be behavior, act, policy or op') }
+          if (rawKind !== undefined && rawKind !== 'behavior' && rawKind !== 'act' && rawKind !== 'policy' && rawKind !== 'op' && rawKind !== 'strategy') {
+            return { ...base, error: invalidMessageError('artifactKind must be behavior, act, policy, op or strategy') }
           }
-          const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | 'op' | undefined
+          const artifactKind = rawKind as 'behavior' | 'act' | 'policy' | 'op' | 'strategy' | undefined
           const rawFormat = params.format
           if (rawFormat !== undefined && rawFormat !== 'ir' && rawFormat !== 'js') {
             return { ...base, error: invalidMessageError('format must be ir or js') }
@@ -447,6 +464,18 @@ export class BodyRuntime {
           return { ...base, result: rescued as unknown as JsonValue }
         }
         case 'switch': {
+          if (this.controller?.engaged === true) {
+            return {
+              ...base,
+              error: p2Error(
+                'CONTROL_MODE_CONFLICT',
+                'control',
+                'the controller owns the action slot; disable it before switching behaviors',
+                { module: 'body.controller' },
+                { controllerMode: this.controller.mode },
+              ),
+            }
+          }
           const artifactId = typeof params.artifactId === 'string' ? params.artifactId : undefined
           if (artifactId === undefined) return { ...base, error: invalidMessageError('artifactId is required') }
           const switchParams = asRecord(params.params ?? {}) ?? {}
@@ -641,6 +670,7 @@ export class BodyRuntime {
       watchEventSeq: behavior?.watchEventSeq ?? 0,
       rescue: this.rescueState ?? null,
       devOps: this.devOpsState?.() ?? null,
+      controller: this.controller?.status(this.now()) ?? null,
       ...(this.debugLog === undefined ? {} : {
         loggingUnavailable: this.debugLog.loggingUnavailable,
         droppedLogCount: this.debugLog.droppedCount,
@@ -656,6 +686,11 @@ export class BodyRuntime {
   }
 
   tickBehavior(now = this.now()): string | undefined {
+    const controller = this.controller
+    if (controller?.engaged === true) {
+      controller.tick(now)
+      return `controller:${controller.mode}`
+    }
     const status = this.behavior?.tick(now)
     if (status !== undefined && status !== this.lastBehaviorStatus) {
       this.lastBehaviorStatus = status
@@ -664,6 +699,126 @@ export class BodyRuntime {
       }
     }
     return status
+  }
+
+  private handleController(
+    base: { protocol: 1; requestId: string; bodyEpoch: string },
+    method: string,
+    params: JsonValue,
+  ): ResponseEnvelope {
+    const controller = this.controller
+    if (controller === undefined) {
+      return {
+        ...base,
+        error: p2Error(
+          'CONTROLLER_UNAVAILABLE',
+          'capability',
+          'this body has no controller host (no provider or not wired)',
+          { module: 'body.controller' },
+        ),
+      }
+    }
+    const record = asRecord(params) ?? {}
+    try {
+      switch (method) {
+        case 'controller.enable': {
+          const active = this.behavior?.status().activeRun ?? null
+          if (active !== null) {
+            return {
+              ...base,
+              error: p2Error(
+                'CONTROL_MODE_CONFLICT',
+                'control',
+                'stop the active behavior before enabling the controller',
+                { module: 'body.controller' },
+                { runId: active.runId },
+              ),
+            }
+          }
+          const guards = this.behavior?.status().guards ?? []
+          if (guards.length > 0) {
+            return {
+              ...base,
+              error: p2Error(
+                'CONTROL_MODE_CONFLICT',
+                'control',
+                'clear guards before enabling the controller; its S0 slots own emergency preemption',
+                { module: 'body.controller' },
+                { guards: guards.map(guard => guard.id) },
+              ),
+            }
+          }
+          return { ...base, result: controller.enable(this.now()) as unknown as JsonValue }
+        }
+        case 'controller.disable':
+          return { ...base, result: controller.disable(this.now()) as unknown as JsonValue }
+        case 'controller.status':
+          return { ...base, result: controller.status(this.now()) as unknown as JsonValue }
+        case 'controller.install': {
+          const artifactId = typeof record.artifactId === 'string' ? record.artifactId : undefined
+          if (artifactId === undefined) return { ...base, error: invalidMessageError('artifactId is required') }
+          const rawMode = record.mode
+          if (rawMode !== undefined && rawMode !== 'boundary' && rawMode !== 'interrupt') {
+            return { ...base, error: invalidMessageError('mode must be boundary or interrupt') }
+          }
+          const install: ControllerInstallParams = {
+            artifactId,
+            ...(rawMode === undefined ? {} : { mode: rawMode }),
+          }
+          return { ...base, result: controller.install(install, this.now()) as unknown as JsonValue }
+        }
+        case 'controller.commit': {
+          const goal = typeof record.goal === 'string' ? record.goal : undefined
+          const strategyKey = typeof record.strategyKey === 'string' ? record.strategyKey : undefined
+          if (goal === undefined || strategyKey === undefined || record.post === undefined) {
+            return { ...base, error: invalidMessageError('goal, strategyKey and post are required') }
+          }
+          const baselineKeys = Array.isArray(record.baselineKeys)
+            ? record.baselineKeys.filter((key): key is string => typeof key === 'string')
+            : undefined
+          const kind = record.kind === 'task' || record.kind === 'standing' ? record.kind : undefined
+          const deadlineMs = typeof record.deadlineMs === 'number' ? record.deadlineMs : undefined
+          const commit: ControllerCommitParams = {
+            goal,
+            strategyKey,
+            post: record.post,
+            ...(typeof record.id === 'string' ? { id: record.id } : {}),
+            ...(kind === undefined ? {} : { kind }),
+            ...(baselineKeys === undefined ? {} : { baselineKeys }),
+            ...(deadlineMs === undefined ? {} : { deadlineMs }),
+            ...(record.checkpoint === undefined ? {} : { checkpoint: record.checkpoint }),
+          }
+          return { ...base, result: controller.commit(commit, this.now()) as unknown as JsonValue }
+        }
+        case 'controller.cancel': {
+          const cancel: ControllerCancelParams = {
+            ...(typeof record.commitmentId === 'string' ? { commitmentId: record.commitmentId } : {}),
+            ...(typeof record.reason === 'string' ? { reason: record.reason } : {}),
+          }
+          return { ...base, result: controller.cancel(cancel, this.now()) as unknown as JsonValue }
+        }
+        case 'controller.events': {
+          const events: ControllerEventsParams = {
+            ...(typeof record.sinceSeq === 'number' ? { sinceSeq: record.sinceSeq } : {}),
+            ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
+          }
+          return { ...base, result: controller.events(events) as unknown as JsonValue }
+        }
+        default:
+          return { ...base, error: unknownMethodError(method) }
+      }
+    } catch (error) {
+      const preserved = asP2Error(error)
+      return {
+        ...base,
+        error: preserved ?? p2Error(
+          'CONTROLLER_ERROR',
+          'runtime',
+          error instanceof Error ? error.message : String(error),
+          { module: 'body.controller' },
+        ),
+      }
+    }
   }
 
   private handleHello(
@@ -1020,4 +1175,5 @@ function duplicateCommand(commandId: string): P2Error {
     { commandId },
   )
 }
+
 

@@ -250,7 +250,7 @@ export class BodyManager {
     }
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.activeClient().check(sourcePath, options)
   }
 
@@ -272,6 +272,10 @@ export class BodyManager {
 
   stopBehavior(runId?: string): Promise<JsonValue> {
     return this.activeClient().behaviorStop(runId)
+  }
+
+  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
+    return this.activeClient().controller(action, params)
   }
 
   guardSet(input: {

@@ -56,6 +56,8 @@ export type FactSource = {
   args?: Record<string, JsonValue>
   scope?: string
   ttlMs?: number
+  /** Per-fact refresh interval; defaults to the controller-wide value. */
+  refreshMs?: number
 }
 
 export type SenseResult =
@@ -478,7 +480,8 @@ export class P2Controller {
     if (this.sense === undefined) return
     for (const [key, source] of Object.entries(this.factSources)) {
       const read = this.observations.read(key, now)
-      if (read.known && now - read.fact.sampledAt < this.refreshIntervalMs) {
+      const refreshMs = source.refreshMs ?? this.refreshIntervalMs
+      if (read.known && now - read.fact.sampledAt < refreshMs) {
         this.degraded.delete(`sense:${key}`)
         continue
       }

@@ -85,7 +85,7 @@ export class BodyClient {
     })
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
     return this.command('check', {
       sourcePath,
       ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
@@ -169,6 +169,10 @@ export class BodyClient {
 
   trace(params: JsonValue = {}): Promise<JsonValue> {
     return this.request('trace', params)
+  }
+
+  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
+    return this.request(`controller.${action}`, params)
   }
 
   async describe(): Promise<DescribeResult> {

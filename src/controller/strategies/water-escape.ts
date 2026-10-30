@@ -8,7 +8,7 @@
  */
 
 import type { Strategy, StrategyContext, StrategyVerdict } from '../strategy.ts'
-import { readPosition } from './reading.ts'
+import { asRecord, readPosition } from './reading.ts'
 
 export type WaterEscapeOptions = {
   key?: string
@@ -21,6 +21,7 @@ export type WaterEscapeOptions = {
 }
 
 const FACT_POSITION = 'position'
+const FACT_HEALTH = 'health'
 
 export function createWaterEscapeStrategy(options: WaterEscapeOptions): Strategy {
   const key = options.key ?? 'water-escape'
@@ -34,13 +35,15 @@ export function createWaterEscapeStrategy(options: WaterEscapeOptions): Strategy
     slot: 'S0',
     hazardClass: 'lethal',
     evaluate(context: StrategyContext): StrategyVerdict {
-      const facts = context.facts([FACT_POSITION])
+      const facts = context.facts([FACT_POSITION, FACT_HEALTH])
       if (facts.unknown.length > 0) return { kind: 'unknown', missing: facts.unknown }
       const position = readPosition(facts.values[FACT_POSITION])
       if (position === undefined) return { kind: 'unknown', missing: [`${FACT_POSITION}.x`] }
       if (typeof position.inWater !== 'boolean') return { kind: 'unknown', missing: [`${FACT_POSITION}.inWater`] }
 
-      const oxygen = position.oxygen
+      // Oxygen comes from the health query, not the position query.
+      const health = asRecord(facts.values[FACT_HEALTH])
+      const oxygen = typeof health?.oxygen === 'number' ? health.oxygen : undefined
       const drowning = position.inWater && (oxygen === undefined || oxygen <= oxygenBelow)
       const lowOxygen = oxygen !== undefined && oxygen <= oxygenBelow
       const hazard = drowning || lowOxygen

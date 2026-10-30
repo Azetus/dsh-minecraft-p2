@@ -30,6 +30,7 @@ export type World = {
   blocks: Array<{ name: string; x: number; y: number; z: number }>
   entities: Array<{ id?: number; name: string; kind?: string; position: { x: number; y: number; z: number }; distance?: number }>
   health: number
+  oxygen: number
   failing: Set<string>
 }
 
@@ -123,7 +124,8 @@ function defaultEffect(world: World, action: FakeAction): void {
     return
   }
   if (intent === 'escape-water') {
-    world.position = { ...world.position, inWater: false, oxygen: 20, y: world.position.y + 1 }
+    world.position = { ...world.position, inWater: false, y: world.position.y + 1 }
+    world.oxygen = 20
     return
   }
   if (intent === 'retreat-creeper') {
@@ -149,6 +151,7 @@ export type Harness = {
 
 const FACT_SOURCES: Record<string, FactSource> = {
   position: { op: 'position', scope: 'world:overworld' },
+  health: { op: 'health', scope: 'world:overworld' },
   inventory: { op: 'inventory', scope: 'world:overworld' },
   nearbyBlocks: { op: 'blocks', scope: 'world:overworld' },
   entities: { op: 'entities', scope: 'world:overworld' },
@@ -161,11 +164,12 @@ export function createHarness(options: Partial<P2ControllerOptions> & {
 } = {}): Harness {
   const { world: worldOverrides, effects, actionDelayTicks, ...controllerOptions } = options
   const world: World = {
-    position: { x: 0, y: 64, z: 0, dimension: 'overworld', inWater: false, oxygen: 20, ...worldOverrides?.position },
+    position: { x: 0, y: 64, z: 0, dimension: 'overworld', inWater: false, ...worldOverrides?.position },
     inventory: worldOverrides?.inventory ?? [],
     blocks: worldOverrides?.blocks ?? [],
     entities: worldOverrides?.entities ?? [],
     health: worldOverrides?.health ?? 20,
+    oxygen: worldOverrides?.oxygen ?? 20,
     failing: worldOverrides?.failing ?? new Set(),
   }
   const clock = { now: 1000 }
@@ -177,6 +181,8 @@ export function createHarness(options: Partial<P2ControllerOptions> & {
       switch (source.op) {
         case 'position':
           return { status: 'ok', value: { ...world.position } }
+        case 'health':
+          return { status: 'ok', value: { health: world.health, food: 20, oxygen: world.oxygen } }
         case 'inventory':
           return { status: 'ok', value: world.inventory.map(item => ({ ...item })) }
         case 'blocks':
@@ -227,3 +233,5 @@ export function createHarness(options: Partial<P2ControllerOptions> & {
     },
   }
 }
+
+

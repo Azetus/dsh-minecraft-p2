@@ -78,7 +78,8 @@ describe('P2Controller M1', () => {
     expect(harness.controller.status().commitment?.state).toBe('active')
     expect(harness.controller.status().action).not.toBeNull()
 
-    harness.world.position = { ...harness.world.position, inWater: true, oxygen: 3 }
+    harness.world.position = { ...harness.world.position, inWater: true }
+    harness.world.oxygen = 3
     harness.tick()
     const suspended = harness.controller.status()
     expect(suspended.commitment?.state).toBe('suspended')
@@ -209,6 +210,7 @@ describe('P2Controller M1', () => {
     expect(harness.controller.eventLog.some(event => event.kind === 'candidate-rejected')).toBe(true)
   })
 })
+
 
 
 

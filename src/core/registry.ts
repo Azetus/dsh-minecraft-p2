@@ -81,7 +81,7 @@ export class ArtifactRegistry {
   }
 
   /** Resolve the enabled default for one definition, if any. */
-  resolveDefault(kind: 'behavior' | 'act' | 'policy' | 'op', definitionId: string): ContentArtifact | undefined {
+  resolveDefault(kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
     const id = this.defaults.get(`${kind}:${definitionId}`)
     if (id === undefined) return undefined
     const record = this.records.get(id)
@@ -90,7 +90,7 @@ export class ArtifactRegistry {
   }
 
   /** Any checked artifact for one definition; policy artifacts are never enabled. */
-  find(kind: 'behavior' | 'act' | 'policy' | 'op', definitionId: string): ContentArtifact | undefined {
+  find(kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
     let fallback: ContentArtifact | undefined
     for (const record of this.records.values()) {
       if (record.artifact.kind !== kind || record.retired) continue
@@ -157,3 +157,4 @@ export class ArtifactRegistry {
     }
   }
 }
+
