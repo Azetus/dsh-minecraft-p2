@@ -26,7 +26,7 @@ const FACT_HEALTH = 'health'
 export function createWaterEscapeStrategy(options: WaterEscapeOptions): Strategy {
   const key = options.key ?? 'water-escape'
   const version = options.version ?? '1'
-  const oxygenBelow = options.oxygenBelow ?? 6
+  const oxygenBelow = options.oxygenBelow ?? 80
   const maxAttempts = options.maxAttempts ?? 2
 
   return {
@@ -83,3 +83,4 @@ export function createWaterEscapeStrategy(options: WaterEscapeOptions): Strategy
     },
   }
 }
+

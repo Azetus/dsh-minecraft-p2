@@ -151,6 +151,7 @@ function harness(options: { inventory?: number; artifact?: StrategyArtifact; cod
 const IDLE = `defineStrategy({ manifest: { id: 'idle', version: '1', slot: 'S2', facts: ['inventory'] }, evaluate() { return { kind: 'idle' } } })`
 const COMPLETE = `defineStrategy({ manifest: { id: 'finish', version: '1', slot: 'S2', facts: ['inventory'] }, evaluate() { return { kind: 'candidate-complete', evidence: ['inventory'] } } })`
 const DIG = `defineStrategy({ manifest: { id: 'dig', version: '1', slot: 'S2', facts: ['inventory'], acts: ['dig'] }, evaluate() { return { kind: 'propose', intent: 'dig:1,64,2', act: 'dig', args: { x: 1, y: 64, z: 2 } } } })`
+const ALWAYS = `defineStrategy({ manifest: { id: 'always', version: '1', slot: 'S2', facts: [], acts: ['noop'] }, evaluate() { return { kind: 'propose', intent: 'noop', act: 'noop', args: {} } } })`
 
 describe('BodyController wiring', () => {
   it('enables and disables the single control mode', () => {
@@ -230,6 +231,29 @@ describe('BodyController wiring', () => {
       identity: { runId: 'controller', actInstanceId: 'controller-act-1', generation: 1 },
     })
     expect(controller.status().action).toMatchObject({ intent: 'dig:1,64,2', slot: 'S2' })
+  })
+
+  it('stops dispatching immediately when disabled, even if the strategy keeps proposing', () => {
+    const artifact = artifactWith(ALWAYS, [], ['noop'], { noop: 'act-noop' })
+    const { controller, act, tick } = harness({ artifact })
+    controller.enable(1000)
+    controller.install({ artifactId: artifact.artifactId }, 1000)
+    controller.commit({
+      id: 'always-goal',
+      goal: 'always propose',
+      strategyKey: 'always',
+      post: { kind: 'standing' },
+      baselineKeys: [],
+    }, 1000)
+    tick()
+    tick()
+    expect(act.actions.length).toBeGreaterThan(0)
+
+    controller.disable()
+    const frozen = act.actions.length
+    for (let index = 0; index < 6; index += 1) tick()
+    expect(act.actions.length).toBe(frozen)
+    expect(controller.status().mode).toBe('off')
   })
 
   it('cancels the commitment and stops the lease when disabled', () => {

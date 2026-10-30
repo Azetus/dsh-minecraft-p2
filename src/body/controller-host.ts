@@ -148,6 +148,7 @@ export class BodyController implements ControllerRuntime {
       )
     }
     this.controller ??= this.createController()
+    this.controller.setAutonomy(true, now)
     this.disableRequested = false
     this.modeValue = 'active'
     this.enabledAt ??= now
@@ -163,10 +164,13 @@ export class BodyController implements ControllerRuntime {
       return this.status(now)
     }
     this.disableRequested = true
+    this.modeValue = 'disabling'
+    // Freeze dispatch before revoking: a strategy that keeps proposing must not
+    // restart an action while the lease is being released (real-machine finding).
+    controller.setAutonomy(false, now)
     const commitment = controller.commitments.active()
     if (commitment !== undefined) controller.cancelCommitment(commitment.id, 'controller-disabled', now)
     controller.machine.cancel(now)
-    this.modeValue = 'disabling'
     if (controller.machine.phase === 'idle' && controller.machine.controlFault === undefined) {
       this.modeValue = 'off'
       this.disableRequested = false

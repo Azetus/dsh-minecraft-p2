@@ -79,7 +79,7 @@ describe('P2Controller M1', () => {
     expect(harness.controller.status().action).not.toBeNull()
 
     harness.world.position = { ...harness.world.position, inWater: true }
-    harness.world.oxygen = 3
+    harness.world.oxygen = 40
     harness.tick()
     const suspended = harness.controller.status()
     expect(suspended.commitment?.state).toBe('suspended')
@@ -243,7 +243,35 @@ describe('P2Controller M1', () => {
     expect(seen.length).toBeGreaterThan(0)
     expect(seen[0]).toBeUndefined()
   })
+
+  it('bounds an S0 that repeats the same action without clearing the hazard', () => {
+    const harness = createHarness()
+    const stubborn: Strategy = {
+      key: 'stubborn',
+      version: '1',
+      slot: 'S0',
+      hazardClass: 'lethal',
+      evaluate: context => context.propose('escape', 'noop', {}),
+    }
+    harness.controller.install(stubborn)
+    harness.controller.commit({
+      id: 'retry-goal',
+      kind: 'standing',
+      goal: 'stubborn emergency',
+      strategyKey: 'stubborn',
+      post: { kind: 'standing' },
+      baselineKeys: [],
+    })
+    harness.run(10)
+
+    expect(harness.actuator.actions.filter(action => action.request.intent === 'escape')).toHaveLength(3)
+    const commitment = harness.controller.commitments.get('retry-goal')
+    expect(commitment?.state).toBe('blocked')
+    expect(commitment?.blocked?.reason).toBe('EMERGENCY_BLOCKED')
+    expect(commitment?.blocked?.diagnostics.some(item => item.code === 'S0_RETRY_EXHAUSTED')).toBe(true)
+  })
 })
+
 
 
 

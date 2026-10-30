@@ -197,6 +197,8 @@ const DEFAULT_REFRESH_INTERVAL_MS = 100
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 2000
 const DEFAULT_UNKNOWN_DEADLINE_MS = 3000
 const DEFAULT_MAX_EVENTS = 128
+const S0_RETRY_WINDOW_MS = 60_000
+const S0_RETRY_LIMIT = 3
 
 export class P2Controller {
   readonly machine: ActionLeaseMachine
@@ -222,6 +224,10 @@ export class P2Controller {
   private activeSlot: SlotId | undefined
   private lastOutcomeValue: StrategyContext['lastOutcome'] | undefined
   private lastCompletionAt: number | undefined
+  /** False while the body is shutting the controller down: no new dispatch. */
+  private autonomyValue = true
+  /** Bounded S0 retry ledger: holder|intent -> starts within the window. */
+  private readonly s0Attempts = new Map<string, { count: number; firstAt: number }>()
 
   constructor(options: P2ControllerOptions) {
     this.sense = options.sense
@@ -367,7 +373,7 @@ export class P2Controller {
    * controller then stays quiet instead of inventing work.
    */
   tick(now = this.now()): ControllerStatus {
-    this.advanceTakeovers(now)
+    if (this.autonomyValue) this.advanceTakeovers(now)
 
     const activeBefore = this.activeRequest
     const handover: HandoverTickResult = this.machine.tick(now)
@@ -384,6 +390,11 @@ export class P2Controller {
       this.recordRevoked(this.activeRequest, now)
     }
 
+    if (!this.autonomyValue) {
+      // Shutdown: still advance release, never evaluate or dispatch again.
+      return this.status(now)
+    }
+
     this.refreshObservations(now)
     // A release confirmed this tick can unblock a pending takeover immediately.
     this.advanceTakeovers(now)
@@ -394,6 +405,20 @@ export class P2Controller {
     this.decisionValue = decision
     this.applyDecision(decision, now)
     return this.status(now)
+  }
+
+  /**
+   * Freeze or resume new control. Disabling the controller sets this false so a
+   * strategy that keeps proposing (for example, an escape loop) cannot restart
+   * an action while the lease is being released.
+   */
+  setAutonomy(enabled: boolean, at = this.now()): void {
+    this.autonomyValue = enabled
+    if (!enabled) this.machine.dropPending('autonomy-off', at)
+  }
+
+  get autonomy(): boolean {
+    return this.autonomyValue
   }
 
   /** Best-effort shutdown: release the slot; never reports a successful stop. */
@@ -539,6 +564,7 @@ export class P2Controller {
             diagnostics: [{ code: 'STRATEGY_ERROR', message: messageOf(error), at: now }],
           }
         }
+        verdict = this.guardS0Retry(slot, strategy.key, verdict, now)
         evaluations.push({
           slot,
           strategyKey: strategy.key,
@@ -832,7 +858,15 @@ export class P2Controller {
     if (commitment.state === 'active') {
       if (emergency.length > 0) {
         const signal = emergency[0]
-        if (signal !== undefined) this.suspendCommitment(commitment, signal, now)
+        const exhausted = signal?.verdict.kind === 'blocked'
+          && signal.verdict.diagnostics.some(item => item.code === 'S0_RETRY_EXHAUSTED')
+        if (signal !== undefined && exhausted && signal.verdict.kind === 'blocked') {
+          // The emergency branch cannot execute: record blocked, never fall
+          // back to the task (docs §6).
+          this.blockCommitment(commitment, 'EMERGENCY_BLOCKED', signal.verdict.missing, now, signal.verdict.diagnostics)
+        } else if (signal !== undefined) {
+          this.suspendCommitment(commitment, signal, now)
+        }
         return
       }
       if (task?.verdict.kind === 'candidate-complete') {
@@ -845,7 +879,15 @@ export class P2Controller {
 
     if (commitment.state === 'suspended') {
       if (this.machine.controlFault !== undefined) return
-      if (emergency.length === 0) this.beginVerification(commitment, 'hazard-cleared', now)
+      const signal = emergency[0]
+      if (signal !== undefined) {
+        if (signal.verdict.kind === 'blocked'
+          && signal.verdict.diagnostics.some(item => item.code === 'S0_RETRY_EXHAUSTED')) {
+          this.blockCommitment(commitment, 'EMERGENCY_BLOCKED', signal.verdict.missing, now, signal.verdict.diagnostics)
+        }
+        return
+      }
+      this.beginVerification(commitment, 'hazard-cleared', now)
       return
     }
 
@@ -1042,7 +1084,47 @@ export class P2Controller {
   private recordStarted(request: ActionRequest): void {
     this.activeRequest = request
     this.activeSlot = request.slot
+    if (request.slot === 'S0') {
+      const key = `${request.holder}|${request.intent}`
+      const now = this.now()
+      const entry = this.s0Attempts.get(key)
+      if (entry === undefined || now - entry.firstAt > S0_RETRY_WINDOW_MS) {
+        this.s0Attempts.set(key, { count: 1, firstAt: now })
+      } else {
+        entry.count += 1
+      }
+    }
     if (this.registry.pending().length === 0) this.degraded.delete(`dispatch:${request.holder}`)
+  }
+
+  /**
+   * An S0 that keeps proposing the same action is not escaping: bound it so it
+   * cannot spin forever (real-machine finding: walk-back could not climb out of
+   * a walled pool). A blocked S0 suppresses lower slots.
+   */
+  private guardS0Retry(slot: SlotId, _strategyKey: string, verdict: StrategyVerdict, now: number): StrategyVerdict {
+    if (slot !== 'S0') return verdict
+    const action = verdict.kind === 'propose'
+      ? verdict.action
+      : verdict.kind === 'recover'
+        ? verdict.action
+        : undefined
+    if (action === undefined) return verdict
+    const entry = this.s0Attempts.get(`${action.holder}|${action.intent}`)
+    if (entry === undefined || now - entry.firstAt > S0_RETRY_WINDOW_MS || entry.count < S0_RETRY_LIMIT) {
+      return verdict
+    }
+    return {
+      kind: 'blocked',
+      missing: [],
+      since: entry.firstAt,
+      diagnostics: [{
+        code: 'S0_RETRY_EXHAUSTED',
+        message: `S0 action ${action.intent} started ${entry.count} times without clearing the hazard`,
+        at: now,
+        detail: { attempts: entry.count, intent: action.intent },
+      }],
+    }
   }
 
   private recordCompletion(request: ActionRequest | undefined, outcome: ActionOutcome, now: number): void {
@@ -1194,6 +1276,7 @@ function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
 }
+
 
 
 

@@ -9,7 +9,7 @@
 defineStrategy({
   manifest: {
     id: 'probe-walk',
-    version: '2',
+    version: '3',
     slot: 'S2',
     facts: ['position'],
     acts: ['goto'],
@@ -46,7 +46,8 @@ defineStrategy({
       kind: 'propose',
       intent: targetIntent,
       act: 'goto',
-      args: { x: walk.x, y: walk.y, z: walk.z, range: 1, timeoutMs: 60000 },
+      args: { x: walk.x, y: walk.y, z: walk.z, range: typeof walk.range === 'number' ? walk.range : 1, timeoutMs: 60000 },
     }
   },
 })
+

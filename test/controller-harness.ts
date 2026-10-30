@@ -125,7 +125,7 @@ function defaultEffect(world: World, action: FakeAction): void {
   }
   if (intent === 'escape-water') {
     world.position = { ...world.position, inWater: false, y: world.position.y + 1 }
-    world.oxygen = 20
+    world.oxygen = 300
     return
   }
   if (intent === 'retreat-creeper') {
@@ -169,7 +169,7 @@ export function createHarness(options: Partial<P2ControllerOptions> & {
     blocks: worldOverrides?.blocks ?? [],
     entities: worldOverrides?.entities ?? [],
     health: worldOverrides?.health ?? 20,
-    oxygen: worldOverrides?.oxygen ?? 20,
+    oxygen: worldOverrides?.oxygen ?? 300,
     failing: worldOverrides?.failing ?? new Set(),
   }
   const clock = { now: 1000 }
@@ -233,5 +233,6 @@ export function createHarness(options: Partial<P2ControllerOptions> & {
     },
   }
 }
+
 
 

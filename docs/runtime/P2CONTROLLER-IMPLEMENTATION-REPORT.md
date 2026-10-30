@@ -142,3 +142,17 @@
 | 跨 realm 异常诊断 | 抛错策略的诊断显示 `Error: probe-error-boom`（不再是 `[object Object]`） |
 
 遗留小项：vm 错误消息仍带 `Error: ` 前缀（`strategy-runtime` 的 `messageOf` 用 String 回退）；不影响可读性，作为下一次构建的清理项。
+
+### 6.5 S0 受控水池测试（第三次实机）
+
+受控 3×3 石台 + 中心水（cobblestone y=72，water -11,72,6）。S2 walk 目标为水池中心。
+
+通过：
+- `action-started` S2 walk → `commitment-suspended`（reason `preempted by water-escape`）→ S0 接管租约（holder `S0:water-escape`）→ decision `emergency-running`，S1–S3 被压制。
+- S0 逃生动作以 `runId=controller`、S0 身份执行；S2 承诺保留 checkpoint。
+
+发现并修复两个安全问题：
+1. **disable 后仍 dispatch**：disable 只做了取消与撤销，但 tick 仍继续评估/仲裁；S0 逃生循环在 `mode=disabling` 下继续启动动作（20+ 次）。修复：`P2Controller.setAutonomy(false)` 在撤销前冻结评估与 dispatch；`enable` 恢复。新增 body 测试。
+2. **S0 无界重试**：artifact S0 读不到任务承诺的 checkpoint，逃生失败会无限重启。修复：核心按 `holder|intent` 限 60s 内 3 次启动；超出 → `blocked`（`S0_RETRY_EXHAUSTED`），承诺 `blocked: EMERGENCY_BLOCKED`，不落回任务。新增测试。
+
+内容问题（非核心）：`walk-back` 不能爬上 1 格石沿；水池逃生 act 应为跳跃/上浮类（例如先 `move direction=jump` 再后退），950ms 后退不足。测试后已 rescue 回基地，水域未再扩散。

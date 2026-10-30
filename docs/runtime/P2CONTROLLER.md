@@ -315,6 +315,8 @@ type StrategyVerdict =
 - **控制模式互斥**：`controller.enable` 要求无活动 run 且无 guard；启用后 `p2_switch` 返回 `CONTROL_MODE_CONFLICT`。`controller.disable` 先取消承诺、撤销租约，释放确认后回到 off。
 - **命令面**（bridge 工具 `p2_controller`）：`enable / disable / status / install / commit / cancel / events`。`p2_status.controller` 返回同一份视图，`controller.events` 按 `seq` 游标读取。
 - **停止语义**：`p2_stop` 仍只停止 behavior run；停止自主行动用 `controller.disable`，停止当前承诺用 `controller.cancel`（§9 的两个契约）。
+- **disable 先冻结再撤销**：`disable` 先 `setAutonomy(false)`（停止评估与 dispatch），再取消承诺、撤销租约；释放确认后回到 off。策略即使继续提议也不能重启动作（实机发现：S0 逃生循环会在 disable 后继续 dispatch）。
+- **S0 重试预算**：同一 `holder|intent` 在 60s 内启动 3 次仍未清除危险 → 该 S0 判定被替换为 `blocked`（诊断 `S0_RETRY_EXHAUSTED`），压制 S1–S3；若存在承诺，承诺转 `blocked: EMERGENCY_BLOCKED`，不落回任务。
 - **策略载体**：新增 `strategy` artifact（见 §14），不使用/不兼容 behavior；actor 代码在 body 内以 `node:vm` 基线执行（与 JS behavior 相同的隔离基线，不是安全边界）。
 - **事实来源**：`position/health/inventory/nearbyBlocks/entities`，默认刷新间隔与 TTL 见 `controller-host.ts`；策略 manifest 只能读取已注册的事实键。`nearbyBlocks` 默认只扫描常见生存资源名，写新策略时按需在 body 配置扩展。
 - **失效**：死亡（`providerState.lastDeathAt` 变化）或维度变化时 `invalidateScope('body')`，旧目标与旧观测作废，承诺转 suspended→verifying，不自动继续旧步骤。
@@ -332,7 +334,7 @@ type StrategyVerdict =
 | `COMMITMENT_BUSY`、`COMMITMENT_NOT_FOUND`、`INVALID_POSTCONDITION` | 承诺仓库参数/状态错误 |
 | `STRATEGY_LIMIT`、`STRATEGY_SLOT_MISMATCH`、`STRATEGY_UNAVAILABLE` | 策略安装/槽位/卸载错误 |
 | `SENSE_FAILED` | 观测端口抛错 |
-| `EVIDENCE_TIMEOUT`、`REVERIFY_TIMEOUT`、`MISSING_OBSERVATION`、`STRATEGY_BLOCKED`、`RELEASE_UNCONFIRMED` | `blocked.reason`（不是 P2Error code） |
+| `EVIDENCE_TIMEOUT`、`REVERIFY_TIMEOUT`、`MISSING_OBSERVATION`、`STRATEGY_BLOCKED`、`RELEASE_UNCONFIRMED`、`EMERGENCY_BLOCKED` | `blocked.reason`（不是 P2Error code；`S0_RETRY_EXHAUSTED` 是诊断码） |
 | `CONTROL_MODE_CONFLICT`、`CONTROL_MODE_BUSY`、`CONTROLLER_UNAVAILABLE`、`CONTROLLER_DISABLED` | body 控制模式与命令门禁 |
 | `STRATEGY_NOT_ACTIVATED`、`STRATEGY_NOT_INSTALLED`、`STRATEGY_FACT_UNKNOWN`、`FACT_NOT_REGISTERED`、`INVALID_COMMITMENT` | 策略产物/承诺参数错误 |
 | `STRATEGY_LOAD_FAILED`、`STRATEGY_EVAL_FAILED`、`STRATEGY_TIMEOUT`、`STRATEGY_ASYNC`、`INVALID_STRATEGY_VERDICT`、`ACT_UNDECLARED`、`ACT_NOT_RESOLVED`、`EVIDENCE_UNDECLARED` | 策略装载/求值失败（失败关闭） |

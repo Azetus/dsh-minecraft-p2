@@ -26,7 +26,7 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 ```
 
 - `enable` 拒绝：有 active run、有 guard、遗留 control fault、正在 settle。
-- `disable`：取消当前承诺 → 撤销租约 → 停止动作 → 等释放确认；期间 `mode=disabling`，不再 dispatch。
+- `disable`：先冻结评估与 dispatch（`setAutonomy(false)`）→ 取消当前承诺 → 撤销租约 → 停止动作 → 等释放确认；期间 `mode=disabling`，不再 dispatch，即使策略持续提议。
 - `fault`：停止新 dispatch；只有观察到释放才解除；解除后按 disableRequested 回到 off 或 active。
 - 旧执行器模式（behavior/guard）与 Controller 模式互斥；同一 body 不同时存在两条调度路径。
 
@@ -117,3 +117,4 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 - `p2_stop` 不停止 Controller；必须用 `controller.cancel` / `controller.disable`。
 - 无自动重启/跨 body epoch 恢复：body 重建后需重新 enable/install/commit。
 - 策略上下文 `lastOutcome` 只覆盖“当前承诺 + 当前 attempt”；`commit()` 与策略接管会清空（实机发现旧结局会卡住新承诺）。
+- S0 策略有界重试：同一 `holder|intent` 60s 内 3 次启动仍未清除危险 → `blocked(S0_RETRY_EXHAUSTED)`，承诺 `blocked: EMERGENCY_BLOCKED`；若逃生动作本身不能脱离（例如 walk-back 爬不上 1 格石沿），需要改成跳跃/上浮类 act，而不是无限重试。
