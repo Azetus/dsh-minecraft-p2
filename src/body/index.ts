@@ -1,3 +1,4 @@
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -6,6 +7,7 @@ import type { BodyInfo, DevOpsStatus } from '../contracts/index.ts'
 import { ArtifactHost } from '../core/artifact-host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { createAuthoredOpSource } from '../core/op-artifact.ts'
+import type { OpHostBridge } from '../core/op-artifact.ts'
 import { RunnerActPort } from '../core/act-port.ts'
 import { RunnerPolicyPort } from '../core/policy-port.ts'
 import { RunnerManager } from '../core/runner-manager.ts'
@@ -124,6 +126,37 @@ async function createArtifactHost(body: BodyInfo, trace: TraceSink): Promise<Hos
     let host: ArtifactHost | undefined
     let opsBroker: DeclaredOpBroker | undefined
     let controller: BodyController | undefined
+    // Authored development operations may drive the live connection directly
+    // (ARCHITECTURE §3.3); the bridge is capability access, not a sandbox.
+    const opDisposers: Array<() => void> = []
+    const debugLogDir = join(process.cwd(), '.p2-logs')
+    let debugLogReady = false
+    const debugLog = (line: string): void => {
+      try {
+        if (!debugLogReady) { mkdirSync(debugLogDir, { recursive: true }); debugLogReady = true }
+        appendFileSync(join(debugLogDir, 'op.log'), `${new Date().toISOString()} ${line}\n`)
+      } catch {
+        // Diagnostics must never break control.
+      }
+    }
+    const position = bot.entity?.position as { constructor?: unknown } | undefined
+    const Vec3 = position?.constructor
+    const pathfinder = providerModule.loadPathfinderRuntime()
+    const opHost: OpHostBridge = {
+      bot,
+      debug: debugLog,
+      ...(providerModule.mineflayerModule === undefined ? {} : { mineflayer: providerModule.mineflayerModule }),
+      ...(Vec3 === undefined ? {} : { Vec3 }),
+      ...(pathfinder === undefined ? {} : {
+        goals: pathfinder.goals,
+        Movements: pathfinder.Movements,
+      }),
+      setTimeout: (callback, ms) => setTimeout(callback, ms),
+      clearTimeout: handle => clearTimeout(handle as NodeJS.Timeout),
+      setInterval: (callback, ms) => setInterval(callback, ms),
+      clearInterval: handle => clearInterval(handle as NodeJS.Timeout),
+      onDispose: (callback) => { opDisposers.push(callback) },
+    }
     // Activated authored ops are resolved from the host registry; the provider
     // stays behind this seam and the broker remains the only control ledger.
     const opsSource = createAuthoredOpSource(
@@ -133,6 +166,7 @@ async function createArtifactHost(body: BodyInfo, trace: TraceSink): Promise<Hos
         log: message => process.stderr.write(`[op] ${message}\n`),
         now: () => Date.now(),
         onUntracked: input => { opsBroker?.markUntracked(input.runId) },
+        host: opHost,
       },
     )
     opsBroker = new DeclaredOpBroker(opsSource, { trace, now: () => Date.now() })
@@ -187,6 +221,9 @@ async function createArtifactHost(body: BodyInfo, trace: TraceSink): Promise<Hos
       rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
       devOps: devOpsInfo,
       dispose: () => {
+        for (const dispose of opDisposers.splice(0)) {
+          try { dispose() } catch { /* content cleanup is best effort */ }
+        }
         controller?.dispose()
         devHost?.dispose()
         artifactHost.dispose()

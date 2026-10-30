@@ -4,6 +4,14 @@ import type { Movements } from 'mineflayer-pathfinder'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 
+/**
+ * The mineflayer module itself, re-exported for the body's authored-op bridge.
+ * The body bundle must not import mineflayer statically: it reaches the
+ * provider through a runtime dynamic import, and that file keeps the package
+ * external so CommonJS `require` of node builtins keeps working.
+ */
+export const mineflayerModule: unknown = mineflayer
+
 import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
@@ -112,7 +120,7 @@ export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
 ])
 
 /** Runtime shape of the pathfinder package (published as CommonJS). */
-type PathfinderRuntime = {
+export type PathfinderRuntime = {
   pathfinder: (bot: Bot) => void
   Movements: new (bot: Bot) => Movements
   goals: {
@@ -130,8 +138,10 @@ let pathfinderRuntime: PathfinderRuntime | undefined
  * The package is CommonJS; a named ESM import compiles fine but throws
  * "Named export not found" at runtime once the provider is bundled. Loading it
  * lazily also keeps fake-bot unit tests working without the plugin.
+ *
+ * Exported for authored operations that navigate with the pathfinder directly.
  */
-function loadPathfinder(): PathfinderRuntime | undefined {
+export function loadPathfinderRuntime(): PathfinderRuntime | undefined {
   if (pathfinderRuntime !== undefined) return pathfinderRuntime
   try {
     pathfinderRuntime = requireFromHere('mineflayer-pathfinder') as PathfinderRuntime
@@ -143,7 +153,7 @@ function loadPathfinder(): PathfinderRuntime | undefined {
 
 /** Load the pathfinder plugin and build conservative movement settings. */
 function createMovements(bot: Bot): Movements | undefined {
-  const library = loadPathfinder()
+  const library = loadPathfinderRuntime()
   if (library === undefined) return undefined
   try {
     const loadable = bot as unknown as { loadPlugin?: (plugin: unknown) => void }
@@ -673,6 +683,27 @@ export class MineflayerProvider implements ActPort {
               inLava: typeof entity.isInLava === 'boolean' ? entity.isInLava : null,
             },
             meta: this.queryMeta('mineflayer.position', sampledAt),
+          }
+        }
+        case 'spawn': {
+          // Read-only: `spawn_position` is the world spawn carried by the
+          // protocol. Vanilla 1.21.1 never sends a client-visible personal
+          // respawn point, so the body also reports what trusted content has
+          // observed from a real sleep/respawn cycle (stored on the bot object
+          // by the content itself). Missing tracking stays null, never false.
+          const point = (this.bot as unknown as { spawnPoint?: { x: number; y: number; z: number } }).spawnPoint
+          const tracked = (this.bot as unknown as {
+            __p2?: { lastSleepBed?: JsonValue; respawnCheck?: JsonValue }
+          }).__p2
+          return {
+            status: 'ok',
+            value: {
+              worldSpawn: point === undefined ? null : { x: point.x, y: point.y, z: point.z },
+              dimension: this.bot.game?.dimension ?? null,
+              lastSleepBed: tracked?.lastSleepBed ?? null,
+              respawnCheck: tracked?.respawnCheck ?? null,
+            },
+            meta: this.queryMeta('mineflayer.spawn', sampledAt),
           }
         }
         case 'inventory': {
@@ -1292,7 +1323,7 @@ class MineflayerActHandle implements ActHandle {
           return
         }
         case 'goto': {
-          const library = loadPathfinder()
+          const library = loadPathfinderRuntime()
           const nav = this.navigation()
           const { x, y, z } = this.args
           if (nav === undefined || library === undefined) {
@@ -1346,7 +1377,7 @@ class MineflayerActHandle implements ActHandle {
           return
         }
         case 'follow': {
-          const library = loadPathfinder()
+          const library = loadPathfinderRuntime()
           const nav = this.navigation()
           if (nav === undefined || library === undefined) {
             this.failed = new Error('pathfinding is not available in this provider')
@@ -2284,6 +2315,7 @@ function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
 }
 
 export type { QueryOutcome }
+
 
 
 

@@ -21,6 +21,7 @@ function fakeBot() {
     },
     time: { timeOfDay: 1000, age: 1, doDaylightCycle: true },
     game: { difficulty: 'peaceful' },
+    spawnPoint: { x: 0, y: 70, z: 0 },
     health: 20,
     food: 20,
     blockAt: () => ({ name: 'grass_block', position: { x: 1, y: 63, z: 2 } }),
@@ -49,6 +50,31 @@ describe('MineflayerProvider', () => {
     expect(provider.query('time').status).toBe('ok')
     expect(provider.query('block', { x: 1, y: 63, z: 2 }).status).toBe('ok')
     expect(provider.query('missing').status).toBe('failed')
+  })
+
+  it('returns the read-only spawn view without inventing a bed respawn point', () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const spawn = provider.query('spawn')
+    expect(spawn.status).toBe('ok')
+    if (spawn.status !== 'ok') throw new Error('expected spawn')
+    expect(spawn.value).toMatchObject({
+      worldSpawn: { x: 0, y: 70, z: 0 },
+      lastSleepBed: null,
+      respawnCheck: null,
+    })
+    ;(bot as unknown as { __p2?: unknown }).__p2 = {
+      lastSleepBed: { x: -3, y: 60, z: 4 },
+      respawnCheck: { ok: true, position: { x: -3, y: 60, z: 4 } },
+    }
+    const tracked = provider.query('spawn')
+    expect(tracked).toMatchObject({
+      status: 'ok',
+      value: {
+        lastSleepBed: { x: -3, y: 60, z: 4 },
+        respawnCheck: { ok: true, position: { x: -3, y: 60, z: 4 } },
+      },
+    })
   })
 
   it('runs move and stop acts through the P2 ActHandle surface', async () => {

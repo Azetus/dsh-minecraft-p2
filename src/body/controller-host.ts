@@ -70,12 +70,19 @@ const DEFAULT_FACT_SOURCES: Record<string, FactSource> = {
       radius: 16,
       count: 24,
       exposed: true,
-      names: ['stone', 'deepslate', 'cobblestone', 'coal_ore', 'iron_ore', 'oak_log', 'birch_log', 'grass_block', 'dirt', 'sand', 'gravel'],
+      names: ['stone', 'deepslate', 'cobblestone', 'coal_ore', 'iron_ore', 'copper_ore', 'deepslate_copper_ore', 'oak_log', 'birch_log', 'grass_block', 'dirt', 'sand', 'gravel'],
     },
     scope: 'body',
     refreshMs: 700,
     ttlMs: 2000,
   },
+  /**
+   * Structure/state evidence produced by the `camp-check` query op. The op
+   * returns a name→count map of verified components (shelter/door/torch/bed/
+   * spawn/inside), so a commitment can use the normal `count-at-least` post
+   * condition. Unknown until that op is activated.
+   */
+  camp: { op: 'camp-check', args: {}, scope: 'body', refreshMs: 1000, ttlMs: 5000 },
   entities: {
     op: 'entities',
     args: { count: 64, sort: 'distance', maxDistance: 24 },

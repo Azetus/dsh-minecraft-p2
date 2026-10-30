@@ -37,10 +37,43 @@ export type OpProviderCapability = {
   start?(name: string, args?: JsonValue): ActHandle
 }
 
+/**
+ * Direct runtime access for a trusted developer operation.
+ *
+ * The operation contract normally keeps provider objects behind `provider`, but
+ * development content is explicitly allowed to drive the live connection
+ * directly (see ARCHITECTURE §3.3). The body supplies this bridge; it is absent
+ * in tests and in the checker, so an operation must degrade or fail closed when
+ * `ctx.host` is undefined. Operations are trusted content: this is capability
+ * access, not a sandbox escape.
+ */
+export type OpHostBridge = {
+  /** The live Mineflayer bot behind the provider connection. */
+  bot: unknown
+  /** The mineflayer module itself (no import is available inside the vm). */
+  mineflayer?: unknown
+  /** Vec3 constructor from the active connection. */
+  Vec3?: unknown
+  /** mineflayer-pathfinder goals namespace when the plugin is available. */
+  goals?: unknown
+  /** mineflayer-pathfinder Movements class when the plugin is available. */
+  Movements?: unknown
+  setTimeout: (callback: () => void, ms: number) => unknown
+  clearTimeout: (handle: unknown) => void
+  setInterval: (callback: () => void, ms: number) => unknown
+  clearInterval: (handle: unknown) => void
+  /** Register a callback that runs when the body disposes. */
+  onDispose?: (callback: () => void) => void
+  /** Diagnostic sink for authored content (the body logs it to a local file). */
+  debug?: (line: string) => void
+}
+
 export type OpContext = {
   provider: OpProviderCapability
   now(): number
   log(message: string): void
+  /** Present when the body runs the operation against a live connection. */
+  host?: OpHostBridge
 }
 
 export type AuthoredOpOptions = {
@@ -51,6 +84,8 @@ export type AuthoredOpOptions = {
   loadTimeoutMs?: number
   /** Deadline for one provider query awaited by an op. */
   queryTimeoutMs?: number
+  /** Direct runtime access handed to every op invocation in this body. */
+  host?: OpHostBridge
 }
 
 const DEFAULT_LOAD_TIMEOUT_MS = 1000
@@ -96,7 +131,14 @@ export class OpLoadError extends Error {
  * directly. The context still keeps `require`/`process` out of the module.
  */
 export function loadOpModule(code: string, timeoutMs = DEFAULT_LOAD_TIMEOUT_MS): LoadedOp {
-  const context = vm.createContext({}, {
+  const context = vm.createContext({
+    // Authored control ops may run their own asynchronous loops; the vm has no
+    // timers of its own and the body process is the only clock they may use.
+    setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout),
+    setInterval: (callback: () => void, ms: number) => setInterval(callback, ms),
+    clearInterval: (handle: unknown) => clearInterval(handle as NodeJS.Timeout),
+  }, {
     name: 'p2-op',
     codeGeneration: { strings: false, wasm: false },
   })
@@ -184,6 +226,7 @@ export function createAuthoredOpSource(
       provider,
       now,
       log: (message: string) => { log(String(message)) },
+      ...(options.host === undefined ? {} : { host: options.host }),
     }
   }
 

@@ -38,3 +38,7 @@ node_modules/
 # 基线 smoke 临时行为
 /.m5-smoke/
 /.p2/dev-ops.mjs
+
+# P2 authored-op diagnostics
+/.p2-logs/
+/.p2-evidence/

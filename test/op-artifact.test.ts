@@ -7,6 +7,7 @@ import { ArtifactHost } from '../src/core/artifact-host.ts'
 import { DeclaredOpBroker } from '../src/core/op-broker.ts'
 import type { OpSource } from '../src/core/op-broker.ts'
 import { createAuthoredOpSource } from '../src/core/op-artifact.ts'
+import type { OpHostBridge } from '../src/core/op-artifact.ts'
 import { RunnerActPort } from '../src/core/act-port.ts'
 import type { RunnerClient } from '../src/core/runner-client.ts'
 import type { ActHandle, ActPoll } from '../src/core/node-runtime.ts'
@@ -69,6 +70,7 @@ function fakeProvider(): { source: OpSource; calls: string[] } {
 
 function createHarness(options: {
   loadManifest?: (kind: 'act' | 'policy', code: string, artifactId: string) => Promise<JsonValue>
+  host?: OpHostBridge
 } = {}): {
   host: ArtifactHost
   broker: DeclaredOpBroker
@@ -82,6 +84,7 @@ function createHarness(options: {
     log: () => {},
     now: () => 1000,
     onUntracked: input => { broker?.markUntracked(input.runId) },
+    ...(options.host === undefined ? {} : { host: options.host }),
   })
   broker = new DeclaredOpBroker(ops)
   host = new ArtifactHost({
@@ -257,6 +260,33 @@ describe('authored op artifacts', () => {
     harness.broker.stopRun(500, 'run-3')
     expect(harness.broker.pollRelease(500)).toBe('unconfirmed')
     expect(harness.broker.pollRelease(9000)).toBe('unconfirmed')
+  })
+
+  it('hands the live-connection bridge and host timers to an authored op', async () => {
+    const directory = sourceDirectory()
+    const path = writeSource(directory, 'bridge.mjs', controlOp(
+      'bridge',
+      "start: (ctx) => ({ poll: () => ({ status: 'succeeded', result: { bot: ctx.host.bot.id, timer: typeof setTimeout, goals: ctx.host.goals === undefined ? null : ctx.host.goals.kind } }), stop: () => {} }),",
+      "effects: 'none', stop: 'none'",
+    ))
+    const harness = createHarness({
+      host: {
+        bot: { id: 'bot-1' },
+        goals: { kind: 'goals' },
+        setTimeout,
+        clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout),
+        setInterval,
+        clearInterval: (handle: unknown) => clearInterval(handle as NodeJS.Timeout),
+      },
+    })
+    const checked = await harness.host.check({ sourcePath: path, artifactKind: 'op' })
+    harness.host.activate(checked.artifactId)
+
+    const handle = harness.broker.start('bridge', {})
+    expect(handle.poll()).toMatchObject({
+      status: 'succeeded',
+      result: { bot: 'bot-1', timer: 'function', goals: 'goals' },
+    })
   })
 
   it('rejects malformed op manifests and forbidden syntax', async () => {
