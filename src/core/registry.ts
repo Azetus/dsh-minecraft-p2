@@ -1,6 +1,6 @@
 import { artifactDigest, artifactId } from '../contracts/digest.ts'
-import type { BehaviorArtifact, ContentArtifact } from '../contracts/ir.ts'
-import type { CheckerCredential } from './checker.ts'
+import type { ContentArtifact } from '../contracts/artifacts.ts'
+import type { CheckerCredential } from './checker-errors.ts'
 
 export type ArtifactRecord = {
   artifact: ContentArtifact
@@ -19,7 +19,7 @@ export class RegistryError extends Error {
 }
 
 function definitionIdOf(artifact: ContentArtifact): string {
-  return artifact.kind === 'behavior' ? artifact.definition.id : artifact.definitionId
+  return artifact.definitionId
 }
 
 function defaultKey(artifact: ContentArtifact): string {
@@ -81,7 +81,7 @@ export class ArtifactRegistry {
   }
 
   /** Resolve the enabled default for one definition, if any. */
-  resolveDefault(kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
+  resolveDefault(kind: 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
     const id = this.defaults.get(`${kind}:${definitionId}`)
     if (id === undefined) return undefined
     const record = this.records.get(id)
@@ -90,7 +90,7 @@ export class ArtifactRegistry {
   }
 
   /** Any checked artifact for one definition; policy artifacts are never enabled. */
-  find(kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
+  find(kind: 'act' | 'policy' | 'op' | 'strategy', definitionId: string): ContentArtifact | undefined {
     let fallback: ContentArtifact | undefined
     for (const record of this.records.values()) {
       if (record.artifact.kind !== kind || record.retired) continue
@@ -99,13 +99,6 @@ export class ArtifactRegistry {
       fallback = record.artifact
     }
     return fallback
-  }
-
-  resolve(): BehaviorArtifact | undefined {
-    for (const record of this.records.values()) {
-      if (record.artifact.kind === 'behavior' && record.enabled && !record.retired) return record.artifact
-    }
-    return undefined
   }
 
   get(id: string): ArtifactRecord | undefined {
@@ -157,4 +150,7 @@ export class ArtifactRegistry {
     }
   }
 }
+
+
+
 

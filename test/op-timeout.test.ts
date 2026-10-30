@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { BehaviorHost } from '../src/core/host.ts'
+import { ArtifactHost } from '../src/core/artifact-host.ts'
 import { DeclaredOpBroker } from '../src/core/op-broker.ts'
 import type { OpSource } from '../src/core/op-broker.ts'
 import { createAuthoredOpSource } from '../src/core/op-artifact.ts'
@@ -55,7 +55,7 @@ const owner = { sessionId: 's', agentId: 'a', cwd: process.cwd() }
 type Clock = { now: number }
 
 function createHarness(clock: Clock, options: { stubbornStop?: boolean } = {}): {
-  host: BehaviorHost
+  host: ArtifactHost
   broker: DeclaredOpBroker
   calls: string[]
 } {
@@ -76,13 +76,13 @@ function createHarness(clock: Clock, options: { stubbornStop?: boolean } = {}): 
       }
     },
   }
-  let host: BehaviorHost | undefined
+  let host: ArtifactHost | undefined
   const source2 = createAuthoredOpSource(source, name => host?.opArtifact(name), {
     log: () => {},
     now: () => clock.now,
   })
   const broker = new DeclaredOpBroker(source2, { now: () => clock.now })
-  host = new BehaviorHost({
+  host = new ArtifactHost({
     bindingId: 'binding-op-timeout',
     query: broker.queryPort(),
     act: { start: () => { throw new Error('act port is not configured') } },
@@ -115,7 +115,7 @@ describe('authored op timeouts', () => {
       artifactKind: 'op',
     })
     harness.host.activate(checked.artifactId)
-    const runtime = new BodyRuntime({ body, owner, behavior: harness.host })
+    const runtime = new BodyRuntime({ body, owner, host: harness.host })
 
     const pending = harness.broker.query('slow-scan', {})
     expect(pending.status).toBe('pending')
@@ -211,3 +211,6 @@ describe('authored op timeouts', () => {
     expect(harness.broker.pollRelease(clock.now + 400)).toBe('released')
   })
 })
+
+
+

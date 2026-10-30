@@ -86,3 +86,5 @@ describe('provider config', () => {
     await expect(loadProviderConfig(configDir({}), {})).rejects.toThrow(/host/)
   })
 })
+
+

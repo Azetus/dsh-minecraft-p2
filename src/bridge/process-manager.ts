@@ -6,12 +6,10 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
-  GuardCondition,
-  GuardEvent,
+  ControllerEventView,
   JsonValue,
   MessageTransport,
   OwnerContext,
-  RunEvent,
   StatusResult,
   WatchEvent,
 } from '../contracts/index.ts'
@@ -43,9 +41,7 @@ export type BodyFault = {
   reason: BodyFaultReason
   epoch?: string
   detail?: string
-  activeRunId?: string | null
   control: 'unknown'
-  guardsCleared: true
   autoRestart: AutoRestartDecision
 }
 
@@ -79,15 +75,11 @@ export type BodyManagerOptions = {
   delay?: (ms: number) => Promise<void>
   now?: () => number
   log?: (line: string) => void
-  /** Called once per body guard event, after deduplication by body seq. */
-  onGuardEvent?: (event: GuardEvent) => void
-  /** Called when the body event cursor skipped events it no longer retained. */
-  onGuardGap?: (fromSeq: number, toSeq: number) => void
+  /** Called once per controller event, after deduplication by body seq. */
+  onControllerEvent?: (event: ControllerEventView) => void
   /** Called once per watch notification, after deduplication by body seq. */
   onWatchEvent?: (event: WatchEvent) => void
   onWatchGap?: (fromSeq: number, toSeq: number) => void
-  /** Called once when status.lastRun moves to a new terminal runId. */
-  onRunEvent?: (event: RunEvent) => void
 }
 
 export type StartResult = {
@@ -120,14 +112,8 @@ export class BodyManager {
   private readonly log: (line: string) => void
   private readonly events = new EventQueue(128)
   private eventSeq = 0
-  private lastGuardSeq = 0
+  private lastControllerSeq = 0
   private lastWatchSeq = 0
-  /**
-   * `undefined` until the first status snapshot is seen: the run that ended
-   * before the bridge connected must not wake the owner.
-   */
-  private lastRunId: string | undefined
-  private runEventSeq = 0
   private readonly requestTimeoutMs: number
   private readonly livenessMs: number
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
@@ -135,7 +121,6 @@ export class BodyManager {
   private readonly delay: (ms: number) => Promise<void>
   private readonly now: () => number
   private lastFaultValue: BodyFault | undefined
-  private lastActiveRunId: string | null = null
   private lastContactAt = 0
   private heartbeatInFlight = false
 
@@ -206,10 +191,8 @@ export class BodyManager {
       this.epoch = hello.bodyEpoch
       this.state = 'active'
       this.lastContactAt = this.now()
-      this.lastGuardSeq = 0
+      this.lastControllerSeq = 0
       this.lastWatchSeq = 0
-      this.lastRunId = undefined
-      this.runEventSeq = 0
       this.startHeartbeat()
       this.watchExit(handle)
       void this.pumpStatus()
@@ -234,10 +217,8 @@ export class BodyManager {
     try {
       const status = await this.client.request('status', {}) as unknown as StatusResult
       this.lastContactAt = this.now()
-      this.lastActiveRunId = status.activeRun?.runId ?? null
-      this.processGuardEvents(status)
       this.processWatchEvents(status)
-      this.processRunEvent(status)
+      this.processControllerEvents(status)
       return {
         state: 'active',
         status,
@@ -250,7 +231,7 @@ export class BodyManager {
     }
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'act' | 'policy' | 'op' | 'strategy' } = {}): Promise<JsonValue> {
     return this.activeClient().check(sourcePath, options)
   }
 
@@ -262,35 +243,8 @@ export class BodyManager {
     return this.activeClient().activate(artifactId)
   }
 
-  switch(artifactId: string, params: JsonValue = {}): Promise<JsonValue> {
-    return this.activeClient().switch(artifactId, params)
-  }
-
-  confirm(runId: string, confirmationId: string, decision: 'confirm' | 'deny'): Promise<JsonValue> {
-    return this.activeClient().confirm(runId, confirmationId, decision)
-  }
-
-  stopBehavior(runId?: string): Promise<JsonValue> {
-    return this.activeClient().behaviorStop(runId)
-  }
-
   controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
     return this.activeClient().controller(action, params)
-  }
-
-  guardSet(input: {
-    guardId?: string
-    priority?: number
-    condition: GuardCondition
-    targetArtifactId: string
-    params: JsonValue
-    ttlMs: number
-  }): Promise<JsonValue> {
-    return this.activeClient().guardSet(input)
-  }
-
-  guardClear(guardId?: string): Promise<JsonValue> {
-    return this.activeClient().guardClear(guardId)
   }
 
   watchAdd(input: JsonValue): Promise<JsonValue> {
@@ -319,10 +273,6 @@ export class BodyManager {
 
   card(params: JsonValue = {}): Promise<JsonValue> {
     return this.activeClient().card(params)
-  }
-
-  trace(params: JsonValue = {}): Promise<JsonValue> {
-    return this.activeClient().trace(params)
   }
 
   private activeClient(): BodyClient {
@@ -426,31 +376,10 @@ export class BodyManager {
     try {
       const status = await this.client.request('status', {}) as unknown as StatusResult
       this.lastContactAt = this.now()
-      this.lastActiveRunId = status.activeRun?.runId ?? null
-      this.processGuardEvents(status)
       this.processWatchEvents(status)
-      this.processRunEvent(status)
+      this.processControllerEvents(status)
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
-    }
-  }
-
-  private processGuardEvents(status: StatusResult): void {
-    const events = status.guardEvents ?? []
-    for (const event of events) {
-      if (event.seq <= this.lastGuardSeq) continue
-      if (this.lastGuardSeq > 0 && event.seq > this.lastGuardSeq + 1) {
-        this.options.onGuardGap?.(this.lastGuardSeq + 1, event.seq - 1)
-      }
-      this.lastGuardSeq = event.seq
-      this.eventSeq += 1
-      this.events.push({
-        eventId: `${this.epoch ?? 'epoch'}:guard:${event.seq}`,
-        seq: this.eventSeq,
-        kind: 'guard',
-        data: event as unknown as JsonValue,
-      })
-      this.options.onGuardEvent?.(event)
     }
   }
 
@@ -464,7 +393,7 @@ export class BodyManager {
       this.lastWatchSeq = event.seq
       this.eventSeq += 1
       this.events.push({
-        eventId: `${this.epoch ?? 'epoch'}:watch:${event.seq}`,
+        eventId: `:watch:`,
         seq: this.eventSeq,
         kind: 'watch',
         data: event as unknown as JsonValue,
@@ -473,33 +402,20 @@ export class BodyManager {
     }
   }
 
-  /**
-   * Synthesize one terminal `run` event when status.lastRun moves to a new
-   * runId. The body keeps no event cursor for runs, so the bridge diffs the
-   * snapshot instead; the first snapshot only primes the id.
-   */
-  private processRunEvent(status: StatusResult): void {
-    const last = status.lastRun ?? null
-    if (last === null) return
-    if (this.lastRunId === undefined) {
-      this.lastRunId = last.runId
-      return
+  private processControllerEvents(status: StatusResult): void {
+    const events = status.controller?.events ?? []
+    for (const event of events) {
+      if (event.seq <= this.lastControllerSeq) continue
+      this.lastControllerSeq = event.seq
+      this.eventSeq += 1
+      this.events.push({
+        eventId: `${this.epoch ?? 'epoch'}:controller:${event.seq}`,
+        seq: this.eventSeq,
+        kind: 'controller',
+        data: event as unknown as JsonValue,
+      })
+      this.options.onControllerEvent?.(event)
     }
-    if (this.lastRunId === last.runId) return
-    this.lastRunId = last.runId
-    this.runEventSeq += 1
-    const event: RunEvent = {
-      seq: this.runEventSeq,
-      runId: last.runId,
-      ...(last.definitionId === undefined ? {} : { definitionId: last.definitionId }),
-      status: last.status,
-      ...(last.error === undefined ? {} : { errorCode: last.error.code }),
-      progress: last.progress ?? null,
-      ...(last.evidence === undefined ? {} : { evidence: last.evidence }),
-      at: this.now(),
-    }
-    this.emitEvent('run', event)
-    this.safeCallback(this.options.onRunEvent, event)
   }
 
   private watchExit(handle: BodyHandle): void {
@@ -535,9 +451,7 @@ export class BodyManager {
       reason,
       ...(this.epoch === undefined ? {} : { epoch: this.epoch }),
       ...(detail === undefined ? {} : { detail }),
-      activeRunId: this.lastActiveRunId,
       control: 'unknown',
-      guardsCleared: true,
       autoRestart: 'disabled',
     }
     this.client?.close()
@@ -707,3 +621,6 @@ function delay(ms: number): Promise<void> {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+
+

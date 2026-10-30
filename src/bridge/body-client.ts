@@ -5,7 +5,6 @@ import {
 } from '../contracts/index.ts'
 import type {
   DescribeResult,
-  GuardCondition,
   HelloResult,
   JsonValue,
   MessageTransport,
@@ -85,13 +84,12 @@ export class BodyClient {
     })
   }
 
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'; format?: 'ir' | 'js' } = {}): Promise<JsonValue> {
+  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'act' | 'policy' | 'op' | 'strategy' } = {}): Promise<JsonValue> {
     return this.command('check', {
       sourcePath,
       ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
       ...(options.artifactKind === undefined ? {} : { artifactKind: options.artifactKind }),
-      ...(options.format === undefined ? {} : { format: options.format }),
     })
   }
 
@@ -101,39 +99,6 @@ export class BodyClient {
 
   activate(artifactId: string): Promise<JsonValue> {
     return this.command('activate', { artifactId })
-  }
-
-  switch(artifactId: string, params: JsonValue = {}): Promise<JsonValue> {
-    return this.command('switch', { artifactId, params })
-  }
-
-  confirm(runId: string, confirmationId: string, decision: 'confirm' | 'deny'): Promise<JsonValue> {
-    return this.command('confirm', { runId, confirmationId, decision })
-  }
-
-  behaviorStop(runId?: string): Promise<JsonValue> {
-    return this.command('behavior.stop', runId === undefined ? {} : { runId })
-  }
-
-  guardSet(input: {
-    guardId?: string
-    priority?: number
-    condition: GuardCondition
-    targetArtifactId: string
-    params: JsonValue
-    ttlMs: number
-  }): Promise<JsonValue> {
-    return this.command('guard.set', {
-      ...(input.guardId === undefined ? {} : { guardId: input.guardId }),
-      ...(input.priority === undefined ? {} : { priority: input.priority }),
-      condition: input.condition,
-      target: { artifactId: input.targetArtifactId, params: input.params },
-      ttlMs: input.ttlMs,
-    })
-  }
-
-  guardClear(guardId?: string): Promise<JsonValue> {
-    return this.command('guard.clear', guardId === undefined ? {} : { guardId })
   }
 
   watchAdd(input: JsonValue): Promise<JsonValue> {
@@ -167,21 +132,12 @@ export class BodyClient {
     return this.request('card', params)
   }
 
-  trace(params: JsonValue = {}): Promise<JsonValue> {
-    return this.request('trace', params)
-  }
-
   controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
     return this.request(`controller.${action}`, params)
   }
 
   async describe(): Promise<DescribeResult> {
     return await this.request('describe', {}) as unknown as DescribeResult
-  }
-
-  stop(runId?: string): Promise<JsonValue> {
-    const params: JsonValue = runId === undefined ? {} : { runId }
-    return this.send('stop', params, { requireEpoch: true, commandId: `stop-${++this.requestSeq}` })
   }
 
   shutdown(): Promise<JsonValue> {
@@ -275,3 +231,8 @@ export class BodyClient {
     }
   }
 }
+
+
+
+
+

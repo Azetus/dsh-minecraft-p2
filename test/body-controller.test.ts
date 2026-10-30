@@ -9,9 +9,9 @@ import { describe, expect, it } from 'vitest'
 
 import { BodyController } from '../src/body/controller-host.ts'
 import { BodyRuntime } from '../src/body/runtime.ts'
-import { BehaviorHost } from '../src/core/host.ts'
+import { ArtifactHost } from '../src/core/artifact-host.ts'
 import type { ActHandle, ActPort, ActRefLike, QueryOutcome, QueryPort, ReleaseStatus } from '../src/core/node-runtime.ts'
-import type { StrategyArtifact } from '../src/contracts/ir.ts'
+import type { StrategyArtifact } from '../src/contracts/artifacts.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
 import {
   PROTOCOL_VERSION,
@@ -291,14 +291,14 @@ describe('BodyController wiring', () => {
   it('routes controller commands through the body protocol and refuses behavior switches', async () => {
     const artifact = artifactWith(IDLE, ['inventory'])
     const { controller } = harness({ artifact })
-    const host = new BehaviorHost({
+    const host = new ArtifactHost({
       bindingId: 'b',
       query: () => ({ status: 'ok', value: null }),
       act: new FakeActPort(),
     })
     const runtime = new BodyRuntime({
       body,
-      behavior: host,
+      host,
       controller,
       newEpoch: () => 'epoch-1',
       now: () => 1000,
@@ -316,12 +316,15 @@ describe('BodyController wiring', () => {
     const installed = runtime.handleRequest(request('controller.install', { artifactId: artifact.artifactId }))
     expect(installed.error).toBeUndefined()
 
-    const switched = await runtime.handleRequestAsync({ ...request('switch', { artifactId: 'x' }), commandId: 'cmd-switch' })
-    expect(switched.error?.code).toBe('CONTROL_MODE_CONFLICT')
+    const unknown = await runtime.handleRequestAsync({ ...request('switch', { artifactId: 'x' }), commandId: 'cmd-switch' })
+    expect(unknown.error?.code).toBe('UNKNOWN_METHOD')
 
     const disabled = runtime.handleRequest(request('controller.disable', {}))
     expect(disabled.error).toBeUndefined()
   })
 })
+
+
+
 
 

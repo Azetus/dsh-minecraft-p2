@@ -121,22 +121,23 @@ describe('protocol vocabulary', () => {
       'observe',
       'check',
       'activate',
-      'switch',
-      'rescue',
-      'confirm',
-      'behavior.stop',
-      'guard.set',
-      'guard.clear',
       'watch.add',
       'watch.remove',
       'watch.list',
       'snapshot',
       'card',
-      'trace',
-      'stop',
+      'rescue',
+      'controller.enable',
+      'controller.disable',
+      'controller.status',
+      'controller.install',
+      'controller.commit',
+      'controller.cancel',
+      'controller.events',
       'shutdown',
       'command.get',
     ])
+
   })
 
   it('builds structured errors and validates owners', () => {
@@ -147,3 +148,6 @@ describe('protocol vocabulary', () => {
     expect(isOwnerContext({ sessionId: 's' })).toBe(false)
   })
 })
+
+
+

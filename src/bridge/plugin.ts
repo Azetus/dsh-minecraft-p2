@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 
 import type { JsonValue } from '../contracts/index.ts'
-import type { GuardEvent, OwnerContext, RunEvent, WatchEvent } from '../contracts/protocol.ts'
+import type { ControllerEventView, OwnerContext, WatchEvent } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
@@ -48,7 +48,7 @@ type WakeMessage = {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'p2-guard' | 'p2-runtime' | 'p2-watch' }
+  source: { kind: 'p2-controller' | 'p2-runtime' | 'p2-watch' }
 }
 
 type AgentsService = {
@@ -89,15 +89,13 @@ export type P2PluginOptions = {
    * The shipped plugin keeps body lifecycle on the human `/p2` command.
    */
   devBodyControl?: boolean
-  /** Development-only: register the `p2_trace` execution-trace tool. */
-  devTrace?: boolean
   /** Development-only: bounded automatic body restart after a fault. */
   devAutoRestart?: boolean
   /** Development-only: auto-restart backoff schedule (tests use a zero schedule). */
   restartBackoffMs?: number[]
   /**
    * Coalescing window for watch owner wakes. Watch events inside one window
-   * become a single digest; guard/runtime wakes are never coalesced.
+   * become a single digest; controller/runtime wakes are never coalesced.
    */
   watchWakeWindowMs?: number
 }
@@ -107,9 +105,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
   inject: string[]
   apply(ctx: P2Context): void
 } {
-  let notifyGuardEvent: ((event: GuardEvent) => void) | undefined
+  let notifyControllerEvent: ((event: ControllerEventView) => void) | undefined
   let notifyWatchEvent: ((event: WatchEvent) => void) | undefined
-  let notifyRunEvent: ((event: RunEvent) => void) | undefined
   let notifyBodyFault: ((fault: BodyFault) => void) | undefined
   let notifyBodyRestart: ((info: RestartInfo) => void) | undefined
   const manager = new BodyManager({
@@ -125,15 +122,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     },
     onFault: fault => notifyBodyFault?.(fault),
     onRestart: info => notifyBodyRestart?.(info),
-    onGuardEvent: event => notifyGuardEvent?.(event),
-    onGuardGap: (fromSeq, toSeq) => {
-      options.log?.(`p2 guard event gap: ${fromSeq}..${toSeq}`)
-    },
+    onControllerEvent: event => notifyControllerEvent?.(event),
     onWatchEvent: event => notifyWatchEvent?.(event),
     onWatchGap: (fromSeq, toSeq) => {
       options.log?.(`p2 watch event gap: ${fromSeq}..${toSeq}`)
     },
-    onRunEvent: event => notifyRunEvent?.(event),
   })
 
   return {
@@ -169,7 +162,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           else agent.followup(message)
         } catch (cause) {
           // Waking is best effort, but a silent swallow hides a broken wake path.
-          const label = kind === 'p2-guard' ? 'p2 guard' : kind === 'p2-watch' ? 'p2 watch' : 'p2 runtime'
+          const label = kind === 'p2-controller' ? 'p2 controller' : kind === 'p2-watch' ? 'p2 watch' : 'p2 runtime'
           options.log?.(`${label} wake failed: ${formatError(cause)}`)
         }
       }
@@ -194,25 +187,18 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         if (watchWakeTimer !== undefined) return
         watchWakeTimer = setTimeout(flushWatchWakes, options.watchWakeWindowMs ?? 1000)
       }
-      notifyGuardEvent = event => {
-        if (event.phase !== 'fired') return
-        const evidence = event.evidence === undefined ? 'n/a' : JSON.stringify(event.evidence)
+      notifyControllerEvent = event => {
+        if (event.kind !== 'commitment-succeeded'
+          && event.kind !== 'commitment-blocked'
+          && event.kind !== 'control-fault') return
+        const detail = event.detail === undefined ? '' : `, ${event.detail}`
         deliverWake(
-          `[p2 guard] ${event.guardId} fired (${event.attemptId ?? 'no attempt'}); target=${event.targetArtifactId ?? 'unknown'}; evidence=${evidence}. Inspect p2_events and p2_status for the switch phase.`,
-          'p2-guard',
-          'urgent',
+          `[p2 controller] ${event.kind}${detail} (commitment=${event.commitmentId ?? 'none'}). Inspect p2_controller status/events for the next decision.`,
+          'p2-controller',
+          event.kind === 'commitment-succeeded' ? 'observe' : 'urgent',
         )
       }
       notifyWatchEvent = queueWatchWake
-      notifyRunEvent = event => {
-        const summary = event.errorCode === undefined ? event.status : `${event.status}:${event.errorCode}`
-        const label = event.definitionId ?? 'behavior'
-        deliverWake(
-          `[p2 run] ${event.runId} ${label} ${summary}. Terminal run state changed; inspect p2_events for the full event and p2_status for the next decision.`,
-          'p2-runtime',
-          event.status === 'failed' ? 'urgent' : 'observe',
-        )
-      }
       notifyBodyFault = fault => {
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
@@ -220,14 +206,14 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
             ? 'Auto-restart budget is exhausted; start a new body manually with /p2 start.'
             : 'Start a new body manually with /p2 start.'
         deliverWake(
-          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'} run=${fault.activeRunId ?? 'none'}; the previous run is faulted, control state is unknown, and guards/watches were cleared by the epoch change. ${next}`,
+          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and the controller/watch state was lost with the epoch. ${next}`,
           'p2-runtime',
           'urgent',
         )
       }
       notifyBodyRestart = info => {
         deliverWake(
-          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Previous run ${info.fault.activeRunId ?? 'none'} is faulted and its control state is unknown; re-register guards/watches as needed.`,
+          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Controller/watch state is empty; re-enable the controller and re-register watches as needed.`,
           'p2-runtime',
           'urgent',
         )
@@ -238,7 +224,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       const ensureTools = (agent: AgentLike): void => {
         const key = keyOf(agent)
         if (registrations.has(key)) return
-        registrations.set(key, registerP2Tools(agent, manager, { devTrace: options.devTrace === true }))
+        registrations.set(key, registerP2Tools(agent, manager))
       }
       const disposeTools = (): void => {
         for (const registration of registrations.values()) registration.dispose()
@@ -273,7 +259,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       )
       ctx.effect(
         () => async () => {
-          notifyGuardEvent = undefined
+          notifyControllerEvent = undefined
           notifyWatchEvent = undefined
           notifyBodyFault = undefined
           notifyBodyRestart = undefined
@@ -357,8 +343,7 @@ async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
   return {
     state: 'active',
     epoch: manager.bodyEpoch ?? null,
-    run: status.status.activeRun,
-    lastRun: status.status.lastRun,
+    controller: status.status.controller ?? null,
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
 }
@@ -468,10 +453,8 @@ async function statusText(manager: BodyManager): Promise<string> {
     `health=${status.health}`,
     `owner=${status.owner?.sessionId ?? 'none'}`,
     `commands=${status.commandCount}`,
-    `run=${status.activeRun?.runId ?? 'none'}:${status.activeRun?.status ?? 'none'}`,
-    `last=${status.lastRun?.runId ?? 'none'}:${status.lastRun?.status ?? 'none'}${status.lastRun?.error === undefined ? '' : `:${status.lastRun.error.code}`}`,
+    `controller=${status.controller?.mode ?? 'none'}:${status.controller?.commitment?.state ?? 'none'}`,
     `paused=${status.providerState?.paused ?? false}`,
-    `confirm=${status.pendingConfirmation?.id ?? 'none'}`,
   ].join(' ')
 }
 
@@ -492,3 +475,5 @@ function formatError(cause: unknown): string {
 function formatP2Error(error: P2Error): string {
   return `${error.code}: ${error.message}`
 }
+
+

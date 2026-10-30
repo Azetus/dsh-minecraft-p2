@@ -3,13 +3,13 @@ import { readFile, realpath } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 
 import { artifactDigest, artifactId, sourceDigest } from '../contracts/digest.ts'
-import type { ActArtifact, ActLimits } from '../contracts/ir.ts'
+import type { ActArtifact, ActLimits } from '../contracts/artifacts.ts'
 import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import { requireOperation } from '../operation/index.ts'
 import type { OperationContract } from '../operation/index.ts'
-import { CHECKER_VERSION, CheckerError } from './checker.ts'
-import type { CheckerCredential } from './checker.ts'
+import { CHECKER_VERSION, CheckerError } from './checker-errors.ts'
+import type { CheckerCredential } from './checker-errors.ts'
 
 export type ActCheckRequest = {
   sourcePath: string
@@ -191,3 +191,5 @@ function requireDeclaredOperation(
   }
   return resolved
 }
+
+

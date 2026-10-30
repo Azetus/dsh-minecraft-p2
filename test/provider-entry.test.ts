@@ -21,3 +21,5 @@ describe('provider entry surface', () => {
     expect(typeof providerEntry.connectMineflayer).toBe('function')
   })
 })
+
+

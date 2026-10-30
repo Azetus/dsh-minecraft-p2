@@ -160,3 +160,4 @@ describe('MineflayerProvider', () => {
     expect(provider.query('position')).toMatchObject({ status: 'failed' })
   })
 })
+

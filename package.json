@@ -1,8 +1,8 @@
 {
   "name": "dsh-minecraft-p2",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
-  "description": "Single-package DSH Minecraft P2 runtime: bridge, body, built-in provider, and authoring entry.",
+  "description": "Single-package DSH Minecraft P2 runtime: bridge, body, P2Controller and built-in provider.",
   "license": "MIT",
   "type": "module",
   "packageManager": "npm@12.0.2",
@@ -12,10 +12,6 @@
     ".": {
       "types": "./lib/bridge/index.d.ts",
       "default": "./lib/bridge.js"
-    },
-    "./authoring": {
-      "types": "./lib/authoring/index.d.ts",
-      "default": "./lib/authoring/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -63,3 +59,4 @@
     "mineflayer-pathfinder": "^2.4.5"
   }
 }
+

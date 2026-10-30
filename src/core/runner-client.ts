@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 
 import type { JsonValue } from '../contracts/types.ts'
-import type { RunnerBehaviorResult, RunnerEvent, RunnerRequest } from '../runner/protocol.ts'
+import type { RunnerEvent, RunnerRequest } from '../runner/protocol.ts'
 import { RUNNER_MAX_PENDING } from '../runner/protocol.ts'
 
 export type RunnerOpEvent = Extract<RunnerEvent, { type: 'op' }>
@@ -85,26 +85,10 @@ export class RunnerClient {
     return this.closed
   }
 
-  async load(kind: 'act' | 'policy' | 'behavior', artifactId: string, code: string): Promise<JsonValue> {
+  async load(kind: 'act' | 'policy', artifactId: string, code: string): Promise<JsonValue> {
     const event = await this.request({ type: 'load', kind, artifactId, code })
     if (event.type !== 'loaded') throw new RunnerError('RUNNER_PROTOCOL', 'load did not return a manifest')
     return event.manifest
-  }
-
-  async behaviorStart(artifactId: string, runId: string, actInstanceId: string, generation: number, params: JsonValue): Promise<void> {
-    const event = await this.request({ type: 'behavior.start', artifactId, runId, actInstanceId, generation, params })
-    if (event.type === 'error') throw new RunnerError(event.code, event.message)
-    if (event.type !== 'behaviorResult' || event.result.kind !== 'started') {
-      throw new RunnerError('RUNNER_PROTOCOL', 'behavior.start did not return a started result')
-    }
-  }
-
-  async behaviorResume(runId: string, generation: number, input: { value?: JsonValue; thrown: boolean }): Promise<RunnerBehaviorResult> {
-    return this.behaviorRequest({ type: 'behavior.resume', runId, generation, input })
-  }
-
-  async behaviorStop(runId: string, generation: number): Promise<RunnerBehaviorResult> {
-    return this.behaviorRequest({ type: 'behavior.stop', runId, generation })
   }
 
   async actStart(artifactId: string, args: JsonValue): Promise<Extract<RunnerEvent, { type: 'hook' }>['result']> {
@@ -167,15 +151,6 @@ export class RunnerClient {
     if (event.type === 'hook') return event.result
     if (event.type === 'error') throw new RunnerError(event.code, event.message)
     throw new RunnerError('RUNNER_PROTOCOL', `unexpected runner event: ${event.type}`)
-  }
-
-  private async behaviorRequest(request: RunnerRequestInput): Promise<RunnerBehaviorResult> {
-    const event = await this.request(request)
-    if (event.type === 'error') throw new RunnerError(event.code, event.message)
-    if (event.type !== 'behaviorResult') {
-      throw new RunnerError('RUNNER_PROTOCOL', `unexpected runner event: ${event.type}`)
-    }
-    return event.result
   }
 
   private request(request: RunnerRequestInput): Promise<RunnerEvent> {
@@ -243,3 +218,6 @@ export class RunnerClient {
     this.kill()
   }
 }
+
+
+

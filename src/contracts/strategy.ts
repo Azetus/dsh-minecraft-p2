@@ -142,3 +142,5 @@ export function parseStrategyManifest(value: unknown): StrategyManifest {
     ...(hazardClass === undefined ? {} : { hazardClass }),
   }
 }
+
+

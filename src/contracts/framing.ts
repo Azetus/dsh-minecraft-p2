@@ -65,3 +65,5 @@ export function decodeJsonLine(line: string): unknown {
     throw new FrameError('FRAME_INVALID_JSON', 'frame is not valid JSON')
   }
 }
+
+

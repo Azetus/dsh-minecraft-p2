@@ -1,4 +1,4 @@
-import type { GuardCondition, JsonValue, SnapshotPart, SnapshotResult } from '../contracts/index.ts'
+import type { JsonValue, SnapshotPart, SnapshotResult } from '../contracts/index.ts'
 import type { BodyManager } from './process-manager.ts'
 import { summarizeEntities, summarizeInventory } from './summaries.ts'
 
@@ -32,13 +32,8 @@ export type ToolRegistration = {
   dispose: () => void
 }
 
-export type P2ToolOptions = {
-  /** Register the developer-only p2_trace tool. */
-  devTrace?: boolean
-}
-
 /** Register owner-scoped P2 tools after a human `/p2 start`; never starts a body. */
-export function registerP2Tools(agent: AgentLike, manager: BodyManager, options: P2ToolOptions = {}): ToolRegistration {
+export function registerP2Tools(agent: AgentLike, manager: BodyManager): ToolRegistration {
   const tools = agent.ctx?.tools
   if (tools === undefined) {
     return { owner: { sessionId: agent.session.id, agentId: agent.id }, dispose: () => {} }
@@ -63,7 +58,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_status',
-    description: 'Read the P2 body, heartbeat, active run, and pending confirmation.',
+    description: 'Read the P2 body, heartbeat, controller and watches.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {
@@ -138,7 +133,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_card',
-    description: 'Compact high-frequency status card: run summary, health, position, nearby hostile count, and guard/watch counts in one round trip.',
+    description: 'Compact high-frequency status card: health, position, nearby hostile count, and watch counts in one round trip.',
     parameters: {
       type: 'object',
       properties: {
@@ -156,13 +151,12 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_check',
-    description: 'Check a behavior, act, policy, op or strategy source file in the owner project without activating or running it.',
+    description: 'Check an act, policy, op or strategy source file in the owner project without activating or running it.',
     parameters: {
       type: 'object',
       properties: {
         sourcePath: { type: 'string', description: 'Path inside the owner project' },
-        artifactKind: { type: 'string', enum: ['behavior', 'act', 'policy', 'op', 'strategy'], description: 'Artifact kind; defaults to behavior' },
-        format: { type: 'string', enum: ['ir', 'js'], description: 'Behavior format; defaults to ir' },
+        artifactKind: { type: 'string', enum: ['act', 'policy', 'op', 'strategy'], description: 'Artifact kind; defaults to act' },
         timeoutMs: { type: 'number', description: 'Build timeout in milliseconds' },
       },
       required: ['sourcePath'],
@@ -174,13 +168,10 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
         || args.artifactKind === 'policy'
         || args.artifactKind === 'op'
         || args.artifactKind === 'strategy'
-        || args.artifactKind === 'behavior'
         ? args.artifactKind
         : undefined
-      const format = args.format === 'js' || args.format === 'ir' ? args.format : undefined
       return manager.check(String(args.sourcePath), {
         ...(kind === undefined ? {} : { artifactKind: kind }),
-        ...(format === undefined ? {} : { format }),
         ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
       })
     }),
@@ -188,7 +179,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_activate',
-    description: 'Activate a checked artifact in its target binding. This does not start a run.',
+    description: 'Activate a checked artifact in its target binding. This does not start control.',
     parameters: {
       type: 'object',
       properties: {
@@ -202,64 +193,8 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
   })
 
   register({
-    name: 'p2_switch',
-    description: 'Accept a serial switch to an activated artifact. Accepted is not task completion.',
-    parameters: {
-      type: 'object',
-      properties: {
-        artifactId: { type: 'string', description: 'Activated artifact id' },
-        params: { type: 'object', description: 'Behavior parameters', additionalProperties: true },
-      },
-      required: ['artifactId'],
-      additionalProperties: false,
-    },
-    output: jsonOutput(),
-    execute: guarded(async args => manager.switch(
-      String(args.artifactId),
-      (args.params ?? {}) as JsonValue,
-    )),
-  })
-
-  register({
-    name: 'p2_confirm',
-    description: 'Submit the agent judgment for a pending external confirmation. The source is bridge-derived, never self-reported.',
-    parameters: {
-      type: 'object',
-      properties: {
-        runId: { type: 'string', description: 'Run awaiting confirmation' },
-        confirmationId: { type: 'string', description: 'Confirmation record id' },
-        decision: { type: 'string', enum: ['confirm', 'deny'], description: 'Agent decision' },
-      },
-      required: ['runId', 'confirmationId', 'decision'],
-      additionalProperties: false,
-    },
-    output: jsonOutput(),
-    execute: guarded(async args => manager.confirm(
-      String(args.runId),
-      String(args.confirmationId),
-      args.decision === 'deny' ? 'deny' : 'confirm',
-    )),
-  })
-
-  register({
-    name: 'p2_stop',
-    description: 'Stop the current behavior run while keeping the P2 body alive.',
-    parameters: {
-      type: 'object',
-      properties: {
-        runId: { type: 'string', description: 'Active run id; defaults to the current run' },
-      },
-      additionalProperties: false,
-    },
-    output: jsonOutput(),
-    execute: guarded(async args => manager.stopBehavior(
-      typeof args.runId === 'string' ? args.runId : undefined,
-    )),
-  })
-
-  register({
     name: 'p2_controller',
-    description: 'Manage the P2Controller control mode: enable/disable, install an activated strategy artifact, commit or cancel a goal, and read controller status/events. The controller owns the single action slot; behavior runs cannot start while it is engaged.',
+    description: 'Manage the P2Controller control mode: enable/disable, install an activated strategy artifact, commit or cancel a goal, and read controller status/events. The controller owns the single action slot; there is no behavior executor.',
     parameters: {
       type: 'object',
       properties: {
@@ -338,107 +273,8 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
   })
 
   register({
-    name: 'p2_guard',
-    description: 'Manage one-shot guards: multiple guards sample declared queries, evaluate a pure policy (or the health sugar), and switch to an activated behavior when authorized. Set requires condition, target, and ttlMs; clear removes one guardId or all guards and keeps the current behavior.',
-    parameters: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['set', 'clear', 'status'], description: 'Guard action' },
-        guardId: { type: 'string', description: 'Stable guard id; set replaces the same id, clear removes it' },
-        priority: { type: 'number', description: 'Higher fires first (integer, ±1000, default 0)' },
-        condition: {
-          type: 'object',
-          properties: {
-            kind: { type: 'string', enum: ['health', 'policy'], description: 'Condition kind' },
-            hpBelow: { type: 'number', description: 'health sugar: fire when health is at or below this value' },
-            queries: {
-              type: 'array',
-              description: 'policy: up to 4 queries sampled by the host',
-              items: {
-                type: 'object',
-                properties: {
-                  op: { type: 'string', description: 'Query operation name' },
-                  args: { type: 'object', description: 'Query arguments', additionalProperties: true },
-                },
-                required: ['op'],
-                additionalProperties: false,
-              },
-            },
-            predicate: { type: 'string', description: 'policy: checked policy artifactId' },
-          },
-          required: ['kind'],
-          additionalProperties: false,
-        },
-        target: {
-          type: 'object',
-          properties: {
-            artifactId: { type: 'string', description: 'Activated target behavior artifact id' },
-            params: { type: 'object', description: 'Target behavior parameters', additionalProperties: true },
-          },
-          required: ['artifactId'],
-          additionalProperties: false,
-        },
-        ttlMs: { type: 'number', description: 'Authorization lifetime in milliseconds (10000-3600000)' },
-      },
-      required: ['action'],
-      additionalProperties: false,
-    },
-    output: jsonOutput(),
-    execute: guarded(async args => {
-      const action = String(args.action)
-      if (action === 'status') {
-        const status = await manager.status()
-        return status.state === 'active'
-          ? {
-              state: 'active',
-              guards: status.status.guards ?? [],
-              lastSwitch: status.status.lastSwitch ?? null,
-              guardEventSeq: status.status.guardEventSeq ?? 0,
-            }
-          : { state: status.state, guards: [] }
-      }
-      if (action === 'clear') {
-        const guardId = typeof args.guardId === 'string' ? args.guardId : undefined
-        return await manager.guardClear(guardId)
-      }
-      if (action !== 'set') throw new Error(`unknown p2_guard action: ${action}`)
-      const condition = args.condition as Record<string, unknown> | undefined
-      let parsed: GuardCondition | undefined
-      if (condition?.kind === 'health' && typeof condition.hpBelow === 'number') {
-        parsed = { kind: 'health', hpBelow: condition.hpBelow }
-      } else if (condition?.kind === 'policy'
-        && typeof condition.predicate === 'string'
-        && Array.isArray(condition.queries)) {
-        parsed = {
-          kind: 'policy',
-          predicate: condition.predicate,
-          queries: condition.queries as Array<{ op: string; args?: JsonValue }>,
-        }
-      }
-      if (parsed === undefined) {
-        throw new Error('p2_guard set requires condition { kind: "health", hpBelow } or { kind: "policy", queries, predicate }')
-      }
-      const target = args.target as { artifactId?: unknown; params?: unknown } | undefined
-      if (target === undefined || typeof target.artifactId !== 'string') {
-        throw new Error('p2_guard set requires target { artifactId, params? }')
-      }
-      if (typeof args.ttlMs !== 'number') {
-        throw new Error('p2_guard set requires ttlMs')
-      }
-      return await manager.guardSet({
-        ...(typeof args.guardId === 'string' ? { guardId: args.guardId } : {}),
-        ...(typeof args.priority === 'number' ? { priority: args.priority } : {}),
-        condition: parsed,
-        targetArtifactId: target.artifactId,
-        params: (target.params ?? {}) as JsonValue,
-        ttlMs: args.ttlMs,
-      })
-    }),
-  })
-
-  register({
     name: 'p2_events',
-    description: 'Drain the bounded current-epoch execution event buffer (run, guard, watch, fault, restart). Current state is read with p2_status.',
+    description: 'Drain the bounded current-epoch execution event buffer (controller, watch, fault, restart). Current state is read with p2_status.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: jsonOutput(),
     execute: guarded(async () => {
@@ -454,7 +290,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
 
   register({
     name: 'p2_watch',
-    description: 'Manage observation-only watches: declared queries + a pure policy predicate produce one notification per edge, subject to cooldown and a global rate cap. A watch cannot stop or switch behavior; inspect p2_events for delivered events.',
+    description: 'Manage observation-only watches: declared queries + a pure policy predicate produce one notification per edge, subject to cooldown and a global rate cap. A watch cannot stop or steer control; inspect p2_events for delivered events.',
     parameters: {
       type: 'object',
       properties: {
@@ -508,37 +344,9 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, options:
     }),
   })
 
-  if (options.devTrace === true) {
-    register({
-      name: 'p2_trace',
-      description: 'Developer-only bounded execution trace: run/behavior/act/op/guard/watch events with p50/p95 durations.',
-      parameters: {
-        type: 'object',
-        properties: {
-          kind: { type: 'string', enum: ['run', 'behavior', 'act', 'op', 'guard', 'watch'], description: 'Event kind filter' },
-          runId: { type: 'string', description: 'Only events attributed to this run' },
-          act: { type: 'string', description: 'Only act events with this definition id' },
-          op: { type: 'string', description: 'Only op events with this operation name' },
-          sinceSeq: { type: 'number', description: 'Return events with a greater seq' },
-          limit: { type: 'number', description: 'Keep the most recent N matching events' },
-        },
-        additionalProperties: false,
-      },
-      output: jsonOutput(),
-      execute: guarded(async args => manager.trace({
-        ...(typeof args.kind === 'string' ? { kind: args.kind } : {}),
-        ...(typeof args.runId === 'string' ? { runId: args.runId } : {}),
-        ...(typeof args.act === 'string' ? { act: args.act } : {}),
-        ...(typeof args.op === 'string' ? { op: args.op } : {}),
-        ...(typeof args.sinceSeq === 'number' ? { sinceSeq: args.sinceSeq } : {}),
-        ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
-      } as JsonValue)),
-    })
-  }
-
   register({
     name: 'p2_rescue',
-    description: 'Experiment-only rescue channel. Sends one allow-listed self command, records an audit entry, and refuses while a behavior is active.',
+    description: 'Experiment-only rescue channel. Sends one allow-listed self command, records an audit entry, and refuses while a controller action is active.',
     parameters: {
       type: 'object',
       properties: {
@@ -604,3 +412,8 @@ function jsonOutput(): ToolDefinition['output'] {
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
   }
 }
+
+
+
+
+

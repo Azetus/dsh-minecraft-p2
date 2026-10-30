@@ -5,7 +5,6 @@ import type {
   CommandId,
   JsonValue,
   P2Error,
-  RunId,
   ValueMeta,
 } from './types.ts'
 import { ErrorCodes } from './types.ts'
@@ -13,6 +12,11 @@ import { ErrorCodes } from './types.ts'
 export const PROTOCOL_VERSION = 1
 export const DEFAULT_MAX_FRAME_BYTES = 1024 * 1024
 
+/**
+ * Controller-only control plane. There is no behavior run, switch, guard or
+ * confirmation method: autonomous action is `controller.enable` + strategies,
+ * and stopping it is `controller.disable` / `controller.cancel`.
+ */
 export const METHODS = [
   'hello',
   'heartbeat',
@@ -21,19 +25,19 @@ export const METHODS = [
   'observe',
   'check',
   'activate',
-  'switch',
-  'rescue',
-  'confirm',
-  'behavior.stop',
-  'guard.set',
-  'guard.clear',
   'watch.add',
   'watch.remove',
   'watch.list',
   'snapshot',
   'card',
-  'trace',
-  'stop',
+  'rescue',
+  'controller.enable',
+  'controller.disable',
+  'controller.status',
+  'controller.install',
+  'controller.commit',
+  'controller.cancel',
+  'controller.events',
   'shutdown',
   'command.get',
 ] as const
@@ -134,68 +138,10 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
-export type CurrentStep = {
-  kind: 'query' | 'act' | 'decide' | 'wait' | 'progress' | 'log'
-  ref: string | null
-  op: string | null
-  summary: string
-}
-
-/** One query a guard/watch declares; sampled by the host, never by content. */
-export type GuardQuery = {
+/** One query a watch declares; sampled by the host, never by content. */
+export type WatchQuery = {
   op: string
   args?: JsonValue
-}
-
-export type GuardCondition =
-  | { kind: 'policy'; queries: GuardQuery[]; predicate: string }
-  | { kind: 'health'; hpBelow: number }
-
-export type GuardState = 'active' | 'firing' | 'fired' | 'deferred' | 'expired' | 'cleared' | 'error'
-
-export type GuardEventPhase =
-  | 'armed'
-  | 'fired'
-  | 'deferred'
-  | 'precheck-failed'
-  | 'stopping'
-  | 'started'
-  | 'failed'
-  | 'suppressed'
-  | 'cleared'
-  | 'expired'
-  | 'error'
-
-export type GuardEvent = {
-  seq: number
-  guardId: string
-  attemptId?: string
-  phase: GuardEventPhase
-  at: number
-  condition?: GuardCondition
-  evidence?: JsonValue
-  targetArtifactId?: string
-  fromRunId?: string | null
-  toRunId?: string | null
-  message?: string
-  error?: P2Error
-}
-
-export type GuardTarget = {
-  artifactId: string
-  params: JsonValue
-}
-
-export type GuardStatus = {
-  id: string
-  priority: number
-  state: GuardState
-  condition: GuardCondition
-  target: GuardTarget
-  armedAt: number
-  expiresAt: number
-  attemptId?: string
-  lastError?: P2Error
 }
 
 export type WatchEdge = 'rising' | 'falling' | 'both'
@@ -207,7 +153,7 @@ export type WatchStatus = {
   name: string | null
   priority: number
   state: WatchState
-  queries: GuardQuery[]
+  queries: WatchQuery[]
   predicate: string
   edge: WatchEdge
   cooldownMs: number
@@ -229,43 +175,6 @@ export type WatchEvent = {
   firedAt: number
   /** Cumulative dropped count for this watch at emission time. */
   dropped: number
-}
-
-export type GuardSwitchSummary = {
-  guardId: string
-  attemptId: string
-  reason: string
-  targetArtifactId: string
-  fromRunId: string | null
-  toRunId: string | null
-  at: number
-  phase: 'precheck-failed' | 'stopping' | 'started' | 'failed' | 'suppressed'
-}
-
-export type CleanupState = 'none' | 'running' | 'released' | 'unconfirmed'
-export type ControlHealth = 'ok' | 'unknown' | 'faulted'
-export type SwitchState = 'none' | 'queued' | 'stopping' | 'released' | 'unconfirmed'
-
-export type ActiveActHandleSummary = {
-  actId: string
-  definitionId: string
-  artifactId: string
-  startedAt: number
-  state: 'running' | 'stopping'
-}
-
-export type RunObservation = {
-  currentStep: CurrentStep | null
-  stepCount: number
-  progress: JsonValue | null
-  lastError: P2Error | null
-  cleanupState: CleanupState
-  controlHealth: ControlHealth
-  switchState: SwitchState
-  logCount: number
-  logDropped: number
-  evidence?: JsonValue
-  activeActHandle?: ActiveActHandleSummary
 }
 
 export type ControllerMode = 'off' | 'active' | 'disabling' | 'fault'
@@ -365,36 +274,16 @@ export type ControllerEventsResult = {
 
 export type StatusResult = {
   bodyEpoch: BodyEpoch
-  /** Package/body version from body.manifest.json, e.g. 0.3.2-exp-ir.1. */
+  /** Package/body version from body.manifest.json. */
   version: string
   owner: OwnerContext | null
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
-  activeRun: ActiveRunSummary | null
-  lastRun?: LastRunSummary | null
-  pendingConfirmation: PendingConfirmationSummary | null
   bindingId: BindingId | null
   capabilities: string[]
   provider: ProviderSummary | null
   providerState?: ProviderRuntimeStatus | null
   commandCount: number
-  activeAct?: string | null
-  activeActHandle?: ActiveActHandleSummary | null
-  activeNode?: string | null
-  activeTarget?: { x: number; z: number } | null
-  waiting?: string | null
-  lastFailure?: P2Error | null
-  currentStep?: CurrentStep | null
-  stepCount?: number
-  progress?: JsonValue | null
-  lastError?: P2Error | null
-  cleanupState?: CleanupState
-  controlHealth?: ControlHealth
-  switchState?: SwitchState
-  guards?: GuardStatus[]
-  lastSwitch?: GuardSwitchSummary | null
-  guardEvents?: GuardEvent[]
-  guardEventSeq?: number
   watches?: WatchStatus[]
   watchEvents?: WatchEvent[]
   watchEventSeq?: number
@@ -408,50 +297,11 @@ export type StatusResult = {
   droppedLogCount?: number
 }
 
-export type ActiveRunSummary = {
-  runId: string
-  status: string
-  artifactId: string
-  completion: string | null
-}
-
-/**
- * Terminal run event, synthesized by the bridge from status.lastRun transitions.
- * Fired once per runId so an owner wake is guaranteed when a behavior ends,
- * without the owner having to poll p2_status.
- */
-export type RunEvent = {
-  seq: number
-  runId: string
-  definitionId?: string
-  status: 'succeeded' | 'failed' | 'cancelled'
-  errorCode?: string
-  progress?: JsonValue | null
-  evidence?: JsonValue
-  at: number
-}
-
-export type LastRunSummary = {
-  runId: string
-  definitionId?: string
-  status: 'succeeded' | 'failed' | 'cancelled'
-  error?: P2Error
-  progress?: JsonValue | null
-  evidence?: JsonValue
-}
-
-export type PendingConfirmationSummary = {
-  id: string
-  runId: string
-}
-
 export type CheckParams = {
   sourcePath: string
   sourceRoot?: string
   timeoutMs?: number
-  artifactKind?: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
-  /** Experimental behavior format; ignored for act/policy/op. */
-  format?: 'ir' | 'js'
+  artifactKind?: 'act' | 'policy' | 'op' | 'strategy'
 }
 
 export type ObserveParams = {
@@ -505,24 +355,11 @@ export type CardResult = {
   bodyEpoch: BodyEpoch
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
-  run: {
-    runId: string
-    status: string
-    artifactId: string
-    act: string | null
-    stepCount: number
-  } | null
-  lastRun: {
-    runId: string
-    status: LastRunSummary['status']
-    errorCode?: string
-  } | null
   healthValue: number | null
   food: number | null
   position: { x: number; y: number; z: number } | null
   /** Null means hostile count could not be established (not zero). */
   hostiles: number | null
-  guards: { active: number; firing: number; error: number }
   watches: { active: number; error: number }
   provider: ProviderRuntimeStatus | null
   sampledAt: number
@@ -533,7 +370,7 @@ export type CheckResult = {
   definitionId: string
   sourceDigest: string
   bindingId: string
-  kind: 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
+  kind: 'act' | 'policy' | 'op' | 'strategy'
   enabled: false
 }
 
@@ -545,11 +382,6 @@ export type ActivateResult = {
   artifactId: string
   bindingId: string
   enabled: true
-}
-
-export type SwitchParams = {
-  artifactId: string
-  params: Record<string, JsonValue>
 }
 
 export type RescueAction = 'tp' | 'effect' | 'respawn'
@@ -574,88 +406,8 @@ export type RescueResult = {
   note: string
 }
 
-export type SwitchResult = {
-  accepted: boolean
-  runId: string | null
-  status: string
-  error?: P2Error
-}
-
-export type ConfirmParams = {
-  runId: string
-  confirmationId: string
-  decision: 'confirm' | 'deny'
-}
-
-export type BehaviorStopParams = {
-  runId?: string
-}
-
-export type BehaviorStopResult = {
-  accepted: boolean
-  status: string
-  error?: P2Error
-}
-
-export type ConfirmationResult = {
-  outcome: 'confirmed' | 'denied' | 'alreadyDecided' | 'rejected'
-  status: string
-  error?: P2Error
-}
-
 export type HeartbeatParams = { seq: number }
 export type HeartbeatResult = { seq: number; alive: true }
-
-export type TraceKind = 'run' | 'behavior' | 'act' | 'op' | 'guard' | 'watch'
-export type TracePhase = 'start' | 'end' | 'error' | 'event'
-
-/** One bounded developer-trace record; durations are monotonic wall-clock ms. */
-export type TraceEvent = {
-  seq: number
-  at: number
-  kind: TraceKind
-  phase: TracePhase
-  name: string
-  durationMs?: number
-  runId?: string
-  actId?: string
-  opId?: string
-  detail?: JsonValue
-}
-
-export type TraceParams = {
-  kind?: TraceKind
-  /** Match events attributed to one run. */
-  runId?: string
-  /** Match act events by definition id. */
-  act?: string
-  /** Match op events by operation name. */
-  op?: string
-  sinceSeq?: number
-  /** Keep the most recent N matching events; stats still cover all matches. */
-  limit?: number
-}
-
-/** Nearest-rank percentiles over completed spans. */
-export type TraceStats = {
-  count: number
-  p50: number | null
-  p95: number | null
-  max: number | null
-}
-
-export type TraceResult = {
-  events: TraceEvent[]
-  stats: Partial<Record<TraceKind, TraceStats>>
-  dropped: number
-  capacity: number
-  seq: number
-  /** True when sinceSeq predates the retained window. */
-  gap: boolean
-}
-
-export type StopParams = { runId?: RunId }
-export type StopResult = { accepted: true; runId: RunId | null }
 
 export type ShutdownResult = { closing: true }
 
@@ -758,4 +510,5 @@ export function unknownMethodError(method: string): P2Error {
     { method },
   )
 }
+
 

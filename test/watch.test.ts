@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { p2Error } from '../src/contracts/protocol.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
-import { BehaviorHost } from '../src/core/host.ts'
+import { ArtifactHost } from '../src/core/artifact-host.ts'
 import type { ActPort, QueryOutcome, QueryPort } from '../src/core/node-runtime.ts'
 
 const dirs: string[] = []
@@ -35,8 +35,8 @@ async function watchHost(
   bindingId: string,
   query: QueryPort,
   predicate: (samples: PredicateInputs, now: number) => JsonValue,
-): Promise<{ host: BehaviorHost; predicate: string }> {
-  const host = new BehaviorHost({
+): Promise<{ host: ArtifactHost; predicate: string }> {
+  const host = new ArtifactHost({
     bindingId,
     query,
     act,
@@ -287,7 +287,10 @@ describe('watch registration and edge control', () => {
 })
 
 /** Small helper for the pending-query case where the predicate reads a value. */
-async function waitHost(bindingId: string, query: QueryPort): Promise<{ host: BehaviorHost; predicate: string }> {
+async function waitHost(bindingId: string, query: QueryPort): Promise<{ host: ArtifactHost; predicate: string }> {
   return watchHost(bindingId, query, samples =>
     (samples['0']?.value as { poisoned?: boolean } | undefined)?.poisoned === true)
 }
+
+
+

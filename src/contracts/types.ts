@@ -10,7 +10,6 @@ export type NodeRunId = Brand<string, 'NodeRunId'>
 export type ActEpoch = Brand<string, 'ActEpoch'>
 export type RequestId = Brand<string, 'RequestId'>
 export type CommandId = Brand<string, 'CommandId'>
-export type ConfirmationId = Brand<string, 'ConfirmationId'>
 export type BodyEpoch = Brand<string, 'BodyEpoch'>
 export type ConnectionEpoch = Brand<string, 'ConnectionEpoch'>
 export type BindingId = Brand<string, 'BindingId'>
@@ -96,7 +95,7 @@ export type BindingManifest = {
   config: JsonValue
 }
 
-export type ArtifactKind = 'behavior' | 'act' | 'policy' | 'op' | 'strategy'
+export type ArtifactKind = 'act' | 'policy' | 'op' | 'strategy'
 
 /** Execution-relevant declaration of an authored operation artifact. */
 export type OpDeclaration = {
@@ -149,3 +148,6 @@ export type LocalSlot = {
   value: JsonValue
   meta: ValueMeta
 }
+
+
+

@@ -149,3 +149,5 @@ export function asP2Error(error: unknown, module: string): P2Error {
   }
   return p2Error('OP_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module })
 }
+
+

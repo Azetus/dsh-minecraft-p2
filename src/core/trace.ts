@@ -1,12 +1,40 @@
-import type {
-  TraceEvent,
-  TraceKind,
-  TraceParams,
-  TracePhase,
-  TraceResult,
-  TraceStats,
-} from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
+
+export type TraceKind = 'act' | 'op' | 'watch'
+export type TracePhase = 'start' | 'end' | 'error' | 'event'
+
+export type TraceEvent = {
+  seq: number
+  kind: TraceKind
+  phase: TracePhase
+  name: string
+  at: number
+  durationMs?: number
+  runId?: string
+  actId?: string
+  opId?: string
+  detail?: JsonValue
+}
+
+export type TraceParams = {
+  kind?: TraceKind
+  runId?: string
+  act?: string
+  op?: string
+  sinceSeq?: number
+  limit?: number
+}
+
+export type TraceStats = { count: number; p50: number; p95: number; max: number }
+
+export type TraceResult = {
+  events: TraceEvent[]
+  stats: Partial<Record<TraceKind, TraceStats>>
+  dropped: number
+  capacity: number
+  seq: number
+  gap: boolean
+}
 
 export type TraceContext = {
   runId?: string
@@ -29,7 +57,7 @@ export type TraceSinkOptions = {
 }
 
 const DEFAULT_CAPACITY = 2048
-const KINDS: readonly TraceKind[] = ['run', 'behavior', 'act', 'op', 'guard', 'watch']
+const KINDS: readonly TraceKind[] = ['act', 'op', 'watch']
 
 /**
  * Bounded developer trace. Recording is synchronous and allocation-light; the
@@ -157,3 +185,6 @@ function percentile(sorted: number[], rank: number): number {
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((rank / 100) * sorted.length) - 1))
   return sorted[index] as number
 }
+
+
+

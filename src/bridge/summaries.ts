@@ -50,3 +50,5 @@ export function summarizeEntities(value: JsonValue): EntitySummary {
   }
   return { count, hostile, nearestDistance }
 }
+
+

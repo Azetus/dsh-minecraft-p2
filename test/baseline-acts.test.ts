@@ -590,3 +590,5 @@ describe('P3 movement and interaction act artifacts', () => {
     expect(sandbox.update(handles([[1, 'failed']]))).toMatchObject({ kind: 'failed' })
   })
 })
+
+

@@ -1,4 +1,4 @@
-import type { QueryRef } from '../contracts/ir.ts'
+import type { QueryRef } from './node-runtime.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type {
@@ -186,3 +186,6 @@ function isP2Error(value: unknown): value is P2Error {
     && typeof (value as { code?: unknown }).code === 'string'
     && typeof (value as { message?: unknown }).message === 'string'
 }
+
+
+

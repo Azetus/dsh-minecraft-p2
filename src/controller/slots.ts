@@ -52,3 +52,5 @@ export function compareCandidates(left: CandidateOrder, right: CandidateOrder): 
   if (slot !== 0) return slot
   return left.registration - right.registration
 }
+
+

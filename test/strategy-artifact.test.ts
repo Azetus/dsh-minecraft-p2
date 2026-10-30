@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
 import { checkStrategyJs } from '../src/core/strategy-checker.ts'
 import { StrategyRuntime } from '../src/core/strategy-runtime.ts'
 import { createArtifactStrategy } from '../src/controller/artifact-strategy.ts'
-import type { StrategyArtifact } from '../src/contracts/ir.ts'
+import type { StrategyArtifact } from '../src/contracts/artifacts.ts'
 import type { FactSet } from '../src/controller/observation.ts'
 import type { StrategyContext } from '../src/controller/strategy.ts'
 import { ActionMemory } from '../src/controller/memory.ts'
@@ -227,4 +227,6 @@ describe('strategy runtime and adapter', () => {
     expect(thrown.kind === 'blocked' ? thrown.diagnostics[0]?.message : undefined).toBe('cross-realm boom')
   })
 })
+
+
 

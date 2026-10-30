@@ -3,10 +3,10 @@ import { readFile, realpath } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 
 import { artifactDigest, artifactId, sourceDigest } from '../contracts/digest.ts'
-import type { PolicyArtifact } from '../contracts/ir.ts'
+import type { PolicyArtifact } from '../contracts/artifacts.ts'
 import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
-import { CHECKER_VERSION, CheckerError } from './checker.ts'
-import type { CheckerCredential } from './checker.ts'
+import { CHECKER_VERSION, CheckerError } from './checker-errors.ts'
+import type { CheckerCredential } from './checker-errors.ts'
 import { forbiddenToken } from './act-checker.ts'
 
 export type PolicyCheckRequest = {
@@ -124,3 +124,5 @@ function stringList(value: JsonValue | undefined, field: string): string[] {
   }
   return result
 }
+
+

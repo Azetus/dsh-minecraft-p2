@@ -20,15 +20,15 @@
 ## 2. 控制模式
 
 ```text
-off --enable(无 run、无 guard)--> active
+off --enable--> active
 active --disable--> disabling --(release confirmed)--> off
 active/disabling --control fault--> fault --(release confirmed)--> active / off
 ```
 
-- `enable` 拒绝：有 active run、有 guard、遗留 control fault、正在 settle。
+- `enable` 拒绝：遗留 control fault、正在 settle，或已有未释放的动作。
 - `disable`：先冻结评估与 dispatch（`setAutonomy(false)`）→ 取消当前承诺 → 撤销租约 → 停止动作 → 等释放确认；期间 `mode=disabling`，不再 dispatch，即使策略持续提议。
 - `fault`：停止新 dispatch；只有观察到释放才解除；解除后按 disableRequested 回到 off 或 active。
-- 旧执行器模式（behavior/guard）与 Controller 模式互斥；同一 body 不同时存在两条调度路径。
+- Controller 是 body 的**唯一控制模式**；没有旧执行器、guard、switch 路径。
 
 ## 3. 命令面
 
@@ -36,7 +36,7 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 
 | 命令 | 说明 |
 | --- | --- |
-| `enable` | 进入 Controller 模式（要求无 run、无 guard） |
+| `enable` | 进入 Controller 模式（要求无未释放动作） |
 | `disable` | 退出模式：取消承诺并撤销租约，释放确认后 off |
 | `status` | 控制器视图（见 §4） |
 | `install {artifactId, mode?}` | 安装已启用的 strategy artifact；`mode=boundary`（默认）或 `interrupt` |
@@ -89,14 +89,14 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 - 检查期要求声明 act 已启用，并锁定其 artifactId；策略不能提议未声明的 act。
 - 安装期载入 vm 并校验事实；替换走 boundary/interrupt，新 attemptId，跨版本默认重新核验。
 - 求值预算 20ms；超时/异常/非 JSON 判定 → 该策略 `blocked`，不产生动作。
-- 隔离基线：body 内 `node:vm`，与 JS behavior 同级，**不是安全边界**；agent 现场编写的策略在迁移隔离 runner 前按受信内容对待。
+- 隔离基线：body 内 `node:vm`，**不是安全边界**；agent 现场编写的策略在迁移隔离 runner 前按受信内容对待。
 
 ## 7. 实机冒烟步骤（人工）
 
 1. `p2_body start` → `p2_status`：`connection=connected`，`controller=null` 或 `mode=off`。
 2. 准备 act（例如 `dig`/`goto` 的自有 act）：`p2_check artifactKind=act` → `p2_activate`。
 3. 写一个最小 strategy（见 `prompts/artifact-strategy.md` 示例），`p2_check artifactKind=strategy` → `p2_activate`。
-4. `p2_guard clear all`（若登记过 guard）→ `p2_controller action=enable`。
+4. `p2_controller action=enable`。
 5. `p2_controller action=install {artifactId}` → `p2_controller action=commit {goal, strategyKey, post:{kind:'count-at-least',factKey:'inventory',item:'stone',count:3,fromBaseline:true}, baselineKeys:['inventory']}`。
 6. 观察：`p2_controller action=status` 每 1–2s；`p2_controller action=events sinceSeq=0`。
 7. 人为制造危险（例如走进浅水/靠近苦力怕，若已装 S0 策略）：确认承诺 `suspended`→`verifying`→`active`，且验证期间无新动作。
@@ -111,10 +111,10 @@ active/disabling --control fault--> fault --(release confirmed)--> active / off
 
 ## 8. 已知限制
 
-- 策略沙箱是进程内 vm，不是隔离 runner；恶意代码可逃逸（与 JS behavior 相同的已知基线）。
+- 策略沙箱是进程内 vm，不是隔离 runner；恶意代码可逃逸。
 - `nearbyBlocks` 默认只含常见资源名（含 `grass_block`）；新方块需求要改事实源。
 - `blocked` 只写状态/事件，不唤醒 owner（事件通道接线留待后续）。
-- `p2_stop` 不停止 Controller；必须用 `controller.cancel` / `controller.disable`。
+- 没有 `p2_stop`/`p2_switch`/`p2_guard`；停止用 `controller.cancel` / `controller.disable`。
 - 无自动重启/跨 body epoch 恢复：body 重建后需重新 enable/install/commit。
 - 策略上下文 `lastOutcome` 只覆盖“当前承诺 + 当前 attempt”；`commit()` 与策略接管会清空（实机发现旧结局会卡住新承诺）。
 - S0 策略有界重试：同一 `holder|intent` 60s 内 3 次启动仍未清除危险 → `blocked(S0_RETRY_EXHAUSTED)`，承诺 `blocked: EMERGENCY_BLOCKED`；若逃生动作本身不能脱离（例如 walk-back 爬不上 1 格石沿），需要改成跳跃/上浮类 act，而不是无限重试。

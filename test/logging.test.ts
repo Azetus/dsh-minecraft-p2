@@ -72,3 +72,5 @@ describe('CommandLedger', () => {
     expect(ledger.get('b')).toEqual({ value: 2 })
   })
 })
+
+

@@ -4,9 +4,8 @@
  * ports, loads checked strategy artifacts and exposes a small command surface
  * to the bridge.
  *
- * Control-mode exclusivity is enforced one level up: the body refuses to start
- * a behavior run while the controller is engaged, and the controller refuses
- * to enable while a behavior run is active.
+ * The controller is the body's single autonomous control mode: no other
+ * executor may hold the action slot.
  */
 
 import type {
@@ -23,7 +22,7 @@ import type {
 } from '../contracts/protocol.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
-import type { StrategyArtifact } from '../contracts/ir.ts'
+import type { StrategyArtifact } from '../contracts/artifacts.ts'
 import type { PostCondition, Commitment } from '../controller/commitment.ts'
 import { P2Controller } from '../controller/controller.ts'
 import type { ControllerEvent, FactSource, SenseResult } from '../controller/controller.ts'
@@ -558,6 +557,9 @@ function parsePostCondition(value: JsonValue): PostCondition {
 function isRecord(value: JsonValue | unknown): value is Record<string, JsonValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+
+
 
 
 

@@ -142,7 +142,6 @@ describe('body watchdog', () => {
       reason: 'heartbeat-missed',
       epoch: 'epoch-1',
       control: 'unknown',
-      guardsCleared: true,
       autoRestart: 'scheduled',
     })
     expect(harness.restarts[0]).toMatchObject({ epoch: 'epoch-2', attempt: 1, maxRestarts: 3 })
@@ -280,3 +279,6 @@ describe('body watchdog', () => {
     expect(followups.every(message => message.role === 'user')).toBe(true)
   })
 })
+
+
+

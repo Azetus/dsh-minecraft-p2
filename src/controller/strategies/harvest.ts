@@ -151,3 +151,5 @@ function pointId(point: { x: number; y: number; z: number }): string {
   return `${point.x},${point.y},${point.z}`
 }
 
+
+

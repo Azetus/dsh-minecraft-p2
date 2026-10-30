@@ -11,12 +11,12 @@ import { dirname, relative, resolve, sep } from 'node:path'
 import vm from 'node:vm'
 
 import { artifactDigest, artifactId, sourceDigest } from '../contracts/digest.ts'
-import type { StrategyArtifact } from '../contracts/ir.ts'
+import type { StrategyArtifact } from '../contracts/artifacts.ts'
 import { StrategyManifestError, parseStrategyManifest } from '../contracts/strategy.ts'
 import type { StrategyManifest } from '../contracts/strategy.ts'
 import type { ArtifactManifest } from '../contracts/types.ts'
-import { CHECKER_VERSION, CheckerError } from './checker.ts'
-import type { CheckerCredential } from './checker.ts'
+import { CHECKER_VERSION, CheckerError } from './checker-errors.ts'
+import type { CheckerCredential } from './checker-errors.ts'
 import { forbiddenIn, lineColumn } from './js-forbidden.ts'
 
 export type StrategyCheckRequest = {
@@ -155,4 +155,6 @@ export async function checkStrategyJs(request: StrategyCheckRequest): Promise<St
     },
   }
 }
+
+
 

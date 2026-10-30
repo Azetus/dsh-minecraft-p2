@@ -33,3 +33,5 @@ export function lineColumn(code: string, index: number): { line: number; column:
   const lastBreak = before.lastIndexOf('\n')
   return { line, column: index - lastBreak }
 }
+
+

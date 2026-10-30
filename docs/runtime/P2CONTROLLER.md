@@ -1,7 +1,7 @@
 # P2Controller v2（评审修订版）
 
 > 状态：**M0–M4 已实施（M0–M3 fake/单测；M4 body 接线 + strategy artifact；未做本阶段实机验证）**（2026-10-30）。已采纳独立评审的七项修正；本文替代 v1。实现映射见 §13–§14。
-> 关联：[operation/provider 契约](OP-PROVIDER-CONTRACT.md)、[威胁反应 guard v2](../THREAT-REACTION.md)、[通知 watch](../NOTIFICATIONS.md)、[操作员手册](../OPERATOR-PLAYBOOK.md)、[behavior 契约](../BEHAVIOR.md)、[运行时](../RUNTIME.md)、[Minecraft 接入决策](../MINECRAFT-INTEGRATION-OPTIONS.md)。
+> 关联：[operation/provider 契约](OP-PROVIDER-CONTRACT.md)、[操作员手册](../OPERATOR-PLAYBOOK.md)、[运行时](../RUNTIME.md)、[架构](../ARCHITECTURE.md)、[Minecraft 接入决策](../MINECRAFT-INTEGRATION-OPTIONS.md)。
 > 命名：**P2Controller** = 常驻控制器（唯一动作控制槽 + 承诺/观测/交接）；`runtime` 保留给 body 执行层（`src/body/runtime.ts`），避免撞名。v1 的 "唯一 run" 表述已废弃（见 §3.1）。
 
 ## 0. 与 v1 的差异（评审修正）
@@ -32,7 +32,7 @@
 
 - 当前执行器**支持** act 执行期间继续观测：`ctx.act(..., { async: true })` + `actStop`（`src/core/js-runtime.ts`），body 调度周期 50ms（`src/body/server.ts`）。因此"每一步都必须经过模型"不成立；缺的是**共享仲裁**。
 - provider 已有合成产物增量校验（`src/provider/mineflayer.ts`）；"全部缺读回"不成立。
-- guard 的 fire→target started ≈336ms 只说明启动事件发生，**不代表撤离生效**；时延必须四段测量（§2）。
+- S0 判定→动作启动只说明启动事件发生，**不代表撤离生效**；时延必须四段测量（§2）。
 
 ## 2. 目标与度量
 
@@ -73,16 +73,16 @@
 - **迟到结果只能对账，不能重新取得控制权**（generation fencing）；死亡、重生、维度变化使旧目标与旧观测失效。
 - **唯一动作槽**：同时只有一个动作持有控制权；但槽位状态（任务推进、紧急评估）可以并行更新。
 
-### 3.2 与 guard / watch / behavior 的关系
+### 3.2 与 watch 的关系
 
-- **guard API 保留**，内部映射为"向 S0 提交紧急请求"；是否接管由 Controller 的租约仲裁决定，而不是 guard 直接切 run。
+- watch 只通知；危险抢占由 S0 策略提出，是否接管由 Controller 的租约仲裁决定。
 - `STOP_UNCONFIRMED` 属**控制故障**：进入 `control-fault`，停止新 dispatch，上报 owner；不得降级为等待。
 - **watch/通知不变**；诱因仍是事件，不是轮询。
-- 旧 behavior 作为**受控任务策略**接入（当前 JS ctx 没有 `ctx.call`，需要适配层）；被中断后不能默认可恢复。
+- watch 是观察-only 通知，不拥有控制；危险抢占由 S0 策略负责。
 
 ### 3.3 控制模式互斥
 
-同一 body 一次只能启用一种控制模式（旧执行器模式 / P2Controller 模式）。开发期可并存代码，但**不得同时有两条调度路径**；旧 behavior 接入新模式时必须适配为任务执行者，不能把旧 Host 完整嵌套进来。
+P2Controller 是 body 的**唯一控制模式**：没有旧执行器、没有 guard、没有 switch。
 
 ## 4. 四份契约（实施前必须先定稿）
 
@@ -187,12 +187,11 @@ type StrategyVerdict =
 | 既有 | 处理 |
 | --- | --- |
 | broker / runner / artifact / events | 保留；租约与 generation 在其之上新增，不替换账本 |
-| `p2_switch` / `p2_stop` | `p2_switch` 在 Controller 模式下返回 `CONTROL_MODE_CONFLICT`；`p2_stop` 仍只停止 behavior run。"停止自主行动" = `p2_controller action=disable`；"停止当前承诺" = `p2_controller action=cancel`（两个明确契约） |
-| guard | API 保留；Controller 模式要求先 `p2_guard clear`（S0 接管紧急抢占前，不允许 guard 与 Controller 竞争） |
+| 停止 | "停止自主行动" = `p2_controller action=disable`；"停止当前承诺" = `p2_controller action=cancel`；没有 `p2_switch`/`p2_stop`/`p2_guard` |
 | watch | 不变 |
 | operation 契约 | M0 前置：typed 契约 + 动作前检查 + 读回；不要求一次改完 |
 | 导航/合成 | v2 只定语义接口；首个 adapter 可继续使用现有库；算法上移另立项 |
-| behavior 产物 | **不作为 Controller 的策略载体**；behavior 计划废弃，Controller 使用独立 `strategy` artifact（§14） |
+| 策略载体 | 只有独立的 `strategy` artifact（§14）；没有 behavior 产物 |
 
 ## 10. 里程碑（全部完成后才做统一实机测试）
 
@@ -214,7 +213,7 @@ type StrategyVerdict =
 
 ## 12. 仍待定（实施中确认）
 
-1. 策略代码的沙箱与依赖契约细节（复用现有 behavior 沙箱？独立 artifact 类型？）。
+1. 策略代码的沙箱与依赖契约细节（独立 `strategy` artifact，body 内 `node:vm`）。
    - 本期口径：策略载体是独立 `strategy` artifact（§14），在 body 内以 `node:vm` 基线同步求值；迁移隔离 runner 前不承诺安全隔离。agent 现场编写策略已可用，但沙箱强度仍未达隔离 runner 标准。
 2. `coherenceWindow` 与查询预算的具体数值（需真实服测量，但先给保守默认）。
    - 本期默认：事实 TTL 500ms、`coherenceWindow` 500ms、观测刷新间隔 100ms；均可在构造参数覆盖，待实测。
@@ -222,7 +221,6 @@ type StrategyVerdict =
    - 本期只实现三级类序（lethal > bleeding-fire > trapped）+ 槽序 + 注册序；同级多危险时后者只进候选列表，不产生动作。
 4. `blocked` 的上报阈值与 owner 唤醒策略（避免刷屏与漏报）。
    - 本期：`unknown`/`blocked` 持续超过 `unknownDeadlineMs`（默认 3000ms）转 `blocked`；`candidate` 证据等待上限 `verificationTimeoutMs`（默认 2000ms）。owner 唤醒未接线（见 §13.7）。
-5. 旧 behavior 适配为任务策略的最小契约（是否需要 `ctx.call`）。
    - 未决；本期策略是原生函数，不包装旧 Host。
 6. 指标基线的采集方式（t_release/t_effective 需要 provider 侧配合埋点）。
    - 未实现；交接事件已记录 `requested/revoked/stop-requested/release-confirmed/granted/started` 时间戳，可在实机时先按这些事件近似四段时延。
@@ -312,12 +310,12 @@ type StrategyVerdict =
 ### 13.7 与 body 的集成（M4，已完成）
 
 - Controller 已接入 body：`src/body/controller-host.ts`（`BodyController`）把现有 ActPort/QueryPort 适配为 `ActuatorPort`/`SensePort`，body 每 tick 在 Controller 模式下驱动它。
-- **控制模式互斥**：`controller.enable` 要求无活动 run 且无 guard；启用后 `p2_switch` 返回 `CONTROL_MODE_CONFLICT`。`controller.disable` 先取消承诺、撤销租约，释放确认后回到 off。
+- **单控制模式**：`controller.enable` 要求没有未释放的 controller 动作；`controller.disable` 先冻结 dispatch、取消承诺、撤销租约，释放确认后回到 off。
 - **命令面**（bridge 工具 `p2_controller`）：`enable / disable / status / install / commit / cancel / events`。`p2_status.controller` 返回同一份视图，`controller.events` 按 `seq` 游标读取。
-- **停止语义**：`p2_stop` 仍只停止 behavior run；停止自主行动用 `controller.disable`，停止当前承诺用 `controller.cancel`（§9 的两个契约）。
+- **停止语义**：`controller.disable` 冻结 dispatch 并撤销租约；`controller.cancel` 只取消当前承诺。
 - **disable 先冻结再撤销**：`disable` 先 `setAutonomy(false)`（停止评估与 dispatch），再取消承诺、撤销租约；释放确认后回到 off。策略即使继续提议也不能重启动作（实机发现：S0 逃生循环会在 disable 后继续 dispatch）。
 - **S0 重试预算**：同一 `holder|intent` 在 60s 内启动 3 次仍未清除危险 → 该 S0 判定被替换为 `blocked`（诊断 `S0_RETRY_EXHAUSTED`），压制 S1–S3；若存在承诺，承诺转 `blocked: EMERGENCY_BLOCKED`，不落回任务。
-- **策略载体**：新增 `strategy` artifact（见 §14），不使用/不兼容 behavior；actor 代码在 body 内以 `node:vm` 基线执行（与 JS behavior 相同的隔离基线，不是安全边界）。
+- **策略载体**：`strategy` artifact（见 §14），在 body 内以 `node:vm` 基线执行；它不是安全边界，只应运行可信内容。
 - **事实来源**：`position/health/inventory/nearbyBlocks/entities`，默认刷新间隔与 TTL 见 `controller-host.ts`；策略 manifest 只能读取已注册的事实键。`nearbyBlocks` 默认只扫描常见生存资源名，写新策略时按需在 body 配置扩展。
 - **失效**：死亡（`providerState.lastDeathAt` 变化）或维度变化时 `invalidateScope('body')`，旧目标与旧观测作废，承诺转 suspended→verifying，不自动继续旧步骤。
 - Nav/Crafting 仍不新增算法接口：进度用 `ActionProgress`、失败证据用 `P2Error.details`（例如 `head-blocked@x,y,z`）、期限由 act limits/租约约束、停止结论由 `release` 给出；算法留在 adapter（符合 §5 与 OP 契约的阶段 2）。
@@ -341,7 +339,7 @@ type StrategyVerdict =
 
 ## 14. strategy artifact（策略载体）
 
-> 状态：**已实现**（2026-10-30）。策略不复用 behavior，也不与 behavior 兼容；behavior 计划废弃。
+> 状态：**已实现**（2026-10-30，0.3.0 起 behavior/guard 已删除）。
 
 ### 14.1 形状
 
@@ -386,10 +384,10 @@ p2_controller action=status|events
 p2_controller action=cancel|disable
 ```
 
-- 安装顺序：`enable` → `install` → `commit`。`enable` 要求无活动 run、无 guard。
+- 安装顺序：`enable` → `install` → `commit`。`enable` 要求没有未释放的 controller 动作。
 - `install` 的替换语义沿用 §13.4（boundary / interrupt，新 attemptId，跨版本重新核验）。
 - 求值预算：单次 `evaluate` 默认 20ms（vm timeout）；超时/异常 → 该策略 `blocked`，不产生动作。
-- 隔离基线：body 内 `node:vm`，与 JS behavior 相同的“非安全边界”基线；迁移隔离 runner 前不得把 agent 现场编写的策略当作可信隔离执行。
+- 隔离基线：body 内 `node:vm`，**不是安全边界**；迁移隔离 runner 前不得把 agent 现场编写的策略当作可信隔离执行。
 
 ### 14.3 内置策略与事实
 

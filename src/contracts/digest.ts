@@ -180,7 +180,7 @@ export function normalizeArtifactManifest(manifest: ArtifactManifest): ArtifactM
   }
 }
 
-/** Content identity for a behavior/act artifact. */
+/** Content identity for a checked artifact. */
 export function artifactDigest(manifest: ArtifactManifest): string {
   return digest(DIGEST_DOMAIN.artifact, normalizeArtifactManifest(manifest))
 }
@@ -197,3 +197,6 @@ function sortedRecord(record: Record<string, string>): Record<string, string> {
       .sort(([left], [right]) => compareKeys(left, right)),
   )
 }
+
+
+

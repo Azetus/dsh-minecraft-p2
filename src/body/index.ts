@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createStdioTransport, p2Error } from '../contracts/index.ts'
 import type { BodyInfo, DevOpsStatus } from '../contracts/index.ts'
-import { BehaviorHost } from '../core/host.ts'
+import { ArtifactHost } from '../core/artifact-host.ts'
 import { DeclaredOpBroker } from '../core/op-broker.ts'
 import { createAuthoredOpSource } from '../core/op-artifact.ts'
 import { RunnerActPort } from '../core/act-port.ts'
@@ -19,7 +19,7 @@ import { loadProviderConfig } from './provider-config.ts'
 import { executeRescue } from './rescue.ts'
 
 type HostBundle = {
-  host: BehaviorHost
+  host: ArtifactHost
   controller?: BodyController
   rescue?: { enabled: boolean; tpRadius: number }
   devOps?: () => DevOpsStatus | null
@@ -37,13 +37,12 @@ async function main(): Promise<void> {
   }
 
   const trace = new TraceSink({ capacity: 2048 })
-  const bundle = await createBehaviorHost(body, trace)
+  const bundle = await createArtifactHost(body, trace)
   const runtime = new BodyRuntime({
     body,
-    behavior: bundle.host,
+    host: bundle.host,
     ...(bundle.controller === undefined ? {} : { controller: bundle.controller }),
     heartbeatTimeoutMs: 10_000,
-    trace,
     ...(bundle.rescue === undefined ? {} : { rescue: bundle.rescue }),
     ...(bundle.devOps === undefined ? {} : { devOps: bundle.devOps }),
   })
@@ -64,12 +63,11 @@ async function main(): Promise<void> {
   server.start()
 }
 
-async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<HostBundle> {
+async function createArtifactHost(body: BodyInfo, trace: TraceSink): Promise<HostBundle> {
   const loaded = await loadProviderConfig()
   if (loaded === undefined) {
-    const host = new BehaviorHost({
+    const host = new ArtifactHost({
       bindingId: body.bindingId ?? 'unbound',
-      trace,
       query: () => ({
         status: 'failed',
         error: p2Error(
@@ -123,8 +121,9 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
 
     let actPort: RunnerActPort | undefined
     let policyPort: RunnerPolicyPort | undefined
-    let host: BehaviorHost | undefined
+    let host: ArtifactHost | undefined
     let opsBroker: DeclaredOpBroker | undefined
+    let controller: BodyController | undefined
     // Activated authored ops are resolved from the host registry; the provider
     // stays behind this seam and the broker remains the only control ledger.
     const opsSource = createAuthoredOpSource(
@@ -148,15 +147,14 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
         const message = `runner exited with code ${String(code)}`
         actPort?.runnerExited(p2Error('RUNNER_EXITED', 'runtime', message, { module: 'body.runner' }))
         policyPort?.reset()
-        host?.runnerExited(message)
+        host?.runnerExited?.(message)
       },
     })
     actPort = new RunnerActPort(() => runner.ensure(), ops, artifactId => host?.actSource(artifactId), trace)
     const act = actPort
     policyPort = new RunnerPolicyPort(() => runner.ensure(), artifactId => host?.policySource(artifactId))
-    const behaviorHost = new BehaviorHost({
+    const artifactHost = new ArtifactHost({
       bindingId: body.bindingId ?? 'unbound',
-      trace,
       query: ops.queryPort(),
       act,
       policy: {
@@ -167,32 +165,31 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
       },
       providerStatus: () => provider.liveStatus(),
       loadManifest: (kind, code, artifactId) => runner.ensure().load(kind, artifactId, code),
-      loadBehaviorManifest: (code, artifactId) => runner.ensure().load('behavior', artifactId, code),
-      behaviorRunner: () => runner.ensure(),
       rescue: (request, context) => executeRescue(provider, request, {
         allowRescue: loaded.config.allowRescue,
         tpRadius: loaded.config.rescueTpRadius,
         auditPath: join(process.cwd(), '.m5-runs', 'rescue.jsonl'),
         owner: context.owner,
       }),
+      rescueBusy: () => controller !== undefined && controller.engaged,
     })
-    host = behaviorHost
-    const controller = new BodyController({
+    host = artifactHost
+    controller = new BodyController({
       act,
       query: ops.queryPort(),
-      strategySource: artifactId => behaviorHost.strategySource(artifactId),
+      strategySource: artifactId => artifactHost.strategySource(artifactId),
       providerStatus: () => provider.liveStatus(),
       log: line => process.stderr.write(`[controller] ${line}\n`),
     })
     return {
-      host: behaviorHost,
+      host: artifactHost,
       controller,
       rescue: { enabled: loaded.config.allowRescue, tpRadius: loaded.config.rescueTpRadius },
       devOps: devOpsInfo,
       dispose: () => {
-        controller.dispose()
+        controller?.dispose()
         devHost?.dispose()
-        behaviorHost.dispose()
+        artifactHost.dispose()
         actPort?.dispose()
         runner.dispose()
       },
@@ -204,4 +201,3 @@ async function createBehaviorHost(body: BodyInfo, trace: TraceSink): Promise<Hos
 }
 
 await main()
-

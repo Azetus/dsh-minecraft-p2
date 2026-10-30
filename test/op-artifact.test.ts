@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { BehaviorHost } from '../src/core/host.ts'
+import { ArtifactHost } from '../src/core/artifact-host.ts'
 import { DeclaredOpBroker } from '../src/core/op-broker.ts'
 import type { OpSource } from '../src/core/op-broker.ts'
 import { createAuthoredOpSource } from '../src/core/op-artifact.ts'
@@ -70,13 +70,13 @@ function fakeProvider(): { source: OpSource; calls: string[] } {
 function createHarness(options: {
   loadManifest?: (kind: 'act' | 'policy', code: string, artifactId: string) => Promise<JsonValue>
 } = {}): {
-  host: BehaviorHost
+  host: ArtifactHost
   broker: DeclaredOpBroker
   actPort: (client: RunnerClient) => RunnerActPort
   calls: string[]
 } {
   const { source, calls } = fakeProvider()
-  let host: BehaviorHost | undefined
+  let host: ArtifactHost | undefined
   let broker: DeclaredOpBroker | undefined
   const ops = createAuthoredOpSource(source, name => host?.opArtifact(name), {
     log: () => {},
@@ -84,7 +84,7 @@ function createHarness(options: {
     onUntracked: input => { broker?.markUntracked(input.runId) },
   })
   broker = new DeclaredOpBroker(ops)
-  host = new BehaviorHost({
+  host = new ArtifactHost({
     bindingId: 'binding-op',
     query: broker.queryPort(),
     act: { start: () => { throw new Error('act port is not configured in this harness') } },
@@ -277,3 +277,6 @@ describe('authored op artifacts', () => {
     }
   })
 })
+
+
+

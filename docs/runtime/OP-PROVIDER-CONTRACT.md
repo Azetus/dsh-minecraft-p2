@@ -5,7 +5,7 @@
 
 ## 1. 目标与不变式
 
-1. **provider 是实现，不是接口**。P2 core、behavior、act、guard、kernel 只依赖 operation 契约；不出现 Mineflayer 的类型、对象、事件或插件句柄。
+1. **provider 是实现，不是接口**。P2 core、artifact、act、guard、kernel 只依赖 operation 契约；不出现 Mineflayer 的类型、对象、事件或插件句柄。
 2. **类型由 P2 自己定义**。契约层持有领域类型与语义；provider 只做映射（anti-corruption layer）。契约层**零外部依赖**，不得 import provider 或任何游戏库。
 3. **agent 仍可在运行时扩展 operation**，扩展物必须通过同一份契约的运行时校验；不因为"是 agent 写的"就绕过。
 4. **不做 MROS、不做缺失降级**。能力缺失即明确失败（沿用 `CAPABILITY_MISMATCH` / `CAPABILITY_MISSING`），不做语义猜测；迁移的完整性由类型 + 校验 + 契约断言保证。
@@ -16,7 +16,7 @@
 ```text
 contracts/domain.ts + contracts/ops/*.ts      ← 零依赖（仅 TS 标准库）
         ↑                       ↑
-providers/*/ops/*.ts        nav/ · crafting/ · behaviors · controller
+providers/*/ops/*.ts        nav/ · crafting/ · artifacts · controller
 （只 import contracts）      （只 import contracts，不 import provider）
 ```
 
@@ -47,7 +47,7 @@ export interface EntityRef {
 | **WindowPort** | openWindow / clickSlot / closeWindow | provider |
 | **Nav（上层，语义接口）** | goto、上浮、脱困的**语义**（进度、失败证据、期限、停止结论） | 先定接口；算法可暂留在 adapter |
 | **Crafting（上层，语义接口）** | craft(item,count) 的**语义**（配方可用性、失败证据、超时、产物校验） | 先定接口；算法可暂留在 adapter |
-| **behavior / act / guard / controller** | 策略与组合 | 仅上层与原语 |
+| **artifact / act / guard / controller** | 策略与组合 | 仅上层与原语 |
 
 判定原则：**能在上层用原语组合出来的，不放进 provider**。但"上移"分两步，不要捆绑成一次重写：
 
@@ -85,7 +85,7 @@ export interface EquipResult { equipped: ItemName }
 
 ## 5. agent 扩展 operation 的运行时约束
 
-`act`/`behavior` 是沙箱 JS（禁止 import），因此拿不到编译期类型。对 agent 产物采用**同一份契约的运行时校验**：
+`act`/`artifact` 是沙箱 JS（禁止 import），因此拿不到编译期类型。对 agent 产物采用**同一份契约的运行时校验**：
 
 1. op manifest 增加 `implements: <InterfaceName>`（如 `DigOps`）与既有 `opKind`。
 2. `p2_check` 用契约的 type guard 校验：

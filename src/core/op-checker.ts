@@ -3,10 +3,10 @@ import { readFile, realpath } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 
 import { artifactDigest, artifactId, canonicalJson, sourceDigest } from '../contracts/digest.ts'
-import type { OpArtifact } from '../contracts/ir.ts'
+import type { OpArtifact } from '../contracts/artifacts.ts'
 import type { ArtifactManifest, JsonValue } from '../contracts/types.ts'
-import { CHECKER_VERSION, CheckerError } from './checker.ts'
-import type { CheckerCredential } from './checker.ts'
+import { CHECKER_VERSION, CheckerError } from './checker-errors.ts'
+import type { CheckerCredential } from './checker-errors.ts'
 import { forbiddenToken } from './act-checker.ts'
 import { OpLoadError, loadOpModule } from './op-artifact.ts'
 
@@ -262,3 +262,5 @@ function requireImplementation(module: unknown, opKind: 'query' | 'control', nam
     throw new CheckerError('INVALID_OP_MANIFEST', `control op ${name} must provide start(ctx, args)`)
   }
 }
+
+

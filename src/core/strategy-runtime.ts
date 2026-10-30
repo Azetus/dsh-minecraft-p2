@@ -10,7 +10,7 @@
 
 import vm from 'node:vm'
 
-import type { StrategyArtifact } from '../contracts/ir.ts'
+import type { StrategyArtifact } from '../contracts/artifacts.ts'
 import { parseStrategyManifest } from '../contracts/strategy.ts'
 import type { StrategyManifest } from '../contracts/strategy.ts'
 import { p2Error } from '../contracts/protocol.ts'
@@ -111,3 +111,5 @@ export class StrategyRuntime {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+

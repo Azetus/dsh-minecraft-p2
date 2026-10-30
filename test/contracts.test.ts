@@ -42,7 +42,7 @@ const body: BodyManifest = {
 
 const artifact: ArtifactManifest = {
   schemaVersion: 1,
-  kind: 'behavior',
+  kind: 'act',
   definitionId: 'collect',
   sourceDigest: 'c'.repeat(64),
   irVersion: 1,
@@ -151,7 +151,7 @@ describe('manifest identities', () => {
   it('sorts artifact dependencies but keeps artifact kind and binding', () => {
     const reordered = { ...artifact, dependencies: [...artifact.dependencies].reverse() }
     expect(artifactDigest(reordered)).toBe(artifactDigest(artifact))
-    expect(artifactId(artifact)).toMatch(/^p2:behavior:[a-f0-9]{64}$/)
+    expect(artifactId(artifact)).toMatch(/^p2:act:[a-f0-9]{64}$/)
     expect(artifactDigest({ ...artifact, bindingId: '0'.repeat(64) })).not.toBe(artifactDigest(artifact))
   })
 
@@ -164,3 +164,7 @@ describe('manifest identities', () => {
     expect(artifactDigest(audited)).toBe(artifactDigest(artifact))
   })
 })
+
+
+
+

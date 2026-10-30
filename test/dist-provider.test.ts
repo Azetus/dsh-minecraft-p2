@@ -27,3 +27,5 @@ describe('built provider bundle', () => {
     expect(typeof module.PROVIDER_ID).toBe('string')
   })
 })
+
+

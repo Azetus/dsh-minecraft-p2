@@ -2,7 +2,7 @@ import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error, ValueMeta } from '../contracts/types.ts'
 import type { PolicyOutcome, QueryOutcome, QueryPort } from './node-runtime.ts'
 
-/** One query declared by a guard or watch condition. */
+/** One query declared by a watch condition. */
 export type DeclaredQuery = {
   op: string
   args?: Record<string, JsonValue>
@@ -58,8 +58,7 @@ export type ConditionOutcome =
 const DEFAULT_TIMEOUT_MS = 1000
 
 /**
- * Shared "declared queries + pure policy" evaluator used by guard conditions
- * and watch predicates.
+ * Shared "declared queries + pure policy" evaluator used by watch predicates.
  *
  * One round samples the declared queries sequentially (one in flight at a
  * time, 1s deadline each), rejects stale or failed samples, then calls the
@@ -128,7 +127,7 @@ export class ConditionEvaluator {
         this.inFlight = undefined
         this.samples.push({
           status: 'failed',
-          error: p2Error('GUARD_QUERY_TIMEOUT', 'timeout', 'declared query timed out', { module: 'core.condition' }),
+          error: p2Error('WATCH_QUERY_TIMEOUT', 'timeout', 'declared query timed out', { module: 'core.condition' }),
         })
       } else {
         const outcome = this.inFlight.poll()
@@ -147,7 +146,7 @@ export class ConditionEvaluator {
         outcome = {
           status: 'failed',
           error: p2Error(
-            'GUARD_QUERY_FAILED',
+            'WATCH_QUERY_FAILED',
             'runtime',
             error instanceof Error ? error.message : String(error),
             { module: 'core.condition', opId: query.op },
@@ -181,7 +180,7 @@ export class ConditionEvaluator {
     const failed = this.samples.find(sample => sample.status === 'failed')
     return {
       status: 'failed',
-      error: failed?.error ?? p2Error('GUARD_QUERY_FAILED', 'runtime', 'declared query failed', { module: 'core.condition' }),
+      error: failed?.error ?? p2Error('WATCH_QUERY_FAILED', 'runtime', 'declared query failed', { module: 'core.condition' }),
       samples: this.payload(),
     }
   }
@@ -205,7 +204,7 @@ export class ConditionEvaluator {
     } catch (error) {
       call = {
         status: 'failed',
-        error: p2Error('GUARD_POLICY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.condition' }),
+        error: p2Error('WATCH_POLICY_FAILED', 'runtime', error instanceof Error ? error.message : String(error), { module: 'core.condition' }),
       }
     }
     return this.consumePredicate(call, now)
@@ -218,7 +217,7 @@ export class ConditionEvaluator {
       this.predicate = undefined
       return {
         status: 'failed',
-        error: p2Error('GUARD_POLICY_TIMEOUT', 'timeout', 'predicate timed out', { module: 'core.condition' }),
+        error: p2Error('WATCH_POLICY_TIMEOUT', 'timeout', 'predicate timed out', { module: 'core.condition' }),
         samples: this.payload(),
       }
     }
@@ -250,7 +249,7 @@ export class ConditionEvaluator {
         || (record.summary !== undefined && typeof record.summary !== 'string')) {
         return {
           status: 'failed',
-          error: p2Error('GUARD_POLICY_RESULT_INVALID', 'runtime', 'predicate key/summary must be strings', { module: 'core.condition' }),
+          error: p2Error('WATCH_POLICY_RESULT_INVALID', 'runtime', 'predicate key/summary must be strings', { module: 'core.condition' }),
           samples: this.payload(),
         }
       }
@@ -258,7 +257,7 @@ export class ConditionEvaluator {
     }
     return {
       status: 'failed',
-      error: p2Error('GUARD_POLICY_RESULT_INVALID', 'runtime', 'predicate returned an invalid value', { module: 'core.condition' }),
+      error: p2Error('WATCH_POLICY_RESULT_INVALID', 'runtime', 'predicate returned an invalid value', { module: 'core.condition' }),
       samples: this.payload(),
     }
   }
@@ -304,3 +303,6 @@ export function policyCall(outcome: PolicyOutcome): PredicateCall {
     poll: () => policyCall(outcome.poll()),
   }
 }
+
+
+

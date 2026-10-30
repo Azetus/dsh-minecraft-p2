@@ -99,8 +99,6 @@ async function mainAsync() {
     'lib/bridge.js',
     'lib/body/body.mjs',
     'lib/body/body.manifest.json',
-    'lib/authoring/index.js',
-    'lib/authoring/index.d.ts',
   ]) {
     if (!existsSync(join(installedDir, relative))) {
       fail(`verify-dist: installed package is missing ${relative}`, home)
@@ -122,18 +120,6 @@ async function mainAsync() {
     return
   }
 
-  const authoringCheck = spawnSync(process.execPath, [
-    '-e',
-    `import('${PACKAGE_NAME}/authoring').then(m => {`
-      + ` if (m.AUTHORING_VERSION !== ${JSON.stringify(installedManifest.version)}) {`
-      + ` process.stderr.write('authoring version mismatch\\n'); process.exit(1) }`
-      + `})`,
-  ], { cwd: profileDir, stdio: 'inherit' })
-  if (authoringCheck.status !== 0) {
-    fail('verify-dist: authoring entry could not be imported or has the wrong version', home)
-    return
-  }
-
   const projectDir = join(home, 'project')
   mkdirSync(projectDir, { recursive: true })
   await writeFile(join(projectDir, 'package.json'), `${JSON.stringify({
@@ -152,18 +138,7 @@ async function mainAsync() {
     TARBALL,
   ])
   if (projectInstall.status !== 0) {
-    fail('verify-dist: project authoring install failed', home)
-    return
-  }
-  const projectCheck = spawnSync(process.execPath, [
-    '--input-type=module',
-    '-e',
-    `import('${PACKAGE_NAME}/authoring').then(m => {`
-      + ` if (m.AUTHORING_VERSION !== ${JSON.stringify(installedManifest.version)}) process.exit(1)`
-      + `})`,
-  ], { cwd: projectDir, stdio: 'inherit' })
-  if (projectCheck.status !== 0) {
-    fail('verify-dist: project authoring entry has the wrong version', home)
+    fail('verify-dist: project install failed', home)
     return
   }
 

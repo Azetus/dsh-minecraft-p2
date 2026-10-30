@@ -1,5 +1,5 @@
 import { p2Error } from '../contracts/protocol.ts'
-import type { ArtifactRef } from '../contracts/ir.ts'
+import type { ArtifactRef } from '../contracts/artifacts.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
 import type { PolicyOutcome, PolicyPort } from './node-runtime.ts'
 import type { RunnerClient } from './runner-client.ts'
@@ -70,3 +70,5 @@ export class RunnerPolicyPort implements PolicyPort {
     return promise
   }
 }
+
+

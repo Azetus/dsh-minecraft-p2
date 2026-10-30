@@ -1,47 +1,53 @@
 import { describe, expect, it } from 'vitest'
 
+import type { JsonValue } from '../src/contracts/types.ts'
 import type { BodyManager } from '../src/bridge/process-manager.ts'
-import type { AgentLike } from '../src/bridge/tools.ts'
 import { registerP2Tools } from '../src/bridge/tools.ts'
+import type { AgentLike } from '../src/bridge/tools.ts'
 
-function fakeAgent(): { agent: AgentLike; names: string[] } {
-  const names: string[] = []
+type Tool = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  execute: (args: Record<string, unknown>, exec: { agent?: AgentLike }) => Promise<JsonValue>
+}
+
+function register(): { names: string[]; descriptions: Record<string, string> } {
+  const tools: Tool[] = []
   const agent: AgentLike = {
     id: 'agent-1',
-    session: { id: 'session-1', header: { cwd: process.cwd() } },
+    session: { id: 'session-1' },
     ctx: {
       tools: {
-        register: definition => {
-          names.push(definition.name)
+        register(definition) {
+          tools.push(definition as Tool)
           return () => {}
         },
       },
     },
   }
-  return { agent, names }
+  registerP2Tools(agent, {} as BodyManager)
+  return {
+    names: tools.map(tool => tool.name),
+    descriptions: Object.fromEntries(tools.map(tool => [tool.name, tool.description])),
+  }
 }
 
-describe('bridge tools', () => {
-  it('registers the experiment rescue tool', () => {
-    const { agent, names } = fakeAgent()
-    const manager = {} as BodyManager
-    registerP2Tools(agent, manager)
-    expect(names).toContain('p2_rescue')
+describe('Controller-only bridge tools', () => {
+  it('exposes controller/watch/artifact tools and no behavior control tools', () => {
+    const { names } = register()
+    expect(names).toContain('p2_controller')
+    expect(names).toContain('p2_watch')
+    expect(names).toContain('p2_check')
+    expect(names).toContain('p2_activate')
+    for (const removed of ['p2_switch', 'p2_stop', 'p2_confirm', 'p2_guard', 'p2_trace']) {
+      expect(names).not.toContain(removed)
+    }
   })
 
-  it('keeps the core tool surface', () => {
-    const { agent, names } = fakeAgent()
-    registerP2Tools(agent, {} as BodyManager)
-    expect(names).toEqual(expect.arrayContaining([
-      'p2_status',
-      'p2_observe',
-      'p2_check',
-      'p2_activate',
-      'p2_switch',
-      'p2_stop',
-      'p2_guard',
-      'p2_events',
-      'p2_rescue',
-    ]))
+  it('does not describe behavior, run or guard state in status/card', () => {
+    const { descriptions } = register()
+    expect(descriptions.p2_status).not.toMatch(/run|guard|behavior/iu)
+    expect(descriptions.p2_card).not.toMatch(/run|guard|behavior/iu)
   })
 })

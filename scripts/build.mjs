@@ -34,7 +34,6 @@ function sha256(buffer) {
 compile('src/bridge/index.ts', 'lib/bridge.js', ['--packages=external'])
 compile('src/body/index.ts', 'lib/body/body.mjs')
 compile('src/runner/main.ts', 'lib/runner.js')
-compile('src/authoring/index.ts', 'lib/authoring/index.js')
 
 const body = await readFile(join(root, 'lib/body/body.mjs'))
 const bodyManifest = {
@@ -63,4 +62,5 @@ if (existsSync(join(root, 'src/provider/index.ts'))) {
   await writeFile(join(root, 'lib/provider/provider.manifest.json'), `${JSON.stringify(providerManifest, null, 2)}\n`)
 }
 
-console.log('built lib/bridge.js, lib/body/body.mjs, lib/authoring/index.js')
+console.log('built lib/bridge.js, lib/body/body.mjs, lib/runner.js')
+

@@ -4,18 +4,9 @@ import type { Movements } from 'mineflayer-pathfinder'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 
-import {
-  act,
-  assign,
-  defineBehavior,
-  lit,
-  sequence,
-} from '../authoring/index.ts'
-import type { BehaviorDefinition } from '../contracts/ir.ts'
 import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
-import { BehaviorExecutor } from '../core/executor.ts'
 import type {
   ActHandle,
   ActPoll,
@@ -2227,80 +2218,7 @@ function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
   return 'runtime'
 }
 
-export function g2Definition(moveDurationMs = 700): BehaviorDefinition {
-  return defineBehavior({
-    id: 'm3-g2-mapped',
-    description: 'P2 act mapping for look/move/jump/stop',
-    mode: 'finite',
-    parameters: {},
-    locals: { phase: { type: 'string' } },
-    root: sequence(
-      'root',
-      act('look', 'look', { yaw: lit(Math.PI / 2), pitch: lit(0.2) }),
-      act('move', 'move', { direction: lit('forward'), durationMs: lit(moveDurationMs) }),
-      act('jump', 'jump', {}),
-      act('stop', 'stop', {}),
-      assign('phase-done', 'phase', lit('done')),
-    ),
-    completion: { kind: 'predicate', condition: { kind: 'expr', expr: { kind: 'binary', op: 'eq', left: { kind: 'local', name: 'phase' }, right: { kind: 'literal', value: 'done' } } } },
-  })
-}
-
-export type MappedG2Result = {
-  status: string
-  ticks: number
-  positions: Array<{ x: number; y: number; z: number } | null>
-  health: number | null
-  food: number | null
-  controls: Record<string, boolean>
-  settledPosition: { x: number; y: number; z: number } | null
-  settledDelta: { dx: number; dy: number; dz: number } | null
-}
-
-/** Drive the P2 executor with real Mineflayer acts; no mining/placing/attacking. */
-export async function runMappedG2(bot: Bot, options: MineflayerProviderOptions = {}): Promise<MappedG2Result> {
-  const provider = new MineflayerProvider(bot, options)
-  const definition = g2Definition(options.moveDurationMs)
-  const executor = new BehaviorExecutor({
-    definition,
-    params: {},
-    query: provider.queryPort(),
-    act: provider,
-  })
-  const positions: Array<{ x: number; y: number; z: number } | null> = []
-  let ticks = 0
-  while (executor.currentStatus === 'running' && ticks < 120) {
-    executor.tick(Date.now())
-    ticks += 1
-    const p = bot.entity?.position
-    positions.push(p === undefined ? null : { x: p.x, y: p.y, z: p.z })
-    await new Promise(resolve => setTimeout(resolve, 50))
-  }
-  if (executor.currentStatus === 'running') executor.stop()
-  const finalPosition = bot.entity?.position
-  const controls = {
-    forward: bot.getControlState('forward'),
-    back: bot.getControlState('back'),
-    left: bot.getControlState('left'),
-    right: bot.getControlState('right'),
-    jump: bot.getControlState('jump'),
-    sprint: bot.getControlState('sprint'),
-    sneak: bot.getControlState('sneak'),
-  }
-  await new Promise(resolve => setTimeout(resolve, 500))
-  const settled = bot.entity?.position
-  return {
-    status: executor.currentStatus,
-    ticks,
-    positions,
-    health: bot.health ?? null,
-    food: bot.food ?? null,
-    controls,
-    settledPosition: settled === undefined ? null : { x: settled.x, y: settled.y, z: settled.z },
-    settledDelta: finalPosition === undefined || settled === undefined
-      ? null
-      : { dx: settled.x - finalPosition.x, dy: settled.y - finalPosition.y, dz: settled.z - finalPosition.z },
-  }
-}
-
 export type { QueryOutcome }
+
+
+
