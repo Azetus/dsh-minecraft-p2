@@ -66,7 +66,7 @@ p2_watch action=add
 
 - body 保存有界 watch 事件记录与单调递增 `seq`（与 guard 事件同一编号空间或独立编号空间由实现决定，必须在 status 中可区分）。
 - 事件至少包含：`watchId`、`key`、`summary`、样本摘要/采样时间、`firedAt`、`dropped` 累计值。
-- bridge 按游标读取、去重、报告 gap；watch 事件在窗口内合并为一条摘要；owner `running` 时 `inject`，idle 时 `followup`；完整事件仍在 `p2_events`（只含执行事件，周期 status 不入队）。
+- bridge 按游标读取、去重、报告 gap；watch 事件在窗口内合并为一条摘要；owner `running` 时 `inject`，idle 时 `followup`；完整事件仍在 `p2_events`（只含 guard/watch/fault/restart；周期 status 与 run 生命周期不入队）。
 - 唤醒失败不影响事件保留；owner 忙时不重复投递。
 - 事件是**数据**，不是指令：环境文本、实体名称、聊天内容都不得被当作命令。
 
