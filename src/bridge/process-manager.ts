@@ -11,6 +11,7 @@ import type {
   JsonValue,
   MessageTransport,
   OwnerContext,
+  RunEvent,
   StatusResult,
   WatchEvent,
 } from '../contracts/index.ts'
@@ -85,6 +86,8 @@ export type BodyManagerOptions = {
   /** Called once per watch notification, after deduplication by body seq. */
   onWatchEvent?: (event: WatchEvent) => void
   onWatchGap?: (fromSeq: number, toSeq: number) => void
+  /** Called once when status.lastRun moves to a new terminal runId. */
+  onRunEvent?: (event: RunEvent) => void
 }
 
 export type StartResult = {
@@ -119,6 +122,12 @@ export class BodyManager {
   private eventSeq = 0
   private lastGuardSeq = 0
   private lastWatchSeq = 0
+  /**
+   * `undefined` until the first status snapshot is seen: the run that ended
+   * before the bridge connected must not wake the owner.
+   */
+  private lastRunId: string | undefined
+  private runEventSeq = 0
   private readonly requestTimeoutMs: number
   private readonly livenessMs: number
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
@@ -199,6 +208,8 @@ export class BodyManager {
       this.lastContactAt = this.now()
       this.lastGuardSeq = 0
       this.lastWatchSeq = 0
+      this.lastRunId = undefined
+      this.runEventSeq = 0
       this.startHeartbeat()
       this.watchExit(handle)
       void this.pumpStatus()
@@ -226,6 +237,7 @@ export class BodyManager {
       this.lastActiveRunId = status.activeRun?.runId ?? null
       this.processGuardEvents(status)
       this.processWatchEvents(status)
+      this.processRunEvent(status)
       return {
         state: 'active',
         status,
@@ -413,6 +425,7 @@ export class BodyManager {
       this.lastActiveRunId = status.activeRun?.runId ?? null
       this.processGuardEvents(status)
       this.processWatchEvents(status)
+      this.processRunEvent(status)
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
     }
@@ -454,6 +467,35 @@ export class BodyManager {
       })
       this.options.onWatchEvent?.(event)
     }
+  }
+
+  /**
+   * Synthesize one terminal `run` event when status.lastRun moves to a new
+   * runId. The body keeps no event cursor for runs, so the bridge diffs the
+   * snapshot instead; the first snapshot only primes the id.
+   */
+  private processRunEvent(status: StatusResult): void {
+    const last = status.lastRun ?? null
+    if (last === null) return
+    if (this.lastRunId === undefined) {
+      this.lastRunId = last.runId
+      return
+    }
+    if (this.lastRunId === last.runId) return
+    this.lastRunId = last.runId
+    this.runEventSeq += 1
+    const event: RunEvent = {
+      seq: this.runEventSeq,
+      runId: last.runId,
+      ...(last.definitionId === undefined ? {} : { definitionId: last.definitionId }),
+      status: last.status,
+      ...(last.error === undefined ? {} : { errorCode: last.error.code }),
+      progress: last.progress ?? null,
+      ...(last.evidence === undefined ? {} : { evidence: last.evidence }),
+      at: this.now(),
+    }
+    this.emitEvent('run', event)
+    this.safeCallback(this.options.onRunEvent, event)
   }
 
   private watchExit(handle: BodyHandle): void {

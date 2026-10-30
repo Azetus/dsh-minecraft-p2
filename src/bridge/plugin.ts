@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 
 import type { JsonValue } from '../contracts/index.ts'
-import type { GuardEvent, OwnerContext, WatchEvent } from '../contracts/protocol.ts'
+import type { GuardEvent, OwnerContext, RunEvent, WatchEvent } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
@@ -109,6 +109,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 } {
   let notifyGuardEvent: ((event: GuardEvent) => void) | undefined
   let notifyWatchEvent: ((event: WatchEvent) => void) | undefined
+  let notifyRunEvent: ((event: RunEvent) => void) | undefined
   let notifyBodyFault: ((fault: BodyFault) => void) | undefined
   let notifyBodyRestart: ((info: RestartInfo) => void) | undefined
   const manager = new BodyManager({
@@ -132,6 +133,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     onWatchGap: (fromSeq, toSeq) => {
       options.log?.(`p2 watch event gap: ${fromSeq}..${toSeq}`)
     },
+    onRunEvent: event => notifyRunEvent?.(event),
   })
 
   return {
@@ -202,6 +204,15 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         )
       }
       notifyWatchEvent = queueWatchWake
+      notifyRunEvent = event => {
+        const summary = event.errorCode === undefined ? event.status : `${event.status}:${event.errorCode}`
+        const label = event.definitionId ?? 'behavior'
+        deliverWake(
+          `[p2 run] ${event.runId} ${label} ${summary}. Terminal run state changed; inspect p2_events for the full event and p2_status for the next decision.`,
+          'p2-runtime',
+          event.status === 'failed' ? 'urgent' : 'observe',
+        )
+      }
       notifyBodyFault = fault => {
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'

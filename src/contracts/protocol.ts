@@ -318,8 +318,25 @@ export type ActiveRunSummary = {
   completion: string | null
 }
 
+/**
+ * Terminal run event, synthesized by the bridge from status.lastRun transitions.
+ * Fired once per runId so an owner wake is guaranteed when a behavior ends,
+ * without the owner having to poll p2_status.
+ */
+export type RunEvent = {
+  seq: number
+  runId: string
+  definitionId?: string
+  status: 'succeeded' | 'failed' | 'cancelled'
+  errorCode?: string
+  progress?: JsonValue | null
+  evidence?: JsonValue
+  at: number
+}
+
 export type LastRunSummary = {
   runId: string
+  definitionId?: string
   status: 'succeeded' | 'failed' | 'cancelled'
   error?: P2Error
   progress?: JsonValue | null

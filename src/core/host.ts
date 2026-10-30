@@ -413,7 +413,10 @@ export class BehaviorHost {
   }
 
   async rescueRun(request: RescueParams): Promise<RescueResult> {
-    if (this.run !== undefined && !isTerminal(this.run.status)) {
+    // Self-heal effects do not touch control, so they stay available while a run
+    // is active (a creeper chase cannot afford "stop the behavior first").
+    // Positional rescue still conflicts with the run's control path.
+    if (request.action !== 'effect' && this.run !== undefined && !isTerminal(this.run.status)) {
       throw p2Error('RESCUE_BUSY', 'runtime', 'stop the active behavior before using rescue', { module: 'core.host' })
     }
     if (this.rescue === undefined) {
@@ -1514,6 +1517,7 @@ export class BehaviorHost {
     const observation = run.observation()
     this.lastRun = {
       runId: run.runId,
+      definitionId: run.definition.id,
       status: run.status,
       ...(run.error === undefined ? {} : { error: run.error }),
       progress: observation.progress,
