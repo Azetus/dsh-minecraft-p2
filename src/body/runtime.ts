@@ -254,6 +254,10 @@ export class BodyRuntime {
     if (!isOwnerContext(params.owner)) {
       throw p2Error(ErrorCodes.INVALID_OWNER, 'validation', 'owner context is invalid', { module: 'body.runtime' })
     }
+    if (this.owner !== undefined
+      && (this.owner.sessionId !== params.owner.sessionId || this.owner.agentId !== params.owner.agentId)) {
+      throw p2Error(ErrorCodes.INVALID_OWNER, 'validation', 'owner is already initialized', { module: 'body.runtime' })
+    }
     this.owner = params.owner
     this.lastHeartbeatAt = this.now()
     this.host.setOwner(params.owner.agentId)

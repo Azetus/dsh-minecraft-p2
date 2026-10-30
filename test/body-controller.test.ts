@@ -307,6 +307,13 @@ describe('BodyController wiring', () => {
       protocols: [PROTOCOL_VERSION],
       owner,
     }))
+    const otherOwner = runtime.handleRequest(request('hello', {
+      protocols: [PROTOCOL_VERSION],
+      owner: { ...owner, sessionId: 'other-session' },
+    }))
+    expect(otherOwner.error?.code).toBe('INVALID_OWNER')
+    expect('activeRun' in runtime.status()).toBe(false)
+    expect('guards' in runtime.status()).toBe(false)
 
     const enabled = runtime.handleRequest(request('controller.enable', {}))
     expect(enabled.error).toBeUndefined()
