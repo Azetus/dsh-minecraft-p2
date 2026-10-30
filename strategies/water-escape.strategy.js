@@ -6,7 +6,7 @@
 defineStrategy({
   manifest: {
     id: 'water-escape',
-    version: '3',
+    version: '5',
     slot: 'S0',
     hazardClass: 'lethal',
     facts: ['position'],
@@ -19,7 +19,13 @@ defineStrategy({
       return { kind: 'unknown', missing: facts && facts.unknown ? facts.unknown : ['facts'] }
     }
     var position = facts.values.position
-    if (!position || position.inWater !== true) return { kind: 'idle' }
+    if (!position || position.inWater !== true) {
+      // A jump briefly reports inWater=false while the escape action is still
+      // running. Do not let that transient clear the emergency and resume the
+      // task while the bot is still in the river.
+      if (ctx.activeAction) return { kind: 'running', intent: ctx.activeAction.intent }
+      return { kind: 'idle' }
+    }
     if (ctx.activeAction) return { kind: 'running', intent: ctx.activeAction.intent }
     var checkpoint = (ctx.commitment && ctx.commitment.checkpoint) || {}
     var attempts = typeof checkpoint.escapeAttempts === 'number' ? checkpoint.escapeAttempts : 0
