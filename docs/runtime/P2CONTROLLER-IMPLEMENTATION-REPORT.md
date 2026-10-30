@@ -133,3 +133,12 @@
 - S0 危险抢占（水中/苦力怕）未在实机触发：测试点附近无安全可控的水域/苦力怕；该路径仍只有 fake 覆盖。
 - 实机探针策略把 bot 带到基地西侧约 14 格（僵尸/骷髅 5–10 格），已用 `p2_rescue action=tp` 回基地（审计 id `f75b4308-…`）。实机测试应限制行走目标在已知安全半径内，或先安装 S0 策略。
 - 探针策略（`strategies/probe-*.js`）是测试内容，不属于产品；`probe-dig` 的“脚下挖掘”会在原地留下 1 格坑。
+
+### 6.4 修复复测（第二次 `/p2 start` 后）
+
+| 复测 | 结果 |
+| --- | --- |
+| 同一 attempt 连续两次承诺 | `reg-a` walk:-6 成功后 `cancel`；`reg-b` walk:-3 立即 `action-started` 并成功 —— 旧 `lastOutcome` 不再卡住新承诺 |
+| 跨 realm 异常诊断 | 抛错策略的诊断显示 `Error: probe-error-boom`（不再是 `[object Object]`） |
+
+遗留小项：vm 错误消息仍带 `Error: ` 前缀（`strategy-runtime` 的 `messageOf` 用 String 回退）；不影响可读性，作为下一次构建的清理项。

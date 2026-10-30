@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `probe-dig.strategy.js` | S2 | 在脚下挖一块并走到掉落物，验证 baseline 增量与证据判定 |
 | `probe-walk.strategy.js` | S2 | 按 `checkpoint.walk` 走到坐标，验证租约、路径停止与 cancel |
+| `probe-error.strategy.js` | S2 | 固定抛错，验证跨 realm 异常诊断可读 |
 
 流程：
 
