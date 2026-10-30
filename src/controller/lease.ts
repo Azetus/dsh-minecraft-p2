@@ -51,6 +51,7 @@ export type HandoverTickResult = {
   phase: HandoverPhase
   leaseState: LeaseState
   started?: LeaseGrant
+  startedRequest?: ActionRequest
   completed?: { grant: LeaseGrant; outcome: ActionOutcome }
   fault?: ControlFault
   faultCleared: boolean
@@ -154,6 +155,14 @@ export class ActionLeaseMachine {
   cancel(at = this.now()): void {
     if (this.phaseValue !== 'active') return
     this.revoke(at, 'cancel')
+  }
+
+  /** Drop a queued wish without touching the deadline or the active action. */
+  dropPending(reason: string, at = this.now()): boolean {
+    if (this.pendingValue === undefined) return false
+    this.pendingValue = undefined
+    this.record('queued', at, undefined, `pending dropped: ${reason}`)
+    return true
   }
 
   /**
@@ -301,7 +310,7 @@ export class ActionLeaseMachine {
     if (started.outcome !== 'started' || started.grant === undefined) {
       return this.result({ faultCleared: false })
     }
-    return this.result({ started: started.grant, faultCleared: false })
+    return this.result({ started: started.grant, startedRequest: next, faultCleared: false })
   }
 
   private pollFault(at: number): HandoverTickResult {
@@ -399,6 +408,7 @@ export class ActionLeaseMachine {
 
   private result(extra: {
     started?: LeaseGrant
+    startedRequest?: ActionRequest
     completed?: { grant: LeaseGrant; outcome: ActionOutcome }
     faultCleared: boolean
   }): HandoverTickResult {
@@ -407,6 +417,7 @@ export class ActionLeaseMachine {
       leaseState: this.leaseStateValue,
       faultCleared: extra.faultCleared,
       ...(extra.started === undefined ? {} : { started: extra.started }),
+      ...(extra.startedRequest === undefined ? {} : { startedRequest: extra.startedRequest }),
       ...(extra.completed === undefined ? {} : { completed: extra.completed }),
       ...(this.faultValue === undefined ? {} : { fault: this.faultValue }),
     }

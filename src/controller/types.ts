@@ -48,6 +48,8 @@ export type ActionRequest = {
   slot: SlotId
   /** Stable strategy identity that owns the request (for example `S2:harvest`). */
   holder: string
+  /** Strategy attempt that produced the request; results are matched by it. */
+  attemptId?: string
 }
 
 export type ActionProgress = {
