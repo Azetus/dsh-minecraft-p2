@@ -9,7 +9,7 @@
 defineStrategy({
   manifest: {
     id: 'probe-walk',
-    version: '3',
+    version: '4',
     slot: 'S2',
     facts: ['position'],
     acts: ['goto'],
@@ -32,6 +32,21 @@ defineStrategy({
     }
     var targetIntent = 'walk:' + walk.x + ',' + walk.y + ',' + walk.z
     if (ctx.activeAction) return { kind: 'running', intent: ctx.activeAction.intent }
+    var hazards = (ctx.memory && ctx.memory.hazards) || []
+    for (var h = 0; h < hazards.length; h += 1) {
+      var area = hazards[h].area
+      if (!area) continue
+      var dx = walk.x - area.x
+      var dy = walk.y - area.y
+      var dz = walk.z - area.z
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) <= area.radius) {
+        return {
+          kind: 'blocked',
+          missing: ['safe-target'],
+          diagnostics: [{ code: 'HAZARD_TARGET', message: 'walk target is inside a remembered hazard' }],
+        }
+      }
+    }
     var last = ctx.lastOutcome
     var own = last && last.attemptId === ctx.attemptId && last.intent === targetIntent ? last : null
     if (own && own.status === 'failed') {
@@ -50,4 +65,5 @@ defineStrategy({
     }
   },
 })
+
 

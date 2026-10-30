@@ -6,7 +6,7 @@
 defineStrategy({
   manifest: {
     id: 'water-escape',
-    version: '2',
+    version: '3',
     slot: 'S0',
     hazardClass: 'lethal',
     facts: ['position'],
@@ -36,7 +36,17 @@ defineStrategy({
       act: 'leave-water',
       args: {},
       checkpoint: { escapeAttempts: attempts + 1 },
+      hazard: {
+        id: 'water:' + Math.floor(position.x) + ',' + Math.floor(position.y) + ',' + Math.floor(position.z),
+        kind: 'water',
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        radius: 3,
+        ttlMs: 600000,
+      },
     }
   },
 })
+
 

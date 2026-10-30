@@ -95,8 +95,6 @@ export async function checkOp(request: OpCheckRequest): Promise<OpCheckResult> {
     kind: 'op',
     definitionId: info.name,
     sourceDigest: sourceHash,
-    irVersion: 0,
-    irDigest: null,
     codeDigest: `sha256:${codeDigest}`,
     buildToolVersion: CHECKER_VERSION,
     bindingId: request.bindingId,

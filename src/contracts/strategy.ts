@@ -35,6 +35,17 @@ export type StrategyActionShape = {
   args?: Record<string, JsonValue>
 }
 
+export type StrategyHazardShape = {
+  id: string
+  kind: string
+  x: number
+  y: number
+  z: number
+  radius?: number
+  dimension?: string
+  ttlMs?: number
+}
+
 export type StrategyDiagnosticShape = {
   code: string
   message: string
@@ -48,7 +59,7 @@ export type StrategyDiagnosticShape = {
 export type StrategyVerdictShape =
   | { kind: 'idle'; checkpoint?: JsonValue }
   | { kind: 'unknown'; missing: string[]; checkpoint?: JsonValue }
-  | ({ kind: 'propose'; checkpoint?: JsonValue } & StrategyActionShape)
+  | ({ kind: 'propose'; checkpoint?: JsonValue; hazard?: StrategyHazardShape } & StrategyActionShape)
   | { kind: 'running'; intent: string; progress?: { step?: string; fraction?: number; detail?: JsonValue }; checkpoint?: JsonValue }
   | { kind: 'wait'; until: string; deadlineMs: number; checkpoint?: JsonValue }
   | {
@@ -57,6 +68,7 @@ export type StrategyVerdictShape =
     leasePriority: 'interrupt' | 'boundary'
     action?: StrategyActionShape
     checkpoint?: JsonValue
+    hazard?: StrategyHazardShape
   }
   | { kind: 'candidate-complete'; evidence: string[]; checkpoint?: JsonValue }
   | {

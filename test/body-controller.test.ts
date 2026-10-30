@@ -92,8 +92,6 @@ function artifactWith(code: string, facts: string[], acts: string[] = [], resolv
       kind: 'strategy',
       definitionId: id,
       sourceDigest: 's',
-      irVersion: 0,
-      irDigest: null,
       codeDigest: null,
       buildToolVersion: 'test',
       bindingId: 'b',

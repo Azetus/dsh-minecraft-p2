@@ -72,6 +72,10 @@ export function createArtifactStrategy(options: ArtifactStrategyOptions): Strate
         return failedVerdict(context, 'INVALID_STRATEGY_VERDICT', `unknown verdict kind: ${String(raw.kind)}`)
       }
 
+      const hazard = readHazard(context, artifact, raw)
+      if ('error' in hazard) return hazard.error
+      if (hazard.record !== undefined) context.memory.recordHazard(hazard.record)
+
       const checkpoint = raw.checkpoint
       if (checkpoint !== undefined) {
         if (!saveCheckpoint(context, checkpoint, maxBytes)) {
@@ -161,6 +165,53 @@ export function createArtifactStrategy(options: ArtifactStrategyOptions): Strate
 type ActionRead =
   | { request: ReturnType<StrategyContext['request']>; intent: string }
   | { error: StrategyVerdict }
+
+type HazardRead =
+  | { record?: Parameters<StrategyContext['memory']['recordHazard']>[0] }
+  | { error: StrategyVerdict }
+
+function readHazard(
+  context: StrategyContext,
+  artifact: StrategyArtifact,
+  value: Record<string, JsonValue>,
+): HazardRead {
+  if (value.hazard === undefined) return {}
+  if (artifact.slot !== 'S0') {
+    return { error: failedVerdict(context, 'HAZARD_UNDECLARED', 'only S0 strategies may record a hazard') }
+  }
+  if (value.kind !== 'propose' && value.kind !== 'recover') {
+    return { error: failedVerdict(context, 'INVALID_STRATEGY_VERDICT', 'hazard is only valid on propose/recover') }
+  }
+  if (!isRecord(value.hazard)) {
+    return { error: failedVerdict(context, 'INVALID_HAZARD', 'hazard must be an object') }
+  }
+  const raw = value.hazard
+  if (typeof raw.id !== 'string' || raw.id.length === 0) {
+    return { error: failedVerdict(context, 'INVALID_HAZARD', 'hazard.id is required') }
+  }
+  if (typeof raw.kind !== 'string' || raw.kind.length === 0) {
+    return { error: failedVerdict(context, 'INVALID_HAZARD', 'hazard.kind is required') }
+  }
+  if (typeof raw.x !== 'number' || typeof raw.y !== 'number' || typeof raw.z !== 'number'
+    || !Number.isFinite(raw.x) || !Number.isFinite(raw.y) || !Number.isFinite(raw.z)) {
+    return { error: failedVerdict(context, 'INVALID_HAZARD', 'hazard needs numeric x/y/z') }
+  }
+  const radius = typeof raw.radius === 'number' && Number.isFinite(raw.radius) && raw.radius > 0 ? raw.radius : 2
+  const ttlMs = typeof raw.ttlMs === 'number' && Number.isFinite(raw.ttlMs) && raw.ttlMs > 0 ? raw.ttlMs : 300_000
+  if (raw.dimension !== undefined && typeof raw.dimension !== 'string') {
+    return { error: failedVerdict(context, 'INVALID_HAZARD', 'hazard.dimension must be a string') }
+  }
+  return {
+    record: {
+      hazardId: raw.id,
+      kind: raw.kind,
+      area: { x: raw.x, y: raw.y, z: raw.z, radius },
+      ...(raw.dimension === undefined ? {} : { dimension: raw.dimension }),
+      at: context.now,
+      expiresAt: context.now + ttlMs,
+    },
+  }
+}
 
 function readAction(
   context: StrategyContext,

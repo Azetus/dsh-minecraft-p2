@@ -114,8 +114,6 @@ export type ArtifactManifest = {
   kind: ArtifactKind
   definitionId: string
   sourceDigest: string
-  irVersion: number
-  irDigest: string | null
   codeDigest: string | null
   buildToolVersion: string
   bindingId: string

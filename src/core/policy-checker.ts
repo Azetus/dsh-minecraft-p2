@@ -66,8 +66,6 @@ export async function checkPolicy(request: PolicyCheckRequest): Promise<PolicyCh
     kind: 'policy',
     definitionId: info.id,
     sourceDigest: sourceHash,
-    irVersion: 1,
-    irDigest: null,
     codeDigest: `sha256:${codeDigest}`,
     buildToolVersion: CHECKER_VERSION,
     bindingId: request.bindingId,

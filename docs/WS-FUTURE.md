@@ -50,7 +50,7 @@ heartbeat 2000ms、lease 10000ms 是保留的配置起点，不是保证；恢�
 | command.get | commandId | 命令阶段及最终结果；无记录返回未知。 |
 | events.subscribe / events.ack | 游标 | 至少一次事件及缺口说明；ack 只代表 bridge 已接收保存。 |
 
-命令状态保留 accepted、pending、completed、rejected、superseded。completed 是命令完成，不代表 behavior 成功；切换完成表示新 run 已开始，停止未获收尾证明时仍 pending 并附故障。具体 WS 字段 schema 和凭据机制在实现该阶段前验证。
+命令状态保留 accepted、pending、completed、rejected、superseded。completed 是命令完成，不代表承诺成功；controller 的 disable 未获释放证明时仍 pending 并附故障。具体 WS 字段 schema 和凭据机制在实现该阶段前验证。
 
 同 commandId 同业务内容返回原结果，不同内容拒绝；摘要包括方法、目标与参数，不包括 requestId 或连接凭据。先鉴权再查结果。未知命令不等于从未执行，不自动换新 commandId 重做；新 epoch 不重放旧命令。D6 首版仅提供调试日志与有界内存记录；本方案的持久通知、可靠 ack 和跨崩溃对账另列为[后续恢复能力](FEEDBACK-AND-RECOVERY.md#7-异常退出与后续恢复功能)，须在实现前重新确定存储与预算，不能直接依赖首版日志。
 

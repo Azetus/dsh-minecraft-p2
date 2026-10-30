@@ -86,8 +86,6 @@ export async function checkAct(request: ActCheckRequest): Promise<ActCheckResult
     kind: 'act',
     definitionId: info.id,
     sourceDigest: sourceHash,
-    irVersion: 1,
-    irDigest: null,
     codeDigest: `sha256:${codeDigest}`,
     buildToolVersion: CHECKER_VERSION,
     bindingId: request.bindingId,

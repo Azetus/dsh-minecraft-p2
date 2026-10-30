@@ -122,8 +122,6 @@ export async function checkStrategyJs(request: StrategyCheckRequest): Promise<St
     kind: 'strategy',
     definitionId: module.manifest.id,
     sourceDigest: sourceHash,
-    irVersion: 0,
-    irDigest: null,
     codeDigest: createHash('sha256').update(bytes).digest('hex'),
     buildToolVersion: CHECKER_VERSION,
     bindingId: request.bindingId,

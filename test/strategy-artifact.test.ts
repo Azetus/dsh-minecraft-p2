@@ -135,8 +135,6 @@ describe('strategy runtime and adapter', () => {
         kind: 'strategy',
         definitionId: 'adapter',
         sourceDigest: 's',
-        irVersion: 0,
-        irDigest: null,
         codeDigest: null,
         buildToolVersion: 'test',
         bindingId: 'b',
@@ -200,6 +198,23 @@ describe('strategy runtime and adapter', () => {
     expect(propose).toMatchObject({ kind: 'propose', intent: 'dig:1,2,3' })
     expect(requests[0]).toMatchObject({ act: 'act-dig-9', intent: 'dig:1,2,3' })
     expect(saved).toEqual([{ target: 'a' }])
+
+    const memory = new ActionMemory({ now: () => 100 })
+    const s0Artifact: StrategyArtifact = { ...artifact, slot: 'S0', hazardClass: 'lethal' }
+    const hazardVerdict = createArtifactStrategy({
+      artifact: s0Artifact,
+      evaluate: () => ({
+        kind: 'propose',
+        intent: 'leave-water',
+        act: 'dig',
+        args: {},
+        hazard: { id: 'water:1', kind: 'water', x: 1, y: 2, z: 3, radius: 2, ttlMs: 1000 },
+      }),
+    }).evaluate({ ...context, slot: 'S0', memory })
+    expect(hazardVerdict.kind).toBe('propose')
+    expect(memory.hazards(100)).toMatchObject([
+      { hazardId: 'water:1', kind: 'water', area: { x: 1, y: 2, z: 3, radius: 2 } },
+    ])
 
     const complete = createArtifactStrategy({
       artifact,

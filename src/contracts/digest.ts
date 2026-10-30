@@ -152,8 +152,6 @@ export function normalizeArtifactManifest(manifest: ArtifactManifest): ArtifactM
     kind: manifest.kind,
     definitionId: manifest.definitionId,
     sourceDigest: manifest.sourceDigest,
-    irVersion: manifest.irVersion,
-    irDigest: manifest.irDigest ?? null,
     codeDigest: manifest.codeDigest ?? null,
     buildToolVersion: manifest.buildToolVersion,
     bindingId: manifest.bindingId,

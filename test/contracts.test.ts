@@ -45,8 +45,6 @@ const artifact: ArtifactManifest = {
   kind: 'act',
   definitionId: 'collect',
   sourceDigest: 'c'.repeat(64),
-  irVersion: 1,
-  irDigest: 'd'.repeat(64),
   codeDigest: null,
   buildToolVersion: 'esbuild@0.28.2',
   bindingId: 'e'.repeat(64),
