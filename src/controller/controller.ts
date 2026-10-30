@@ -223,6 +223,9 @@ export class P2Controller {
   private activeRequest: ActionRequest | undefined
   private activeSlot: SlotId | undefined
   private lastOutcomeValue: StrategyContext['lastOutcome'] | undefined
+  /** Debounce S0 clearing: a jump can briefly report inWater=false. */
+  private s0HadEmergency = false
+  private s0ClearTicks = 0
   private lastCompletionAt: number | undefined
   /** False while the body is shutting the controller down: no new dispatch. */
   private autonomyValue = true
@@ -346,6 +349,8 @@ export class P2Controller {
     this.lastOutcomeValue = undefined
     this.lastCompletionAt = undefined
     this.stallValue = undefined
+    this.s0HadEmergency = false
+    this.s0ClearTicks = 0
     return commitment
   }
 
@@ -853,6 +858,7 @@ export class P2Controller {
     }
 
     const emergency = evaluations.filter(evaluation => evaluation.slot === 'S0' && isHazardSignal(evaluation.verdict))
+    const s0Clear = this.s0EmergencyClear(emergency)
     const task = evaluations.find(evaluation => evaluation.slot === 'S2' && evaluation.strategyKey === commitment.strategyKey)
 
     if (commitment.state === 'active') {
@@ -869,6 +875,7 @@ export class P2Controller {
         }
         return
       }
+      if (!s0Clear) return
       if (task?.verdict.kind === 'candidate-complete') {
         this.completionGate(commitment, task.verdict.evidence, now)
         return
@@ -887,6 +894,7 @@ export class P2Controller {
         }
         return
       }
+      if (!s0Clear) return
       this.beginVerification(commitment, 'hazard-cleared', now)
       return
     }
@@ -898,6 +906,7 @@ export class P2Controller {
         return
       }
       if (this.machine.controlFault !== undefined) return
+      if (!s0Clear) return
       const verdict = task?.verdict
       const ready = verdict?.kind === 'propose' || verdict?.kind === 'candidate-complete' || verdict?.kind === 'running'
       if (ready) {
@@ -1095,6 +1104,24 @@ export class P2Controller {
       }
     }
     if (this.registry.pending().length === 0) this.degraded.delete(`dispatch:${request.holder}`)
+  }
+
+  /**
+   * A jump can transiently report inWater=false, so an S0 that stops proposing
+   * for one tick is not proof that the hazard cleared. Require a few quiet ticks.
+   */
+  private s0EmergencyClear(emergency: SlotEvaluation[]): boolean {
+    if (emergency.length > 0) {
+      this.s0HadEmergency = true
+      this.s0ClearTicks = 0
+      return false
+    }
+    if (!this.s0HadEmergency) return true
+    this.s0ClearTicks += 1
+    if (this.s0ClearTicks < 3) return false
+    this.s0HadEmergency = false
+    this.s0ClearTicks = 0
+    return true
   }
 
   /**
