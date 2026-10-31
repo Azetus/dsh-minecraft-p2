@@ -74,6 +74,21 @@ function fakePort(): FakePort {
 }
 
 describe('mind integration', () => {
+  it('holds still when no order is active', () => {
+    const { port, moves } = fakePort()
+    const mind = createMind({
+      port,
+      home: { x: 0, y: 64, z: 0 },
+      contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.tick()
+    expect(mind.status().tracker).toBe('idle')
+    expect(moves).toHaveLength(0)
+  })
+
   it('selects, starts and finishes one wander job', async () => {
     const { port, moves, pending } = fakePort()
     const mind = createMind({
@@ -85,6 +100,7 @@ describe('mind integration', () => {
       now: () => 1_000,
     })
 
+    mind.enqueueOrder({ verb: 'wander' })
     mind.tick()
     expect(mind.status().tracker).toBe('running')
     expect(moves).toHaveLength(1)

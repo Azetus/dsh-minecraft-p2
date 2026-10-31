@@ -410,12 +410,23 @@ export class BodyRuntime {
         const last = this.lastHostileNotice.get(entity.id)
         if (last !== undefined && at - last < 30_000) continue
         this.lastHostileNotice.set(entity.id, at)
+        const distance = Math.hypot(
+          entity.position.x - self.pos.x,
+          entity.position.y - self.pos.y,
+          entity.position.z - self.pos.z,
+        )
         this.pushNotice({
           kind: 'hostile-near',
-          severity: 'warning',
+          severity: distance <= 6 ? 'critical' : 'warning',
           key: `hostile:${entity.id}`,
-          summary: `hostile ${entity.name} within 8 blocks at ${Math.floor(entity.position.x)},${Math.floor(entity.position.y)},${Math.floor(entity.position.z)}`,
-          data: { id: entity.id, name: entity.name, position: entity.position },
+          summary: `hostile ${entity.name}#${entity.id} at ${Math.floor(entity.position.x)},${Math.floor(entity.position.y)},${Math.floor(entity.position.z)} (${distance.toFixed(1)}m)`,
+          data: {
+            id: entity.id,
+            name: entity.name,
+            position: entity.position,
+            distance,
+            self: self.pos,
+          },
         })
       }
       this.nearHostiles.clear()

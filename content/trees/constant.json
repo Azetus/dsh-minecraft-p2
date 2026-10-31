@@ -1,1 +1,1 @@
-{ "type": "priority", "children": [{ "type": "giver", "ref": "eat" }, { "type": "giver", "ref": "escape" }] }
+{ "type": "priority", "children": [{ "type": "giver", "ref": "escape" }] }

@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import { createEatDriver } from '../src/mind/drivers/eat.ts'
-import { createEatGiver } from '../src/mind/givers/eat.ts'
+import { createSleepDriver } from '../src/mind/drivers/sleep.ts'
 import { createGoHomeGiver, createWanderGiver, isNight } from '../src/mind/givers/home.ts'
+import {
+  createEatOrderGiver,
+  createGoOrderGiver,
+  createSleepOrderGiver,
+  createWanderOrderGiver,
+} from '../src/mind/givers/orders.ts'
+import type { JsonValue } from '../src/contracts/types.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
 import type { ClientPort } from '../src/port/index.ts'
 
@@ -47,13 +54,55 @@ describe('idle givers', () => {
     expect(giver.find(ctx, world({ time: { timeOfDay: 18_000, worldAge: 1 } }))).toBeNull()
   })
 
-  it('selects food when food is low', () => {
-    const giver = createEatGiver({ threshold: 14 })
-    const candidate = giver.find({ now: 0 }, world({
+  it('executes go/eat/sleep only from an explicit order', () => {
+    const active: { order: { id: string; verb: string; params?: Record<string, JsonValue> } } = {
+      order: { id: 'ord-1', verb: 'go', params: { x: 4, y: 64, z: -2 } },
+    }
+    const go = createGoOrderGiver(() => active)
+    expect(go.find({ now: 0 }, world())).toMatchObject({
+      driverId: 'move',
+      target: { kind: 'point', pos: { x: 4, y: 64, z: -2 } },
+    })
+
+    active.order = { id: 'ord-2', verb: 'eat', params: {} }
+    const eat = createEatOrderGiver(() => active)
+    expect(eat.find({ now: 0 }, world({
       inventory: [{ slot: 36, name: 'cookie', count: 10 }],
+    }))).toMatchObject({ driverId: 'eat', params: { item: 'cookie' } })
+
+    active.order = { id: 'ord-3', verb: 'sleep', params: { x: 1, y: 64, z: 1 } }
+    const sleep = createSleepOrderGiver(() => active)
+    expect(sleep.find({ now: 0 }, world())).toMatchObject({ driverId: 'sleep' })
+    expect(createGoOrderGiver(() => undefined).find({ now: 0 }, world())).toBeNull()
+  })
+
+  it('executes a wander order', () => {
+    const wander = createWanderOrderGiver(
+      () => ({ order: { id: 'ord-w', verb: 'wander' } }),
+      createWanderGiver({ allowNight: true, cooldownMs: 0, radius: 6 }),
+    )
+    const candidate = wander.find({ now: 0, home: { x: 0, y: 64, z: 0 } }, Object.assign(world(), {
+      blockAt: (p: { y: number }) => ({ name: p.y < 64 ? 'stone' : 'air', loaded: true }),
     }))
-    expect(candidate).toMatchObject({ driverId: 'eat', params: { item: 'cookie' } })
-    expect(giver.find({ now: 0 }, world({ self: { ...baseSelf, food: 20 } }))).toBeNull()
+    expect(candidate).toMatchObject({ driverId: 'move' })
+  })
+})
+
+describe('sleep driver', () => {
+  it('moves near the bed and then sleeps', async () => {
+    const calls: string[] = []
+    const port = {
+      moveTo: async () => { calls.push('move'); return { state: 'ok' as const, elapsedMs: 1 } },
+      sleep: async () => { calls.push('sleep'); return { state: 'ok' as const, elapsedMs: 1 } },
+    } as unknown as ClientPort
+    const driver = createSleepDriver()
+    const job = { driverId: 'sleep', params: { x: 1, y: 64, z: 1 } } as unknown as Job
+    const handle = driver.start(job, { port, now: () => 1 })
+    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 2))
+    }
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { kind: 'sleep' } })
+    expect(calls).toEqual(['move', 'sleep'])
   })
 })
 
@@ -80,3 +129,4 @@ describe('eat driver', () => {
     })
   })
 })
+

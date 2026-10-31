@@ -34,15 +34,17 @@ export function createWanderGiver(options: {
   radius?: number
   minDistance?: number
   cooldownMs?: number
+  allowNight?: boolean
 } = {}): WorkGiver {
   const radius = options.radius ?? 8
   const minDistance = options.minDistance ?? 3
   const cooldownMs = options.cooldownMs ?? 12_000
+  const allowNight = options.allowNight ?? false
   let lastAt = Number.NEGATIVE_INFINITY
   return {
     id: 'wander',
     find(ctx: EvalCtx, world: WorldView): Candidate | null {
-      if (isNight(world.time.timeOfDay)) return null
+      if (!allowNight && isNight(world.time.timeOfDay)) return null
       if (ctx.now - lastAt < cooldownMs) return null
       const self = feetOf(world.self.pos)
       const home = ctx.home ?? self

@@ -10,14 +10,22 @@ import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
 import { createClearDriver, CLEAR_DRIVER_ID } from '../mind/drivers/clear.ts'
 import { createCheckDriver, CHECK_DRIVER_ID } from '../mind/drivers/check.ts'
 import { createEatDriver, EAT_DRIVER_ID } from '../mind/drivers/eat.ts'
+import { createSleepDriver, SLEEP_DRIVER_ID } from '../mind/drivers/sleep.ts'
+import { createAttackDriver, ATTACK_DRIVER_ID } from '../mind/drivers/attack.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
-import { createEatGiver } from '../mind/givers/eat.ts'
-import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
+import { createWanderGiver } from '../mind/givers/home.ts'
+import {
+  createEatOrderGiver,
+  createGoOrderGiver,
+  createSleepOrderGiver,
+  createWanderOrderGiver,
+} from '../mind/givers/orders.ts'
+import { createAttackOrderGiver, createCombatGiver } from '../mind/givers/combat.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { createMaterialGiver } from '../mind/givers/material.ts'
 import { MindLoop } from '../mind/loop.ts'
@@ -83,19 +91,30 @@ export type CreateMindOptions = {
 export function createMind(options: CreateMindOptions): MindRuntime {
   const now = options.now ?? (() => Date.now())
   const registry = new Registry()
-  let checkOrderLookup: (() => ReturnType<OrderStore['active']>) | undefined
+  let activeOrderLookup: (() => ReturnType<OrderStore['active']>) | undefined
   registry.registerDriver({ id: MOVE_DRIVER_ID, driver: createMoveDriver() })
   registry.registerDriver({ id: CLEAR_DRIVER_ID, driver: createClearDriver() })
   registry.registerDriver({ id: CHECK_DRIVER_ID, driver: createCheckDriver() })
   registry.registerDriver({ id: EAT_DRIVER_ID, driver: createEatDriver() })
+  registry.registerDriver({ id: SLEEP_DRIVER_ID, driver: createSleepDriver() })
+  registry.registerDriver({ id: ATTACK_DRIVER_ID, driver: createAttackDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
-  registry.registerGiver({ id: 'eat', factory: () => createEatGiver() })
-  registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => checkOrderLookup?.()) })
-  registry.registerGiver({ id: 'goHome', factory: () => createGoHomeGiver() })
-  registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })
+  registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.sleep', factory: () => createSleepOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.eat', factory: () => createEatOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.attack', factory: () => createAttackOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.combat', factory: () => createCombatGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({
+    id: 'order.wander',
+    factory: () => createWanderOrderGiver(
+      () => activeOrderLookup?.(),
+      createWanderGiver({ allowNight: true, cooldownMs: 0 }),
+    ),
+  })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver() })
 
@@ -137,7 +156,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
   })
   orders.restore()
-  checkOrderLookup = () => orders.active()
+  activeOrderLookup = () => orders.active()
 
   const sensors = new Sensors({ port: options.port, now })
   const home = options.home
@@ -194,6 +213,21 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           events.push('check.result', now(), {
             orderId: active.order.id,
             observed: observed ?? null,
+          })
+        }
+      }
+      if (event.kind === 'job.terminal') {
+        const active = orders.active()
+        if (active !== undefined
+          && (active.order.verb === 'go' || active.order.verb === 'eat'
+            || active.order.verb === 'sleep' || active.order.verb === 'wander'
+            || active.order.verb === 'attack')) {
+          orders.complete(active.order.id, event.state === 'succeeded' ? 'succeeded' : 'failed')
+          events.push('order.result', now(), {
+            orderId: active.order.id,
+            state: event.state,
+            ...(event.code === undefined ? {} : { code: event.code }),
+            ...(event.observed === undefined ? {} : { observed: event.observed }),
           })
         }
       }

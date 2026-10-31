@@ -138,7 +138,7 @@ describe('body chat transport', () => {
     vi.advanceTimersByTime(500)
     const result = await runtime.handleRequestAsync(request('perception.poll', { afterSeq: 0 }))
     expect(result.result).toMatchObject({
-      notices: [{ kind: 'hostile-near', severity: 'warning' }],
+      notices: [{ kind: 'hostile-near', severity: 'critical' }],
     })
   })
 })

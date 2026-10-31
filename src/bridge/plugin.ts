@@ -225,7 +225,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         if (pendingPerception.length === 0) return
         const lines = pendingPerception.splice(0)
         deliverWake(
-          `[p2 perception]\n${lines.join('\n')}\n如需改变目标请用 p2_order / p2_cancel；先复核可用 p2_observe。`,
+          `[p2 perception][DIGEST]\n${lines.join('\n')}\nNo immediate action required; assess after current work.`,
           'normal',
         )
       }
@@ -247,7 +247,19 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           for (const notice of result.notices ?? []) {
             perceptionCursor = Math.max(perceptionCursor, notice.seq)
             if (notice.severity === 'critical') {
-              deliverWake(`[p2 perception] critical: ${notice.summary}`, 'critical')
+              deliverWake(
+                [
+                  '[p2 perception][IMMEDIATE]',
+                  `- ${notice.kind}: ${notice.summary}`,
+                  'FIRST ACTION (do not call p2_observe first):',
+                  'FIGHT only if your combat ROE already allows this target:',
+                  '  p2_order {verb:"attack", params:{entityId:"<id from summary>"}}',
+                  'FLIGHT is the default without ROE / low health / creeper / multiple threats:',
+                  '  p2_order {verb:"go", params:{x:<safe> y:<safe> z:<safe>}} or p2_cancel',
+                  'Then verify; never auto-attack without an explicit combat order.',
+                ].join('\n'),
+                'critical',
+              )
             } else {
               pendingPerception.push(`- ${notice.kind}: ${notice.summary}`)
               schedulePerception()

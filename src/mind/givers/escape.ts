@@ -17,6 +17,7 @@ import {
  */
 export function createEscapeGiver(): WorkGiver {
   let held: { threat: string; target: { x: number; y: number; z: number }; at: number; kind: 'cover' | 'hostile' } | undefined
+  let lastSeenAt = 0
   return {
     id: 'escape',
     find(ctx: EvalCtx, world: WorldView): Candidate | null {
@@ -37,33 +38,30 @@ export function createEscapeGiver(): WorkGiver {
 
       const threat = hostilesNear(world, self.pos, 6)[0]
       if (threat === undefined) {
-        held = undefined
+        // Sensor snapshots can miss an adjacent mob for a tick. Keep the
+        // target through a short gap instead of recomputing a new one.
+        if (ctx.now - lastSeenAt > 500) held = undefined
         return null
+      }
+      lastSeenAt = ctx.now
+
+      // Same threat: keep the selected target for 3s even if a single
+      // snapshot briefly says it is not standable. Recomputing every tick
+      // causes preempt/restart thrash and can prevent any movement.
+      if (held !== undefined && held.threat === threat.id && ctx.now - held.at < 3_000) {
+        return moveCandidate(
+          held.target,
+          held.kind === 'cover' ? `escape:cover:${threat.id}` : `escape:hostile:${threat.id}`,
+          6_000,
+        )
       }
 
       // A phantom or ranged mob cannot hit through a solid roof. Prefer a
       // covered standable cell before an open-field retreat.
-      if (held !== undefined
-        && held.kind === 'cover'
-        && held.threat === threat.id
-        && ctx.now - held.at < 3_000
-        && isStandable(world, held.target)) {
-        return moveCandidate(held.target, `escape:cover:${threat.id}`, 6_000)
-      }
       const cover = nearestCoveredStandable(world, feet, 6)
       if (cover !== undefined) {
         held = { threat: threat.id, target: cover, at: ctx.now, kind: 'cover' }
         return moveCandidate(cover, `escape:cover:${threat.id}`, 6_000)
-      }
-
-      // Keep one retreat target for the same threat. Recomputing every tick
-      // makes the candidate target jitter and causes preempt/restart thrash.
-      if (held !== undefined
-        && held.kind === 'hostile'
-        && held.threat === threat.id
-        && ctx.now - held.at < 3_000
-        && isStandable(world, held.target)) {
-        return moveCandidate(held.target, `escape:hostile:${threat.id}`, 6_000)
       }
 
       const dx = feet.x - Math.floor(threat.position.x)

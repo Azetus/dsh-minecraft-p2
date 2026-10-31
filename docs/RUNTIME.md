@@ -197,13 +197,25 @@ order 可带 `policy.conflict`：
 - 三态：`observed.state = ok | failed | unknown`；`unknown` 不会被当作成功。
 - Verifier 仍只用世界方块/物品快照；需要界面数据时必须排队 check，不直接开窗。
 
-### 10.8 idle 调优（M4-03）
+### 10.8 idle 边界与执行原语（M4-03 重构）
 
-- 夜间（timeOfDay 13000–23000）回家半径收紧到 2，wander 直接返回 null，原地待命。
-- 白天 wander 有 12s 冷却，避免持续选新点；半径/最小距离仍可配置。
-- 食物低于 14 时 `eat` giver 选背包食物；`eat` driver 装备后按住使用约 1.8s，
-  以食物值上升作为成功证据，而不是只看动作返回。
-- 夜间验收仍要求 30 分钟零死亡/零方块变化；本轮用单测和短实机验证，未跑满 30 分钟。
+- 默认无 order：**hold**，不自动 wander、不自动回家、不自动进食。
+- 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击。
+- Agent 显式 order：
+  - `hold`：原地待命；
+  - `go`：移动到坐标附近；
+  - `wander`：有界游荡（Agent 显式开启，允许夜间）；
+  - `eat`：吃指定/背包食物；
+  - `sleep`：移动到床附近并用床；
+  - `check`：打开容器/熔炉做三态观测；
+  - `attack`：攻击 Agent 明确指定的 entityId，单次；
+  - `combat`：按 `allowedTargets` 白名单和半径索敌 hostile，持续到 Agent 取消；
+    players/neutral 始终受保护。
+- P2 执行原语：move / useOn / sleep / eat / check / attack；失败上报，不自行消耗食物或改变目标。
+- 旧“夜间自动回家/自动进食/自动游荡”已移除；`home` 只是 Agent 可使用的坐标，
+  不再是 P2 自动安全锚点。
+- Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察，
+  FIGHT 仅在已有 combat ROE 时使用，否则默认 FLIGHT。
 
 ### 10.9 感知与唤醒粒度（M4 后）
 

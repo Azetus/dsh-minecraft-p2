@@ -22,21 +22,30 @@ P2_Observer: 测试三：你能收到吗
 
 - `check` order verb 已接入 check giver / check driver；只有 check driver 打开容器界面。
 - 结果三态写入 `job.terminal.observed` 和 `check.result`：`ok | failed | unknown`。
-- 单测覆盖 ok / failed / unknown；当前加载区域没有箱子/熔炉，因此未做容器实机。
+- 单测覆盖 ok / failed / unknown；当前加载区域没有箱子/熔炉，因此容器实机 `ok` 仍未完成。
 - Verifier 未增加任何开窗调用。
 
-## M4-03 idle
+## M4-03 idle（已按职责边界重构）
 
-- 实机：health 1 / food 0 启动后 `eat` 连续消耗 cookie，观测到
-  `food 0→2→4→6→8→10→12`，身体仍在 active；证明 equip + 按住使用 + 食物值验证生效。
-- 夜间回家半径 2、夜间禁止 wander、白天 wander 12s 冷却均为单测覆盖。
-- 尚未跑满夜间 30 分钟零死亡/零方块变化验收。
-- 已确认存档从旧 journal 迁移时身份 defVersion 会变化；旧 journal 已归档为
-  `.p2/journal-pre-m4.jsonl`，新 journal 重新建立身份头。
+- 默认无 order：hold，已实机确认 tracker idle、无自动移动/进食。
+- Agent 显式 order：`hold` / `go` / `wander` / `eat` / `sleep`；P2 提供执行原语。
+- 实机：`go` order 成功完成（order.terminal succeeded）；
+  `wander` 首次在地形受限时未产生 job，重试成功；`eat`/`sleep` 仅单测（实机无食物/床）。
+- 夜间 30 分钟验收仍未跑；当前世界昼夜固定白天，需要可夜晚的测试世界。
+- 旧自动回家/进食/游荡已移除，不再内建 Agent 策略。
+
+## 战斗 ROE
+
+- 新增 `attack`（显式 entityId）与 `combat`（allowedTargets 白名单 + 半径）执行路径。
+- 玩家与中立生物始终受保护；`combat` 只索敌 hostile。
+- 无 Agent 明确 attack/combat order 时，P2 不攻击。
+- 新增 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察，
+  FIGHT 仅已有 ROE 时使用，否则默认 FLIGHT。
+- 实机未做战斗测试（当前 body 已停）。
 
 ## 验证
 
-- `npm run check`：274 passed / 1 skipped。
+- `npm run check`：282 passed / 1 skipped。
 - 实机 chat：合并推送与 `p2_say` 双向成功。
 - 实机 eat：food 从 0 升到 12（继续进食到阈值）。
 
