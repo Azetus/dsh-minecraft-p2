@@ -12,6 +12,8 @@ export type BlockInfo = {
   name: string
   state?: Record<string, string>
   loaded: boolean
+  /** Set by `blocksIn` entries; `blockAt` already knows the position. */
+  pos?: Vec3
 }
 
 export type Item = { slot: number; name: string; count: number }
