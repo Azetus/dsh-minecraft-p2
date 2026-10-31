@@ -62,6 +62,7 @@ function fakePort(): FakePort {
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
     blocksIn,
     entities: () => [],
+    inventory: () => [],
     beginWrite: () => {},
     endWrite: () => {},
     moveTo: (target: { x: number; y: number; z: number }) => {

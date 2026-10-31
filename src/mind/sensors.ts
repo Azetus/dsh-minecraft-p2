@@ -77,7 +77,8 @@ export class Sensors {
     }
     const blocks = this.port.blocksIn(blockBox)
     const entities = this.port.entities(entityBox)
-    return { self, time, entities, blocks }
+    const inventory = this.port.inventory()
+    return { self, time, entities, blocks, inventory }
   }
 }
 

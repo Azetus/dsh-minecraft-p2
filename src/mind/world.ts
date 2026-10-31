@@ -1,4 +1,4 @@
-import type { BlockInfo, Box, EntityInfo, SelfInfo, Vec3 } from '../port/index.ts'
+import type { BlockInfo, Box, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
 import type { WorldView } from './types.ts'
 
 export type SnapshotData = {
@@ -6,6 +6,7 @@ export type SnapshotData = {
   time: { timeOfDay: number; worldAge: number }
   entities: EntityInfo[]
   blocks: BlockInfo[]
+  inventory: Item[]
   stale?: boolean
 }
 
@@ -13,6 +14,7 @@ export type SnapshotData = {
 export class SnapshotWorld implements WorldView {
   readonly self: SelfInfo
   readonly time: { timeOfDay: number; worldAge: number }
+  readonly inventory: Item[]
   readonly stale?: boolean
   private readonly blocks = new Map<string, BlockInfo>()
   private readonly entityList: EntityInfo[]
@@ -20,6 +22,7 @@ export class SnapshotWorld implements WorldView {
   constructor(data: SnapshotData) {
     this.self = data.self
     this.time = data.time
+    this.inventory = data.inventory
     this.entityList = data.entities
     if (data.stale !== undefined) this.stale = data.stale
     for (const block of data.blocks) {

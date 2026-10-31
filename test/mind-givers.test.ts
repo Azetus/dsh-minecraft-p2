@@ -52,6 +52,7 @@ function flatWorld(options: {
     time: { timeOfDay: 1000, worldAge: 100 },
     entities: options.entities ?? [],
     blocks,
+    inventory: [],
   })
 }
 
@@ -116,6 +117,7 @@ describe('home and wander givers', () => {
       time: { timeOfDay: 1000, worldAge: 1 },
       entities: [],
       blocks: [],
+      inventory: [],
     })
     expect(createWanderGiver().find(ctx, empty)).toBeNull()
   })

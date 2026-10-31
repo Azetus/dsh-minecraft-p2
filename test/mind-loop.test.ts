@@ -34,6 +34,7 @@ function world(stale = false): WorldView {
     },
     time: { timeOfDay: 1000, worldAge: 100 },
     ...(stale ? { stale: true } : {}),
+    inventory: [],
     blockAt: () => null,
     blocksIn: () => [],
     entitiesIn: () => [],

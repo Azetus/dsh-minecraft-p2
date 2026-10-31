@@ -4,6 +4,7 @@ import type {
   Box,
   ClientPort,
   EntityInfo,
+  Item,
   SelfInfo,
   Vec3,
 } from '../port/index.ts'
@@ -37,6 +38,7 @@ export type WorldView = {
   time: { timeOfDay: number; worldAge: number }
   /** True when the sensor snapshot is older than its budget. */
   stale?: boolean
+  inventory: Item[]
   blockAt(p: Vec3): BlockInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]
   entitiesIn(box: Box): EntityInfo[]

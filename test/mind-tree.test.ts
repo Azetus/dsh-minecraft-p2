@@ -26,6 +26,7 @@ function world(overrides: Partial<WorldView> = {}): WorldView {
       inLava: false,
     },
     time: { timeOfDay: 1_000, worldAge: 100 },
+    inventory: [],
     blockAt: () => null,
     blocksIn: () => [],
     entitiesIn: () => [],
