@@ -4,6 +4,7 @@ import {
   feetOf,
   farthestStandable,
   hostilesNear,
+  isStandable,
   moveCandidate,
   nearestStandable,
 } from './common.ts'
@@ -14,26 +15,40 @@ import {
  * work and must not preempt an order.
  */
 export function createEscapeGiver(): WorkGiver {
+  let held: { threat: string; target: { x: number; y: number; z: number }; at: number } | undefined
   return {
     id: 'escape',
-    find(_ctx: EvalCtx, world: WorldView): Candidate | null {
+    find(ctx: EvalCtx, world: WorldView): Candidate | null {
       const self = world.self
       const feet = feetOf(self.pos)
 
-      if (self.inLava) {
-        const target = nearestStandable(world, feet, 6, feet, 2)
-        if (target === undefined) return null
-        return moveCandidate(target, 'escape:lava', 4_000)
-      }
-
-      if (self.inWater && !self.onGround) {
+      if (self.inLava || (self.inWater && !self.onGround)) {
+        held = undefined
+        if (self.inLava) {
+          const target = nearestStandable(world, feet, 6, feet, 2)
+          if (target === undefined) return null
+          return moveCandidate(target, 'escape:lava', 4_000)
+        }
         const target = nearestStandable(world, feet, 6, feet, 2)
         if (target === undefined) return null
         return moveCandidate(target, 'escape:water', 6_000)
       }
 
       const threat = hostilesNear(world, self.pos, 6)[0]
-      if (threat === undefined) return null
+      if (threat === undefined) {
+        held = undefined
+        return null
+      }
+
+      // Keep one retreat target for the same threat. Recomputing every tick
+      // makes the candidate target jitter and causes preempt/restart thrash.
+      if (held !== undefined
+        && held.threat === threat.id
+        && ctx.now - held.at < 3_000
+        && isStandable(world, held.target)
+        && Math.hypot(held.target.x - feet.x, held.target.z - feet.z) > 1) {
+        return moveCandidate(held.target, `escape:hostile:${threat.id}`, 6_000)
+      }
 
       const dx = feet.x - Math.floor(threat.position.x)
       const dz = feet.z - Math.floor(threat.position.z)
@@ -48,6 +63,7 @@ export function createEscapeGiver(): WorkGiver {
       const target = nearestStandable(world, feet, 7, desired, 2)
         ?? farthestStandable(world, feet, 7, threat.position, 2)
       if (target === undefined) return null
+      held = { threat: threat.id, target, at: ctx.now }
       return moveCandidate(target, `escape:hostile:${threat.id}`, 6_000)
     },
   }
