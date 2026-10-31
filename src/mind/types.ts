@@ -35,6 +35,8 @@ export type Handoff = {
 export type WorldView = {
   self: SelfInfo
   time: { timeOfDay: number; worldAge: number }
+  /** True when the sensor snapshot is older than its budget. */
+  stale?: boolean
   blockAt(p: Vec3): BlockInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]
   entitiesIn(box: Box): EntityInfo[]
