@@ -52,7 +52,7 @@ export function createMaterialGiver(): WorkGiver {
           const handoff: Handoff = {
             driverId: 'move',
             target: { kind: 'point', pos: best.pos },
-            params: { x: best.pos.x, y: best.pos.y, z: best.pos.z, range: 1, timeoutMs: 8_000 },
+            params: { x: best.pos.x, y: best.pos.y, z: best.pos.z, range: 4, intent: 'interact', timeoutMs: 8_000 },
             reason: `gather ${item}`,
           }
           const handoffKey = `handoff:move:${best.pos.x},${best.pos.y},${best.pos.z}`

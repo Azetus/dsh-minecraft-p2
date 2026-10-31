@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { createMind } from '../src/body/mind.ts'
-import type { ClientPort, SelfInfo } from '../src/port/index.ts'
+import type { ClientPort, Item, SelfInfo } from '../src/port/index.ts'
 import type { Box } from '../src/port/index.ts'
 
 /**
@@ -41,11 +41,13 @@ type FakePort = {
   port: ClientPort
   moves: Array<{ x: number; y: number; z: number }>
   pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void>
+  pillarUps: Array<{ item: string; levels: number }>
 }
 
-function fakePort(): FakePort {
+function fakePort(items: Item[] = []): FakePort {
   const moves: Array<{ x: number; y: number; z: number }> = []
   const pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void> = []
+  const pillarUps: Array<{ item: string; levels: number }> = []
   const blocksIn = (box: Box): Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> => {
     const blocks = []
     for (let x = box.min.x; x <= box.max.x; x += 1) {
@@ -63,15 +65,20 @@ function fakePort(): FakePort {
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
     blocksIn,
     entities: () => [],
-    inventory: () => [],
+    inventory: () => items,
     beginWrite: () => {},
     endWrite: () => {},
     moveTo: (target: { x: number; y: number; z: number }) => {
       moves.push({ x: target.x, y: target.y, z: target.z })
       return new Promise<{ state: 'ok'; elapsedMs: number }>(resolve => { pending.push(resolve) })
     },
+    pillarUp: async (item: string, levels: number) => {
+      pillarUps.push({ item, levels })
+      self.pos.y += levels
+      return { state: 'ok' as const, elapsedMs: 1 }
+    },
   } as unknown as ClientPort
-  return { port, moves, pending }
+  return { port, moves, pending, pillarUps }
 }
 
 describe('mind integration', () => {
@@ -112,6 +119,27 @@ describe('mind integration', () => {
     mind.tick()
     expect(mind.status().tracker).toBe('idle')
     expect(mind.status().job).toBeNull()
+  })
+
+  it('completes a traverse order after the pillar job', async () => {
+    const { port, pillarUps } = fakePort([{ slot: 36, name: 'dirt', count: 2 }])
+    const mind = createMind({
+      port,
+      home: { x: 0, y: 64, z: 0 },
+      contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.enqueueOrder({ verb: 'traverse', params: { mode: 'scaffold', x: 0, y: 66, z: 0, item: 'dirt' } })
+    mind.tick()
+    expect(mind.status().job?.driverId).toBe('traverse')
+    await Promise.resolve()
+    mind.tick()
+    await Promise.resolve()
+    mind.tick()
+    expect(pillarUps).toEqual([{ item: 'dirt', levels: 2 }])
+    expect(mind.status().activeOrder).toBeNull()
   })
 
   it('exposes active and queued orders in status', () => {

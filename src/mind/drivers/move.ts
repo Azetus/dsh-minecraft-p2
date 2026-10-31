@@ -1,4 +1,5 @@
-import type { ActResult } from '../../port/index.ts'
+import { HAZARD_KINDS } from '../../port/terrain.ts'
+import type { ActResult, MoveOptions } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
   Driver,
@@ -20,6 +21,21 @@ const MOVE_SCHEMA: SchemaNode = {
     z: { type: 'number' },
     range: { type: 'number', minimum: 0, maximum: 8 },
     timeoutMs: { type: 'integer', minimum: 1 },
+    exact: { type: 'boolean' },
+    approach: { type: 'boolean' },
+    intent: { type: 'string', enum: ['interact', 'attack'] },
+    unstickDig: { type: 'array', items: { type: 'object', properties: {
+      x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
+    }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
+    hazards: {
+      type: 'object',
+      properties: {
+        allow: { type: 'array', items: { type: 'string', enum: [...HAZARD_KINDS] } },
+        reason: { type: 'string' },
+      },
+      required: ['allow'],
+      additionalProperties: false,
+    },
   },
   required: ['x', 'y', 'z'],
   additionalProperties: false,
@@ -31,6 +47,11 @@ type MoveParams = {
   z: number
   range?: number
   timeoutMs?: number
+  exact?: boolean
+  approach?: boolean
+  unstickDig?: MoveOptions['unstickDig']
+  intent?: MoveOptions['intent']
+  hazards?: MoveOptions['hazards']
 }
 
 /**
@@ -62,7 +83,13 @@ export function createMoveDriver(): Driver {
       const keys = `move:${params.x},${params.y},${params.z},${range}`
       const promise = ctx.port.moveTo(
         { x: params.x, y: params.y, z: params.z },
-        { range, timeoutMs },
+        { range, timeoutMs,
+          ...(params.exact === undefined ? {} : { exact: params.exact }),
+          ...(params.approach === undefined ? {} : { approach: params.approach }),
+          ...(params.unstickDig === undefined ? {} : { unstickDig: params.unstickDig }),
+          ...(params.intent === undefined ? {} : { intent: params.intent }),
+          ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
+        },
       )
       return new MoveHandle(keys, promise)
     },

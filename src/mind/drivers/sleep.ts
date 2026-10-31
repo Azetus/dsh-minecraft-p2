@@ -46,7 +46,7 @@ export function createSleepDriver(): Driver {
 }
 
 async function sleep(port: ClientPort, bed: Vec3): Promise<DriverResult> {
-  const moved = await port.moveTo(bed, { range: 2, timeoutMs: 15_000 })
+  const moved = await port.moveTo(bed, { range: 4, intent: 'interact', timeoutMs: 15_000 })
   if (moved.state !== 'ok') {
     return { state: 'failed', code: moved.code ?? 'SLEEP_MOVE_FAILED' }
   }

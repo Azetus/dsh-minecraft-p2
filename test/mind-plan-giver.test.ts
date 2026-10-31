@@ -81,7 +81,7 @@ describe('plan giver', () => {
     expect(result.driverId).toBe('clear')
   })
 
-  it('hands off a reach-only problem to a nearby stand', () => {
+  it('hands off a reach-only problem with interaction reach', () => {
     const plan = instantiatePlan(template([
       { id: 'far', kind: 'clear', at: [20, 0, 0] },
     ]), 'ord-1', origin)
@@ -98,10 +98,12 @@ describe('plan giver', () => {
       driverId: string
       reason: string
       target: { pos: { x: number; y: number; z: number } }
+      params: { range: number; intent: string }
     }
     expect(result.driverId).toBe('move')
     expect(result.reason).toContain('reach far')
     expect(Math.hypot(result.target.pos.x - 20, result.target.pos.z - 0)).toBeLessThanOrEqual(3)
+    expect(result.params).toMatchObject({ range: 4, intent: 'interact' })
   })
 
   it('hands off an approach move when the work item is outside the snapshot', () => {

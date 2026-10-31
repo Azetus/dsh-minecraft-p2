@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
 import { createGoHomeGiver, createWanderGiver } from '../src/mind/givers/home.ts'
+import { createGoOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
 import type { EntityInfo, SelfInfo } from '../src/port/index.ts'
@@ -90,7 +94,35 @@ describe('escape giver', () => {
   })
 })
 
+describe('main tree wiring', () => {
+  it('references order.traverse so the giver can actually run', () => {
+    const tree = JSON.parse(readFileSync(join(process.cwd(), 'content', 'trees', 'main.json'), 'utf8')) as {
+      children: Array<{ ref?: string }>
+    }
+    expect(tree.children.map(child => child.ref)).toContain('order.traverse')
+  })
+})
+
 describe('home and wander givers', () => {
+  it('wires ordinary go approach and per-order exact/dig authorization into the move job', () => {
+    const unstickDig = [{ x: 1, y: 65, z: 0, name: 'dirt' }]
+    const giver = createGoOrderGiver(() => ({ order: { id: 'go-1', verb: 'go',
+      params: { x: 6, y: 64, z: 0, exact: true, unstickDig } } }))
+    expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { approach: true, exact: true, unstickDig } })
+  })
+  it('passes hazard permission and traverse parameters through the order', () => {
+    const go = createGoOrderGiver(() => ({ order: { id: 'go-h', verb: 'go',
+      params: { x: 6, y: 64, z: 0 },
+      policy: { hazards: { allow: ['lethal_fall'], reason: 'fall' } } } }))
+    expect(go.find(ctx, flatWorld())).toMatchObject({ params: { hazards: { allow: ['lethal_fall'] } } })
+    const traverse = createTraverseGiver(() => ({ order: { id: 'tr-1', verb: 'traverse',
+      params: { mode: 'bridge', x: 3, y: 64, z: 0, item: 'dirt', maxBlocks: 4 } } }))
+    expect(traverse.find(ctx, flatWorld())).toMatchObject({
+      driverId: 'traverse',
+      params: { mode: 'bridge', x: 3, y: 64, z: 0, item: 'dirt', maxBlocks: 4 },
+    })
+  })
+
   it('goes home only when outside the home radius', () => {
     const giver = createGoHomeGiver({ radius: 16 })
     expect(giver.find(ctx, flatWorld({ self: { pos: { x: 5.5, y: 64, z: 0.5 } } }))).toBeNull()

@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
+import { parseHazardPolicy } from '../port/terrain.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from './policy.ts'
 
 export const ORDER_VERBS = [
@@ -25,6 +26,7 @@ export const ORDER_VERBS = [
   'dig',
   'withdraw',
   'deposit',
+  'traverse',
 ] as const
 
 export type OrderVerb = (typeof ORDER_VERBS)[number]
@@ -332,11 +334,16 @@ function validateOrder(value: unknown): Order {
   if (value.params !== undefined && !isRecord(value.params)) {
     throw orderError('INVALID_ORDER', 'order params must be an object')
   }
+  if (value.verb === 'traverse') validateTraverseParams(value.params)
   if (value.policy !== undefined) {
     const conflict = parseConflictPolicy(value.policy)
     if (!conflict.ok) throw orderError('INVALID_ORDER', conflict.error)
     const materials = parseMaterialPolicy(value.policy)
     if (!materials.ok) throw orderError('INVALID_ORDER', materials.error)
+    const hazards = parseHazardPolicy((value.policy as Record<string, unknown>).hazards)
+    if (hazards === null) {
+      throw orderError('INVALID_ORDER', 'policy.hazards must be {allow:["void"|"lethal_fall"|"lava"], reason?}')
+    }
   }
   if (value.budget !== undefined) {
     if (!isRecord(value.budget)) throw orderError('INVALID_ORDER', 'order budget must be an object')
@@ -348,6 +355,29 @@ function validateOrder(value: unknown): Order {
     }
   }
   return value as unknown as Order
+}
+
+/** Material and geometry are mandatory at call time; no implicit material. */
+function validateTraverseParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) {
+    throw orderError('INVALID_ORDER', 'traverse requires params {mode,x,y,z,item}')
+  }
+  if (params.mode !== 'bridge' && params.mode !== 'scaffold') {
+    throw orderError('INVALID_ORDER', 'traverse.mode must be bridge or scaffold')
+  }
+  for (const axis of ['x', 'y', 'z'] as const) {
+    if (typeof params[axis] !== 'number' || !Number.isFinite(params[axis])) {
+      throw orderError('INVALID_ORDER', `traverse.${axis} must be a finite number`)
+    }
+  }
+  if (typeof params.item !== 'string' || params.item.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'traverse.item (the material block) is required')
+  }
+  const maxBlocks = params.maxBlocks
+  if (maxBlocks !== undefined
+    && (typeof maxBlocks !== 'number' || !Number.isInteger(maxBlocks) || maxBlocks < 1 || maxBlocks > 64)) {
+    throw orderError('INVALID_ORDER', 'traverse.maxBlocks must be an integer between 1 and 64')
+  }
 }
 
 function isOrder(value: unknown): value is Order {

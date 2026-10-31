@@ -296,7 +296,7 @@ export class MineflayerClientPort implements ClientPort {
     if (denied !== undefined) return denied
     if (!isVec3(target)) return actFailed('INVALID_TARGET', 0)
 
-    const range = opts.range ?? 1
+    const range = opts.exact === true ? 0 : opts.range ?? 1
     if (![target.x, target.y, target.z, range, opts.timeoutMs ?? 1].every(Number.isFinite)
       || range < 0 || range > 8 || (opts.timeoutMs ?? 1) <= 0) return actFailed('INVALID_TARGET', 0)
     const timeoutMs = Math.min(opts.timeoutMs ?? this.timeouts.moveTo, this.timeouts.moveTo)
@@ -306,6 +306,11 @@ export class MineflayerClientPort implements ClientPort {
       z: target.z,
       range,
       timeoutMs,
+      ...(opts.exact === undefined ? {} : { exact: opts.exact }),
+      ...(opts.approach === undefined ? {} : { approach: opts.approach }),
+      ...(opts.unstickDig === undefined ? {} : { unstickDig: opts.unstickDig }),
+      ...(opts.intent === undefined ? {} : { intent: opts.intent }),
+      ...(opts.hazards === undefined ? {} : { hazards: opts.hazards }),
     }, timeoutMs)
   }
 
@@ -324,6 +329,15 @@ export class MineflayerClientPort implements ClientPort {
     const equipped = await this.ensureHeld(item)
     if (equipped !== undefined) return equipped
     return await this.run('place', { x: p.x, y: p.y, z: p.z, face, item }, this.timeouts.place)
+  }
+
+  async pillarUp(item: string, levels: number): Promise<ActResult> {
+    const denied = this.deny('place')
+    if (denied !== undefined) return denied
+    if (!Number.isInteger(levels) || levels < 1 || levels > 8) return actFailed('INVALID_TARGET', 0)
+    const equipped = await this.ensureHeld(item)
+    if (equipped !== undefined) return equipped
+    return await this.run('pillar', { count: levels }, this.timeouts.place + levels * 3_000)
   }
 
   async useItem(opts: { durationMs?: number } = {}): Promise<ActResult> {
@@ -477,8 +491,19 @@ export class MineflayerClientPort implements ClientPort {
   private async poll(handle: ActHandle, timeoutMs: number, moveEpoch?: number): Promise<WaitResult> {
     const deadline = this.now() + timeoutMs
     let lastProgressAt = Number.NEGATIVE_INFINITY
+    let lastActionSeq = 0
     while (true) {
       const poll = handle.poll()
+      if (moveEpoch !== undefined && this.gate.isCurrent(moveEpoch)) {
+        const observed = poll.status === 'running' ? poll.progress : poll.status === 'succeeded' ? poll.result
+          : poll.status === 'failed' ? poll.error.details : undefined
+        const actions = (observed as { actions?: Array<{ seq: number; kind: string }> } | undefined)?.actions
+        if (Array.isArray(actions)) for (const action of actions) {
+          if (action.seq <= lastActionSeq) continue
+          lastActionSeq = action.seq
+          if (action.kind === 'door' || action.kind === 'unstick-dig') this.emit(`move.${action.kind}`, { epoch: moveEpoch, ...action })
+        }
+      }
       if (moveEpoch !== undefined && !this.gate.isCurrent(moveEpoch)) {
         this.stopHandle(handle)
         if (handle.controlState?.() !== 'idle' && handle.poll().status !== 'cancelled') {

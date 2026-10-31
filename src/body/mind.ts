@@ -16,6 +16,7 @@ import { createSmeltDriver, SMELT_DRIVER_ID } from '../mind/drivers/smelt.ts'
 import { createDigDriver, DIG_DRIVER_ID } from '../mind/drivers/dig.ts'
 import { createContainerDriver, CONTAINER_DRIVER_ID } from '../mind/drivers/container.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
+import { createTraverseDriver, TRAVERSE_DRIVER_ID } from '../mind/drivers/traverse.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
@@ -26,6 +27,7 @@ import {
   createEatOrderGiver,
   createGoOrderGiver,
   createSleepOrderGiver,
+  createTraverseGiver,
   createWanderOrderGiver,
 } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver, createCombatGiver } from '../mind/givers/combat.ts'
@@ -108,6 +110,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: DIG_DRIVER_ID, driver: createDigDriver() })
   registry.registerDriver({ id: CONTAINER_DRIVER_ID, driver: createContainerDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
+  registry.registerDriver({ id: TRAVERSE_DRIVER_ID, driver: createTraverseDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
@@ -120,6 +123,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.smelt', factory: () => createSmeltOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.dig', factory: () => createDigOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.container', factory: () => createContainerOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({
     id: 'order.wander',
     factory: () => createWanderOrderGiver(
@@ -148,7 +152,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const templates = loadedPlans.templates
 
   const events = new MindEvents()
-  for (const event of ['move.started', 'move.progress', 'move.no_path', 'move.stuck', 'move.finished'] as const) {
+  for (const event of ['move.started', 'move.progress', 'move.no_path', 'move.stuck', 'move.finished', 'move.door', 'move.unstick-dig'] as const) {
     options.port.on(event, data => events.push(event, now(), data))
   }
   let lastReport: JsonValue | null = null
@@ -242,7 +246,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
             || active.order.verb === 'sleep' || active.order.verb === 'wander'
             || active.order.verb === 'attack' || active.order.verb === 'smelt'
             || active.order.verb === 'dig' || active.order.verb === 'withdraw'
-            || active.order.verb === 'deposit')) {
+            || active.order.verb === 'deposit' || active.order.verb === 'traverse')) {
           orders.complete(active.order.id, event.state === 'succeeded' ? 'succeeded' : 'failed')
           events.push('order.result', now(), {
             orderId: active.order.id,

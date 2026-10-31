@@ -78,7 +78,7 @@ async function smelt(port: ClientPort, params: SmeltParams): Promise<DriverResul
   const output = params.output ?? 'iron_ingot'
   const count = Math.max(1, Math.floor(params.count ?? 1))
 
-  const toChest = await port.moveTo(chest, { range: 2, timeoutMs: 20_000 })
+  const toChest = await port.moveTo(chest, { range: 4, intent: 'interact', timeoutMs: 20_000 })
   if (toChest.state !== 'ok') return { state: 'failed', code: toChest.code ?? 'SMELT_MOVE_CHEST' }
 
   for (const [item, itemCount] of [[input, count], [fuel, count]] as const) {
@@ -88,7 +88,7 @@ async function smelt(port: ClientPort, params: SmeltParams): Promise<DriverResul
     }
   }
 
-  const toFurnace = await port.moveTo(furnace, { range: 2, timeoutMs: 20_000 })
+  const toFurnace = await port.moveTo(furnace, { range: 4, intent: 'interact', timeoutMs: 20_000 })
   if (toFurnace.state !== 'ok') return { state: 'failed', code: toFurnace.code ?? 'SMELT_MOVE_FURNACE' }
 
   const loadedInput = await port.containerTransfer(furnace, 'load-input', input, count)
@@ -115,7 +115,7 @@ async function smelt(port: ClientPort, params: SmeltParams): Promise<DriverResul
   const taken = await port.containerTransfer(furnace, 'take-output')
   if (taken.state !== 'ok') return { state: 'failed', code: taken.code ?? 'SMELT_TAKE_OUTPUT' }
 
-  const back = await port.moveTo(chest, { range: 2, timeoutMs: 20_000 })
+  const back = await port.moveTo(chest, { range: 4, intent: 'interact', timeoutMs: 20_000 })
   if (back.state !== 'ok') return { state: 'failed', code: back.code ?? 'SMELT_RETURN_FAILED' }
   const deposited = await port.containerTransfer(chest, 'deposit', output, count)
   if (deposited.state !== 'ok') {

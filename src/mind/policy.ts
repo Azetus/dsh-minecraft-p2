@@ -30,7 +30,9 @@ export function parseConflictPolicy(value: JsonValue | undefined): ConflictPolic
   if (value === undefined) return { ok: true, policy: undefined }
   if (!isRecord(value)) return { ok: false, error: 'policy must be an object' }
   for (const key of Object.keys(value)) {
-    if (key !== 'conflict' && key !== 'materials') return { ok: false, error: `policy.${key} is not supported` }
+    if (key !== 'conflict' && key !== 'materials' && key !== 'hazards') {
+      return { ok: false, error: `policy.${key} is not supported` }
+    }
   }
   const conflict = value.conflict
   if (conflict === undefined) return { ok: true, policy: undefined }

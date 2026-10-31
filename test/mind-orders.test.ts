@@ -60,6 +60,32 @@ describe('order store', () => {
     expect(errorCode(() => store.enqueue(order('ord-1')))).toBe('ORDER_EXISTS')
   })
 
+  it('validates per-order hazard permissions and the traverse verb', () => {
+    const store = new OrderStore()
+    expect(store.enqueue({
+      id: 'ord-hazard',
+      verb: 'go',
+      params: { x: 0, y: 64, z: 0 },
+      policy: { hazards: { allow: ['lethal_fall'], reason: 'test' } },
+    }).state).toBe('active')
+    expect(errorCode(() => store.enqueue({
+      id: 'ord-bad-hazard',
+      verb: 'go',
+      params: { x: 0, y: 64, z: 0 },
+      policy: { hazards: { allow: ['lava', 'not-a-hazard'] } },
+    }))).toBe('INVALID_ORDER')
+    expect(store.enqueue({
+      id: 'ord-traverse',
+      verb: 'traverse',
+      params: { mode: 'bridge', x: 2, y: 64, z: 0, item: 'dirt' },
+    }).state).toBe('queued')
+    expect(errorCode(() => store.enqueue({
+      id: 'ord-no-material',
+      verb: 'traverse',
+      params: { mode: 'bridge', x: 2, y: 64, z: 0 },
+    }))).toBe('INVALID_ORDER')
+  })
+
   it('cancelling the active order promotes the next and is terminal', () => {
     const store = new OrderStore()
     store.enqueue(order('ord-1'))

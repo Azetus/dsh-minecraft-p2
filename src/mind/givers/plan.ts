@@ -55,7 +55,7 @@ export function createPlanGiver(): WorkGiver {
         const handoff: Handoff = {
           driverId: 'move',
           target: { kind: 'point', pos: stand },
-          params: { x: stand.x, y: stand.y, z: stand.z, range: 1, timeoutMs: 8_000 },
+          params: { x: stand.x, y: stand.y, z: stand.z, range: 0, exact: true, timeoutMs: 8_000 },
           reason: `step aside ${item.id}`,
         }
         const key = `handoff:move:${stand.x},${stand.y},${stand.z}`
@@ -80,7 +80,7 @@ export function createPlanGiver(): WorkGiver {
         const handoff: Handoff = {
           driverId: 'move',
           target: { kind: 'point', pos: position },
-          params: { x: position.x, y: position.y, z: position.z, range: 2, timeoutMs: 10_000 },
+          params: { x: position.x, y: position.y, z: position.z, range: 4, intent: 'interact', timeoutMs: 10_000 },
           reason: `approach ${unknown.id}`,
         }
         const key = `handoff:${handoff.driverId}:${position.x},${position.y},${position.z}`
@@ -93,17 +93,15 @@ export function createPlanGiver(): WorkGiver {
       })
       for (const item of unreachable) {
         const target = itemPosition(plan, item)
-        // Stand next to the work item, not on it: a standable target cell is
-        // exactly where a place job would be blocked by the body.
-        const stand = nearestStandable(world, target, 2, target, 1, target)
-        if (stand === undefined) continue
+        // The navigation goal selects a reachable standing cell within block
+        // interaction reach, excluding the work cell itself.
         const handoff: Handoff = {
           driverId: 'move',
-          target: { kind: 'point', pos: stand },
-          params: { x: stand.x, y: stand.y, z: stand.z, range: 1, timeoutMs: 8_000 },
+          target: { kind: 'point', pos: target },
+          params: { x: target.x, y: target.y, z: target.z, range: 4, intent: 'interact', timeoutMs: 8_000 },
           reason: `reach ${item.id}`,
         }
-        const handoffKey = `handoff:${handoff.driverId}:${stand.x},${stand.y},${stand.z}`
+        const handoffKey = `handoff:${handoff.driverId}:${target.x},${target.y},${target.z}`
         if (ctx.isBlocked?.(handoffKey) === true) continue
         return handoff
       }

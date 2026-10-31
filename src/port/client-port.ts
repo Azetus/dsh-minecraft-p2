@@ -15,6 +15,7 @@ import type {
   Vec3,
 } from './types.ts'
 import type { WriteToken } from './write-token.ts'
+import type { HazardPolicy, UnstickBlock } from './terrain.ts'
 
 export type ClientEvent =
   | 'blockUpdated'
@@ -28,8 +29,19 @@ export type ClientEvent =
   | 'move.no_path'
   | 'move.stuck'
   | 'move.finished'
+  | 'move.door'
+  | 'move.unstick-dig'
 
-export type MoveOptions = { range?: number; timeoutMs?: number }
+export type MoveOptions = {
+  range?: number
+  timeoutMs?: number
+  exact?: boolean
+  approach?: boolean
+  unstickDig?: UnstickBlock[]
+  intent?: 'interact' | 'attack'
+  /** Explicit danger permissions for this call; default is empty. */
+  hazards?: HazardPolicy
+}
 
 /**
  * The only game-I/O boundary. Values are pure data: no mineflayer objects,
@@ -76,6 +88,8 @@ export interface ClientPort {
   lookAt(p: Vec3): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
+  /** Jump and place the held material under the feet, once per level. */
+  pillarUp(item: string, levels: number): Promise<ActResult>
   useItem(opts?: { durationMs?: number }): Promise<ActResult>
   equip(item: string): Promise<ActResult>
   useOn(p: Vec3): Promise<ActResult>

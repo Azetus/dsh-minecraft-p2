@@ -74,7 +74,8 @@ describe('combat ROE', () => {
   })
 
   it('executes one attack and reports success', async () => {
-    const port = { attack: async () => ({ state: 'ok' as const, elapsedMs: 1 }) } as unknown as ClientPort
+    const port = { self: () => world([]).self, entities: () => [entity({ id: 'z1', name: 'zombie' })],
+      attack: async () => ({ state: 'ok' as const, elapsedMs: 1 }) } as unknown as ClientPort
     const driver = createAttackDriver()
     const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
     const handle = driver.start(job, { port, now: () => 1 })
@@ -82,5 +83,22 @@ describe('combat ROE', () => {
       await new Promise(resolve => setTimeout(resolve, 2))
     }
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { kind: 'attack', entityId: 'z1' } })
+  })
+
+  it('uses bounded attack reach and rechecks a moving target before attacking', async () => {
+    let attacks = 0
+    const moves: unknown[] = []
+    const port = {
+      self: () => world([]).self,
+      entities: () => [entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 } })],
+      moveTo: async (_target: unknown, opts: unknown) => { moves.push(opts); return { state: 'ok', elapsedMs: 1 } },
+      attack: async () => { attacks++; return { state: 'ok', elapsedMs: 1 } },
+    } as unknown as ClientPort
+    const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
+    const handle = createAttackDriver().start(job, { port, now: () => 1 })
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(moves).toEqual([{ range: 2.5, intent: 'attack', timeoutMs: 15_000 }])
+    expect(attacks).toBe(0)
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_MOVED' })
   })
 })

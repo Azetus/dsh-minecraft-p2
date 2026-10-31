@@ -4,6 +4,7 @@ import type { Movements } from 'mineflayer-pathfinder'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 import { configureNavigation, NavigationRun } from './navigation.ts'
+import { parseHazardPolicy, parseUnstickBlocks } from '../port/terrain.ts'
 
 /**
  * The mineflayer module itself, re-exported for the body's authored-op bridge.
@@ -337,8 +338,11 @@ export class MineflayerProvider implements ActPort {
         at: Date.now(),
         position: position === undefined ? null : { x: position.x, y: position.y, z: position.z },
       }
-      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
-      current?.abort?.(new Error('the bot died'), 'DEATH')
+      const current = this.current as (ActHandle & {
+        abort?: (error: Error, code?: string) => void
+        deathCode?: () => string
+      }) | undefined
+      current?.abort?.(new Error('the bot died'), current.deathCode?.() ?? 'DEATH')
     })
     bot.on('error', error => {
       clearInterval(this.pauseTimer)
@@ -1200,6 +1204,14 @@ class MineflayerActHandle implements ActHandle {
     return null
   }
 
+  /** Preserve the caller's explicit hazard permission in the terminal code. */
+  deathCode(): string {
+    const hazards = parseHazardPolicy(this.args.hazards)
+    return hazards !== null && hazards !== undefined && hazards.allow.length > 0
+      ? 'DIED_IN_ALLOWED_HAZARD'
+      : 'DEATH'
+  }
+
   abort(error: Error, code = 'ACT_FAILED'): void {
     if (this.cancelled || this.completed) return
     this.failed = error
@@ -1354,7 +1366,19 @@ class MineflayerActHandle implements ActHandle {
             this.failedCode = 'BAD_ARGS'
             return
           }
-          const range = typeof this.args.range === 'number' ? this.args.range : 1
+          const range = this.args.exact === true ? 0 : typeof this.args.range === 'number' ? this.args.range : 1
+          const unstickDig = parseUnstickBlocks(this.args.unstickDig)
+          if (unstickDig === null) {
+            this.failed = new Error('unstickDig requires at most 2 integer coordinates with expected names')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
+          const hazards = parseHazardPolicy(this.args.hazards)
+          if (hazards === null) {
+            this.failed = new Error('hazards must allow at most void/lethal_fall/lava')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
           const timeout = Math.min(typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000, this.options.actionTimeoutMs)
           this.navigationRun = new NavigationRun(this.bot, this.movements, { x, y, z }, range, timeout,
             (code, observed, released) => {
@@ -1367,7 +1391,9 @@ class MineflayerActHandle implements ActHandle {
                 this.failed = new Error(code)
                 this.failureDetails = observed
               }
-            })
+            }, { exact: this.args.exact === true, approach: this.args.approach === true, unstickDig,
+              ...(this.args.intent === 'interact' || this.args.intent === 'attack' ? { intent: this.args.intent } : {}),
+              ...(hazards === undefined ? {} : { hazards }) })
           this.navigationRun.start()
           return
         }
