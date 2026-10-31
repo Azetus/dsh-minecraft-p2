@@ -28,6 +28,21 @@ export function createPlanGiver(): WorkGiver {
       }
       if (evaluation.satisfied) return null
 
+      // The item may be outside the sensor box. Walk toward it before calling
+      // it unreachable: the next snapshot will load those blocks.
+      const unknown = plan.workItems.find(item => evaluation.states.get(item.id)?.kind === 'unknown')
+      if (unknown !== undefined) {
+        const position = itemPosition(plan, unknown)
+        const handoff: Handoff = {
+          driverId: 'move',
+          target: { kind: 'point', pos: position },
+          params: { x: position.x, y: position.y, z: position.z, range: 2, timeoutMs: 10_000 },
+          reason: `approach ${unknown.id}`,
+        }
+        const key = `handoff:${handoff.driverId}:${position.x},${position.y},${position.z}`
+        if (ctx.isBlocked?.(key) !== true) return handoff
+      }
+
       const unreachable = plan.workItems.filter(item => {
         const state = evaluation.states.get(item.id)
         return state?.kind === 'blocked' && (state as { reason?: string }).reason === 'UNREACHABLE'

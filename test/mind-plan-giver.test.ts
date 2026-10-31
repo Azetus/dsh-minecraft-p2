@@ -104,6 +104,20 @@ describe('plan giver', () => {
     expect(Math.hypot(result.target.pos.x - 20, result.target.pos.z - 0)).toBeLessThanOrEqual(3)
   })
 
+  it('hands off an approach move when the work item is outside the snapshot', () => {
+    const plan = instantiatePlan(template([
+      { id: 'far', kind: 'clear', at: [30, 0, 0] },
+    ]), 'ord-1', origin)
+    const result = createPlanGiver().find({ now: 0, plan }, world()) as unknown as {
+      driverId: string
+      reason: string
+      target: { pos: { x: number; y: number; z: number } }
+    }
+    expect(result.driverId).toBe('move')
+    expect(result.reason).toContain('approach far')
+    expect(result.target.pos).toEqual({ x: 30, y: 64, z: 0 })
+  })
+
   it('returns null when every work item is satisfied', () => {
     const plan = instantiatePlan(template([
       { id: 'c1', kind: 'clear', at: [1, 0, 0] },

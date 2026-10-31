@@ -137,17 +137,21 @@ export function evaluatePlan(plan: PlanInstance, world: WorldView): PlanEvaluati
   let next: { item: WorkItem; state: WorkState } | undefined
   let satisfied = true
   let blocked = false
+  let unknown = false
   for (const item of plan.workItems) {
     const state = stateOf(item)
     if (state.kind !== 'satisfied') satisfied = false
     if (state.kind === 'executable' && next === undefined) next = { item, state }
     if (state.kind === 'blocked') blocked = true
+    if (state.kind === 'unknown') unknown = true
   }
   return {
     states,
     next,
     satisfied,
-    blocked: next === undefined && blocked,
+    // "All blocked" means every item is known and blocked; an unknown cell
+    // must not turn into a blocked report.
+    blocked: next === undefined && blocked && !unknown,
   }
 }
 
