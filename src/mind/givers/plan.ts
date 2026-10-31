@@ -41,6 +41,26 @@ export function createPlanGiver(): WorkGiver {
           return handoff
         }
       }
+      // A place target that coincides with the body cannot be placed; step
+      // aside first. This also repairs an approach that ended on the cell.
+      for (const item of plan.workItems) {
+        const state = evaluation.states.get(item.id)
+        if (state?.kind !== 'executable' || state.driverId !== 'place') continue
+        const position = itemPosition(plan, item)
+        const feet = world.self.pos
+        if (Math.floor(feet.x) !== position.x || Math.floor(feet.z) !== position.z) continue
+        if (Math.floor(feet.y) !== position.y && Math.floor(feet.y) !== position.y + 1) continue
+        const stand = nearestStandable(world, position, 2, position, 1, position)
+        if (stand === undefined) continue
+        const handoff: Handoff = {
+          driverId: 'move',
+          target: { kind: 'point', pos: stand },
+          params: { x: stand.x, y: stand.y, z: stand.z, range: 1, timeoutMs: 8_000 },
+          reason: `step aside ${item.id}`,
+        }
+        const key = `handoff:move:${stand.x},${stand.y},${stand.z}`
+        if (ctx.isBlocked?.(key) !== true) return handoff
+      }
       // Iterate all items: a key blocked by repeated failures is skipped, and
       // the next executable item is still offered.
       for (const item of plan.workItems) {
@@ -73,9 +93,9 @@ export function createPlanGiver(): WorkGiver {
       })
       for (const item of unreachable) {
         const target = itemPosition(plan, item)
-        // Stand next to the work item, not merely somewhere near the current
-        // body: a stand three blocks away can still be out of reach.
-        const stand = nearestStandable(world, target, 2, target, 1)
+        // Stand next to the work item, not on it: a standable target cell is
+        // exactly where a place job would be blocked by the body.
+        const stand = nearestStandable(world, target, 2, target, 1, target)
         if (stand === undefined) continue
         const handoff: Handoff = {
           driverId: 'move',

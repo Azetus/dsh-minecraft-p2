@@ -63,6 +63,7 @@ export function nearestStandable(
   radius: number,
   desired: Vec3 = center,
   vertical = 2,
+  exclude?: Vec3,
 ): Vec3 | undefined {
   let best: Vec3 | undefined
   let bestDistance = Number.POSITIVE_INFINITY
@@ -70,6 +71,8 @@ export function nearestStandable(
     for (let dz = -radius; dz <= radius; dz += 1) {
       for (let dy = -vertical; dy <= vertical; dy += 1) {
         const candidate = { x: center.x + dx, y: center.y + dy, z: center.z + dz }
+        if (exclude !== undefined
+          && candidate.x === exclude.x && candidate.y === exclude.y && candidate.z === exclude.z) continue
         if (!isStandable(world, candidate)) continue
         const distance = Math.hypot(
           candidate.x - desired.x,
