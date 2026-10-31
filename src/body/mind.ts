@@ -10,6 +10,7 @@ import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
+import { createPlanGiver } from '../mind/givers/plan.ts'
 import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
 import { Registry } from '../mind/registry.ts'
@@ -53,6 +54,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'goHome', factory: () => createGoHomeGiver() })
   registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })
+  registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
 
   const definitions = readTreeDefinitions(options.contentDir)
   if (definitions.constant === undefined || definitions.main === undefined) {

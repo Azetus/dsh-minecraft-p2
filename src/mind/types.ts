@@ -9,6 +9,7 @@ import type {
   Vec3,
 } from '../port/index.ts'
 import type { SchemaNode } from './schema.ts'
+import type { PlanInstance } from './plan.ts'
 
 /** A selected target. M1 only needs points; more kinds arrive with plans. */
 export type Target = { kind: 'point'; pos: Vec3 }
@@ -48,6 +49,8 @@ export type EvalCtx = {
   now: number
   /** Where "home" is for this body; absent until the body records its start. */
   home?: Vec3
+  /** Active plan for this order, if any. */
+  plan?: PlanInstance
 }
 
 export interface WorkGiver {

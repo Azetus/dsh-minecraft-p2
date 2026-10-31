@@ -1,1 +1,1 @@
-{ "type": "priority", "children": [{ "type": "giver", "ref": "goHome" }, { "type": "giver", "ref": "wander" }] }
+{ "type": "priority", "children": [{ "type": "giver", "ref": "plan.work" }, { "type": "giver", "ref": "goHome" }, { "type": "giver", "ref": "wander" }] }
