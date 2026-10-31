@@ -36,6 +36,12 @@ P2_Observer: 测试三：你能收到吗
 
 ## 验证
 
-- `npm run check`：273 passed / 1 skipped。
+- `npm run check`：274 passed / 1 skipped。
 - 实机 chat：合并推送与 `p2_say` 双向成功。
 - 实机 eat：food 从 0 升到 12（继续进食到阈值）。
+
+## 感知切片
+
+- body 已接 `damaged`/`died`/`task-block` 三类感知；task-block 只匹配 active plan 关注的坐标。
+- 普通 digest 在 Agent running 时本地挂起，idle 后合并 `followup`；critical 才 `steer`。
+- 尚未接 entity near；生存反射仍由现有 escape giver 负责。

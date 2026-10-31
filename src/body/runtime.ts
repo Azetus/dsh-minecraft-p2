@@ -26,6 +26,8 @@ import type {
   MindReportResult,
   MindStatusView,
   OwnerContext,
+  PerceptionNotice,
+  PerceptionPollResult,
   ProviderRuntimeStatus,
   RequestEnvelope,
   ResponseEnvelope,
@@ -69,6 +71,11 @@ export class BodyRuntime {
   private readonly port: ClientPort | undefined
   private readonly chatMessages: Array<{ seq: number; at: number; username: string; message: string }> = []
   private chatSeq = 0
+  private readonly perceptionNotices: PerceptionNotice[] = []
+  private perceptionSeq = 0
+  private lastHealth: number | undefined
+  private lastDamageNoticeAt = Number.NEGATIVE_INFINITY
+  private readonly lastBlockNotice = new Map<string, number>()
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -85,6 +92,14 @@ export class BodyRuntime {
     this.port = options.port
     if (this.port !== undefined && typeof this.port.on === 'function') {
       this.port.on('chat', payload => this.recordChat(payload))
+      this.port.on('damaged', payload => this.recordDamaged(payload))
+      this.port.on('died', () => this.recordDied())
+      this.port.on('blockUpdated', payload => this.recordBlockUpdate(payload))
+      try {
+        this.lastHealth = this.port.self().health
+      } catch {
+        this.lastHealth = undefined
+      }
     }
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     if (options.owner !== undefined) {
@@ -139,6 +154,7 @@ export class BodyRuntime {
       case 'blueprint.preview': return this.blueprintPreview(params) as unknown as JsonValue
       case 'chat.poll': return this.chatPoll(params) as unknown as JsonValue
       case 'chat.say': return this.chatSay(params) as unknown as JsonValue
+      case 'perception.poll': return this.perceptionPoll(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
@@ -319,6 +335,76 @@ export class BodyRuntime {
         error instanceof Error ? error.message : String(error),
         { module: 'body.runtime' },
       )
+    }
+  }
+
+  private recordDamaged(payload: JsonValue): void {
+    if (!isRecord(payload) || typeof payload.health !== 'number') return
+    const health = payload.health
+    const previous = this.lastHealth
+    this.lastHealth = health
+    if (previous !== undefined && health >= previous) return
+    const at = this.now()
+    if (at - this.lastDamageNoticeAt < 1_000 && health > 4) return
+    this.lastDamageNoticeAt = at
+    this.pushNotice({
+      kind: 'damaged',
+      severity: health <= 4 ? 'critical' : 'warning',
+      key: 'damaged',
+      summary: `health ${previous ?? '?'} -> ${health}`,
+      data: { health, previous: previous ?? null },
+    })
+  }
+
+  private recordDied(): void {
+    this.pushNotice({
+      kind: 'died',
+      severity: 'critical',
+      key: 'died',
+      summary: 'the body died',
+    })
+  }
+
+  private recordBlockUpdate(payload: JsonValue): void {
+    if (!isRecord(payload)) return
+    if (typeof payload.x !== 'number' || typeof payload.y !== 'number' || typeof payload.z !== 'number') return
+    if (typeof payload.name !== 'string') return
+    const mind = this.mind
+    if (mind === undefined) return
+    const pos = { x: payload.x, y: payload.y, z: payload.z }
+    const expected = mind.watchedBlock(pos)
+    if (expected === undefined || expected === payload.name) return
+    const key = `task-block:${pos.x},${pos.y},${pos.z}`
+    const at = this.now()
+    const last = this.lastBlockNotice.get(key) ?? 0
+    if (at - last < 5_000) return
+    this.lastBlockNotice.set(key, at)
+    this.pushNotice({
+      kind: 'task-block',
+      severity: 'warning',
+      key,
+      summary: `watched block ${pos.x},${pos.y},${pos.z} expected ${expected}, now ${payload.name}`,
+      data: { ...pos, expected, actual: payload.name },
+    })
+  }
+
+  private pushNotice(notice: Omit<PerceptionNotice, 'seq' | 'at'>): void {
+    this.perceptionSeq += 1
+    this.perceptionNotices.push({ ...notice, seq: this.perceptionSeq, at: this.now() })
+    while (this.perceptionNotices.length > 100) this.perceptionNotices.shift()
+  }
+
+  private perceptionPoll(params: Record<string, JsonValue>): PerceptionPollResult {
+    this.requireOwner()
+    const afterSeq = typeof params.afterSeq === 'number' ? Math.floor(params.afterSeq) : 0
+    if (afterSeq < 0) {
+      throw p2Error(ErrorCodes.INVALID_MESSAGE, 'validation', 'afterSeq must be non-negative', {
+        module: 'body.runtime',
+      })
+    }
+    return {
+      notices: this.perceptionNotices.filter(notice => notice.seq > afterSeq),
+      seq: this.perceptionSeq,
     }
   }
 

@@ -146,6 +146,7 @@ describe('mind integration', () => {
         cancelOrder: id => ({ id, state: 'cancelled' }),
         listOrders: () => ({ active: null, queued: [] }),
         sinceEvents: () => ({ events: [], seq: 0 }),
+        watchedBlock: () => undefined,
         orders: {} as never,
         events: {} as never,
       },
@@ -156,4 +157,6 @@ describe('mind integration', () => {
     expect(runtime.status().mind).toMatchObject({ tracker: 'idle', queuedOrders: 0 })
   })
 })
+
+
 

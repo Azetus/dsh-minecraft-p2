@@ -24,7 +24,7 @@ const body: BodyInfo = {
   provider: null,
 }
 
-function fakePort(): { port: ClientPort; chat(payload: unknown): void; says: string[] } {
+function fakePort(): { port: ClientPort; chat(payload: unknown): void; emit(event: ClientEvent, payload: unknown): void; says: string[] } {
   const listeners = new Map<string, Array<(payload: unknown) => void>>()
   const says: string[] = []
   const port = {
@@ -40,6 +40,9 @@ function fakePort(): { port: ClientPort; chat(payload: unknown): void; says: str
     says,
     chat: payload => {
       for (const cb of listeners.get('chat') ?? []) cb(payload)
+    },
+    emit: (event, payload) => {
+      for (const cb of listeners.get(event) ?? []) cb(payload)
     },
   }
 }
@@ -89,5 +92,21 @@ describe('body chat transport', () => {
     const runtime = runtimeWith(fake.port)
     const result = await runtime.handleRequestAsync(request('chat.say', { text: ' ' }))
     expect(result.error?.code).toBe('INVALID_MESSAGE')
+  })
+
+  it('turns damage into perception notices', async () => {
+    const fake = fakePort()
+    const runtime = runtimeWith(fake.port)
+    fake.emit('damaged', { health: 8 })
+    fake.emit('damaged', { health: 3 })
+    fake.emit('died', {})
+    const result = await runtime.handleRequestAsync(request('perception.poll', { afterSeq: 0 }))
+    expect(result.result).toMatchObject({
+      notices: [
+        { kind: 'damaged', severity: 'warning', summary: 'health ? -> 8' },
+        { kind: 'damaged', severity: 'critical', summary: 'health 8 -> 3' },
+        { kind: 'died', severity: 'critical' },
+      ],
+    })
   })
 })

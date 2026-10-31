@@ -123,6 +123,7 @@ describe('protocol vocabulary', () => {
       'blueprint.preview',
       'chat.poll',
       'chat.say',
+      'perception.poll',
       'mind.order',
       'mind.orders',
       'mind.cancel',

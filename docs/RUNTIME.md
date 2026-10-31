@@ -204,3 +204,19 @@ order 可带 `policy.conflict`：
 - 食物低于 14 时 `eat` giver 选背包食物；`eat` driver 装备后按住使用约 1.8s，
   以食物值上升作为成功证据，而不是只看动作返回。
 - 夜间验收仍要求 30 分钟零死亡/零方块变化；本轮用单测和短实机验证，未跑满 30 分钟。
+
+### 10.9 感知与唤醒粒度（M4 后）
+
+- body 维护有界 `perception` 队列：
+  - `damaged`：health 下降；<=4 为 critical；
+  - `died`：critical；
+  - `task-block`：当前 plan 关注的方块被改成非 expected；5s/坐标去重，normal。
+- bridge 每 300ms `perception.poll`；普通 notice 1s 防抖、最长 3s 合并成一条 digest；
+  critical 立即投递。
+- DSH 侧三档入口（源码 `@deepseek-ai/dsh-agent-loop`）：
+  - `followup` → `next-turn`，当前轮结束后开新轮；
+  - `steer` → `next-step`，下一步插话，影响当前轮；
+  - `inject` → `next-step`，不唤醒；本轮继续时才被看到。
+- 策略：普通 digest/chat 在 Agent running 时由 P2 本地挂起，等 idle 后只 `followup` 一次；
+  只有本地无法处理/需要改变目标的 critical 才 `steer`。
+- 世界全量变化仍只在观测层/Verifier；不进入感知通知。

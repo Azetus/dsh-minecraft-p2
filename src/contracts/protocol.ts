@@ -24,6 +24,7 @@ export const METHODS = [
   'blueprint.preview',
   'chat.poll',
   'chat.say',
+  'perception.poll',
   'mind.order',
   'mind.orders',
   'mind.cancel',
@@ -283,6 +284,19 @@ export type ChatPollParams = { afterSeq?: number }
 export type ChatPollResult = { messages: ChatMessage[]; seq: number }
 export type ChatSayParams = { text: string }
 export type ChatSayResult = { sent: true }
+
+export type PerceptionNotice = {
+  seq: number
+  at: number
+  kind: 'damaged' | 'died' | 'task-block'
+  severity: 'info' | 'warning' | 'critical'
+  key: string
+  summary: string
+  data?: JsonValue
+}
+
+export type PerceptionPollParams = { afterSeq?: number }
+export type PerceptionPollResult = { notices: PerceptionNotice[]; seq: number }
 
 export type BodyInfo = {
   manifest: BodyManifest

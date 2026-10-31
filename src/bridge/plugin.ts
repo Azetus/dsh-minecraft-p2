@@ -58,6 +58,8 @@ type AgentsService = {
     status?: 'idle' | 'running'
     followup(message: WakeMessage): void
     steer?(message: WakeMessage): void
+    /** Attach context to a running turn without waking it. */
+    inject?(message: WakeMessage): void
   } | undefined
 }
 
@@ -109,27 +111,62 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       let chatCursor = 0
       let chatTimer: ReturnType<typeof setInterval> | undefined
       let chatPolling = false
+      let perceptionCursor = 0
+      let perceptionPolling = false
+      let perceptionTimer: ReturnType<typeof setTimeout> | undefined
+      const pendingPerception: string[] = []
+      let perceptionFirstAt = 0
       let startChatPolling: (() => void) | undefined
       let stopChatPolling: (() => void) | undefined
+      const pendingNormal: string[] = []
       /** Runtime faults steer a running owner; idle owners get a follow-up turn. */
-      const deliverWake = (text: string): void => {
+      const wakeMessage = (text: string): WakeMessage => ({
+        id: randomUUID(),
+        role: 'user',
+        content: [{ type: 'text', text }],
+        source: { kind: 'p2-runtime' },
+      })
+      const followup = (text: string): void => {
         const owner = manager.currentOwner
         if (owner === undefined) return
         const agent = ctx.agents?.get(owner.sessionId)
         if (agent === undefined) return
-        const message: WakeMessage = {
-          id: randomUUID(),
-          role: 'user',
-          content: [{ type: 'text', text }],
-          source: { kind: 'p2-runtime' },
-        }
         try {
-          if (agent.status === 'running' && agent.steer !== undefined) agent.steer(message)
-          else agent.followup(message)
+          agent.followup(wakeMessage(text))
         } catch (cause) {
-          // Waking is best effort, but a silent swallow hides a broken wake path.
           options.log?.(`p2 runtime wake failed: ${formatError(cause)}`)
         }
+      }
+      const flushPendingNormal = (): void => {
+        if (pendingNormal.length === 0) return
+        const owner = manager.currentOwner
+        if (owner === undefined) return
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined || agent.status !== 'idle') return
+        const text = pendingNormal.splice(0).join('\n\n')
+        followup(text)
+      }
+      const deliverWake = (text: string, kind: 'normal' | 'critical' = 'normal'): void => {
+        const owner = manager.currentOwner
+        if (owner === undefined) return
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined) return
+        const status = agent.status ?? 'idle'
+        if (kind === 'critical' && status === 'running' && agent.steer !== undefined) {
+          try {
+            agent.steer(wakeMessage(text))
+          } catch (cause) {
+            options.log?.(`p2 runtime steer failed: ${formatError(cause)}`)
+          }
+          return
+        }
+        if (status === 'idle') {
+          followup(text)
+          return
+        }
+        // Normal notices wait for the current turn to finish; never interrupt it.
+        pendingNormal.push(text)
+        if (pendingNormal.length > 8) pendingNormal.splice(0, pendingNormal.length - 8)
       }
       const chatBatcher = new ChatBatcher(messages => {
         const lines = messages.map(message => `${message.username}: ${message.message}`).join('\n')
@@ -137,6 +174,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       })
       notifyBodyFault = fault => {
         stopChatPolling?.()
+        pendingNormal.length = 0
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
           : fault.autoRestart === 'exhausted'
@@ -144,17 +182,22 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
             : 'Start a new body manually with /p2 start.'
         deliverWake(
           `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and was lost with the epoch. ${next}`,
+          'critical',
         )
       }
       notifyBodyRestart = info => {
         chatCursor = 0
+        perceptionCursor = 0
+        pendingNormal.length = 0
         startChatPolling?.()
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
+          'critical',
         )
       }
 
       const pollChat = async (): Promise<void> => {
+        flushPendingNormal()
         if (chatPolling || manager.currentState !== 'active') return
         chatPolling = true
         try {
@@ -172,18 +215,68 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           options.log?.(`p2 chat poll failed: ${formatError(error)}`)
         } finally {
           chatPolling = false
+          flushPendingNormal()
+        }
+      }
+      const flushPerception = (): void => {
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        perceptionTimer = undefined
+        perceptionFirstAt = 0
+        if (pendingPerception.length === 0) return
+        const lines = pendingPerception.splice(0)
+        deliverWake(
+          `[p2 perception]\n${lines.join('\n')}\n如需改变目标请用 p2_order / p2_cancel；先复核可用 p2_observe。`,
+          'normal',
+        )
+      }
+      const schedulePerception = (): void => {
+        const at = Date.now()
+        if (perceptionFirstAt === 0) perceptionFirstAt = at
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        const wait = Math.max(0, Math.min(1_000, 3_000 - (at - perceptionFirstAt)))
+        perceptionTimer = setTimeout(flushPerception, wait)
+        perceptionTimer.unref?.()
+      }
+      const pollPerception = async (): Promise<void> => {
+        if (perceptionPolling || manager.currentState !== 'active') return
+        perceptionPolling = true
+        try {
+          const result = await manager.perceptionPoll(perceptionCursor) as unknown as {
+            notices?: Array<{ seq: number; kind: string; severity: string; summary: string; at: number }>
+          }
+          for (const notice of result.notices ?? []) {
+            perceptionCursor = Math.max(perceptionCursor, notice.seq)
+            if (notice.severity === 'critical') {
+              deliverWake(`[p2 perception] critical: ${notice.summary}`, 'critical')
+            } else {
+              pendingPerception.push(`- ${notice.kind}: ${notice.summary}`)
+              schedulePerception()
+            }
+          }
+        } catch (error) {
+          options.log?.(`p2 perception poll failed: ${formatError(error)}`)
+        } finally {
+          perceptionPolling = false
         }
       }
       startChatPolling = (): void => {
         if (chatTimer !== undefined) return
-        chatTimer = setInterval(() => { void pollChat() }, 300)
+        perceptionCursor = 0
+        chatTimer = setInterval(() => { void pollChat(); void pollPerception() }, 300)
         chatTimer.unref?.()
         void pollChat()
+        void pollPerception()
       }
       stopChatPolling = (): void => {
         if (chatTimer !== undefined) clearInterval(chatTimer)
         chatTimer = undefined
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        perceptionTimer = undefined
+        pendingPerception.length = 0
+        perceptionFirstAt = 0
+        perceptionCursor = 0
         chatBatcher.stop()
+        pendingNormal.length = 0
       }
 
       const globalDisposers: Array<() => void> = []

@@ -236,6 +236,10 @@ export class BodyManager {
     return this.activeClient().request('chat.say', { text })
   }
 
+  perceptionPoll(afterSeq: number): Promise<JsonValue> {
+    return this.activeClient().request('perception.poll', { afterSeq })
+  }
+
   mindOrders(): Promise<JsonValue> {
     return this.activeClient().request('mind.orders', {})
   }

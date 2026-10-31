@@ -56,6 +56,8 @@ export type MindRuntime = {
   cancelOrder(id: string): { id: string; state: string }
   listOrders(): { active: MindOrderView | null; queued: MindOrderView[] }
   sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number }
+  /** Expected block name at a watched plan position, if any. */
+  watchedBlock(p: Vec3): string | undefined
   orders: OrderStore
   events: MindEvents
 }
@@ -638,6 +640,14 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         events: events.since(seq, limit),
         seq: events.lastSeq(),
       }
+    },
+    watchedBlock(p: Vec3): string | undefined {
+      if (activePlan === undefined) return undefined
+      const item = activePlan.workItems.find(candidate => {
+        const at = itemPosition(activePlan as PlanInstance, candidate)
+        return at.x === p.x && at.y === p.y && at.z === p.z
+      })
+      return item?.expected?.name
     },
     orders,
     events,
