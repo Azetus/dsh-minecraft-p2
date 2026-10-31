@@ -1,4 +1,5 @@
 import type { BlockInfo, EntityInfo, Vec3 } from '../../port/index.ts'
+import { standingAt } from '../../port/terrain.ts'
 import { boxAround } from '../sensors.ts'
 import type { Candidate, WorldView } from '../types.ts'
 
@@ -43,12 +44,7 @@ export function isSolid(block: BlockInfo | null): boolean {
 }
 
 export function isStandable(world: WorldView, p: Vec3): boolean {
-  const below = world.blockAt({ x: p.x, y: p.y - 1, z: p.z })
-  const at = world.blockAt(p)
-  const head = world.blockAt({ x: p.x, y: p.y + 1, z: p.z })
-  return isSolid(below)
-    && at !== null && at.loaded && isAirName(at.name)
-    && head !== null && head.loaded && isAirName(head.name)
+  return standingAt(point => world.blockAt(point), p).state === 'valid'
 }
 
 export function hostilesNear(world: WorldView, center: Vec3, radius: number): EntityInfo[] {

@@ -48,6 +48,7 @@ function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; selfPos
     inLava: false,
   })
   const port = {
+    on: () => {},
     self,
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
     blockAt: (p: Vec3) => blocks.get(key(p)) ?? null,

@@ -14,6 +14,8 @@ export type BlockInfo = {
   loaded: boolean
   /** Collision hint from the adapter; undefined means it cannot tell. */
   solid?: boolean
+  /** Local collision AABBs [minX,minY,minZ,maxX,maxY,maxZ]; [] is non-colliding. */
+  collision?: number[][]
   /** Set by `blocksIn` entries; `blockAt` already knows the position. */
   pos?: Vec3
 }

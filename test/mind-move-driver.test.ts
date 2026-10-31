@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createMoveDriver } from '../src/mind/drivers/move.ts'
+import { AsyncDriverHandle } from '../src/mind/drivers/handle.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
 import type { ActResult, ClientPort } from '../src/port/index.ts'
 
@@ -76,9 +77,23 @@ describe('move driver', () => {
     const pending = deferred<ActResult>()
     const { port } = portWith(pending.promise)
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
-    pending.resolve({ state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 10 })
+    pending.resolve({ state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 10, observed: { pathStatus: 'noPath' } })
     await Promise.resolve()
-    expect(handle.result()).toEqual({ state: 'failed', code: 'GOTO_NO_PATH' })
+    expect(handle.result()).toEqual({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
+  })
+
+  it('never reports stopped when the port cannot confirm release', async () => {
+    const pending = deferred<ActResult>()
+    const { port } = portWith(pending.promise)
+    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    handle.requestStop()
+    pending.resolve({ state: 'unknown', code: 'STOP_UNCONFIRMED', elapsedMs: 10 })
+    await Promise.resolve()
+    expect(handle.stopStatus()).toBe('unconfirmed')
+    const compound = new AsyncDriverHandle('sleep-or-smelt', Promise.resolve({ state: 'failed', code: 'STOP_UNCONFIRMED' }))
+    compound.requestStop()
+    await Promise.resolve()
+    expect(compound.stopStatus()).toBe('unconfirmed')
   })
 
   it('reports interrupted and stopped when stopped before completion', async () => {

@@ -58,6 +58,7 @@ function fakePort(): FakePort {
     return blocks
   }
   const port = {
+    on: () => {},
     self: () => self,
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
     blocksIn,

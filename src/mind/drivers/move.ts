@@ -18,7 +18,7 @@ const MOVE_SCHEMA: SchemaNode = {
     x: { type: 'number' },
     y: { type: 'number' },
     z: { type: 'number' },
-    range: { type: 'number', minimum: 0 },
+    range: { type: 'number', minimum: 0, maximum: 8 },
     timeoutMs: { type: 'integer', minimum: 1 },
   },
   required: ['x', 'y', 'z'],
@@ -73,6 +73,7 @@ class MoveHandle implements DriverHandle {
   private resultValue: DriverResult = { state: 'running' }
   private stopRequested = false
   private settled = false
+  private releaseUnconfirmed = false
 
   constructor(
     private readonly keys: string,
@@ -81,12 +82,14 @@ class MoveHandle implements DriverHandle {
     void promise.then(
       result => {
         this.settled = true
+        this.releaseUnconfirmed = result.code === 'STOP_UNCONFIRMED'
         this.resultValue = this.stopRequested
           ? { state: 'interrupted' }
           : toDriverResult(result)
       },
       error => {
         this.settled = true
+        this.releaseUnconfirmed = true
         this.resultValue = {
           state: this.stopRequested ? 'interrupted' : 'failed',
           code: errorCode(error),
@@ -105,6 +108,7 @@ class MoveHandle implements DriverHandle {
 
   stopStatus(): 'stopping' | 'stopped' | 'unconfirmed' {
     if (!this.stopRequested) return 'stopping'
+    if (this.releaseUnconfirmed) return 'unconfirmed'
     return this.settled ? 'stopped' : 'stopping'
   }
 
@@ -125,9 +129,9 @@ function toDriverResult(result: ActResult): DriverResult {
   }
   if (result.state === 'unknown') {
     // `unknown` is never success: the driver reports failure with the reason.
-    return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
+    return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT', ...(result.observed === undefined ? {} : { observed: result.observed }) }
   }
-  return { state: 'failed', code: result.code ?? 'ACT_FAILED' }
+  return { state: 'failed', code: result.code ?? 'ACT_FAILED', ...(result.observed === undefined ? {} : { observed: result.observed }) }
 }
 
 function errorCode(error: unknown): string {

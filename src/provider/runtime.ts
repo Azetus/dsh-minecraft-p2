@@ -20,7 +20,7 @@ export type QueryRef = {
 export type QueryPort = (ref: QueryRef, args: Record<string, JsonValue>) => QueryOutcome
 
 export type ActPoll =
-  | { status: 'running' }
+  | { status: 'running'; progress?: JsonValue }
   | { status: 'succeeded'; result?: JsonValue; meta?: ValueMeta }
   | { status: 'failed'; error: P2Error }
   | { status: 'cancelled'; error?: P2Error }
@@ -28,6 +28,7 @@ export type ActPoll =
 export type ActHandle = {
   poll(): ActPoll
   stop(): void
+  controlState?(): 'idle' | 'active' | 'unknown'
   cleanup?(): ActPoll
 }
 

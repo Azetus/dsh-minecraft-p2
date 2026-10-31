@@ -30,7 +30,10 @@
 
 ### 1.6 `pathfinder.goto()` 可能永久 pending
 - **现象**：`stop()` 之后 promise 不 resolve；或 `path_update` + 空路径时“伪成功” resolve。
-- **规则**：永不裸 `await goto`；自轮询位置 + 硬超时；`stop()` 之后必须 `setGoal(null)`（顺序不能反）。
+- **规则**：永不裸 `await goto`；用 `path_update.status` 区分增量搜索和无路，另做实际位移看门狗 + 硬超时；`stop()` 之后必须 `setGoal(null)`（顺序不能反），再清按键。
+- `path_update` 发出后，上游才把结果写入内部 path；不能在监听回调内同步 stop 后就当作停稳，应在下一事件循环确认/处理。
+- `allow1by1towers=false` 只禁垂直垫高，不禁搭桥；无放置授权时还必须清空 `scafoldingBlocks`。
+- `2.4.5` 的陆地 `maxDropDown` 对支撑方块计数，允许脚部下降 2 格需要设为 3；本项目另按路径节点限制下降 ≤2 格。斜向下落没有完整检查落脚格的 `exclusionStep`，必须补检查，避免踩到岩浆块。真实 A* 地形回归覆盖这两种情况。
 
 ### 1.7 `lookAt` / `placeBlock` 依赖物理 tick
 - **现象**：物理停摆（区块未加载、死亡、传送中）时，`lookAt` 的 promise 永不 resolve。
@@ -92,7 +95,7 @@
 | 挖/放 | 两次读回、超时返回 unknown | 用 promise resolve 当成功 |
 | 放置前 | closeWindow + 校验 heldItem | 直接 placeBlock |
 | 找方块 | id 数组 + 可达性检查 | 函数匹配器、超距目标 |
-| 移动 | 自轮询 + 硬超时 + stop 后 setGoal(null) | 裸 await goto |
+| 移动 | path_update + 实际位移 + 硬超时 + stop 后 setGoal(null) | 裸 await goto；用 isMoving 判无路；盲跳恢复 |
 | 任何 await | 硬超时 | 无界等待 |
 | 长循环 | 每步 `await sleep`、报 progress | 微任务忙等 |
 | 观测 | 单快照、unknown 不折空 | 多源拼盘当同一时刻 |

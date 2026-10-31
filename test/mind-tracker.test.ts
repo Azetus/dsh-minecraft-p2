@@ -229,6 +229,7 @@ describe('job tracker', () => {
     tracker.offer(candidate(1))
     tracker.tick()
     ;(driver.handles[0] as FakeHandle).value = { state: 'succeeded' }
+    ;(driver.handles[0] as FakeHandle).stopState = 'stopped'
     tracker.tick()
 
     expect(tracker.state()).toBe('idle')
@@ -244,6 +245,7 @@ describe('job tracker', () => {
       tracker.tick()
       const handle = driver.handles.at(-1) as FakeHandle
       handle.value = { state: 'failed', code: 'GOTO_NO_PATH' }
+      handle.stopState = 'stopped'
       tracker.tick()
     }
     expect(tracker.failureCount('key-1')).toBe(3)
@@ -251,6 +253,20 @@ describe('job tracker', () => {
     tracker.offer(candidate(1))
     tracker.tick()
     expect(driver.starts).toHaveLength(3)
+  })
+
+  it('does not treat a terminal result as proof of released controls', () => {
+    const { tracker, driver } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick()
+    const handle = driver.handles[0] as FakeHandle
+    handle.value = { state: 'failed', code: 'STOP_UNCONFIRMED' }
+    handle.stopState = 'unconfirmed'
+    tracker.tick()
+    expect(tracker.state()).toBe('fault')
+    tracker.offer(candidate(2))
+    tracker.tick()
+    expect(driver.starts).toHaveLength(1)
   })
 
   it('rejects an old run result instead of applying it to the new job', () => {

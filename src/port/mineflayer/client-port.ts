@@ -58,6 +58,7 @@ const ACTION_TIMEOUTS = {
 type BlockLike = {
   name: string
   boundingBox?: string
+  shapes?: number[][]
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -73,7 +74,7 @@ type EntityLike = {
 
 type WaitResult =
   | { kind: 'done'; poll: ActPoll }
-  | { kind: 'timeout' }
+  | { kind: 'timeout'; released: boolean; observed?: JsonValue }
 
 /**
  * ClientPort over one mineflayer bot. Reads come from the live bot; writes go
@@ -295,12 +296,15 @@ export class MineflayerClientPort implements ClientPort {
     if (denied !== undefined) return denied
     if (!isVec3(target)) return actFailed('INVALID_TARGET', 0)
 
-    const timeoutMs = opts.timeoutMs ?? this.timeouts.moveTo
+    const range = opts.range ?? 1
+    if (![target.x, target.y, target.z, range, opts.timeoutMs ?? 1].every(Number.isFinite)
+      || range < 0 || range > 8 || (opts.timeoutMs ?? 1) <= 0) return actFailed('INVALID_TARGET', 0)
+    const timeoutMs = Math.min(opts.timeoutMs ?? this.timeouts.moveTo, this.timeouts.moveTo)
     return await this.run('goto', {
       x: target.x,
       y: target.y,
       z: target.z,
-      range: opts.range ?? 1,
+      range,
       timeoutMs,
     }, timeoutMs)
   }
@@ -427,15 +431,42 @@ export class MineflayerClientPort implements ClientPort {
     const entry = { handle, epoch }
     this.running.add(entry)
     try {
-      const waited = await this.poll(handle, timeoutMs)
+      if (name === 'goto') this.emit('move.started', { target: args, from: this.self().pos, epoch })
+      const waited = await this.poll(handle, timeoutMs, name === 'goto' ? epoch : undefined)
+      // Release uncertainty must survive revocation; otherwise the next driver
+      // would see an ordinary stale result and assume it is safe to dispatch.
+      if ((waited.kind === 'timeout' && !waited.released)
+        || (waited.kind === 'done' && waited.poll.status === 'failed' && waited.poll.error.code === 'STOP_UNCONFIRMED')) {
+        const observed = waited.kind === 'timeout' ? waited.observed : waited.poll.status === 'failed' ? waited.poll.error.details : undefined
+        if (name === 'goto' && this.gate.isCurrent(epoch)) {
+          this.emit('move.finished', { epoch, state: 'unknown', code: 'STOP_UNCONFIRMED', observed: observed ?? null })
+        }
+        return actUnknown('STOP_UNCONFIRMED', this.now() - startedAt, observed)
+      }
       // A result produced after the authority moved on is stale, not success.
       if (!this.gate.isCurrent(epoch)) return actFailed(PortErrorCodes.STALE_WRITE, this.now() - startedAt)
-      if (waited.kind === 'timeout') return actUnknown(PortErrorCodes.CLIENT_TIMEOUT, this.now() - startedAt)
+      if (waited.kind === 'timeout') {
+        if (name === 'goto') this.emit('move.finished', { epoch, state: 'unknown', code: 'CLIENT_TIMEOUT', observed: waited.observed ?? null })
+        return actUnknown(PortErrorCodes.CLIENT_TIMEOUT, this.now() - startedAt, waited.observed)
+      }
 
       const poll = waited.poll
-      if (poll.status === 'succeeded') return actOk(this.now() - startedAt, poll.result)
+      if (poll.status === 'succeeded') {
+        if (name === 'goto') this.emit('move.finished', { epoch, state: 'ok', observed: poll.result ?? null })
+        return actOk(this.now() - startedAt, poll.result)
+      }
       if (poll.status === 'failed') {
-        return actFailed(poll.error.code, this.now() - startedAt)
+        if (name === 'goto') {
+          const unknown = /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)
+          const data = { epoch, state: unknown ? 'unknown' : 'failed', code: poll.error.code, observed: poll.error.details ?? null }
+          if (poll.error.code === 'GOTO_STUCK') this.emit('move.stuck', data)
+          if (['GOTO_NO_PATH', 'GOTO_INVALID_TARGET', 'GOTO_TARGET_UNLOADED'].includes(poll.error.code)) this.emit('move.no_path', data)
+          this.emit('move.finished', data)
+        }
+        if (name === 'goto' && /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)) {
+          return actUnknown(poll.error.code, this.now() - startedAt, poll.error.details)
+        }
+        return actFailed(poll.error.code, this.now() - startedAt, poll.error.details)
       }
       return actFailed('ACT_CANCELLED', this.now() - startedAt)
     } finally {
@@ -443,14 +474,31 @@ export class MineflayerClientPort implements ClientPort {
     }
   }
 
-  private async poll(handle: ActHandle, timeoutMs: number): Promise<WaitResult> {
+  private async poll(handle: ActHandle, timeoutMs: number, moveEpoch?: number): Promise<WaitResult> {
     const deadline = this.now() + timeoutMs
+    let lastProgressAt = Number.NEGATIVE_INFINITY
     while (true) {
       const poll = handle.poll()
+      if (moveEpoch !== undefined && !this.gate.isCurrent(moveEpoch)) {
+        this.stopHandle(handle)
+        if (handle.controlState?.() !== 'idle' && handle.poll().status !== 'cancelled') {
+          return { kind: 'done', poll: { status: 'failed', error: p2Error('STOP_UNCONFIRMED', 'runtime', 'navigation release not confirmed') } }
+        }
+        return { kind: 'done', poll: { status: 'cancelled' } }
+      }
       if (poll.status !== 'running') return { kind: 'done', poll }
+      if (moveEpoch !== undefined && this.gate.isCurrent(moveEpoch) && poll.progress !== undefined
+        && this.now() - lastProgressAt >= 1_000) {
+        lastProgressAt = this.now()
+        this.emit('move.progress', { epoch: moveEpoch, observed: poll.progress })
+      }
       if (this.now() >= deadline) {
         this.stopHandle(handle)
-        return { kind: 'timeout' }
+        return {
+          kind: 'timeout',
+          released: moveEpoch === undefined || handle.controlState?.() === 'idle' || handle.poll().status === 'cancelled',
+          ...(poll.progress === undefined ? {} : { observed: poll.progress }),
+        }
       }
       await sleep(this.pollIntervalMs)
     }
@@ -516,6 +564,7 @@ function blockInfo(block: BlockLike): BlockInfo {
     name: block.name,
     loaded: true as const,
     ...(solid === undefined ? {} : { solid }),
+    ...(block.shapes === undefined ? {} : { collision: block.shapes.map(shape => [...shape]) }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
 }

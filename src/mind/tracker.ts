@@ -325,22 +325,10 @@ export class JobTracker {
   }
 
   private finish(result: DriverResult, now: number): void {
-    const current = this.currentValue
-    if (current === undefined) return
-    try {
-      this.port.endWrite(current.token)
-    } catch {
-      // The action already terminated; release is still recorded below.
-    }
-    try {
-      current.handle.requestStop()
-    } catch {
-      // Best effort: the driver is finished.
-    }
-    this.recordTerminal(current.keys, current.job, result, now)
-    this.currentValue = undefined
-    this.stateValue = 'idle'
-    this.lastRenewedKeys = undefined
+    // A terminal result does not prove that navigation released its controls.
+    // Use the same confirmation as preemption before dispatching another job.
+    this.beginStop(now, result)
+    this.tickStopping(now)
   }
 
   private reject(candidate: Candidate, result: DriverResult, now: number): void {

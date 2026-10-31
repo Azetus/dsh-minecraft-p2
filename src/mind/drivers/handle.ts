@@ -5,6 +5,7 @@ export class AsyncDriverHandle implements DriverHandle {
   private resultValue: DriverResult = { state: 'running' }
   private stopRequested = false
   private settled = false
+  private releaseUnconfirmed = false
 
   constructor(
     private readonly key: string,
@@ -13,10 +14,12 @@ export class AsyncDriverHandle implements DriverHandle {
     void work.then(
       result => {
         this.settled = true
+        this.releaseUnconfirmed = result.code === 'STOP_UNCONFIRMED'
         this.resultValue = this.stopRequested ? { state: 'interrupted' } : result
       },
       error => {
         this.settled = true
+        this.releaseUnconfirmed = true
         this.resultValue = {
           state: this.stopRequested ? 'interrupted' : 'failed',
           code: errorCode(error),
@@ -35,6 +38,7 @@ export class AsyncDriverHandle implements DriverHandle {
 
   stopStatus(): 'stopping' | 'stopped' | 'unconfirmed' {
     if (!this.stopRequested) return 'stopping'
+    if (this.releaseUnconfirmed) return 'unconfirmed'
     return this.settled ? 'stopped' : 'stopping'
   }
 

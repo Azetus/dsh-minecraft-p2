@@ -23,6 +23,11 @@ export type ClientEvent =
   | 'damaged'
   | 'died'
   | 'chat'
+  | 'move.started'
+  | 'move.progress'
+  | 'move.no_path'
+  | 'move.stuck'
+  | 'move.finished'
 
 export type MoveOptions = { range?: number; timeoutMs?: number }
 

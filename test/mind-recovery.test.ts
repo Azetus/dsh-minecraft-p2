@@ -44,6 +44,7 @@ function fakePort(targetName: string): { port: ClientPort; places: number } {
   }
   let places = 0
   const port = {
+    on: () => {},
     self: () => self,
     time: () => ({ timeOfDay: 1000, worldAge: 1 }),
     biomeAt: () => ({ id: 39, name: 'plains' }),

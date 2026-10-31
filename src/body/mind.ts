@@ -144,6 +144,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const templates = loadedPlans.templates
 
   const events = new MindEvents()
+  for (const event of ['move.started', 'move.progress', 'move.no_path', 'move.stuck', 'move.finished'] as const) {
+    options.port.on(event, data => events.push(event, now(), data))
+  }
   let lastReport: JsonValue | null = null
   let loopRef: MindLoop | undefined
 
