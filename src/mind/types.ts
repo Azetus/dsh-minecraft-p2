@@ -52,6 +52,8 @@ export type EvalCtx = {
   home?: Vec3
   /** Active plan for this order, if any. */
   plan?: PlanInstance
+  /** Active order verb; lets safety reflex know when combat was authorized. */
+  orderVerb?: string
   /** Agent-authored conflict policy for the active order. */
   conflictPolicy?: ConflictPolicy
   /** Material policy for the active order; default is require-all. */

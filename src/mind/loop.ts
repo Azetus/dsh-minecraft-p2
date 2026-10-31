@@ -20,6 +20,8 @@ export type MindLoopOptions = {
   home?: Vec3
   /** Active plan, if any. A plan keeps the main tree hot instead of idling. */
   plan?: () => PlanInstance | undefined
+  /** Active order verb, if any. */
+  orderVerb?: () => string | undefined
   /** Conflict policy for the active order. */
   conflictPolicy?: () => ConflictPolicy | undefined
   /** Material policy for the active order. */
@@ -44,6 +46,7 @@ export class MindLoop {
   private readonly now: () => number
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
+  private readonly orderVerb: (() => string | undefined) | undefined
   private readonly conflictPolicy: (() => ConflictPolicy | undefined) | undefined
   private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
   private readonly gatherCount: (() => number) | undefined
@@ -61,6 +64,7 @@ export class MindLoop {
     this.now = options.now ?? (() => Date.now())
     this.home = options.home
     this.plan = options.plan
+    this.orderVerb = options.orderVerb
     this.conflictPolicy = options.conflictPolicy
     this.materialPolicy = options.materialPolicy
     this.gatherCount = options.gatherCount
@@ -79,6 +83,7 @@ export class MindLoop {
       return
     }
     const activePlan = this.plan?.()
+    const orderVerb = this.orderVerb?.()
     const conflictPolicy = this.conflictPolicy?.()
     const materialPolicy = this.materialPolicy?.()
     const gatherCount = this.gatherCount?.()
@@ -86,6 +91,7 @@ export class MindLoop {
       now,
       ...(this.home === undefined ? {} : { home: this.home }),
       ...(activePlan === undefined ? {} : { plan: activePlan }),
+      ...(orderVerb === undefined ? {} : { orderVerb }),
       ...(conflictPolicy === undefined ? {} : { conflictPolicy }),
       ...(materialPolicy === undefined ? {} : { materialPolicy }),
       ...(gatherCount === undefined ? {} : { gatherCount }),

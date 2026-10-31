@@ -259,6 +259,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
+    orderVerb: () => orders.active()?.order.verb,
     conflictPolicy: () => currentConflictPolicy(),
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,

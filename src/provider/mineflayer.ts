@@ -1356,17 +1356,18 @@ class MineflayerActHandle implements ActHandle {
           const range = typeof this.args.range === 'number' ? Math.max(0, this.args.range) : 1
           const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000
           nav.pathfinder.setMovements(this.movements)
-          // GoalNear accepts a 3D target plus a radius; it walks, jumps and drops
-          // as needed instead of the flat-only `moveTo` walker.
-          nav.pathfinder.setGoal(new library.goals.GoalNear(x, y, z, range))
+          const goal = new library.goals.GoalNear(x, y, z, range)
+          nav.pathfinder.setGoal(goal)
           const started = Date.now()
           let idleSince = 0
+          let recovered = false
           const check = (): void => {
             if (this.cancelled || this.completed || this.failed !== undefined) return
             const position = this.bot.entity?.position
             if (position !== undefined
               && Math.hypot(position.x - x, position.y - y, position.z - z) <= range + 0.5) {
               this.stopNavigation()
+              this.bot.clearControlStates()
               this.result = { x: position.x, y: position.y, z: position.z }
               this.completed = true
               return
@@ -1374,8 +1375,31 @@ class MineflayerActHandle implements ActHandle {
             if (!nav.pathfinder.isMoving()) {
               if (idleSince === 0) idleSince = Date.now()
               else if (Date.now() - idleSince > 1500) {
+                // A one-block pit or a short step can leave the pathfinder with
+                // no path even though a plain jump-forward escapes it. Try that
+                // bounded recovery before declaring the target unreachable.
+                if (!recovered) {
+                  recovered = true
+                  this.stopNavigation()
+                  this.bot.setControlState('jump', true)
+                  this.bot.setControlState('forward', true)
+                  setTimeout(() => {
+                    this.bot.setControlState('jump', false)
+                    this.bot.setControlState('forward', false)
+                    if (this.cancelled || this.completed || this.failed !== undefined) return
+                    idleSince = 0
+                    this.bot.clearControlStates()
+                    nav.pathfinder.setGoal(goal)
+                    this.timer = setTimeout(check, 250)
+                  }, 600)
+                  return
+                }
                 this.stopNavigation()
-                this.failed = new Error(`no path to ${x},${y},${z}`)
+                this.bot.clearControlStates()
+                const at = position === undefined
+                  ? 'unknown'
+                  : `${position.x.toFixed(1)},${position.y.toFixed(1)},${position.z.toFixed(1)}`
+                this.failed = new Error(`no path to ${x},${y},${z} from ${at}`)
                 this.failedCode = 'GOTO_NO_PATH'
                 return
               }
@@ -1384,6 +1408,7 @@ class MineflayerActHandle implements ActHandle {
             }
             if (Date.now() - started > timeout) {
               this.stopNavigation()
+              this.bot.clearControlStates()
               this.failed = new Error(`goto timed out after ${timeout}ms`)
               this.failedCode = 'GOTO_TIMEOUT'
               return
