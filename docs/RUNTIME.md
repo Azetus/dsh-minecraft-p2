@@ -77,6 +77,8 @@
 |---|---|
 | `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / 最近偏差摘要 |
 | `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤 |
+
+`surface` 每列同时给出最高非空气块（`y/name`）与最高实心块（`solidY/solidName`）：草、花等不计入实心面；适配器无法判断时 `solid` 省略，按非空气处理。
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | order/job/plan/tracker 事件游标 |
 | 唤醒 | 只在 order 终态、偏离阈值、tracker fault 时推送 |

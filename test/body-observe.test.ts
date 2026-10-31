@@ -35,7 +35,12 @@ const self: SelfInfo = {
   inLava: false,
 }
 
-type RawBlock = { name: string; loaded: boolean; pos: { x: number; y: number; z: number } }
+type RawBlock = {
+  name: string
+  loaded: boolean
+  solid?: boolean
+  pos: { x: number; y: number; z: number }
+}
 
 const defaultBlocks: RawBlock[] = [
   { name: 'stone', loaded: true, pos: { x: 0, y: 64, z: 0 } },
@@ -50,7 +55,14 @@ function fakePort(blocks: RawBlock[] = defaultBlocks): { port: ClientPort; write
     blocksIn: () => blocks,
     blockAt: (p: { x: number; y: number; z: number }): BlockInfo | null => {
       const found = blocks.find(block => block.pos.x === p.x && block.pos.y === p.y && block.pos.z === p.z)
-      return found === undefined ? null : { name: found.name, loaded: found.loaded, pos: found.pos }
+      return found === undefined
+        ? null
+        : {
+            name: found.name,
+            loaded: found.loaded,
+            ...(found.solid === undefined ? {} : { solid: found.solid }),
+            pos: found.pos,
+          }
     },
     entities: () => [{ id: 'e1', name: 'zombie', position: { x: 0, y: 64, z: 0 } }],
     inventory: () => [{ slot: 0, name: 'dirt', count: 2 }],
@@ -152,27 +164,39 @@ describe('world.observe', () => {
   it('summarizes one surface per column and marks an unknown column', async () => {
     const blocks: RawBlock[] = [
       { name: 'air', loaded: true, pos: { x: 0, y: 64, z: 0 } },
-      { name: 'dirt', loaded: true, pos: { x: 0, y: 65, z: 0 } },
-      { name: 'stone', loaded: true, pos: { x: 1, y: 64, z: 0 } },
+      { name: 'grass_block', loaded: true, solid: true, pos: { x: 0, y: 65, z: 0 } },
+      { name: 'short_grass', loaded: true, solid: false, pos: { x: 0, y: 66, z: 0 } },
+      { name: 'stone', loaded: true, solid: true, pos: { x: 1, y: 64, z: 0 } },
       { name: 'air', loaded: true, pos: { x: 1, y: 65, z: 0 } },
+      { name: 'air', loaded: true, pos: { x: 1, y: 66, z: 0 } },
       { name: '', loaded: false, pos: { x: 0, y: 64, z: 1 } },
       { name: 'air', loaded: true, pos: { x: 0, y: 65, z: 1 } },
+      { name: 'air', loaded: true, pos: { x: 0, y: 66, z: 1 } },
       { name: 'air', loaded: true, pos: { x: 1, y: 64, z: 1 } },
       { name: 'air', loaded: true, pos: { x: 1, y: 65, z: 1 } },
+      { name: 'air', loaded: true, pos: { x: 1, y: 66, z: 1 } },
     ]
     const fake = fakePort(blocks)
     const response = await runtimeWith(fake.port).handleRequestAsync(request({
       min: { x: 0, y: 64, z: 0 },
-      max: { x: 1, y: 65, z: 1 },
+      max: { x: 1, y: 66, z: 1 },
       detail: 'surface',
     }))
     const result = response.result as unknown as WorldObserveResult
     const surface = result.surface ?? []
     expect(surface).toHaveLength(4)
-    expect(surface.find(entry => entry.x === 0 && entry.z === 0)).toMatchObject({ y: 65, name: 'dirt', loaded: true })
-    expect(surface.find(entry => entry.x === 1 && entry.z === 0)).toMatchObject({ y: 64, name: 'stone', loaded: true })
-    expect(surface.find(entry => entry.x === 0 && entry.z === 1)).toMatchObject({ y: null, name: null, loaded: false })
-    expect(surface.find(entry => entry.x === 1 && entry.z === 1)).toMatchObject({ y: null, name: null, loaded: true })
+    expect(surface.find(entry => entry.x === 0 && entry.z === 0)).toMatchObject({
+      y: 66, name: 'short_grass', solidY: 65, solidName: 'grass_block', loaded: true,
+    })
+    expect(surface.find(entry => entry.x === 1 && entry.z === 0)).toMatchObject({
+      y: 64, name: 'stone', solidY: 64, solidName: 'stone', loaded: true,
+    })
+    expect(surface.find(entry => entry.x === 0 && entry.z === 1)).toMatchObject({
+      y: null, name: null, solidY: null, solidName: null, loaded: false,
+    })
+    expect(surface.find(entry => entry.x === 1 && entry.z === 1)).toMatchObject({
+      y: null, name: null, solidY: null, solidName: null, loaded: true,
+    })
   })
 
   it('filters the blocks view by name and air', async () => {

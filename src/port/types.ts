@@ -12,6 +12,8 @@ export type BlockInfo = {
   name: string
   state?: Record<string, string>
   loaded: boolean
+  /** Collision hint from the adapter; undefined means it cannot tell. */
+  solid?: boolean
   /** Set by `blocksIn` entries; `blockAt` already knows the position. */
   pos?: Vec3
 }

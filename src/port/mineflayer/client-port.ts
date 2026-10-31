@@ -51,6 +51,7 @@ const ACTION_TIMEOUTS = {
 
 type BlockLike = {
   name: string
+  boundingBox?: string
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -391,9 +392,13 @@ function blockInfo(block: BlockLike): BlockInfo {
   const properties = typeof block.getProperties === 'function' ? block.getProperties() : {}
   const state: Record<string, string> = {}
   for (const [key, value] of Object.entries(properties)) state[key] = String(value)
-  return Object.keys(state).length === 0
-    ? { name: block.name, loaded: true }
-    : { name: block.name, state, loaded: true }
+  const solid = typeof block.boundingBox === 'string' ? block.boundingBox !== 'empty' : undefined
+  const base = {
+    name: block.name,
+    loaded: true as const,
+    ...(solid === undefined ? {} : { solid }),
+  }
+  return Object.keys(state).length === 0 ? base : { ...base, state }
 }
 
 function isVec3(value: Vec3 | Landmark): value is Vec3 {

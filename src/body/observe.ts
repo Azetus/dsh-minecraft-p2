@@ -89,6 +89,7 @@ function observePoints(port: ClientPort, params: Record<string, unknown>, common
           ...position,
           name: block.name,
           loaded: block.loaded,
+          ...(block.solid === undefined ? {} : { solid: block.solid }),
           ...(block.state === undefined ? {} : { state: { ...block.state } }),
         })
   }
@@ -153,6 +154,7 @@ function observeBox(port: ClientPort, params: Record<string, unknown>, common: C
         z: block.pos.z,
         name: block.name,
         loaded: block.loaded,
+        ...(block.solid === undefined ? {} : { solid: block.solid }),
         ...(block.state === undefined ? {} : { state: { ...block.state } }),
       })
     }
@@ -189,15 +191,23 @@ function countBlocks(raw: Array<{ name: string; loaded: boolean }>): WorldObserv
 }
 
 function surfaceOf(
-  raw: Array<{ name: string; loaded: boolean; pos?: ObserveVec3 }>,
+  raw: Array<{ name: string; loaded: boolean; solid?: boolean; pos?: ObserveVec3 }>,
   min: ObserveVec3,
   max: ObserveVec3,
 ): WorldObserveSurface[] {
-  type Column = { x: number; z: number; y: number | null; name: string | null; loaded: boolean }
+  type Column = {
+    x: number
+    z: number
+    y: number | null
+    name: string | null
+    solidY: number | null
+    solidName: string | null
+    loaded: boolean
+  }
   const columns = new Map<string, Column>()
   for (let x = min.x; x <= max.x; x += 1) {
     for (let z = min.z; z <= max.z; z += 1) {
-      columns.set(`${x},${z}`, { x, z, y: null, name: null, loaded: true })
+      columns.set(`${x},${z}`, { x, z, y: null, name: null, solidY: null, solidName: null, loaded: true })
     }
   }
   for (const block of raw) {
@@ -213,11 +223,17 @@ function surfaceOf(
       column.y = block.pos.y
       column.name = block.name
     }
+    if (block.solid !== false && (column.solidY === null || block.pos.y > column.solidY)) {
+      column.solidY = block.pos.y
+      column.solidName = block.name
+    }
   }
   for (const column of columns.values()) {
     if (!column.loaded) {
       column.y = null
       column.name = null
+      column.solidY = null
+      column.solidName = null
     }
   }
   return [...columns.values()]

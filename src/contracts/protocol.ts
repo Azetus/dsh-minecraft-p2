@@ -158,6 +158,8 @@ export type WorldObserveBlock = {
   z: number
   name: string
   loaded: boolean
+  /** Provider collision hint; undefined when the adapter cannot tell. */
+  solid?: boolean
   state?: Record<string, string>
 }
 
@@ -171,9 +173,12 @@ export type WorldObserveCounts = {
 export type WorldObserveSurface = {
   x: number
   z: number
-  /** Highest non-air block; null when the column is all air. */
+  /** Highest non-air block (includes plants/fluids); null when all air. */
   y: number | null
   name: string | null
+  /** Highest block with a collision box (ground/structure); null if none. */
+  solidY: number | null
+  solidName: string | null
   /** false when any cell in the column is unloaded: the surface is unknown. */
   loaded: boolean
 }
