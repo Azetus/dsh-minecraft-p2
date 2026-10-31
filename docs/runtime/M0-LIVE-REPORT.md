@@ -73,6 +73,10 @@ npx vitest run test/port-live.test.ts --pool=threads
 
 ## 5. 观察与风险
 
-- 被取消的 `goto` 在 provider 中约 **3.5s** 才报告 release（`controlState` active→idle）。ClientPort 会等 release 后才返回 `STALE_WRITE`，期间旧句柄不再发起新写；M1 JobTracker 的停止确认必须按实测放宽或记录，不能假设 1s。
+- ~~被取消的 `goto` 在 provider 中约 3.5s 才报告 release。~~ **已修复**：`pathfinder.stop()` 在 mineflayer-pathfinder 里只置标志，路径要等角色走到下一个节点才清；provider 现在在 `stop()` 的同时调用 `setGoal(null)`（顺序按 PITFALLS 1.6），goto/follow 的所有停止/失败/超时路径都走同一 helper。
+  - 修复前实测：release 1256ms（LAND 实机曾 3.5s），释放前角色继续走 4.73 格。
+  - 修复后实测：release **0ms**、`isMoving=false`；实机场景 5 的 `idleAfterTimeoutMs` 从 3494ms 降到 **0ms**，场景 6 取消总耗时从 3556ms 降到 **305ms**，取消后 1s 位移 0。
+  - 回归：契约/状态测试 112 passed（新增“清 goal 立即释放”和“清不掉仍保持 active”两例）；fresh devworld 实机 10/10。
+- M1 JobTracker 的停止确认仍应以实测为准（客户端物理/网络有抖动），只是不再需要为“等节点”预留数秒。
 - LAN 世界的出生点附近地形为草坡（y≈68–74）；本次挖/放未被 spawn protection 阻止。
 - 未覆盖：DSH `/p2` 命令入口（本次走的是插件 `p2_body` 工具）、order/对话/自治行为（M1+）。
