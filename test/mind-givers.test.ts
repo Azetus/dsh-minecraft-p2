@@ -95,7 +95,7 @@ describe('home and wander givers', () => {
     const giver = createGoHomeGiver({ radius: 16 })
     expect(giver.find(ctx, flatWorld({ self: { pos: { x: 5.5, y: 64, z: 0.5 } } }))).toBeNull()
     const far = asCandidate(giver.find(ctx, flatWorld({ self: { pos: { x: 20.5, y: 64, z: 0.5 } } })))
-    expect(far?.keys).toBe('home:0,64,0')
+    expect(far?.keys).toBe('home:day:0,64,0')
   })
 
   it('does not go home without a home point', () => {
@@ -122,3 +122,4 @@ describe('home and wander givers', () => {
     expect(createWanderGiver().find(ctx, empty)).toBeNull()
   })
 })
+

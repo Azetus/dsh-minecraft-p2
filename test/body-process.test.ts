@@ -44,6 +44,7 @@ describe.skipIf(!built || !providerAvailable)('body process entry', () => {
           cwd: process.cwd(),
           stdio: [inputFd, outputFd, 'ignore'],
           timeout: 5000,
+          env: { ...process.env, P2_JOURNAL_PATH: join(directory, 'journal.jsonl') },
         })
       } finally {
         closeSync(inputFd)

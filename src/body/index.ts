@@ -53,10 +53,10 @@ async function main(): Promise<void> {
         crashAfterPending: provider.config.crashAfterPending,
         contentDir: fileURLToPath(new URL('../../content/trees', import.meta.url)),
         plansDir: fileURLToPath(new URL('../../content/plans', import.meta.url)),
-        journalPath: join(process.cwd(), '.p2', 'journal.jsonl'),
+        journalPath: process.env.P2_JOURNAL_PATH ?? join(process.cwd(), '.p2', 'journal.jsonl'),
       })
     } catch (error) {
-      process.stderr.write(`dsh-minecraft-p2 body: mind init failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      process.stderr.write(`dsh-minecraft-p2 body: mind init failed: ${error instanceof Error ? error.message : JSON.stringify(error)}\n`)
       provider.dispose()
       process.exitCode = 1
       return

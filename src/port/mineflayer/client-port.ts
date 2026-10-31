@@ -12,6 +12,7 @@ import type {
   BiomeInfo,
   BlockInfo,
   Box,
+  ContainerCheckResult,
   EntityInfo,
   Face,
   Item,
@@ -46,6 +47,7 @@ const ACTION_TIMEOUTS = {
   dig: 15_000,
   place: 10_000,
   useItem: 5_000,
+  equip: 5_000,
   useOn: 5_000,
   attack: 2_000,
   sleep: 30_000,
@@ -135,6 +137,61 @@ export class MineflayerClientPort implements ClientPort {
     return {
       worldId: `${this.worldId}:${dimension}`,
       characterId: player?.uuid ?? player?.username ?? this.bot.username,
+    }
+  }
+
+  async containerAt(p: Vec3): Promise<ContainerCheckResult> {
+    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
+    if (block === null) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
+    const info = blockInfo(block)
+    if (!info.loaded) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
+    type ContainerWindow = {
+      containerItems?: () => Array<{ slot?: number; name: string; count: number }>
+      slots?: Array<{ slot?: number; name: string; count: number } | null>
+      close?: () => Promise<void>
+      fuel?: number
+      progress?: number
+    }
+    let window: ContainerWindow | undefined
+    try {
+      const open = block.name.includes('furnace')
+        ? this.bot.openFurnace(block as never)
+        : this.bot.openContainer(block as never)
+      window = await Promise.race([
+        open as unknown as Promise<ContainerWindow>,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('container open timed out')), 5_000)
+        }),
+      ])
+      const raw = typeof window.containerItems === 'function'
+        ? window.containerItems()
+        : (window.slots ?? []).filter((item): item is { slot?: number; name: string; count: number } =>
+            item !== null && item !== undefined)
+      const items = raw.map((item, index) => ({
+        slot: typeof item.slot === 'number' ? item.slot : index,
+        name: item.name,
+        count: item.count,
+      }))
+      const result: ContainerCheckResult = {
+        state: 'ok',
+        block: info.name,
+        items,
+        ...(typeof window.fuel === 'number' ? { fuel: window.fuel } : {}),
+        ...(typeof window.progress === 'number' ? { progress: window.progress } : {}),
+      }
+      await window.close?.()
+      return result
+    } catch (error) {
+      try {
+        await window?.close?.()
+      } catch {
+        // Closing is best effort after a failed open.
+      }
+      return {
+        state: 'failed',
+        code: 'CHECK_OPEN_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      }
     }
   }
 
@@ -265,8 +322,16 @@ export class MineflayerClientPort implements ClientPort {
     return await this.run('place', { x: p.x, y: p.y, z: p.z, face, item }, this.timeouts.place)
   }
 
-  async useItem(): Promise<ActResult> {
-    return await this.action('useItem', 'use', {})
+  async useItem(opts: { durationMs?: number } = {}): Promise<ActResult> {
+    return await this.action(
+      'useItem',
+      'use',
+      opts.durationMs === undefined ? {} : { durationMs: opts.durationMs },
+    )
+  }
+
+  async equip(item: string): Promise<ActResult> {
+    return await this.action('equip', 'equip', { item })
   }
 
   async useOn(p: Vec3): Promise<ActResult> {
@@ -306,7 +371,7 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   private async action(
-    action: 'lookAt' | 'dig' | 'useItem' | 'useOn' | 'attack' | 'sleep',
+    action: 'lookAt' | 'dig' | 'useItem' | 'equip' | 'useOn' | 'attack' | 'sleep',
     name: string,
     args: Record<string, JsonValue>,
   ): Promise<ActResult> {

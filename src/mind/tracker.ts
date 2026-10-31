@@ -20,7 +20,7 @@ export type TrackerFault = {
 export type TrackerEvent =
   | { kind: 'job.started'; at: number; runId: string; driverId: string; keys: string }
   | { kind: 'job.renewed'; at: number; runId: string; keys: string }
-  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean }
+  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed'] }
   | { kind: 'job.preempted'; at: number; runId: string }
   | { kind: 'job.stale-result'; at: number; runId: string; state: DriverResult['state'] }
   | { kind: 'tracker.fault'; at: number; code: string }
@@ -370,6 +370,7 @@ export class JobTracker {
       driverId: job.driverId,
       state: result.state,
       ...(result.code === undefined ? {} : { code: result.code }),
+      ...(result.observed === undefined ? {} : { observed: result.observed }),
       blocked,
     })
     if (blocked) this.blocked.add(keys)

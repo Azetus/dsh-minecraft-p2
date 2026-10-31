@@ -19,6 +19,7 @@ export const ORDER_VERBS = [
   'follow',
   'hold',
   'wander',
+  'check',
 ] as const
 
 export type OrderVerb = (typeof ORDER_VERBS)[number]

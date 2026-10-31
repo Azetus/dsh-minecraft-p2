@@ -111,7 +111,7 @@ describe('capabilities', () => {
     expect(actionCapability('attack')).toBe('combat')
     expect(actionCapability('screen')).toBe('observe.screen')
     expect(actionCapability('lookAt')).toBeNull()
-    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(9)
+    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(10)
   })
 
   it('fails with CAPABILITY_MISSING instead of degrading', () => {
@@ -134,3 +134,4 @@ describe('three-state ActResult', () => {
     expect(actUnknown('CLIENT_TIMEOUT', 1000).state).not.toBe('ok')
   })
 })
+

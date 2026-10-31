@@ -5,6 +5,7 @@ import type {
   BiomeInfo,
   BlockInfo,
   Box,
+  ContainerCheckResult,
   EntityInfo,
   Face,
   Item,
@@ -34,6 +35,8 @@ export type MoveOptions = { range?: number; timeoutMs?: number }
  * action without awaiting (and blocking the loop would kill the heartbeat).
  */
 export interface ClientPort {
+  /** Open a container/furnace for a check job; closes it before resolving. */
+  containerAt(p: Vec3): Promise<ContainerCheckResult>
   self(): SelfInfo
   /** Stable recovery identity for this world/character binding. */
   identity(): { worldId: string; characterId: string }
@@ -52,7 +55,8 @@ export interface ClientPort {
   lookAt(p: Vec3): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
-  useItem(): Promise<ActResult>
+  useItem(opts?: { durationMs?: number }): Promise<ActResult>
+  equip(item: string): Promise<ActResult>
   useOn(p: Vec3): Promise<ActResult>
   attack(entityId: string): Promise<ActResult>
   sleep(bed: Vec3): Promise<ActResult>

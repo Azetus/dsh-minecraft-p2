@@ -19,6 +19,7 @@ export type ClientAction =
   | 'dig'
   | 'place'
   | 'useItem'
+  | 'equip'
   | 'useOn'
   | 'attack'
   | 'sleep'
@@ -30,6 +31,7 @@ export const ACTION_CAPABILITIES: Record<ClientAction, Capability | null> = {
   dig: 'interact',
   place: 'interact',
   useItem: 'interact',
+  equip: 'interact',
   useOn: 'interact',
   attack: 'combat',
   sleep: 'interact',

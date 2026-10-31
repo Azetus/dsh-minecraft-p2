@@ -8,11 +8,15 @@ import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
 import { createClearDriver, CLEAR_DRIVER_ID } from '../mind/drivers/clear.ts'
+import { createCheckDriver, CHECK_DRIVER_ID } from '../mind/drivers/check.ts'
+import { createEatDriver, EAT_DRIVER_ID } from '../mind/drivers/eat.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
+import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
+import { createEatGiver } from '../mind/givers/eat.ts'
 import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { createMaterialGiver } from '../mind/givers/material.ts'
@@ -77,12 +81,17 @@ export type CreateMindOptions = {
 export function createMind(options: CreateMindOptions): MindRuntime {
   const now = options.now ?? (() => Date.now())
   const registry = new Registry()
+  let checkOrderLookup: (() => ReturnType<OrderStore['active']>) | undefined
   registry.registerDriver({ id: MOVE_DRIVER_ID, driver: createMoveDriver() })
   registry.registerDriver({ id: CLEAR_DRIVER_ID, driver: createClearDriver() })
+  registry.registerDriver({ id: CHECK_DRIVER_ID, driver: createCheckDriver() })
+  registry.registerDriver({ id: EAT_DRIVER_ID, driver: createEatDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
+  registry.registerGiver({ id: 'eat', factory: () => createEatGiver() })
+  registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => checkOrderLookup?.()) })
   registry.registerGiver({ id: 'goHome', factory: () => createGoHomeGiver() })
   registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
@@ -126,6 +135,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
   })
   orders.restore()
+  checkOrderLookup = () => orders.active()
 
   const sensors = new Sensors({ port: options.port, now })
   const home = options.home
@@ -173,6 +183,18 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           typeof event.code === 'string' ? event.code : undefined,
         )
       }
+      if (event.kind === 'job.terminal' && event.driverId === 'check') {
+        const active = orders.active()
+        const observed = event.observed
+        if (active !== undefined && active.order.verb === 'check') {
+          const ok = isRecord(observed) && observed.state === 'ok'
+          orders.complete(active.order.id, ok ? 'succeeded' : 'failed')
+          events.push('check.result', now(), {
+            orderId: active.order.id,
+            observed: observed ?? null,
+          })
+        }
+      }
       if (event.kind === 'job.preempted' && isRecord(event) && typeof event.runId === 'string') {
         orders.recordActionSettled(event.runId, 'preempted')
       }
@@ -203,6 +225,16 @@ export function createMind(options: CreateMindOptions): MindRuntime {
 
   const syncPlan = (): void => {
     const active = orders.active()
+    if (active !== undefined && active.order.verb === 'check') {
+      if (checkPosition(active) === undefined) {
+        events.push('check.invalid', now(), {
+          orderId: active.order.id,
+          message: 'check order requires numeric params.x/y/z',
+        })
+        orders.complete(active.order.id, 'failed')
+      }
+      return
+    }
     if (active === undefined || (active.order.verb !== 'shelter' && active.order.verb !== 'build')) {
       if (planOrderId !== undefined) {
         activePlan = undefined

@@ -27,6 +27,7 @@ p2_orders                      # 队列
 p2_cancel {id}                 # 取消
 p2_report                      # 最近一次偏离/终态摘要
 p2_say {text}                  # 回复游戏内聊天（聊天会合并后推给 Agent）
+p2_order {verb:"check", params:{x,y,z}}  # 需要开界面的三态 check Job
 ```
 
 Agent 负责选点、蓝图、材料轮次与 order，也负责游戏内对话；P2Mind 在 order 内完成移动、挖掘、放置与恢复。

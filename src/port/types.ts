@@ -47,6 +47,18 @@ export type ScreenInfo = {
   slots: Item[]
 }
 
+/** Result of a check job that opens a container/furnace interface. */
+export type ContainerCheckResult =
+  | {
+      state: 'ok'
+      block: string
+      items: Item[]
+      fuel?: number
+      progress?: number
+    }
+  | { state: 'failed'; code: string; message?: string }
+  | { state: 'unknown'; code: string; message?: string }
+
 export type SelfInfo = {
   pos: Vec3
   yaw: number

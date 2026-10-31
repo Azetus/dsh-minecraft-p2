@@ -188,3 +188,19 @@ order 可带 `policy.conflict`：
 - Agent 用 `p2_say` 回复；body 不解析语言、不自动创建 order。
 - bot 自己的聊天回显在 provider 层忽略，避免自回环。
 - 只有 active body 的 owner 会收到 wake；重启后 cursor 归零。
+
+### 10.7 check Job（M4-02）
+
+- `check` 是 order verb：`p2_order {verb:"check", params:{x,y,z}}`。
+- check giver 从 active check order 选目标；check driver 才打开界面（箱子/熔炉等），
+  结果写入 `job.terminal.observed`，并另发 `check.result`。
+- 三态：`observed.state = ok | failed | unknown`；`unknown` 不会被当作成功。
+- Verifier 仍只用世界方块/物品快照；需要界面数据时必须排队 check，不直接开窗。
+
+### 10.8 idle 调优（M4-03）
+
+- 夜间（timeOfDay 13000–23000）回家半径收紧到 2，wander 直接返回 null，原地待命。
+- 白天 wander 有 12s 冷却，避免持续选新点；半径/最小距离仍可配置。
+- 食物低于 14 时 `eat` giver 选背包食物；`eat` driver 装备后按住使用约 1.8s，
+  以食物值上升作为成功证据，而不是只看动作返回。
+- 夜间验收仍要求 30 分钟零死亡/零方块变化；本轮用单测和短实机验证，未跑满 30 分钟。
