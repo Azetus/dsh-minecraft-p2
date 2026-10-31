@@ -104,6 +104,50 @@ M3-03 的三条主路径在实机可观察：
   - `action.settled` 写入 `state=unreconciled`；
   - 没有发出 place job，**没有重放** pending 动作；
   - 日志：`action.pending` 尾行 → 重启后 `action.settled(unreconciled)` + `order.terminal(blocked)`。
-- 说明：先尝试直接杀 body 进程，动作在重启前已结算/未留下 pending，因此改用受控 pending
-  注入验证恢复路径；真实“pending 窗口内杀进程”的故障注入仍待做。
+- 说明：这一轮先用受控 pending 注入验证恢复路径；随后在 §6 用 `crashAfterPending`
+  做了真实 pending 窗口崩溃注入。
+
+## 6. M3-04 真实崩溃注入
+
+- 插件 tarball SHA-256：`DCCCEB63…1A02C5`。
+- 在 `.p2/config.json` 临时设置 `crashAfterPending: true`，启动 body，下达单块 build order。
+- body 在 `action.pending` 写入后由 `beforeStart` 钩子真实 `process.exit(1)`；DSH 检测到
+  `process-exit`，自动重启到新 epoch `30835416…`。
+- 重启后事件：
+
+```text
+plan.instantiated
+action.unreconciled  actions=[run-2 place b:-25,67,18]  basis={...}
+order.terminal       state=blocked
+```
+
+- 该 place 目标未被放置，**没有重放**；`action.settled(state=unreconciled)` 已落盘。
+- journal 新增身份头：
+
+```json
+{"kind":"journal.identity","identity":{
+  "worldId":"127.0.0.1:25575:overworld",
+  "characterId":"5321c846-…",
+  "defVersion":"747e3190…"
+},"v":1}
+```
+
+- 测试后已移除 `crashAfterPending` 与 `crash-after-pending.done`，配置恢复干净。
+
+## 7. auto-gather 正路径
+
+- 背包 5 dirt，blueprint 6 块，`policy.materials.mode=auto-gather`。
+- 实际事件：
+
+```text
+gather:dirt:-26,67,18  clear succeeded
+gather:dirt:-26,66,18  clear succeeded
+gather:dirt:-26,68,18  clear succeeded
+6 × place              succeeded
+order.terminal         succeeded
+plan.terminal          succeeded
+```
+
+- 观察复核：6 个目标格全部为 dirt；背包剩余 1 dirt。auto-gather 成功从草地补料后完成建造。
+
 
