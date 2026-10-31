@@ -14,13 +14,15 @@ import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
+import { createMaterialGiver } from '../mind/givers/material.ts'
 import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
+import { planShortage, materialSources } from '../mind/materials.ts'
 import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
 import { evaluatePlan, instantiatePlan, loadPlanTemplates } from '../mind/plan.ts'
 import type { PlanInstance } from '../mind/plan.ts'
-import { parseConflictPolicy } from '../mind/policy.ts'
-import type { ConflictPolicy } from '../mind/policy.ts'
+import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
+import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
@@ -71,6 +73,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'goHome', factory: () => createGoHomeGiver() })
   registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
+  registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver() })
 
   const definitions = readJsonDefinitions(options.contentDir, 'tree')
   if (definitions.constant === undefined || definitions.main === undefined) {
@@ -107,6 +110,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let planOrderId: string | undefined
   let planBlockedReported = false
   let planInsufficientReported = false
+  let gatherCount = 0
   const tracker = new JobTracker({
     port: options.port,
     driver: id => registry.driver(id),
@@ -128,8 +132,14 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
     conflictPolicy: () => currentConflictPolicy(),
+    materialPolicy: () => currentMaterialPolicy(),
+    gatherCount: () => gatherCount,
     onEvent: event => {
       events.push(event.kind, event.at, event.data)
+      if (event.kind === 'job.started' && isRecord(event.data)
+        && typeof event.data.keys === 'string' && event.data.keys.startsWith('gather:')) {
+        gatherCount += 1
+      }
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
     },
   })
@@ -169,6 +179,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       planOrderId = active.order.id
       planBlockedReported = false
       planInsufficientReported = false
+      gatherCount = 0
+      if (!materialsSufficient(activePlan)) return
       events.push('plan.instantiated', now(), {
         planId: activePlan.planId,
         template: 'blueprint',
@@ -203,6 +215,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     planOrderId = active.order.id
     planBlockedReported = false
     planInsufficientReported = false
+    gatherCount = 0
+    if (!materialsSufficient(activePlan)) return
     events.push('plan.instantiated', now(), {
       planId: activePlan.planId,
       template: template.id,
@@ -224,6 +238,42 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     if (active === undefined) return undefined
     const parsed = parseConflictPolicy(active.order.policy)
     return parsed.ok ? parsed.policy : undefined
+  }
+
+  function currentMaterialPolicy(): MaterialPolicy | undefined {
+    const active = orders.active()
+    if (active === undefined) return undefined
+    const parsed = parseMaterialPolicy(active.order.policy)
+    return parsed.ok ? parsed.policy : undefined
+  }
+
+  function materialsSufficient(plan: PlanInstance): boolean {
+    const policy = currentMaterialPolicy() ?? { mode: 'require-all' as const }
+    try {
+      const shortage = planShortage(plan, sensors.read())
+      if (Object.keys(shortage.missing).length === 0) return true
+      const unsupported = Object.keys(shortage.missing).filter(name => materialSources(name).length === 0)
+      if (policy.mode === 'require-all' || unsupported.length > 0) {
+        const data = {
+          planId: plan.planId,
+          required: shortage.required,
+          needed: shortage.needed,
+          missing: shortage.missing,
+          ...(unsupported.length === 0 ? {} : { unsupported }),
+        }
+        events.push('plan.material-short', now(), data)
+        orders.complete(plan.orderId, 'blocked')
+        lastReport = data
+        activePlan = undefined
+        planOrderId = undefined
+        planBlockedReported = false
+        planInsufficientReported = false
+        return false
+      }
+      return true
+    } catch {
+      return false
+    }
   }
 
   const tick = (): void => {

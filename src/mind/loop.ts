@@ -1,7 +1,7 @@
 import type { JsonValue } from '../contracts/types.ts'
 import type { Vec3 } from '../port/index.ts'
 import type { PlanInstance } from './plan.ts'
-import type { ConflictPolicy } from './policy.ts'
+import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
 import type { JobTracker } from './tracker.ts'
 import type { TreeResult } from './tree.ts'
 import type { EvalCtx, WorldView } from './types.ts'
@@ -22,6 +22,10 @@ export type MindLoopOptions = {
   plan?: () => PlanInstance | undefined
   /** Conflict policy for the active order. */
   conflictPolicy?: () => ConflictPolicy | undefined
+  /** Material policy for the active order. */
+  materialPolicy?: () => MaterialPolicy | undefined
+  /** Gather jobs already started for the active plan. */
+  gatherCount?: () => number
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -41,6 +45,8 @@ export class MindLoop {
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
   private readonly conflictPolicy: (() => ConflictPolicy | undefined) | undefined
+  private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
+  private readonly gatherCount: (() => number) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -56,6 +62,8 @@ export class MindLoop {
     this.home = options.home
     this.plan = options.plan
     this.conflictPolicy = options.conflictPolicy
+    this.materialPolicy = options.materialPolicy
+    this.gatherCount = options.gatherCount
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -72,11 +80,15 @@ export class MindLoop {
     }
     const activePlan = this.plan?.()
     const conflictPolicy = this.conflictPolicy?.()
+    const materialPolicy = this.materialPolicy?.()
+    const gatherCount = this.gatherCount?.()
     const ctx: EvalCtx = {
       now,
       ...(this.home === undefined ? {} : { home: this.home }),
       ...(activePlan === undefined ? {} : { plan: activePlan }),
       ...(conflictPolicy === undefined ? {} : { conflictPolicy }),
+      ...(materialPolicy === undefined ? {} : { materialPolicy }),
+      ...(gatherCount === undefined ? {} : { gatherCount }),
       isBlocked: key => this.tracker.isBlocked(key),
     }
 

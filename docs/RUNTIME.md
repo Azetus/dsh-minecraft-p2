@@ -133,3 +133,18 @@ order 可带 `policy.conflict`：
 - 默认 deny：箱子/床/熔炉/刷怪笼/基岩/黑曜石等；显式 `allow` 可覆盖默认 deny，
   显式 `deny` 永远优先。
 - 清障策略只决定“拆不拆”，不参与“目标格是否可替换”的判断；place 仍然不维护 replaceable 名单。
+
+### 10.3 材料策略（M3-03）
+
+```jsonc
+{ "policy": { "materials": { "mode": "require-all" | "auto-gather", "maxGatherBlocks": 64 } } }
+```
+
+- 缺省 `require-all`：order 开始时算 BOM；有缺口 → `plan.material-short`（required/needed/missing）
+  + order `blocked`，不会先放一部分。
+- `auto-gather`：只对已知来源的材料自动补；来源由 `materials.ts` 显式映射（泥土←草/泥土、
+  圆石←石头、原木←原木、沙/砂砾/煤/铁/铜等）；**没有来源的物品（门等）仍 blocked**。
+- auto-gather 只选择源方块；`clear` driver 负责挖，掉落由正常拾取进入背包/材料账。
+- 若缺料中**有任一物品没有来源**，整个 order 直接 blocked，不做部分施工。
+- `maxGatherBlocks` 按已开始的 gather job 计数；达到预算后停止 gather，等待/blocked。
+- 当前没有 crafting：需要合成才能得到的材料不会自动补。

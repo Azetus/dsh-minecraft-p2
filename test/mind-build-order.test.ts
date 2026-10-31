@@ -27,7 +27,7 @@ afterEach(() => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
 
-function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; places: number } {
+function fakePort(dirtCount = 2): { port: ClientPort; blocks: Map<string, BlockInfo>; places: number } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set('0,63,0', { name: 'stone', loaded: true, pos: { x: 0, y: 63, z: 0 } })
   blocks.set('0,64,0', { name: 'air', loaded: true, pos: { x: 0, y: 64, z: 0 } })
@@ -53,7 +53,7 @@ function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; places:
       && block.pos.y >= box.min.y && block.pos.y <= box.max.y
       && block.pos.z >= box.min.z && block.pos.z <= box.max.z),
     entities: () => [],
-    inventory: () => [{ slot: 36, name: 'dirt', count: 2 }],
+    inventory: () => (dirtCount === 0 ? [] : [{ slot: 36, name: 'dirt', count: dirtCount }]),
     beginWrite: () => {},
     endWrite: () => {},
     place: async (p: Vec3) => {
@@ -93,5 +93,48 @@ describe('build order', () => {
     expect(fake.blocks.get('0,64,0')?.name).toBe('dirt')
     expect(fake.places).toBe(1)
     expect(mind.status().plan).toBeNull()
+  })
+
+  it('blocks a require-all order before placing when materials are missing', () => {
+    const fake = fakePort(0)
+    const mind = createMind({
+      port: fake.port,
+      home: { x: 1, y: 64, z: 0 },
+      contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+    })
+    mind.enqueueOrder({
+      id: 'ord-short',
+      verb: 'build',
+      blueprint: { blocks: [{ x: 0, y: 64, z: 0, name: 'dirt' }] },
+    })
+    mind.tick()
+
+    expect(mind.orders.get('ord-short')?.state).toBe('blocked')
+    expect(fake.places).toBe(0)
+    expect([...mind.events.since(0)].some(event => event.kind === 'plan.material-short')).toBe(true)
+  })
+
+  it('blocks auto-gather when a missing item has no source', () => {
+    const fake = fakePort(0)
+    const mind = createMind({
+      port: fake.port,
+      home: { x: 1, y: 64, z: 0 },
+      contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+    })
+    mind.enqueueOrder({
+      id: 'ord-door',
+      verb: 'build',
+      blueprint: { blocks: [{ x: 0, y: 64, z: 0, name: 'oak_door' }] },
+      policy: { materials: { mode: 'auto-gather' } },
+    })
+    mind.tick()
+
+    expect(mind.orders.get('ord-door')?.state).toBe('blocked')
+    expect(fake.places).toBe(0)
+    expect([...mind.events.since(0)].some(event => event.kind === 'plan.material-short')).toBe(true)
   })
 })

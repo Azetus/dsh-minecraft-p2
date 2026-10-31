@@ -21,7 +21,7 @@ p2_status                      # 精简状态：当前 order / job / 预算 / �
 p2_observe {min,max,detail}    # 只读观测：方块/计数/表面，或 points 定向查询
 p2_entities {radius,names}     # 不移动的实体/掉落物观测（按距离排序）
 p2_preview_blueprint {blueprint} # 蓝图 dry-run：缺料/冲突/未加载格
-p2_order {verb:"build", blueprint:{blocks:[...]}, policy:{conflict:{mode:"clear"}}}  # 内联蓝图 + 冲突策略
+p2_order {verb:"build", blueprint:{blocks:[...]}, policy:{conflict:{mode:"clear"}, materials:{mode:"auto-gather"}}}  # 蓝图 + 冲突/材料策略
 p2_order {verb: "shelter", params: {quality: "minimal"}}   # 下一条 order
 p2_orders                      # 队列
 p2_cancel {id}                 # 取消

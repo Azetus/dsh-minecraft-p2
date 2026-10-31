@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { canClearBlock, parseConflictPolicy } from '../src/mind/policy.ts'
+import { canClearBlock, parseConflictPolicy, parseMaterialPolicy } from '../src/mind/policy.ts'
 
 /**
  * Category: data (M3-03 conflict policy).
@@ -34,5 +34,18 @@ describe('conflict policy', () => {
     expect(canClearBlock(parsed.policy, 'grass_block')).toBe(false)
     expect(canClearBlock(parsed.policy, 'stone')).toBe(true)
     expect(canClearBlock(parsed.policy, 'diamond_block')).toBe(true)
+  })
+
+  it('parses material policy and keeps it separate from conflict policy', () => {
+    expect(parseMaterialPolicy(undefined)).toEqual({ ok: true, policy: undefined })
+    expect(parseMaterialPolicy({ materials: { mode: 'auto-gather', maxGatherBlocks: 8 } })).toEqual({
+      ok: true,
+      policy: { mode: 'auto-gather', maxGatherBlocks: 8 },
+    })
+    expect(parseMaterialPolicy({ materials: { mode: 'explode' } }).ok).toBe(false)
+    expect(parseMaterialPolicy({ materials: { maxGatherBlocks: -1 } }).ok).toBe(false)
+    // The conflict parser tolerates a materials section; the material parser
+    // validates it separately.
+    expect(parseConflictPolicy({ materials: { mode: 'auto-gather' } })).toEqual({ ok: true, policy: undefined })
   })
 })

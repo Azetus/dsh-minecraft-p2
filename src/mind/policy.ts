@@ -9,6 +9,13 @@ export type ConflictPolicy = {
   deny?: string[]
 }
 
+export type MaterialMode = 'require-all' | 'auto-gather'
+
+export type MaterialPolicy = {
+  mode: MaterialMode
+  maxGatherBlocks?: number
+}
+
 export const DEFAULT_DENY: ReadonlySet<string> = new Set([
   'chest', 'trapped_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker',
   'hopper', 'dropper', 'dispenser', 'brewing_stand', 'enchanting_table',
@@ -23,7 +30,7 @@ export function parseConflictPolicy(value: JsonValue | undefined): ConflictPolic
   if (value === undefined) return { ok: true, policy: undefined }
   if (!isRecord(value)) return { ok: false, error: 'policy must be an object' }
   for (const key of Object.keys(value)) {
-    if (key !== 'conflict') return { ok: false, error: `policy.${key} is not supported` }
+    if (key !== 'conflict' && key !== 'materials') return { ok: false, error: `policy.${key} is not supported` }
   }
   const conflict = value.conflict
   if (conflict === undefined) return { ok: true, policy: undefined }
@@ -72,4 +79,36 @@ function readNames(
 
 function normalizeName(name: string): string {
   return name.replace(/^minecraft:/u, '')
+}
+
+export type MaterialPolicyParse =
+  | { ok: true; policy: MaterialPolicy | undefined }
+  | { ok: false; error: string }
+
+export function parseMaterialPolicy(value: JsonValue | undefined): MaterialPolicyParse {
+  if (value === undefined) return { ok: true, policy: undefined }
+  if (!isRecord(value)) return { ok: false, error: 'policy must be an object' }
+  const materials = value.materials
+  if (materials === undefined) return { ok: true, policy: undefined }
+  if (!isRecord(materials)) return { ok: false, error: 'policy.materials must be an object' }
+  for (const key of Object.keys(materials)) {
+    if (!['mode', 'maxGatherBlocks'].includes(key)) {
+      return { ok: false, error: `policy.materials.${key} is unknown` }
+    }
+  }
+  const mode = materials.mode ?? 'require-all'
+  if (mode !== 'require-all' && mode !== 'auto-gather') {
+    return { ok: false, error: 'policy.materials.mode must be require-all or auto-gather' }
+  }
+  const max = materials.maxGatherBlocks
+  if (max !== undefined && (typeof max !== 'number' || !Number.isInteger(max) || max < 0)) {
+    return { ok: false, error: 'policy.materials.maxGatherBlocks must be a non-negative integer' }
+  }
+  return {
+    ok: true,
+    policy: {
+      mode,
+      ...(max === undefined ? {} : { maxGatherBlocks: max as number }),
+    },
+  }
 }

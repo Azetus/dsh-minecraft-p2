@@ -10,7 +10,7 @@ import type {
 } from '../port/index.ts'
 import type { SchemaNode } from './schema.ts'
 import type { PlanInstance } from './plan.ts'
-import type { ConflictPolicy } from './policy.ts'
+import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
 
 /** A selected target. M1 only needs points; more kinds arrive with plans. */
 export type Target = { kind: 'point'; pos: Vec3 }
@@ -54,6 +54,10 @@ export type EvalCtx = {
   plan?: PlanInstance
   /** Agent-authored conflict policy for the active order. */
   conflictPolicy?: ConflictPolicy
+  /** Material policy for the active order; default is require-all. */
+  materialPolicy?: MaterialPolicy
+  /** Gather jobs started for this plan (auto-gather budget accounting). */
+  gatherCount?: number
   /** Work keys the tracker has blocked after repeated failures. */
   isBlocked?: (key: string) => boolean
 }
