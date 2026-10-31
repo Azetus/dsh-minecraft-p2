@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { ChatBatcher } from './chat-batcher.ts'
+import { CompletionFeed, formatCompletionWake } from './completion-wake.ts'
+import type { CompletionItem, MindEventView } from './completion-wake.ts'
 import type { JsonValue } from '../contracts/index.ts'
 import type { ChatMessage, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
@@ -119,6 +121,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       let startChatPolling: (() => void) | undefined
       let stopChatPolling: (() => void) | undefined
       const pendingNormal: string[] = []
+      const completion = new CompletionFeed()
+      const pendingCompletion: CompletionItem[] = []
+      let completionTimer: ReturnType<typeof setTimeout> | undefined
+      let completionUnavailable = false
+      let mindPolling = false
       /** Runtime faults steer a running owner; idle owners get a follow-up turn. */
       const wakeMessage = (text: string): WakeMessage => ({
         id: randomUUID(),
@@ -168,6 +175,41 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         pendingNormal.push(text)
         if (pendingNormal.length > 8) pendingNormal.splice(0, pendingNormal.length - 8)
       }
+      const clearCompletionTimer = (): void => {
+        if (completionTimer !== undefined) clearTimeout(completionTimer)
+        completionTimer = undefined
+      }
+      const flushCompletion = (): void => {
+        clearCompletionTimer()
+        if (pendingCompletion.length === 0) return
+        const items = pendingCompletion.splice(0)
+        deliverWake(formatCompletionWake(items, manager.bodyEpoch), 'normal')
+      }
+      const deliverCompletion = (items: CompletionItem[], epoch: string | undefined): void => {
+        if (items.length === 0) return
+        if (!items.some(item => item.severity === 'critical')) {
+          // Successful results are merged into one digest; a finished job does
+          // not wake a running turn by itself. The window starts at the first
+          // pending result so a later success cannot delay it past 1 s.
+          pendingCompletion.push(...items)
+          if (completionTimer === undefined) {
+            completionTimer = setTimeout(flushCompletion, 250)
+            completionTimer.unref?.()
+          }
+          return
+        }
+        // Critical results never wait for the merge window, but pending normal
+        // results ride along so a restart or failure wake does not drop them.
+        const merged = [...pendingCompletion.splice(0), ...items]
+        clearCompletionTimer()
+        deliverWake(formatCompletionWake(merged, epoch), 'critical')
+      }
+      const resetCompletion = (): void => {
+        pendingCompletion.length = 0
+        clearCompletionTimer()
+        completion.reset()
+        completionUnavailable = false
+      }
       const chatBatcher = new ChatBatcher(messages => {
         const lines = messages.map(message => `${message.username}: ${message.message}`).join('\n')
         deliverWake(`[p2 chat]\n${lines}\n请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`)
@@ -175,6 +217,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       notifyBodyFault = fault => {
         stopChatPolling?.()
         pendingNormal.length = 0
+        resetCompletion()
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
           : fault.autoRestart === 'exhausted'
@@ -189,6 +232,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         chatCursor = 0
         perceptionCursor = 0
         pendingNormal.length = 0
+        resetCompletion()
         startChatPolling?.()
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
@@ -271,13 +315,47 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           perceptionPolling = false
         }
       }
+      const pollMind = async (): Promise<void> => {
+        if (mindPolling || manager.currentState !== 'active') return
+        const epoch = manager.bodyEpoch
+        if (completion.attach(epoch)) {
+          // A new body epoch starts a fresh event ring and cursor; results
+          // queued for the old epoch are no longer actionable.
+          pendingCompletion.length = 0
+          clearCompletionTimer()
+          completionUnavailable = false
+        }
+        if (completionUnavailable) return
+        mindPolling = true
+        try {
+          const result = await manager.mindEvents(completion.cursor) as unknown as {
+            events?: MindEventView[]
+          }
+          deliverCompletion(completion.accept(result.events ?? []), epoch)
+        } catch (error) {
+          if (error instanceof BodyClientError && error.error.code === 'MIND_UNAVAILABLE') {
+            // A providerless test body has no mind; do not log every 300 ms.
+            completionUnavailable = true
+            options.log?.('p2 completion polling disabled: this body has no mind runtime')
+          } else {
+            options.log?.(`p2 completion poll failed: ${formatError(error)}`)
+          }
+        } finally {
+          mindPolling = false
+        }
+      }
       startChatPolling = (): void => {
         if (chatTimer !== undefined) return
         perceptionCursor = 0
-        chatTimer = setInterval(() => { void pollChat(); void pollPerception() }, 300)
+        chatTimer = setInterval(() => {
+          void pollChat()
+          void pollPerception()
+          void pollMind()
+        }, 300)
         chatTimer.unref?.()
         void pollChat()
         void pollPerception()
+        void pollMind()
       }
       stopChatPolling = (): void => {
         if (chatTimer !== undefined) clearInterval(chatTimer)
@@ -289,6 +367,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         perceptionCursor = 0
         chatBatcher.stop()
         pendingNormal.length = 0
+        resetCompletion()
       }
 
       const globalDisposers: Array<() => void> = []

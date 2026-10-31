@@ -146,7 +146,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_order',
-      description: 'Submit one goal-level order. The NPC chooses and executes the work; do not use it as a micro-command.',
+      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command.',
       parameters: {
         type: 'object',
         properties: {
@@ -170,7 +170,12 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
         for (const key of ['id', 'params', 'constraints', 'blueprint', 'policy'] as const) {
           if (args[key] !== undefined) order[key] = args[key] as JsonValue
         }
-        return await manager.mindOrder(order)
+        const accepted = await manager.mindOrder(order) as unknown as { id?: string; state?: string }
+        return {
+          accepted: true,
+          ...(typeof accepted?.id === 'string' ? { id: accepted.id } : {}),
+          ...(typeof accepted?.state === 'string' ? { state: accepted.state } : {}),
+        } as JsonValue
       },
     }),
     tools.register({
@@ -211,7 +216,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_events',
-      description: 'Mind events since a cursor (orders, jobs, tracker, definition errors).',
+      description: 'Detailed mind-event audit trail since a cursor. Completion/failure is pushed automatically as a wake; use this only to investigate, never as the main polling loop.',
       parameters: {
         type: 'object',
         properties: {

@@ -93,11 +93,12 @@
 | `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤；附当前 `biome` |
 | `p2_entities {center?,radius?,types?,names?,limit?}` | 不移动的实体/掉落物观测：半径 ≤160、limit ≤512、按距离排序；掉落物带 `item.name/count`；只受服务器跟踪范围限制 |
 | `p2_preview_blueprint {blueprint}` | 只读 dry-run：必需/缺料、冲突（当前方块、是否可拆）、未加载格、非法字段；不消耗材料、不清障、不放置 |
+| `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
+| `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
+| `p2_events {sinceSeq}` | 详细事件审计（order/job/plan/tracker/move）；仅供排查，不是主轮询手段 |
+| 唤醒 | order 终态、plan.blocked、job.terminal failed/blocked、tracker fault、感知 critical、对话 |
 
 `surface` 每列同时给出最高非空气块（`y/name`）与最高实心块（`solidY/solidName`）：草、花等不计入实心面；适配器无法判断时 `solid` 省略，按非空气处理。
-| `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
-| `p2_events {sinceSeq}` | order/job/plan/tracker/move 事件游标 |
-| 唤醒 | 只在 order 终态、偏离阈值、tracker fault 时推送 |
 
 ## 9. 失败模式
 
@@ -248,3 +249,25 @@ order 可带 `policy.conflict`：
 - 策略：普通 digest/chat 在 Agent running 时由 P2 本地挂起，等 idle 后只 `followup` 一次；
   只有本地无法处理/需要改变目标的 critical 才 `steer`。
 - 世界全量变化仍只在观测层/Verifier；不进入感知通知。
+
+### 10.10 异步完成通知（completion wake）
+
+- bridge 与 chat/perception 共用 300ms 轮询，读 `mind.events {sinceSeq}`。
+  事件 cursor 以 **body epoch** 为边界：epoch 变化时归零并丢弃旧 epoch 的待发结果；
+  同一 epoch 内按 `seq` 前进，重复轮询不会重复推送。
+- 必推（critical，不等待合并）：
+  - `order.terminal` 的 `failed / blocked / abandoned`；
+  - `plan.blocked`；
+  - `job.terminal` 的 `failed` 或 `blocked=true`；check job 的 `succeeded` 只表示观测完成，
+    若 `observed.state=failed/unknown` 也作为失败 cause 推送；
+  - `tracker.fault`，以及直接导致终态的 `plan.material-short / plan.abort /
+    plan.verify(refuted) / plan.definition-error / action.unreconciled`。
+- 成功/取消合并：`job.terminal` 成功不单独唤醒；`order.terminal` 成功走 250ms
+  合并窗口，一条 DIGEST；多个成功结果合成一条。
+- `order.terminal` 会吸收紧邻的失败 cause（runId/driverId/code/blocked/observed），
+  所以一条 wake 就带 `orderId / state / observed / reason`；Agent 需要完整记录时读 `p2_report`。
+- 投递策略：Agent running 时普通结果本地挂起，idle 后一次 `followup`；critical 才 `steer`
+  打断当前轮。任何 completion wake 都不要求 Agent 轮询或调 `Start-Sleep`。
+- `p2_order` 只等 accepted；`p2_events` 保留为详细审计，不是主轮询手段。
+- body 重启产生新 epoch 与空事件环，从 seq 1 开始；bridge 按 epoch 重置 cursor，
+  不会把旧 epoch 的终态当成新结果重复推送。

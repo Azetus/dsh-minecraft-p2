@@ -11,13 +11,16 @@
 
 ```text
 p2_status                 # 当前 order / job / reportString / 预算余量 / tracker 状态
-p2_order   {verb, params?, constraints?, blueprint?}
+p2_order   {verb, params?, constraints?, blueprint?}   # 只返回 accepted
 p2_orders                 # 队列
 p2_cancel  {id}
 p2_report                 # 最近一次偏离或终态摘要
-p2_events  {sinceSeq}
+p2_events  {sinceSeq}     # 详细审计；不要用它轮询
 p2_body    {action: start|stop|restart|status}
 ```
+
+`p2_order` 返回 `{accepted:true,id,state}` 后本轮就结束，不要等待、不要 `Start-Sleep`、
+不要轮询 `p2_events`；终态/blocked/失败会以一条 `[p2 completion]` wake 推回来。
 
 ## 下令规则
 
@@ -30,7 +33,10 @@ p2_body    {action: start|stop|restart|status}
 ## 巡检纪律
 
 - **不轮询**。正常执行期间不要看状态；只在被唤醒时行动。
-- 唤醒只有三种：order 终态（succeeded/failed/blocked/abandoned）、偏离阈值、tracker fault。
+- 唤醒来源：`[p2 completion]`（order 终态、plan.blocked、job.terminal failed/blocked）、
+  `[p2 perception]`（critical 立即 / 其余 digest）、`[p2 chat]`、tracker fault。
+- completion wake 每条都带 `orderId / state / observed / reason`（如适用）；
+  要看完整记录再用 `p2_report`，不需要 `p2_events`。
 - 怀疑卡死时，间隔 ≥60s 看一次 `p2_status`，不要连续看。
 
 ## 唤醒后怎么决策

@@ -138,7 +138,7 @@ describe('mind operator tools', () => {
       { verb: 'wander', params: { radius: 6 } },
       { agent },
     )
-    expect(value).toEqual({ id: 'ord-1', state: 'active' })
+    expect(value).toEqual({ accepted: true, id: 'ord-1', state: 'active' })
     expect(manager.orders).toEqual([{ verb: 'wander', params: { radius: 6 } }])
   })
 
