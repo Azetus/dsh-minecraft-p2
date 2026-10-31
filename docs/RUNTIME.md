@@ -175,3 +175,16 @@ order 可带 `policy.conflict`：
 - 开发测试专用：`.p2/config.json` 的 `crashAfterPending: true` 会在首个
   `action.pending` 写入后让 body 真实退出一次（标记 `.p2/crash-after-pending.done`），
   用于验证“pending 窗口崩溃 → 重启对账”。生产配置不应开启。
+
+### 10.6 游戏内对话推送给 Agent（M4）
+
+- 对话**不由 body 解析**：`ClientPort` 的 `chat` 事件进入 body 有界队列（100 条），
+  通过 `chat.poll {afterSeq}` 暴露给 bridge；`chat.say {text}` 只负责发一句话。
+- bridge 每 300ms poll 一次；新消息交给 `ChatBatcher` 合并：
+  - 单条等待 1s 防抖后推送；
+  - 连续聊天最多 3s 强制合并推送一次，避免高频聊天反复打断 Agent。
+- 合并后通过 DSH `Agent.followup/steer` 作为一条 user 消息推送：
+  `[p2 chat] ... 请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`
+- Agent 用 `p2_say` 回复；body 不解析语言、不自动创建 order。
+- bot 自己的聊天回显在 provider 层忽略，避免自回环。
+- 只有 active body 的 owner 会收到 wake；重启后 cursor 归零。
