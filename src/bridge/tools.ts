@@ -129,6 +129,22 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       },
     }),
     tools.register({
+      name: 'p2_say',
+      description: 'Send one chat message as the body. Use this to answer a game-chat message that was pushed to you.',
+      parameters: {
+        type: 'object',
+        properties: { text: { type: 'string', minLength: 1, maxLength: 256 } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        if (typeof args.text !== 'string' || args.text.trim().length === 0) throw new Error('p2_say requires text')
+        return await manager.chatSay(args.text)
+      },
+    }),
+    tools.register({
       name: 'p2_order',
       description: 'Submit one goal-level order. The NPC chooses and executes the work; do not use it as a micro-command.',
       parameters: {

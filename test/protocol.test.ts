@@ -121,6 +121,8 @@ describe('protocol vocabulary', () => {
       'world.observe',
       'world.entities',
       'blueprint.preview',
+      'chat.poll',
+      'chat.say',
       'mind.order',
       'mind.orders',
       'mind.cancel',

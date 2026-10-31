@@ -385,7 +385,10 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   private wireEvents(): void {
-    this.bot.on('chat', (username, message) => this.emit('chat', { username, message }))
+    this.bot.on('chat', (username, message) => {
+      if (username === this.bot.username) return
+      this.emit('chat', { username, message })
+    })
     this.bot.on('blockUpdate', (_oldBlock, newBlock) => {
       const position = newBlock?.position
       if (position === undefined) return

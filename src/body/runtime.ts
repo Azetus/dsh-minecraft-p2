@@ -11,6 +11,8 @@ import {
 } from '../contracts/protocol.ts'
 import type {
   BodyInfo,
+  ChatPollResult,
+  ChatSayResult,
   DescribeResult,
   HeartbeatParams,
   HeartbeatResult,
@@ -65,6 +67,8 @@ export class BodyRuntime {
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly mind: MindRuntime | undefined
   private readonly port: ClientPort | undefined
+  private readonly chatMessages: Array<{ seq: number; at: number; username: string; message: string }> = []
+  private chatSeq = 0
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -79,6 +83,9 @@ export class BodyRuntime {
     this.providerStatus = options.providerStatus
     this.mind = options.mind
     this.port = options.port
+    if (this.port !== undefined && typeof this.port.on === 'function') {
+      this.port.on('chat', payload => this.recordChat(payload))
+    }
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     if (options.owner !== undefined) {
       this.owner = options.owner
@@ -130,6 +137,8 @@ export class BodyRuntime {
       case 'world.observe': return this.worldObserve(params) as unknown as JsonValue
       case 'world.entities': return this.worldEntities(params) as unknown as JsonValue
       case 'blueprint.preview': return this.blueprintPreview(params) as unknown as JsonValue
+      case 'chat.poll': return this.chatPoll(params) as unknown as JsonValue
+      case 'chat.say': return this.chatSay(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
@@ -260,6 +269,57 @@ export class BodyRuntime {
       )
     }
     return previewBlueprint(this.port, params.blueprint, this.now())
+  }
+
+  private recordChat(payload: JsonValue): void {
+    if (!isRecord(payload)) return
+    const username = payload.username
+    const message = payload.message
+    if (typeof username !== 'string' || typeof message !== 'string') return
+    if (username.length === 0 || message.length === 0) return
+    this.chatSeq += 1
+    this.chatMessages.push({ seq: this.chatSeq, at: this.now(), username, message })
+    while (this.chatMessages.length > 100) this.chatMessages.shift()
+  }
+
+  private chatPoll(params: Record<string, JsonValue>): ChatPollResult {
+    this.requireOwner()
+    const afterSeq = typeof params.afterSeq === 'number' ? Math.floor(params.afterSeq) : 0
+    if (afterSeq < 0) {
+      throw p2Error(ErrorCodes.INVALID_MESSAGE, 'validation', 'afterSeq must be non-negative', {
+        module: 'body.runtime',
+      })
+    }
+    return {
+      messages: this.chatMessages.filter(message => message.seq > afterSeq),
+      seq: this.chatSeq,
+    }
+  }
+
+  private chatSay(params: Record<string, JsonValue>): ChatSayResult {
+    this.requireOwner()
+    if (this.port === undefined) {
+      throw p2Error(ErrorCodes.NOT_INITIALIZED, 'runtime', 'body has no provider to chat', {
+        module: 'body.runtime',
+      })
+    }
+    const text = params.text
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > 256) {
+      throw p2Error(ErrorCodes.INVALID_MESSAGE, 'validation', 'chat.say requires text (1..256)', {
+        module: 'body.runtime',
+      })
+    }
+    try {
+      this.port.say(text)
+      return { sent: true }
+    } catch (error) {
+      throw p2Error(
+        'CHAT_SEND_FAILED',
+        'runtime',
+        error instanceof Error ? error.message : String(error),
+        { module: 'body.runtime' },
+      )
+    }
   }
 
   private mindOrders(): MindOrdersResult {

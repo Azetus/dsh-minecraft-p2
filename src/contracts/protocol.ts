@@ -22,6 +22,8 @@ export const METHODS = [
   'world.observe',
   'world.entities',
   'blueprint.preview',
+  'chat.poll',
+  'chat.say',
   'mind.order',
   'mind.orders',
   'mind.cancel',
@@ -269,6 +271,18 @@ export type MindEventsResult = {
   events: Array<{ seq: number; at: number; kind: string; data: JsonValue }>
   seq: number
 }
+
+export type ChatMessage = {
+  seq: number
+  at: number
+  username: string
+  message: string
+}
+
+export type ChatPollParams = { afterSeq?: number }
+export type ChatPollResult = { messages: ChatMessage[]; seq: number }
+export type ChatSayParams = { text: string }
+export type ChatSayResult = { sent: true }
 
 export type BodyInfo = {
   manifest: BodyManifest

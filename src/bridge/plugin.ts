@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
 
+import { ChatBatcher } from './chat-batcher.ts'
 import type { JsonValue } from '../contracts/index.ts'
-import type { OwnerContext } from '../contracts/protocol.ts'
+import type { ChatMessage, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
@@ -105,6 +106,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     name: 'dsh-minecraft-p2',
     inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
+      let chatCursor = 0
+      let chatTimer: ReturnType<typeof setInterval> | undefined
+      let chatPolling = false
+      let startChatPolling: (() => void) | undefined
+      let stopChatPolling: (() => void) | undefined
       /** Runtime faults steer a running owner; idle owners get a follow-up turn. */
       const deliverWake = (text: string): void => {
         const owner = manager.currentOwner
@@ -125,7 +131,12 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           options.log?.(`p2 runtime wake failed: ${formatError(cause)}`)
         }
       }
+      const chatBatcher = new ChatBatcher(messages => {
+        const lines = messages.map(message => `${message.username}: ${message.message}`).join('\n')
+        deliverWake(`[p2 chat]\n${lines}\n请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`)
+      })
       notifyBodyFault = fault => {
+        stopChatPolling?.()
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
           : fault.autoRestart === 'exhausted'
@@ -136,9 +147,43 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         )
       }
       notifyBodyRestart = info => {
+        chatCursor = 0
+        startChatPolling?.()
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
         )
+      }
+
+      const pollChat = async (): Promise<void> => {
+        if (chatPolling || manager.currentState !== 'active') return
+        chatPolling = true
+        try {
+          const result = await manager.chatPoll(chatCursor) as unknown as {
+            messages?: ChatMessage[]
+            seq?: number
+          }
+          const messages = result.messages ?? []
+          if (messages.length > 0) {
+            chatCursor = messages[messages.length - 1]?.seq ?? chatCursor
+            for (const message of messages) chatBatcher.add(message)
+          }
+        } catch (error) {
+          // Polling is a side channel; a transient body failure must not fault it.
+          options.log?.(`p2 chat poll failed: ${formatError(error)}`)
+        } finally {
+          chatPolling = false
+        }
+      }
+      startChatPolling = (): void => {
+        if (chatTimer !== undefined) return
+        chatTimer = setInterval(() => { void pollChat() }, 300)
+        chatTimer.unref?.()
+        void pollChat()
+      }
+      stopChatPolling = (): void => {
+        if (chatTimer !== undefined) clearInterval(chatTimer)
+        chatTimer = undefined
+        chatBatcher.stop()
       }
 
       const globalDisposers: Array<() => void> = []
@@ -152,7 +197,12 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       }
 
       if (options.devBodyControl === true && ctx.tools !== undefined) {
-        globalDisposers.push(ctx.tools.register(createBodyTool(manager, { ensureTools, disposeTools })))
+        globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
+          ensureTools,
+          disposeTools,
+          startChatPolling: () => startChatPolling?.(),
+          stopChatPolling: () => stopChatPolling?.(),
+        })))
       }
 
       ctx.effect(
@@ -161,8 +211,14 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           description: 'Manage the P2 Minecraft player runtime',
           input: { hint: '<setup|start|status|stop>' },
           handler: invocation => handleP2Command(manager, invocation, {
-            onStarted: agent => ensureTools(agent),
-            onStopped: () => disposeTools(),
+            onStarted: agent => {
+              ensureTools(agent)
+              startChatPolling?.()
+            },
+            onStopped: () => {
+              stopChatPolling?.()
+              disposeTools()
+            },
           }),
         }),
         'p2.commands',
@@ -171,6 +227,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         () => async () => {
           notifyBodyFault = undefined
           notifyBodyRestart = undefined
+          stopChatPolling?.()
           disposeTools()
           for (const dispose of globalDisposers.splice(0)) dispose()
           await manager.dispose()
@@ -185,6 +242,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 type BodyToolHooks = {
   ensureTools: (agent: AgentLike) => void
   disposeTools: () => void
+  startChatPolling: () => void
+  stopChatPolling: () => void
 }
 
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
@@ -224,12 +283,14 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         if (stopped.state === 'faulted') return { action, ...stopped }
         const result = await startBody(manager, agent)
         hooks.ensureTools(agent)
+        hooks.startChatPolling()
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
         assertBodyOwner(manager, agent.session.id)
         const result = await stopBody(manager)
+        hooks.stopChatPolling()
         hooks.disposeTools()
         void auditBodyControl(agent, { action, state: result.state })
         return { action, ...result }

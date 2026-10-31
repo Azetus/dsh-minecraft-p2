@@ -228,6 +228,14 @@ export class BodyManager {
     return this.activeClient().request('blueprint.preview', { blueprint })
   }
 
+  chatPoll(afterSeq: number): Promise<JsonValue> {
+    return this.activeClient().request('chat.poll', { afterSeq })
+  }
+
+  chatSay(text: string): Promise<JsonValue> {
+    return this.activeClient().request('chat.say', { text })
+  }
+
   mindOrders(): Promise<JsonValue> {
     return this.activeClient().request('mind.orders', {})
   }

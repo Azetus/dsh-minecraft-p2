@@ -18,6 +18,7 @@ class FakeManager {
   readonly observes: unknown[] = []
   readonly entityQueries: unknown[] = []
   readonly previews: unknown[] = []
+  readonly says: string[] = []
 
   async status(): Promise<unknown> {
     return {
@@ -58,6 +59,11 @@ class FakeManager {
   async blueprintPreview(blueprint: unknown): Promise<unknown> {
     this.previews.push(blueprint)
     return { ok: true, blocks: 0 }
+  }
+
+  async chatSay(text: string): Promise<unknown> {
+    this.says.push(text)
+    return { sent: true }
   }
 
   async mindOrders(): Promise<unknown> {
@@ -105,6 +111,7 @@ describe('mind operator tools', () => {
       'p2_observe',
       'p2_entities',
       'p2_preview_blueprint',
+      'p2_say',
       'p2_order',
       'p2_orders',
       'p2_cancel',
@@ -163,6 +170,13 @@ describe('mind operator tools', () => {
     expect(value).toEqual({ ok: true, blocks: 0 })
     expect(manager.previews).toEqual([blueprint])
     expect(manager.orders).toHaveLength(0)
+  })
+
+  it('sends a chat reply through p2_say', async () => {
+    const { definitions, manager, agent } = harness()
+    const value = await definitions.get('p2_say')?.execute({ text: '收到' }, { agent })
+    expect(value).toEqual({ sent: true })
+    expect(manager.says).toEqual(['收到'])
   })
 
   it('cancels by id and lists events', async () => {
