@@ -34,9 +34,25 @@ export type MoveOptions = { range?: number; timeoutMs?: number }
  * `ActResult` return is a Promise here because mineflayer cannot complete an
  * action without awaiting (and blocking the loop would kill the heartbeat).
  */
+export type ContainerTransferAction =
+  | 'deposit'
+  | 'withdraw'
+  | 'load-input'
+  | 'load-fuel'
+  | 'take-input'
+  | 'take-fuel'
+  | 'take-output'
+
 export interface ClientPort {
   /** Open a container/furnace for a check job; closes it before resolving. */
   containerAt(p: Vec3): Promise<ContainerCheckResult>
+  /** Transfer items through a chest/furnace window; one bounded action. */
+  containerTransfer(
+    p: Vec3,
+    action: ContainerTransferAction,
+    item?: string,
+    count?: number,
+  ): Promise<ActResult>
   self(): SelfInfo
   /** Stable recovery identity for this world/character binding. */
   identity(): { worldId: string; characterId: string }

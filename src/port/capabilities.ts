@@ -24,6 +24,7 @@ export type ClientAction =
   | 'attack'
   | 'sleep'
   | 'screen'
+  | 'containerTransfer'
 
 export const ACTION_CAPABILITIES: Record<ClientAction, Capability | null> = {
   moveTo: 'navigate',
@@ -36,6 +37,7 @@ export const ACTION_CAPABILITIES: Record<ClientAction, Capability | null> = {
   attack: 'combat',
   sleep: 'interact',
   screen: 'observe.screen',
+  containerTransfer: 'interact',
 }
 
 export function actionCapability(action: ClientAction): Capability | null {

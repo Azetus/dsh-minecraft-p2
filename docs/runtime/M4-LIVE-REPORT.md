@@ -22,17 +22,26 @@ P2_Observer: 测试三：你能收到吗
 
 - `check` order verb 已接入 check giver / check driver；只有 check driver 打开容器界面。
 - 结果三态写入 `job.terminal.observed` 和 `check.result`：`ok | failed | unknown`。
-- 单测覆盖 ok / failed / unknown；当前加载区域没有箱子/熔炉，因此容器实机 `ok` 仍未完成。
+- 实机已定位并检查：
+  - chest `(-14,67,-1)`：`ok`，`coal×64`、`raw_iron×64`；
+  - furnace `(-16,67,-1)`：`ok`，空。
 - Verifier 未增加任何开窗调用。
 
 ## M4-03 idle（已按职责边界重构）
 
 - 默认无 order：hold，已实机确认 tracker idle、无自动移动/进食。
 - Agent 显式 order：`hold` / `go` / `wander` / `eat` / `sleep`；P2 提供执行原语。
-- 实机：`go` order 成功完成（order.terminal succeeded）；
-  `wander` 首次在地形受限时未产生 job，重试成功；`eat`/`sleep` 仅单测（实机无食物/床）。
+- 实机：`go` / `wander` 成功；`eat`/`sleep` 仅单测（实机无食物/床）。
 - 夜间 30 分钟验收仍未跑；当前世界昼夜固定白天，需要可夜晚的测试世界。
 - 旧自动回家/进食/游荡已移除，不再内建 Agent 策略。
+
+## 额外执行原语：smelt / dig
+
+- 新增 `containerTransfer`、`smelt` order/driver、`dig` order/driver。
+- 实机 smelt：chest `(-14,67,-1)` + furnace `(-16,67,-1)`，
+  `raw_iron + coal` → `iron_ingot`，成功放回 chest。
+- 复核 chest：`coal×63`、`raw_iron×63`、`iron_ingot×1`。
+- 取消修复：取消非 plan order 现在会 abort 当前 job。
 
 ## 战斗 ROE
 
@@ -41,7 +50,7 @@ P2_Observer: 测试三：你能收到吗
 - 无 Agent 明确 attack/combat order 时，P2 不攻击。
 - 新增 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察，
   FIGHT 仅已有 ROE 时使用，否则默认 FLIGHT。
-- 实机未做战斗测试（当前 body 已停）。
+- 实机未做战斗测试：可定位到的 hostile 最近约 48 格，未把 body 引过去；仅单测。
 
 ## 验证
 

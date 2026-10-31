@@ -114,6 +114,30 @@ describe('mind loop', () => {
     expect(mainCalls).toBe(2)
   })
 
+  it('lets an explicit invalidation bypass the idle delay', () => {
+    const tracker = fakeTracker()
+    let now = 0
+    let mainCalls = 0
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => {
+        if (tree === 'constant') return { kind: 'nowork' }
+        mainCalls += 1
+        return { kind: 'job', candidate: candidate('order.go:1') }
+      },
+      tracker: tracker as unknown as JobTracker,
+      now: () => now,
+      mainIdleDelayMs: 20_000,
+    })
+    loop.tick()
+    expect(mainCalls).toBe(1)
+    now = 5_000
+    loop.invalidate()
+    loop.tick()
+    expect(mainCalls).toBe(2)
+    expect(tracker.offers.at(-1)?.keys).toBe('order.go:1')
+  })
+
   it('does not offer anything while the world is stale', () => {
     const tracker = fakeTracker()
     const loop = new MindLoop({

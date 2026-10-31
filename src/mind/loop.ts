@@ -102,8 +102,9 @@ export class MindLoop {
 
       if (this.tracker.state() === 'idle') {
         const hasPlan = ctx.plan !== undefined
-        const due = hasPlan || this.mainDirty || now - this.lastMainEvalAt >= this.mainFallbackMs
-        if (due && (hasPlan || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {
+        const forced = this.mainDirty
+        const due = hasPlan || forced || now - this.lastMainEvalAt >= this.mainFallbackMs
+        if (due && (hasPlan || forced || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {
           this.lastMainEvalAt = now
           this.mainDirty = false
           const main = this.evaluate('main', ctx, world)

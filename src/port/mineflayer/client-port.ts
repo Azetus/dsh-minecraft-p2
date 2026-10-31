@@ -6,7 +6,7 @@ import type { JsonValue, P2Error } from '../../contracts/types.ts'
 import type { ActHandle, ActPoll } from '../../provider/runtime.ts'
 import type { Capability, ClientAction } from '../capabilities.ts'
 import { checkCapability } from '../capabilities.ts'
-import type { ClientEvent, ClientPort, MoveOptions } from '../client-port.ts'
+import type { ClientEvent, ClientPort, ContainerTransferAction, MoveOptions } from '../client-port.ts'
 import type {
   ActResult,
   BiomeInfo,
@@ -52,6 +52,7 @@ const ACTION_TIMEOUTS = {
   attack: 2_000,
   sleep: 30_000,
   screen: 5_000,
+  containerTransfer: 10_000,
 } as const
 
 type BlockLike = {
@@ -140,8 +141,7 @@ export class MineflayerClientPort implements ClientPort {
     }
   }
 
-  async containerAt(p: Vec3): Promise<ContainerCheckResult> {
-    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
+  async containerAt(p: Vec3): Promise<ContainerCheckResult> {    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
     if (block === null) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
     const info = blockInfo(block)
     if (!info.loaded) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
@@ -348,6 +348,22 @@ export class MineflayerClientPort implements ClientPort {
     return await this.action('sleep', 'sleep', { x: bed.x, y: bed.y, z: bed.z })
   }
 
+  async containerTransfer(
+    p: Vec3,
+    action: ContainerTransferAction,
+    item?: string,
+    count?: number,
+  ): Promise<ActResult> {
+    return await this.action('containerTransfer', 'container-transfer', {
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      action,
+      ...(item === undefined ? {} : { item }),
+      ...(count === undefined ? {} : { count }),
+    })
+  }
+
   say(text: string): void {
     this.bot.chat(text)
   }
@@ -371,7 +387,7 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   private async action(
-    action: 'lookAt' | 'dig' | 'useItem' | 'equip' | 'useOn' | 'attack' | 'sleep',
+    action: 'lookAt' | 'dig' | 'useItem' | 'equip' | 'useOn' | 'attack' | 'sleep' | 'containerTransfer',
     name: string,
     args: Record<string, JsonValue>,
   ): Promise<ActResult> {

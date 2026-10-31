@@ -12,6 +12,8 @@ import { createCheckDriver, CHECK_DRIVER_ID } from '../mind/drivers/check.ts'
 import { createEatDriver, EAT_DRIVER_ID } from '../mind/drivers/eat.ts'
 import { createSleepDriver, SLEEP_DRIVER_ID } from '../mind/drivers/sleep.ts'
 import { createAttackDriver, ATTACK_DRIVER_ID } from '../mind/drivers/attack.ts'
+import { createSmeltDriver, SMELT_DRIVER_ID } from '../mind/drivers/smelt.ts'
+import { createDigDriver, DIG_DRIVER_ID } from '../mind/drivers/dig.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
@@ -26,6 +28,8 @@ import {
   createWanderOrderGiver,
 } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver, createCombatGiver } from '../mind/givers/combat.ts'
+import { createSmeltOrderGiver } from '../mind/givers/smelt.ts'
+import { createDigOrderGiver } from '../mind/givers/dig.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { createMaterialGiver } from '../mind/givers/material.ts'
 import { MindLoop } from '../mind/loop.ts'
@@ -98,6 +102,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: EAT_DRIVER_ID, driver: createEatDriver() })
   registry.registerDriver({ id: SLEEP_DRIVER_ID, driver: createSleepDriver() })
   registry.registerDriver({ id: ATTACK_DRIVER_ID, driver: createAttackDriver() })
+  registry.registerDriver({ id: SMELT_DRIVER_ID, driver: createSmeltDriver() })
+  registry.registerDriver({ id: DIG_DRIVER_ID, driver: createDigDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
@@ -108,6 +114,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.eat', factory: () => createEatOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.attack', factory: () => createAttackOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.combat', factory: () => createCombatGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.smelt', factory: () => createSmeltOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.dig', factory: () => createDigOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({
     id: 'order.wander',
     factory: () => createWanderOrderGiver(
@@ -137,6 +145,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
 
   const events = new MindEvents()
   let lastReport: JsonValue | null = null
+  let loopRef: MindLoop | undefined
 
   const orders = new OrderStore({
     journalPath: options.journalPath,
@@ -153,6 +162,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     onEvent: event => {
       events.push(event.kind, event.at, event as unknown as JsonValue)
+      if (event.kind === 'order.accepted' || event.kind === 'order.terminal') {
+        loopRef?.invalidate()
+      }
     },
   })
   orders.restore()
@@ -221,7 +233,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         if (active !== undefined
           && (active.order.verb === 'go' || active.order.verb === 'eat'
             || active.order.verb === 'sleep' || active.order.verb === 'wander'
-            || active.order.verb === 'attack')) {
+            || active.order.verb === 'attack' || active.order.verb === 'smelt'
+            || active.order.verb === 'dig')) {
           orders.complete(active.order.id, event.state === 'succeeded' ? 'succeeded' : 'failed')
           events.push('order.result', now(), {
             orderId: active.order.id,
@@ -258,6 +271,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
     },
   })
+  loopRef = loop
 
   const syncPlan = (): void => {
     const active = orders.active()
@@ -652,8 +666,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return { id: record.order.id, state: record.state }
     },
     cancelOrder(id: string): { id: string; state: string } {
+      const activeBefore = orders.active()
       const record = orders.cancel(id)
-      if (planOrderId === id) {
+      if (planOrderId === id || activeBefore?.order.id === id) {
         tracker.abort()
         activePlan = undefined
         planOrderId = undefined
