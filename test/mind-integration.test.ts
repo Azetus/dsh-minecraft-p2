@@ -138,6 +138,13 @@ describe('mind integration', () => {
           queuedOrders: 0,
           eventsSeq: 0,
         }),
+        report: () => null,
+        enqueueOrder: () => ({ id: 'ord-1', state: 'active' }),
+        cancelOrder: id => ({ id, state: 'cancelled' }),
+        listOrders: () => ({ active: null, queued: [] }),
+        sinceEvents: () => ({ events: [], seq: 0 }),
+        orders: {} as never,
+        events: {} as never,
       },
     })
     runtime.tick()

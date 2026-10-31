@@ -7,6 +7,7 @@ import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
 import { MindEvents } from '../mind/events.ts'
+import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
 import { MindLoop } from '../mind/loop.ts'
@@ -17,11 +18,17 @@ import { JobTracker } from '../mind/tracker.ts'
 import { evaluateTree, loadTrees } from '../mind/tree.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
+export type MindOrderView = { id: string; verb: string; state: string }
+
 export type MindRuntime = {
   tick(): void
   status(): MindStatusView
   /** Latest deviation/terminal digest for `p2_report`; null while healthy. */
   report(): JsonValue | null
+  enqueueOrder(input: unknown): { id: string; state: string }
+  cancelOrder(id: string): { id: string; state: string }
+  listOrders(): { active: MindOrderView | null; queued: MindOrderView[] }
+  sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number }
   orders: OrderStore
   events: MindEvents
 }
@@ -98,6 +105,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   })
 
   const home = options.home
+  let orderSeq = 0
   return {
     tick(): void {
       loop.tick()
@@ -119,9 +127,41 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     report(): JsonValue | null {
       return lastReport
     },
+    enqueueOrder(input: unknown): { id: string; state: string } {
+      const id = isRecord(input) && typeof input.id === 'string'
+        ? input.id
+        : `ord-${Date.now().toString(36)}-${++orderSeq}`
+      const record = orders.enqueue(isRecord(input) ? { ...input, id } : input)
+      return { id: record.order.id, state: record.state }
+    },
+    cancelOrder(id: string): { id: string; state: string } {
+      const record = orders.cancel(id)
+      return { id: record.order.id, state: record.state }
+    },
+    listOrders(): { active: MindOrderView | null; queued: MindOrderView[] } {
+      const active = orders.active()
+      return {
+        active: active === undefined ? null : viewOf(active),
+        queued: orders.queued().map(viewOf),
+      }
+    },
+    sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number } {
+      return {
+        events: events.since(seq, limit),
+        seq: events.lastSeq(),
+      }
+    },
     orders,
     events,
   }
+}
+
+function viewOf(record: { order: { id: string; verb: string }; state: string }): MindOrderView {
+  return { id: record.order.id, verb: record.order.verb, state: record.state }
+}
+
+function isRecord(value: unknown): value is Record<string, JsonValue> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function readTreeDefinitions(dir: string): Record<string, unknown> {

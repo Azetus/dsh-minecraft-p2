@@ -111,13 +111,18 @@ describe('stdio transport', () => {
 })
 
 describe('protocol vocabulary', () => {
-  it('keeps method names unique and complete for M0', () => {
+  it('keeps method names unique and complete for M1', () => {
     expect(new Set(METHODS).size).toBe(METHODS.length)
     expect(METHODS).toEqual([
       'hello',
       'heartbeat',
       'describe',
       'status',
+      'mind.order',
+      'mind.orders',
+      'mind.cancel',
+      'mind.report',
+      'mind.events',
       'shutdown',
     ])
 

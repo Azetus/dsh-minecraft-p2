@@ -19,6 +19,11 @@ export const METHODS = [
   'heartbeat',
   'describe',
   'status',
+  'mind.order',
+  'mind.orders',
+  'mind.cancel',
+  'mind.report',
+  'mind.events',
   'shutdown',
 ] as const
 
@@ -126,6 +131,26 @@ export type HeartbeatParams = { seq: number }
 export type HeartbeatResult = { seq: number; alive: true }
 
 export type ShutdownResult = { closing: true }
+
+export type MindOrderView = { id: string; verb: string; state: string }
+
+export type MindOrderResult = { id: string; state: string }
+
+export type MindOrdersResult = {
+  active: MindOrderView | null
+  queued: MindOrderView[]
+}
+
+export type MindCancelResult = { id: string; state: string }
+
+export type MindReportResult = { report: JsonValue | null }
+
+export type MindEventsParams = { sinceSeq?: number; limit?: number }
+
+export type MindEventsResult = {
+  events: Array<{ seq: number; at: number; kind: string; data: JsonValue }>
+  seq: number
+}
 
 export type BodyInfo = {
   manifest: BodyManifest

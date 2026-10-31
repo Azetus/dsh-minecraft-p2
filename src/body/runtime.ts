@@ -16,6 +16,12 @@ import type {
   HeartbeatResult,
   HelloParams,
   HelloResult,
+  MindCancelResult,
+  MindEventsParams,
+  MindEventsResult,
+  MindOrderResult,
+  MindOrdersResult,
+  MindReportResult,
   MindStatusView,
   OwnerContext,
   ProviderRuntimeStatus,
@@ -25,6 +31,7 @@ import type {
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
+import type { MindRuntime } from './mind.ts'
 
 export type BodyRuntimeOptions = {
   body: BodyInfo
@@ -35,7 +42,7 @@ export type BodyRuntimeOptions = {
   /** Live provider state; absent when the body was started without a provider. */
   providerStatus?: () => ProviderRuntimeStatus
   /** P2Mind loop; absent without a provider. */
-  mind?: { tick(): void; status(): MindStatusView }
+  mind?: MindRuntime
 }
 
 /**
@@ -47,7 +54,7 @@ export class BodyRuntime {
   private readonly now: () => number
   private readonly heartbeatTimeoutMs: number | undefined
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
-  private readonly mind: { tick(): void; status(): MindStatusView } | undefined
+  private readonly mind: MindRuntime | undefined
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -109,6 +116,11 @@ export class BodyRuntime {
       case 'heartbeat': return this.heartbeat(params as unknown as HeartbeatParams) as unknown as JsonValue
       case 'describe': return this.describe() as unknown as JsonValue
       case 'status': return this.status() as unknown as JsonValue
+      case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
+      case 'mind.orders': return this.mindOrders() as unknown as JsonValue
+      case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
+      case 'mind.report': return this.mindReport() as unknown as JsonValue
+      case 'mind.events': return this.mindEvents(params as unknown as MindEventsParams) as unknown as JsonValue
       case 'shutdown':
         this.closing = true
         return { closing: true }
@@ -190,6 +202,47 @@ export class BodyRuntime {
       ...(providerState === undefined ? {} : { providerState }),
       ...(this.mind === undefined ? {} : { mind: this.mind.status() }),
     }
+  }
+
+  private mindOrder(params: Record<string, JsonValue>): MindOrderResult {
+    this.requireOwner()
+    return this.requireMind().enqueueOrder(params)
+  }
+
+  private mindOrders(): MindOrdersResult {
+    this.requireOwner()
+    return this.requireMind().listOrders()
+  }
+
+  private mindCancel(params: Record<string, JsonValue>): MindCancelResult {
+    this.requireOwner()
+    if (typeof params.id !== 'string' || params.id.length === 0) {
+      throw p2Error('INVALID_MESSAGE', 'validation', 'mind.cancel requires an order id', { module: 'body.runtime' })
+    }
+    return this.requireMind().cancelOrder(params.id)
+  }
+
+  private mindReport(): MindReportResult {
+    this.requireOwner()
+    return { report: this.requireMind().report() }
+  }
+
+  private mindEvents(params: MindEventsParams): MindEventsResult {
+    this.requireOwner()
+    const sinceSeq = typeof params.sinceSeq === 'number' ? Math.max(0, Math.floor(params.sinceSeq)) : 0
+    const limit = typeof params.limit === 'number'
+      ? Math.max(1, Math.min(500, Math.floor(params.limit)))
+      : 100
+    return this.requireMind().sinceEvents(sinceSeq, limit)
+  }
+
+  private requireMind(): MindRuntime {
+    if (this.mind === undefined) {
+      throw p2Error('MIND_UNAVAILABLE', 'capability', 'this body has no P2Mind runtime', {
+        module: 'body.runtime',
+      })
+    }
+    return this.mind
   }
 }
 

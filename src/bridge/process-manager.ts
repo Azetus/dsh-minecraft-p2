@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
+  JsonValue,
   MessageTransport,
   OwnerContext,
   StatusResult,
@@ -209,6 +210,36 @@ export class BodyManager {
       void this.fault('heartbeat-missed', `status request failed: ${errorText(error)}`)
       throw error
     }
+  }
+
+  mindOrder(order: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('mind.order', order)
+  }
+
+  mindOrders(): Promise<JsonValue> {
+    return this.activeClient().request('mind.orders', {})
+  }
+
+  mindCancel(id: string): Promise<JsonValue> {
+    return this.activeClient().request('mind.cancel', { id })
+  }
+
+  mindReport(): Promise<JsonValue> {
+    return this.activeClient().request('mind.report', {})
+  }
+
+  mindEvents(sinceSeq: number, limit?: number): Promise<JsonValue> {
+    return this.activeClient().request('mind.events', {
+      sinceSeq,
+      ...(limit === undefined ? {} : { limit }),
+    })
+  }
+
+  private activeClient(): BodyClient {
+    if (this.state !== 'active' || this.client === undefined) {
+      throw new Error(`body is ${this.state}`)
+    }
+    return this.client
   }
 
   async stop(): Promise<StopResult> {
