@@ -44,15 +44,32 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_observe',
-      description: 'Read-only world observation in an absolute box (max 4096 blocks, 64 per axis). Returns blocks with loaded flags; an unloaded cell is never air. Does not act on the world.',
+      description: 'Read-only world observation. Box query (min+max, max 4096 blocks) or targeted points (max 256); detail blocks/counts/surface. Unloaded cells are loaded=false, never air. Does not act on the world.',
       parameters: {
         type: 'object',
         properties: {
-          min: vecSchema('Minimum corner, inclusive'),
-          max: vecSchema('Maximum corner, inclusive'),
-          includeEntities: { type: 'boolean', description: 'Defaults to true' },
+          min: vecSchema('Box minimum corner, inclusive'),
+          max: vecSchema('Box maximum corner, inclusive'),
+          points: {
+            type: 'array',
+            description: 'Targeted query instead of a box; max 256 unique points',
+            items: vecSchema('Point'),
+            maxItems: 256,
+          },
+          includeEntities: { type: 'boolean', description: 'Defaults to true for box queries' },
+          detail: {
+            type: 'string',
+            enum: ['blocks', 'counts', 'surface'],
+            description: 'Box detail level; counts/surface keep replies small',
+          },
+          only: {
+            type: 'array',
+            description: 'Block names to include in a blocks view',
+            items: { type: 'string' },
+            maxItems: 32,
+          },
+          excludeAir: { type: 'boolean', description: 'Omit loaded air from a blocks view' },
         },
-        required: ['min', 'max'],
         additionalProperties: false,
       },
       output: output(),

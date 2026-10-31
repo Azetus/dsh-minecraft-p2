@@ -138,10 +138,18 @@ export const OBSERVE_MAX_AXIS = 64
 export type ObserveVec3 = { x: number; y: number; z: number }
 
 export type WorldObserveParams = {
-  min: ObserveVec3
-  max: ObserveVec3
-  /** Defaults to true; entities are then filtered to the same box. */
+  /** Box query; provide min+max, or `points` instead. */
+  min?: ObserveVec3
+  max?: ObserveVec3
+  /** Targeted query (1..256 unique points); no box, no entities. */
+  points?: ObserveVec3[]
   includeEntities?: boolean
+  /** Box detail level; ignored for a points query. */
+  detail?: 'blocks' | 'counts' | 'surface'
+  /** Block names to include in the blocks view; unknown cells stay visible. */
+  only?: string[]
+  /** Omit loaded air from the blocks view. */
+  excludeAir?: boolean
 }
 
 export type WorldObserveBlock = {
@@ -153,9 +161,28 @@ export type WorldObserveBlock = {
   state?: Record<string, string>
 }
 
+export type WorldObserveCounts = {
+  total: number
+  loaded: number
+  unloaded: number
+  byName: Record<string, number>
+}
+
+export type WorldObserveSurface = {
+  x: number
+  z: number
+  /** Highest non-air block; null when the column is all air. */
+  y: number | null
+  name: string | null
+  /** false when any cell in the column is unloaded: the surface is unknown. */
+  loaded: boolean
+}
+
 export type WorldObserveResult = {
   at: number
-  box: { min: ObserveVec3; max: ObserveVec3 }
+  mode: 'box' | 'points'
+  detail: 'blocks' | 'counts' | 'surface' | 'points'
+  box?: { min: ObserveVec3; max: ObserveVec3 }
   self: {
     pos: ObserveVec3
     yaw: number
@@ -168,8 +195,10 @@ export type WorldObserveResult = {
   }
   inventory: Array<{ slot: number; name: string; count: number }>
   time: { timeOfDay: number; worldAge: number }
-  /** Includes `loaded:false` cells; an unknown block is never air. */
-  blocks: WorldObserveBlock[]
+  /** Present for detail=blocks / points; includes loaded:false cells. */
+  blocks?: WorldObserveBlock[]
+  counts?: WorldObserveCounts
+  surface?: WorldObserveSurface[]
   entities?: Array<{ id: string; name: string; position: ObserveVec3 }>
 }
 
