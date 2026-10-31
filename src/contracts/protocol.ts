@@ -97,6 +97,16 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type MindStatusView = {
+  tracker: 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
+  job: { runId: string; driverId: string } | null
+  fault: { code: string; since: number } | null
+  home: { x: number; y: number; z: number } | null
+  activeOrder: { id: string; verb: string } | null
+  queuedOrders: number
+  eventsSeq: number
+}
+
 export type StatusResult = {
   bodyEpoch: BodyEpoch
   /** Package/body version from body.manifest.json. */
@@ -108,6 +118,8 @@ export type StatusResult = {
   capabilities: string[]
   provider: ProviderSummary | null
   providerState?: ProviderRuntimeStatus | null
+  /** P2Mind state; null when this body has no provider/mind. */
+  mind?: MindStatusView | null
 }
 
 export type HeartbeatParams = { seq: number }

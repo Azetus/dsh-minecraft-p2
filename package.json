@@ -18,6 +18,7 @@
   },
   "files": [
     "lib/**",
+    "content/**",
     "cordis.patch.yml"
   ],
   "dsh": {

@@ -1,11 +1,19 @@
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { createStdioTransport } from '../contracts/index.ts'
 import type { BodyInfo, ProviderRuntimeStatus } from '../contracts/index.ts'
+import type { Vec3 } from '../port/index.ts'
+import { MineflayerClientPort } from '../port/mineflayer/index.ts'
+import { createMind } from './mind.ts'
+import type { MindRuntime } from './mind.ts'
 import { loadBodyInfo } from './manifest.ts'
 import { loadProviderConfig } from './provider-config.ts'
 import { BodyRuntime } from './runtime.ts'
 import { BodyServer } from './server.ts'
 
 type ConnectedProvider = {
+  port: MineflayerClientPort
   liveStatus(): ProviderRuntimeStatus
   dispose(): void
 }
@@ -21,10 +29,28 @@ async function main(): Promise<void> {
   }
 
   const provider = await connectProvider(body)
+  let mind: MindRuntime | undefined
+  if (provider !== undefined) {
+    try {
+      const home = startHome(provider.port)
+      mind = createMind({
+        port: provider.port,
+        ...(home === undefined ? {} : { home }),
+        contentDir: fileURLToPath(new URL('../../content/trees', import.meta.url)),
+        journalPath: join(process.cwd(), '.p2', 'journal.jsonl'),
+      })
+    } catch (error) {
+      process.stderr.write(`dsh-minecraft-p2 body: mind init failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      provider.dispose()
+      process.exitCode = 1
+      return
+    }
+  }
   const runtime = new BodyRuntime({
     body,
     heartbeatTimeoutMs: 10_000,
     ...(provider === undefined ? {} : { providerStatus: () => provider.liveStatus() }),
+    ...(mind === undefined ? {} : { mind }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
   const server = new BodyServer(runtime, transport)
@@ -41,6 +67,15 @@ async function main(): Promise<void> {
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   server.start()
+}
+
+function startHome(port: MineflayerClientPort): Vec3 | undefined {
+  try {
+    const pos = port.self().pos
+    return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
+  } catch {
+    return undefined
+  }
 }
 
 async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | undefined> {
@@ -70,7 +105,9 @@ async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | unde
       version: body.manifest.bodyVersion,
       capabilities,
     }
+    const port = new MineflayerClientPort(bot, provider)
     return {
+      port,
       liveStatus: () => provider.liveStatus(),
       dispose: () => {
         try {

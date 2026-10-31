@@ -16,6 +16,7 @@ import type {
   HeartbeatResult,
   HelloParams,
   HelloResult,
+  MindStatusView,
   OwnerContext,
   ProviderRuntimeStatus,
   RequestEnvelope,
@@ -33,6 +34,8 @@ export type BodyRuntimeOptions = {
   newEpoch?: () => string
   /** Live provider state; absent when the body was started without a provider. */
   providerStatus?: () => ProviderRuntimeStatus
+  /** P2Mind loop; absent without a provider. */
+  mind?: { tick(): void; status(): MindStatusView }
 }
 
 /**
@@ -44,6 +47,7 @@ export class BodyRuntime {
   private readonly now: () => number
   private readonly heartbeatTimeoutMs: number | undefined
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
+  private readonly mind: { tick(): void; status(): MindStatusView } | undefined
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -56,6 +60,7 @@ export class BodyRuntime {
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs
     this.leaseTimeoutMs = options.heartbeatTimeoutMs
     this.providerStatus = options.providerStatus
+    this.mind = options.mind
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     if (options.owner !== undefined) {
       this.owner = options.owner
@@ -72,6 +77,11 @@ export class BodyRuntime {
     if (this.heartbeatTimeoutMs === undefined) return true
     if (this.owner === undefined) return true
     return now - this.lastHeartbeatAt <= this.heartbeatTimeoutMs
+  }
+
+  /** One 50 ms mind step; a providerless body has nothing to advance. */
+  tick(): void {
+    this.mind?.tick()
   }
 
   async handleRequestAsync(envelope: RequestEnvelope): Promise<ResponseEnvelope> {
@@ -178,6 +188,7 @@ export class BodyRuntime {
       capabilities: this.body.capabilities,
       provider: this.body.provider,
       ...(providerState === undefined ? {} : { providerState }),
+      ...(this.mind === undefined ? {} : { mind: this.mind.status() }),
     }
   }
 }
