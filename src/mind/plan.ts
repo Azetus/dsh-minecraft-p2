@@ -233,7 +233,11 @@ export function isSolidBlock(block: BlockInfo | null): boolean {
 
 export function matchesExpected(block: BlockInfo, expected: ExpectedBlock): boolean {
   if (!block.loaded) return false
-  if (normalizeName(block.name) !== normalizeName(expected.name)) return false
+  const actual = normalizeName(block.name)
+  const wanted = normalizeName(expected.name)
+  // A torch placed on a side face is reported by the server as wall_torch.
+  // Treat it as the same semantic block when the blueprint asks for a torch.
+  if (actual !== wanted && !(wanted === 'torch' && actual === 'wall_torch')) return false
   for (const [key, value] of Object.entries(expected.state ?? {})) {
     if (block.state?.[key] !== value) return false
   }
