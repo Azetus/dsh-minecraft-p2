@@ -16,6 +16,8 @@ import { MineflayerProvider } from '../src/provider/mineflayer.ts'
 type FakeOptions = {
   moving?: boolean
   craftDelayMs?: number
+  /** Simulate a library that does not drop the path when the goal is cleared. */
+  setGoalClears?: boolean
 }
 
 function fakeBot(options: FakeOptions = {}) {
@@ -23,9 +25,10 @@ function fakeBot(options: FakeOptions = {}) {
   const inventory: Array<{ name: string; type: number; count: number }> = []
   const state = {
     craftCalls: 0,
-    pathfinderStopCalls: 0,
+    pathfinderCalls: [] as string[],
     wakeCalls: 0,
     moving: options.moving ?? true,
+    setGoalClears: options.setGoalClears ?? true,
     stuckControl: undefined as string | undefined,
   }
   const recipe = { result: { id: 5, count: 4 }, requiresTable: false, delta: [] }
@@ -77,9 +80,13 @@ function fakeBot(options: FakeOptions = {}) {
     pathfinder: {
       isMoving: () => state.moving,
       stop: () => {
-        state.pathfinderStopCalls += 1
+        state.pathfinderCalls.push('stop')
         // Mirrors the library: stop() only sets a flag; the path is cleared on
         // the next physics tick.
+      },
+      setGoal: (goal: unknown) => {
+        state.pathfinderCalls.push(`setGoal:${goal === null ? 'null' : 'goal'}`)
+        if (goal === null && state.setGoalClears) state.moving = false
       },
     },
   })
@@ -87,16 +94,31 @@ function fakeBot(options: FakeOptions = {}) {
 }
 
 describe('Mineflayer provider release semantics (M0)', () => {
-  it('keeps a lazy pathfinder stop unreleased until the path is really gone', () => {
+  it('clears the pathfinder goal on stop so release is observed immediately', () => {
     const { bot, state } = fakeBot({ moving: true })
     const provider = new MineflayerProvider(bot)
     const handle = provider.start('goto', { x: 4, y: 64, z: 4 })
     // Without a live registry the provider cannot path-find, but the raw
-    // pathfinder handle is exactly what a real stop has to wait for.
+    // pathfinder handle is exactly what a real stop has to clear.
     expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
 
     handle.stop()
-    expect(state.pathfinderStopCalls).toBe(1)
+    // stop() alone only sets a flag in the library; setGoal(null) is what makes
+    // the old path disappear on the spot (PITFALLS 1.6), and the order matters.
+    expect(state.pathfinderCalls).toEqual(['stop', 'setGoal:null'])
+    expect(state.moving).toBe(false)
+    expect(provider.controlState()).toBe('idle')
+    expect(handle.poll()).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('stays active when clearing the goal does not clear the path', () => {
+    const { bot, state } = fakeBot({ moving: true, setGoalClears: false })
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('goto', { x: 4, y: 64, z: 4 })
+    expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
+
+    handle.stop()
+    expect(state.pathfinderCalls).toEqual(['stop', 'setGoal:null'])
     expect(provider.controlState()).toBe('active')
     expect(handle.poll().status).not.toBe('cancelled')
 

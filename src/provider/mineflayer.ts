@@ -1108,7 +1108,7 @@ class MineflayerActHandle implements ActHandle {
     if (this.name === 'dig') attempt(() => this.bot.stopDigging())
     if (this.name === 'use') attempt(() => this.bot.deactivateItem())
     if (this.name === 'goto' || this.name === 'follow') {
-      attempt(() => (this.bot as unknown as { pathfinder?: { stop(): void } }).pathfinder?.stop() ?? undefined)
+      attempt(() => this.stopNavigation())
     }
     if (this.name === 'drive') attempt(() => this.bot.moveVehicle(0, 0))
     if (this.name === 'fish') attempt(() => this.bot.deactivateItem())
@@ -1122,6 +1122,23 @@ class MineflayerActHandle implements ActHandle {
     // A cancel flag alone never proves the effect is gone: confirm only what
     // the provider can still observe (pathfinder path, dig target, craft loop).
     this.refreshRelease()
+  }
+
+  /**
+   * Stop the pathfinder and clear its goal on the spot.
+   *
+   * `pathfinder.stop()` only sets a flag that is consumed when the bot reaches
+   * the next path point, so the old path keeps driving the body until then
+   * (PITFALLS 1.6). `setGoal(null)` clears it immediately; the order matters
+   * because the library's resetPath consults the stop flag.
+   */
+  private stopNavigation(): void {
+    const pathfinder = (this.bot as unknown as {
+      pathfinder?: { stop(): void; setGoal(goal: null): void }
+    }).pathfinder
+    if (pathfinder === undefined) return
+    pathfinder.stop()
+    pathfinder.setGoal(null)
   }
 
   /**
@@ -1349,7 +1366,7 @@ class MineflayerActHandle implements ActHandle {
             const position = this.bot.entity?.position
             if (position !== undefined
               && Math.hypot(position.x - x, position.y - y, position.z - z) <= range + 0.5) {
-              nav.pathfinder.stop()
+              this.stopNavigation()
               this.result = { x: position.x, y: position.y, z: position.z }
               this.completed = true
               return
@@ -1357,7 +1374,7 @@ class MineflayerActHandle implements ActHandle {
             if (!nav.pathfinder.isMoving()) {
               if (idleSince === 0) idleSince = Date.now()
               else if (Date.now() - idleSince > 1500) {
-                nav.pathfinder.stop()
+                this.stopNavigation()
                 this.failed = new Error(`no path to ${x},${y},${z}`)
                 this.failedCode = 'GOTO_NO_PATH'
                 return
@@ -1366,7 +1383,7 @@ class MineflayerActHandle implements ActHandle {
               idleSince = 0
             }
             if (Date.now() - started > timeout) {
-              nav.pathfinder.stop()
+              this.stopNavigation()
               this.failed = new Error(`goto timed out after ${timeout}ms`)
               this.failedCode = 'GOTO_TIMEOUT'
               return
@@ -1398,13 +1415,13 @@ class MineflayerActHandle implements ActHandle {
           const check = (): void => {
             if (this.cancelled || this.completed || this.failed !== undefined) return
             if (this.bot.entities[entity.id] === undefined) {
-              nav.pathfinder.stop()
+              this.stopNavigation()
               this.failed = new Error('follow target is no longer loaded')
               this.failedCode = 'FOLLOW_TARGET_LOST'
               return
             }
             if (Date.now() - started > timeout) {
-              nav.pathfinder.stop()
+              this.stopNavigation()
               this.failed = new Error(`follow timed out after ${timeout}ms`)
               this.failedCode = 'FOLLOW_TIMEOUT'
               return
