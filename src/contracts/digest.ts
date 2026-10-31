@@ -1,24 +1,11 @@
 import { createHash } from 'node:crypto'
 
-import type {
-  ArtifactManifest,
-  BindingManifest,
-  BodyManifest,
-  JsonValue,
-} from './types.ts'
+import type { BindingManifest, BodyManifest, JsonValue } from './types.ts'
 
 export const DIGEST_DOMAIN = {
-  source: 'p2-source-v1',
   body: 'p2-body-v1',
   binding: 'p2-binding-v1',
-  artifact: 'p2-artifact-v1',
 } as const
-
-/** One source file in a snapshot. Paths are relative to the project root. */
-export type SourceFile = {
-  path: string
-  bytes: Uint8Array | string
-}
 
 /** Serialize a JSON value with sorted object keys; arrays keep their order. */
 export function canonicalJson(value: JsonValue): string {
@@ -88,23 +75,6 @@ export function digest(kind: string, value: JsonValue): string {
   return bytesDigest(`${kind}\u0000${canonicalJson(value)}`)
 }
 
-/** Digest a sorted source snapshot; file order never changes the result. */
-export function sourceDigest(files: Iterable<SourceFile>): string {
-  const byPath = new Map<string, string>()
-  for (const file of files) {
-    const path = normalizeRelativePath(file.path)
-    if (byPath.has(path)) throw new Error(`duplicate source path: ${path}`)
-    byPath.set(path, bytesDigest(file.bytes))
-  }
-  const entries = [...byPath.entries()]
-    .sort(([left], [right]) => compareKeys(left, right))
-    .map(([path, digest]) => ({ path, digest }))
-  return digest(DIGEST_DOMAIN.source, {
-    schemaVersion: 1,
-    files: entries,
-  })
-}
-
 /** Digest the body manifest, excluding any fields not declared by the shape. */
 export function bodyManifestDigest(manifest: BodyManifest): string {
   return digest(DIGEST_DOMAIN.body, {
@@ -145,49 +115,6 @@ export function bindingId(manifest: BindingManifest): string {
   return digest(DIGEST_DOMAIN.binding, normalizeBindingManifest(manifest))
 }
 
-/** Build the canonical artifact manifest, discarding fields outside its shape. */
-export function normalizeArtifactManifest(manifest: ArtifactManifest): ArtifactManifest {
-  return {
-    schemaVersion: 1,
-    kind: manifest.kind,
-    definitionId: manifest.definitionId,
-    sourceDigest: manifest.sourceDigest,
-    codeDigest: manifest.codeDigest ?? null,
-    buildToolVersion: manifest.buildToolVersion,
-    bindingId: manifest.bindingId,
-    dependencies: [...manifest.dependencies]
-      .map(dependency => ({ kind: dependency.kind, id: dependency.id, digest: dependency.digest }))
-      .sort((left, right) => compareKeys(`${left.kind}:${left.id}`, `${right.kind}:${right.id}`)),
-    ...(manifest.ops === undefined ? {} : {
-      ops: {
-        query: [...new Set(manifest.ops.query)].sort(compareKeys),
-        control: [...new Set(manifest.ops.control)].sort(compareKeys),
-      },
-    }),
-    ...(manifest.op === undefined ? {} : {
-      op: {
-        opKind: manifest.op.opKind,
-        effects: manifest.op.effects,
-        stop: manifest.op.stop,
-        capabilities: [...new Set(manifest.op.capabilities)].sort(compareKeys),
-        ...(manifest.op.parameters === undefined ? {} : { parameters: manifest.op.parameters }),
-        ...(manifest.op.result === undefined ? {} : { result: manifest.op.result }),
-      },
-    }),
-    ...(manifest.limits === undefined ? {} : { limits: manifest.limits }),
-  }
-}
-
-/** Content identity for a checked artifact. */
-export function artifactDigest(manifest: ArtifactManifest): string {
-  return digest(DIGEST_DOMAIN.artifact, normalizeArtifactManifest(manifest))
-}
-
-/** artifactId is a typed prefix plus the manifest digest, never a second hash. */
-export function artifactId(manifest: ArtifactManifest): string {
-  return `p2:${manifest.kind}:${artifactDigest(manifest)}`
-}
-
 function sortedRecord(record: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(record)
@@ -195,6 +122,3 @@ function sortedRecord(record: Record<string, string>): Record<string, string> {
       .sort(([left], [right]) => compareKeys(left, right)),
   )
 }
-
-
-

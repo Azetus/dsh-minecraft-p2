@@ -6,15 +6,10 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
-  ControllerEventView,
-  JsonValue,
   MessageTransport,
   OwnerContext,
   StatusResult,
-  WatchEvent,
 } from '../contracts/index.ts'
-import { EventQueue } from '../core/events.ts'
-import type { RuntimeEvent } from '../core/events.ts'
 import { BodyClient } from './body-client.ts'
 
 export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
@@ -75,11 +70,6 @@ export type BodyManagerOptions = {
   delay?: (ms: number) => Promise<void>
   now?: () => number
   log?: (line: string) => void
-  /** Called once per controller event, after deduplication by body seq. */
-  onControllerEvent?: (event: ControllerEventView) => void
-  /** Called once per watch notification, after deduplication by body seq. */
-  onWatchEvent?: (event: WatchEvent) => void
-  onWatchGap?: (fromSeq: number, toSeq: number) => void
 }
 
 export type StartResult = {
@@ -110,10 +100,6 @@ export class BodyManager {
   private readonly heartbeatMs: number
   private readonly stopTimeoutMs: number
   private readonly log: (line: string) => void
-  private readonly events = new EventQueue(128)
-  private eventSeq = 0
-  private lastControllerSeq = 0
-  private lastWatchSeq = 0
   private readonly requestTimeoutMs: number
   private readonly livenessMs: number
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
@@ -159,11 +145,6 @@ export class BodyManager {
     return this.epoch
   }
 
-  drainEvents(): { events: RuntimeEvent[]; gap: boolean; dropped: number; droppedTotal: number } {
-    const drained = this.events.drain()
-    return { ...drained, droppedTotal: this.events.droppedCount }
-  }
-
   async start(owner: OwnerContext): Promise<StartResult> {
     if (this.state === 'active' && this.epoch !== undefined) {
       return { state: 'active', epoch: this.epoch }
@@ -193,8 +174,6 @@ export class BodyManager {
       this.epoch = hello.bodyEpoch
       this.state = 'active'
       this.lastContactAt = this.now()
-      this.lastControllerSeq = 0
-      this.lastWatchSeq = 0
       this.startHeartbeat()
       this.watchExit(handle)
       void this.pumpStatus()
@@ -219,20 +198,7 @@ export class BodyManager {
     try {
       const status = await this.client.request('status', {}) as unknown as StatusResult
       this.lastContactAt = this.now()
-      this.processWatchEvents(status)
-      this.processControllerEvents(status)
-      const hasProvider = status.provider !== null || status.providerState != null
-      const connected = status.providerState?.connected !== false && status.connection !== 'disconnected'
-      if (hasProvider && !connected) {
-        this.providerDisconnectPolls += 1
-        if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
-          this.providerDisconnectPolls = 0
-          this.log('provider disconnected; restarting body' )
-          void this.fault('provider-disconnected', 'provider connection lost for two status polls')
-        }
-      } else {
-        this.providerDisconnectPolls = 0
-      }
+      this.checkProviderConnection(status)
       return {
         state: 'active',
         status,
@@ -243,57 +209,6 @@ export class BodyManager {
       void this.fault('heartbeat-missed', `status request failed: ${errorText(error)}`)
       throw error
     }
-  }
-
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'act' | 'policy' | 'op' | 'strategy' } = {}): Promise<JsonValue> {
-    return this.activeClient().check(sourcePath, options)
-  }
-
-  rescue(params: JsonValue): Promise<JsonValue> {
-    return this.activeClient().rescue(params)
-  }
-
-  activate(artifactId: string): Promise<JsonValue> {
-    return this.activeClient().activate(artifactId)
-  }
-
-  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'queue' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
-    return this.activeClient().controller(action, params)
-  }
-
-  watchAdd(input: JsonValue): Promise<JsonValue> {
-    return this.activeClient().watchAdd(input)
-  }
-
-  watchRemove(watchId?: string): Promise<JsonValue> {
-    return this.activeClient().watchRemove(watchId)
-  }
-
-  watchList(): Promise<JsonValue> {
-    return this.activeClient().watchList()
-  }
-
-  commandGet(commandId: string): Promise<JsonValue> {
-    return this.activeClient().commandGet(commandId)
-  }
-
-  observe(op: string, args: JsonValue = {}): Promise<JsonValue> {
-    return this.activeClient().observe(op, args)
-  }
-
-  snapshot(ops: JsonValue, timeoutMs?: number): Promise<JsonValue> {
-    return this.activeClient().snapshot(ops, timeoutMs)
-  }
-
-  card(params: JsonValue = {}): Promise<JsonValue> {
-    return this.activeClient().card(params)
-  }
-
-  private activeClient(): BodyClient {
-    if (this.state !== 'active' || this.client === undefined) {
-      throw new Error(`body is ${this.state}`)
-    }
-    return this.client
   }
 
   async stop(): Promise<StopResult> {
@@ -390,57 +305,25 @@ export class BodyManager {
     try {
       const status = await this.client.request('status', {}) as unknown as StatusResult
       this.lastContactAt = this.now()
-      this.processWatchEvents(status)
-      this.processControllerEvents(status)
-      const hasProvider = status.provider !== null || status.providerState != null
-      const connected = status.providerState?.connected !== false && status.connection !== 'disconnected'
-      if (hasProvider && !connected) {
-        this.providerDisconnectPolls += 1
-        if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
-          this.providerDisconnectPolls = 0
-          this.log('provider disconnected; restarting body' )
-          void this.fault('provider-disconnected', 'provider connection lost for two status polls')
-        }
-      } else {
-        this.providerDisconnectPolls = 0
-      }
+      this.checkProviderConnection(status)
     } catch (error) {
       this.log(`body status poll failed: ${errorText(error)}`)
     }
   }
 
-  private processWatchEvents(status: StatusResult): void {
-    const events = status.watchEvents ?? []
-    for (const event of events) {
-      if (event.seq <= this.lastWatchSeq) continue
-      if (this.lastWatchSeq > 0 && event.seq > this.lastWatchSeq + 1) {
-        this.options.onWatchGap?.(this.lastWatchSeq + 1, event.seq - 1)
+  /** Two consecutive disconnected polls mean the body cannot observe the world. */
+  private checkProviderConnection(status: StatusResult): void {
+    const hasProvider = status.provider !== null || status.providerState != null
+    const connected = status.providerState?.connected !== false && status.connection !== 'disconnected'
+    if (hasProvider && !connected) {
+      this.providerDisconnectPolls += 1
+      if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
+        this.providerDisconnectPolls = 0
+        this.log('provider disconnected; restarting body')
+        void this.fault('provider-disconnected', 'provider connection lost for two status polls')
       }
-      this.lastWatchSeq = event.seq
-      this.eventSeq += 1
-      this.events.push({
-        eventId: `:watch:`,
-        seq: this.eventSeq,
-        kind: 'watch',
-        data: event as unknown as JsonValue,
-      })
-      this.options.onWatchEvent?.(event)
-    }
-  }
-
-  private processControllerEvents(status: StatusResult): void {
-    const events = status.controller?.events ?? []
-    for (const event of events) {
-      if (event.seq <= this.lastControllerSeq) continue
-      this.lastControllerSeq = event.seq
-      this.eventSeq += 1
-      this.events.push({
-        eventId: `${this.epoch ?? 'epoch'}:controller:${event.seq}`,
-        seq: this.eventSeq,
-        kind: 'controller',
-        data: event as unknown as JsonValue,
-      })
-      this.options.onControllerEvent?.(event)
+    } else {
+      this.providerDisconnectPolls = 0
     }
   }
 
@@ -495,7 +378,6 @@ export class BodyManager {
     }
     fault.autoRestart = this.planRestart()
     this.lastFaultValue = fault
-    this.emitEvent('fault', fault)
     this.safeCallback(this.options.onFault, fault)
     if (fault.autoRestart !== 'scheduled') return
     const index = Math.min(this.restartTimes.length - 1, this.autoRestart.backoffMs.length - 1)
@@ -525,7 +407,6 @@ export class BodyManager {
         attempt: this.restartTimes.length,
         maxRestarts: this.autoRestart.maxRestarts,
       }
-      this.emitEvent('restart', info)
       this.safeCallback(this.options.onRestart, info)
     } catch (error) {
       this.log(`body restart failed: ${errorText(error)}`)
@@ -539,23 +420,12 @@ export class BodyManager {
         autoRestart: 'exhausted',
       }
       this.lastFaultValue = failure
-      this.emitEvent('fault', failure)
       this.safeCallback(this.options.onFault, failure)
     }
   }
 
   private isTerminating(): boolean {
     return this.state === 'stopping' || this.state === 'inactive'
-  }
-
-  private emitEvent(kind: string, data: unknown): void {
-    this.eventSeq += 1
-    this.events.push({
-      eventId: `${this.epoch ?? 'body'}:${kind}:${this.eventSeq}`,
-      seq: this.eventSeq,
-      kind,
-      data: data as JsonValue,
-    })
   }
 
   private safeCallback<T>(callback: ((value: T) => void) | undefined, value: T): void {
@@ -647,10 +517,3 @@ function delay(ms: number): Promise<void> {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
-
-
-
-
-
-
-

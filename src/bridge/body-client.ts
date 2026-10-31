@@ -35,7 +35,7 @@ export type BodyClientOptions = {
   log?: (line: string) => void
 }
 
-/** Request/response client for one body process. Events are not used in M0. */
+/** Request/response client for one body process. Events are not used yet. */
 export class BodyClient {
   private readonly pending = new Map<string, Pending>()
   private readonly offLine: () => void
@@ -77,71 +77,12 @@ export class BodyClient {
     return this.send(method, params, { requireEpoch: true })
   }
 
-  command(method: string, params: JsonValue, commandId?: string): Promise<JsonValue> {
-    return this.send(method, params, {
-      requireEpoch: true,
-      commandId: commandId ?? `${method}-${++this.requestSeq}`,
-    })
-  }
-
-  check(sourcePath: string, options: { sourceRoot?: string; timeoutMs?: number; artifactKind?: 'act' | 'policy' | 'op' | 'strategy' } = {}): Promise<JsonValue> {
-    return this.command('check', {
-      sourcePath,
-      ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      ...(options.artifactKind === undefined ? {} : { artifactKind: options.artifactKind }),
-    })
-  }
-
-  rescue(params: JsonValue): Promise<JsonValue> {
-    return this.command('rescue', params as Record<string, JsonValue>)
-  }
-
-  activate(artifactId: string): Promise<JsonValue> {
-    return this.command('activate', { artifactId })
-  }
-
-  watchAdd(input: JsonValue): Promise<JsonValue> {
-    return this.command('watch.add', input)
-  }
-
-  watchRemove(watchId?: string): Promise<JsonValue> {
-    return this.command('watch.remove', watchId === undefined ? {} : { watchId })
-  }
-
-  watchList(): Promise<JsonValue> {
-    return this.request('watch.list', {})
-  }
-
-  commandGet(commandId: string): Promise<JsonValue> {
-    return this.request('command.get', { commandId })
-  }
-
-  observe(op: string, args: JsonValue = {}): Promise<JsonValue> {
-    return this.request('observe', { op, args })
-  }
-
-  snapshot(ops: JsonValue, timeoutMs?: number): Promise<JsonValue> {
-    return this.request('snapshot', {
-      ops,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    })
-  }
-
-  card(params: JsonValue = {}): Promise<JsonValue> {
-    return this.request('card', params)
-  }
-
-  controller(action: 'enable' | 'disable' | 'status' | 'install' | 'commit' | 'queue' | 'cancel' | 'events', params: JsonValue = {}): Promise<JsonValue> {
-    return this.request(`controller.${action}`, params)
-  }
-
   async describe(): Promise<DescribeResult> {
     return await this.request('describe', {}) as unknown as DescribeResult
   }
 
   shutdown(): Promise<JsonValue> {
-    return this.send('shutdown', {}, { requireEpoch: true, commandId: `shutdown-${++this.requestSeq}` })
+    return this.send('shutdown', {}, { requireEpoch: true })
   }
 
   close(): void {
@@ -155,7 +96,7 @@ export class BodyClient {
   private send(
     method: string,
     params: JsonValue,
-    options: { requireEpoch: boolean; commandId?: string },
+    options: { requireEpoch: boolean },
   ): Promise<JsonValue> {
     if (this.closed) return Promise.reject(new Error('body client is closed'))
     if (options.requireEpoch && this.epoch === undefined) {
@@ -174,7 +115,6 @@ export class BodyClient {
       method,
       params,
       ...(options.requireEpoch && this.epoch !== undefined ? { bodyEpoch: this.epoch } : {}),
-      ...(options.commandId === undefined ? {} : { commandId: options.commandId }),
     }
 
     return new Promise<JsonValue>((resolve, reject) => {
@@ -231,9 +171,3 @@ export class BodyClient {
     }
   }
 }
-
-
-
-
-
-

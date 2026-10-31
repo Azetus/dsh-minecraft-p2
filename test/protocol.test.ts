@@ -111,32 +111,14 @@ describe('stdio transport', () => {
 })
 
 describe('protocol vocabulary', () => {
-  it('keeps method names unique and complete for M1', () => {
+  it('keeps method names unique and complete for M0', () => {
     expect(new Set(METHODS).size).toBe(METHODS.length)
     expect(METHODS).toEqual([
       'hello',
       'heartbeat',
       'describe',
       'status',
-      'observe',
-      'check',
-      'activate',
-      'watch.add',
-      'watch.remove',
-      'watch.list',
-      'snapshot',
-      'card',
-      'rescue',
-      'controller.enable',
-      'controller.disable',
-      'controller.status',
-      'controller.install',
-      'controller.commit',
-      'controller.queue',
-      'controller.cancel',
-      'controller.events',
       'shutdown',
-      'command.get',
     ])
 
   })

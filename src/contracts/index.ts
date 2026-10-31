@@ -3,7 +3,5 @@ export * from './digest.ts'
 export * from './protocol.ts'
 export * from './framing.ts'
 export * from './transport.ts'
-export * from './artifacts.ts'
-export * from './strategy.ts'
 
 

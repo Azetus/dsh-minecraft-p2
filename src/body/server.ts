@@ -27,7 +27,6 @@ export class BodyServer {
   private readonly offError: () => void
   private readonly offClose: () => void
   private leaseTimer: ReturnType<typeof setInterval> | undefined
-  private tickTimer: ReturnType<typeof setInterval> | undefined
 
   constructor(
     private readonly runtime: BodyRuntime,
@@ -62,10 +61,6 @@ export class BodyServer {
       }, period)
       this.leaseTimer.unref?.()
     }
-    this.tickTimer = setInterval(() => {
-      this.runtime.tick()
-    }, 50)
-    this.tickTimer.unref?.()
   }
 
   onClose(listener: () => void): () => void {
@@ -78,7 +73,6 @@ export class BodyServer {
     if (this.stopped) return
     this.stopped = true
     if (this.leaseTimer !== undefined) clearInterval(this.leaseTimer)
-    if (this.tickTimer !== undefined) clearInterval(this.tickTimer)
     this.offLine()
     this.offError()
     this.offClose()
@@ -147,8 +141,7 @@ export class BodyServer {
       || typeof value.requestId !== 'string'
       || typeof value.method !== 'string'
       || !isRecord(value.params)
-      || (value.bodyEpoch !== undefined && typeof value.bodyEpoch !== 'string')
-      || (value.commandId !== undefined && typeof value.commandId !== 'string')) {
+      || (value.bodyEpoch !== undefined && typeof value.bodyEpoch !== 'string')) {
       if (typeof value.requestId === 'string') {
         return {
           requestId: value.requestId,
@@ -164,7 +157,6 @@ export class BodyServer {
         method: value.method,
         params: value.params as JsonValue,
         ...(value.bodyEpoch === undefined ? {} : { bodyEpoch: value.bodyEpoch }),
-        ...(value.commandId === undefined ? {} : { commandId: value.commandId }),
       },
     }
   }

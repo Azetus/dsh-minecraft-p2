@@ -7,12 +7,12 @@ import { loadProviderConfig } from '../src/body/provider-config.ts'
 
 const dirs: string[] = []
 
-function configDir(minecraft: Record<string, unknown> | undefined, experiment?: Record<string, unknown>): string {
+function configDir(minecraft: Record<string, unknown> | undefined): string {
   const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-provider-config-'))
   dirs.push(dir)
   if (minecraft !== undefined) {
     mkdirSync(join(dir, '.p2'))
-    writeFileSync(join(dir, '.p2', 'config.json'), JSON.stringify({ minecraft, ...(experiment === undefined ? {} : { experiment }) }))
+    writeFileSync(join(dir, '.p2', 'config.json'), JSON.stringify({ minecraft }))
   }
   return dir
 }
@@ -41,18 +41,8 @@ describe('provider config', () => {
         version: '1.21.1',
         connectTimeoutMs: 15000,
         serverIdleMs: 1500,
-        allowRescue: false,
-        rescueTpRadius: 32,
-        devOps: false,
-        devOpsPath: '.p2/dev-ops.mjs',
       },
     })
-  })
-
-  it('reads the experiment rescue switch', async () => {
-    const loaded = await loadProviderConfig(configDir({ host: '127.0.0.1' }, { allowRescue: true, rescueTpRadius: 16 }), {})
-    expect(loaded?.config.allowRescue).toBe(true)
-    expect(loaded?.config.rescueTpRadius).toBe(16)
   })
 
   it('lets environment variables override file fields', async () => {

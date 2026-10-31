@@ -21,7 +21,7 @@ import type {
   ActPort,
   QueryOutcome,
   QueryPort,
-} from '../core/node-runtime.ts'
+} from './runtime.ts'
 
 export type MineflayerProviderOptions = {
   actionTimeoutMs?: number

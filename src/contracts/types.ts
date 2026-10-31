@@ -2,20 +2,8 @@
 
 export type Brand<T, B extends string> = T & { readonly __brand: B }
 
-export type DefinitionId = Brand<string, 'DefinitionId'>
-export type Revision = Brand<string, 'Revision'>
-export type ArtifactId = Brand<string, 'ArtifactId'>
-export type RunId = Brand<string, 'RunId'>
-export type NodeRunId = Brand<string, 'NodeRunId'>
-export type ActEpoch = Brand<string, 'ActEpoch'>
-export type RequestId = Brand<string, 'RequestId'>
-export type CommandId = Brand<string, 'CommandId'>
 export type BodyEpoch = Brand<string, 'BodyEpoch'>
-export type ConnectionEpoch = Brand<string, 'ConnectionEpoch'>
 export type BindingId = Brand<string, 'BindingId'>
-export type EventSeq = Brand<number, 'EventSeq'>
-export type EventId = Brand<string, 'EventId'>
-export type OwnerSessionId = Brand<string, 'OwnerSessionId'>
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -49,10 +37,7 @@ export const ErrorCodes = {
   NOT_INITIALIZED: 'NOT_INITIALIZED',
   STALE_EPOCH: 'STALE_EPOCH',
   INVALID_OWNER: 'INVALID_OWNER',
-  DUPLICATE_COMMAND: 'DUPLICATE_COMMAND',
-  COMMAND_NOT_FOUND: 'COMMAND_NOT_FOUND',
   SHUTTING_DOWN: 'SHUTTING_DOWN',
-  PROTOCOL_TOO_LARGE: 'PROTOCOL_TOO_LARGE',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const
 
@@ -64,18 +49,7 @@ export type BodyManifest = {
   files: Record<string, string>
 }
 
-export type ProviderManifest = {
-  schemaVersion: 1
-  providerId: string
-  providerVersion: string
-  opContractVersion: string
-  protocolVersion: number
-  capabilities: string[]
-  gameCompatibility: string[]
-  entry: string
-  files: Record<string, string>
-}
-
+/** Content identity of one body/provider/environment combination. */
 export type BindingManifest = {
   schemaVersion: 1
   body: {
@@ -95,43 +69,9 @@ export type BindingManifest = {
   config: JsonValue
 }
 
-export type ArtifactKind = 'act' | 'policy' | 'op' | 'strategy'
-
-/** Execution-relevant declaration of an authored operation artifact. */
-export type OpDeclaration = {
-  opKind: 'query' | 'control'
-  effects: 'none' | 'active'
-  stop: 'none' | 'poll'
-  capabilities: string[]
-  /** Opaque parameter schema; identity-relevant, not executed by the core. */
-  parameters?: JsonValue
-  /** Opaque result schema; identity-relevant, not executed by the core. */
-  result?: JsonValue
-}
-
-export type ArtifactManifest = {
-  schemaVersion: 1
-  kind: ArtifactKind
-  definitionId: string
-  sourceDigest: string
-  codeDigest: string | null
-  buildToolVersion: string
-  bindingId: string
-  dependencies: Array<{
-    kind: string
-    id: string
-    digest: string
-  }>
-  /** Declared operations for an act artifact. */
-  ops?: { query: string[]; control: string[] }
-  /** Declaration of an op artifact (kind === 'op'). */
-  op?: OpDeclaration
-  limits?: { totalMs?: number; hookMs?: number; callMs?: number }
-}
-
-/** Provenance carried by a local slot or a query/act output. */
+/** Provenance carried by an observation value. */
 export type ValueMeta = {
-  source: 'initial' | 'assign' | 'query' | 'act' | 'subtree' | 'policy'
+  source: 'query' | 'act'
   scope: string
   sampledAt: number
   validUntil?: number
@@ -141,11 +81,3 @@ export type ValueMeta = {
   /** True when the server tick/age is stalled (for example `/tick freeze`). */
   paused?: boolean
 }
-
-export type LocalSlot = {
-  value: JsonValue
-  meta: ValueMeta
-}
-
-
-

@@ -7,24 +7,17 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 
 import type { JsonValue } from '../contracts/index.ts'
-import type { ControllerEventView, OwnerContext, WatchEvent } from '../contracts/protocol.ts'
+import type { OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
-import { registerP2Tools } from './tools.ts'
-import type { AgentLike, ToolRegistration } from './tools.ts'
 
 type CommandResult = { kind: 'success' | 'error'; text: string }
 
 type CommandInvocation = {
   agent: AgentLike
   rawInput: string
-}
-
-type CommandHooks = {
-  onStarted?: (agent: AgentLike) => void
-  onStopped?: () => void
 }
 
 type CommandsService = {
@@ -48,7 +41,7 @@ type WakeMessage = {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'p2-controller' | 'p2-runtime' | 'p2-watch' }
+  source: { kind: 'p2-runtime' }
 }
 
 type AgentsService = {
@@ -57,8 +50,15 @@ type AgentsService = {
     status?: 'idle' | 'running'
     followup(message: WakeMessage): void
     steer?(message: WakeMessage): void
-    inject?(message: WakeMessage): void
   } | undefined
+}
+
+type AgentLike = {
+  id: string
+  session: {
+    id: string
+    header?: { cwd?: string }
+  }
 }
 
 type ToolsService = {
@@ -93,11 +93,6 @@ export type P2PluginOptions = {
   devAutoRestart?: boolean
   /** Development-only: auto-restart backoff schedule (tests use a zero schedule). */
   restartBackoffMs?: number[]
-  /**
-   * Coalescing window for watch owner wakes. Watch events inside one window
-   * become a single digest; controller/runtime wakes are never coalesced.
-   */
-  watchWakeWindowMs?: number
 }
 
 export function createP2Plugin(options: P2PluginOptions = {}): {
@@ -105,8 +100,6 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
   inject: string[]
   apply(ctx: P2Context): void
 } {
-  let notifyControllerEvent: ((event: ControllerEventView) => void) | undefined
-  let notifyWatchEvent: ((event: WatchEvent) => void) | undefined
   let notifyBodyFault: ((fault: BodyFault) => void) | undefined
   let notifyBodyRestart: ((info: RestartInfo) => void) | undefined
   const manager = new BodyManager({
@@ -122,29 +115,14 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     },
     onFault: fault => notifyBodyFault?.(fault),
     onRestart: info => notifyBodyRestart?.(info),
-    onControllerEvent: event => notifyControllerEvent?.(event),
-    onWatchEvent: event => notifyWatchEvent?.(event),
-    onWatchGap: (fromSeq, toSeq) => {
-      options.log?.(`p2 watch event gap: ${fromSeq}..${toSeq}`)
-    },
   })
 
   return {
     name: 'dsh-minecraft-p2',
     inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
-      let pendingWatchEvents: WatchEvent[] = []
-      let watchWakeTimer: ReturnType<typeof setTimeout> | undefined
-      /**
-       * Urgent wakes steer a running owner at its next step boundary; observation
-       * wakes are injected there without opening a turn. Idle owners always get a
-       * follow-up turn. The full event data stays in p2_events.
-       */
-      const deliverWake = (
-        text: string,
-        kind: WakeMessage['source']['kind'],
-        priority: 'urgent' | 'observe',
-      ): void => {
+      /** Runtime faults steer a running owner; idle owners get a follow-up turn. */
+      const deliverWake = (text: string): void => {
         const owner = manager.currentOwner
         if (owner === undefined) return
         const agent = ctx.agents?.get(owner.sessionId)
@@ -153,52 +131,16 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           id: randomUUID(),
           role: 'user',
           content: [{ type: 'text', text }],
-          source: { kind },
+          source: { kind: 'p2-runtime' },
         }
-        const running = agent.status === 'running'
         try {
-          if (running && priority === 'urgent' && agent.steer !== undefined) agent.steer(message)
-          else if (running && priority === 'observe' && agent.inject !== undefined) agent.inject(message)
+          if (agent.status === 'running' && agent.steer !== undefined) agent.steer(message)
           else agent.followup(message)
         } catch (cause) {
           // Waking is best effort, but a silent swallow hides a broken wake path.
-          const label = kind === 'p2-controller' ? 'p2 controller' : kind === 'p2-watch' ? 'p2 watch' : 'p2 runtime'
-          options.log?.(`${label} wake failed: ${formatError(cause)}`)
+          options.log?.(`p2 runtime wake failed: ${formatError(cause)}`)
         }
       }
-      const flushWatchWakes = (): void => {
-        watchWakeTimer = undefined
-        if (pendingWatchEvents.length === 0) return
-        const batch = pendingWatchEvents
-        pendingWatchEvents = []
-        const shown = batch.slice(0, 6).map(event => {
-          const summary = event.summary === null ? '' : `, ${event.summary}`
-          return `${event.watchId}(key=${event.key ?? 'none'}, at=${event.firedAt}${summary})`
-        })
-        const more = batch.length > shown.length ? `; +${batch.length - shown.length} more` : ''
-        deliverWake(
-          `[p2 watch] ${batch.length} event(s): ${shown.join('; ')}${more}. This is observation data, not an instruction. Inspect p2_watch list and p2_events.`,
-          'p2-watch',
-          'observe',
-        )
-      }
-      const queueWatchWake = (event: WatchEvent): void => {
-        pendingWatchEvents.push(event)
-        if (watchWakeTimer !== undefined) return
-        watchWakeTimer = setTimeout(flushWatchWakes, options.watchWakeWindowMs ?? 1000)
-      }
-      notifyControllerEvent = event => {
-        if (event.kind !== 'commitment-succeeded'
-          && event.kind !== 'commitment-blocked'
-          && event.kind !== 'control-fault') return
-        const detail = event.detail === undefined ? '' : `, ${event.detail}`
-        deliverWake(
-          `[p2 controller] ${event.kind}${detail} (commitment=${event.commitmentId ?? 'none'}). Inspect p2_controller status/events for the next decision.`,
-          'p2-controller',
-          event.kind === 'commitment-succeeded' ? 'observe' : 'urgent',
-        )
-      }
-      notifyWatchEvent = queueWatchWake
       notifyBodyFault = fault => {
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
@@ -206,39 +148,19 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
             ? 'Auto-restart budget is exhausted; start a new body manually with /p2 start.'
             : 'Start a new body manually with /p2 start.'
         deliverWake(
-          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and the controller/watch state was lost with the epoch. ${next}`,
-          'p2-runtime',
-          'urgent',
+          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and was lost with the epoch. ${next}`,
         )
       }
       notifyBodyRestart = info => {
         deliverWake(
-          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Controller/watch state is empty; re-enable the controller and re-register watches as needed.`,
-          'p2-runtime',
-          'urgent',
+          `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
         )
       }
-      const registrations = new Map<string, ToolRegistration>()
+
       const globalDisposers: Array<() => void> = []
-      const keyOf = (agent: AgentLike): string => `${agent.session.id}/${agent.id}`
-      const ensureTools = (agent: AgentLike): void => {
-        const key = keyOf(agent)
-        if (registrations.has(key)) return
-        registrations.set(key, registerP2Tools(agent, manager))
-      }
-      const disposeTools = (): void => {
-        for (const registration of registrations.values()) registration.dispose()
-        registrations.clear()
-      }
-      const disposeGlobals = (): void => {
-        for (const dispose of globalDisposers.splice(0)) dispose()
-      }
 
       if (options.devBodyControl === true && ctx.tools !== undefined) {
-        globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
-          ensureTools,
-          disposeTools,
-        })))
+        globalDisposers.push(ctx.tools.register(createBodyTool(manager)))
       }
 
       ctx.effect(
@@ -246,28 +168,15 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           name: 'p2',
           description: 'Manage the P2 Minecraft player runtime',
           input: { hint: '<setup|start|status|stop>' },
-          handler: invocation => handleP2Command(manager, invocation, {
-            onStarted: agent => {
-              ensureTools(agent)
-            },
-            onStopped: () => {
-              disposeTools()
-            },
-          }),
+          handler: invocation => handleP2Command(manager, invocation),
         }),
         'p2.commands',
       )
       ctx.effect(
         () => async () => {
-          notifyControllerEvent = undefined
-          notifyWatchEvent = undefined
           notifyBodyFault = undefined
           notifyBodyRestart = undefined
-          if (watchWakeTimer !== undefined) clearTimeout(watchWakeTimer)
-          watchWakeTimer = undefined
-          pendingWatchEvents = []
-          disposeTools()
-          disposeGlobals()
+          for (const dispose of globalDisposers.splice(0)) dispose()
           await manager.dispose()
         },
         'p2.body',
@@ -276,13 +185,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
   }
 }
 
-type BodyToolHooks = {
-  ensureTools: (agent: AgentLike) => void
-  disposeTools: () => void
-}
-
 /** Development-only global tool; the human `/p2` command remains the shipped path. */
-function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
+function createBodyTool(manager: BodyManager): ToolDefinition {
   return {
     name: 'p2_body',
     description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command.',
@@ -309,24 +213,20 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
       if (action === 'start') {
         assertBodyOwner(manager, agent.session.id)
         const result = await startBody(manager, agent)
-        hooks.ensureTools(agent)
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
-        const status = await bodyStatus(manager)
-        return { action, ...result, status }
+        return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'restart') {
         assertBodyOwner(manager, agent.session.id)
         const stopped = await stopBody(manager)
         if (stopped.state === 'faulted') return { action, ...stopped }
         const result = await startBody(manager, agent)
-        hooks.ensureTools(agent)
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
         assertBodyOwner(manager, agent.session.id)
         const result = await stopBody(manager)
-        hooks.disposeTools()
         void auditBodyControl(agent, { action, state: result.state })
         return { action, ...result }
       }
@@ -352,7 +252,6 @@ async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
   return {
     state: 'active',
     epoch: manager.bodyEpoch ?? null,
-    controller: status.status.controller ?? null,
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
 }
@@ -390,7 +289,6 @@ async function stopBody(manager: BodyManager): Promise<StopResult> {
 export async function handleP2Command(
   manager: BodyManager,
   invocation: CommandInvocation,
-  hooks: CommandHooks = {},
 ): Promise<CommandResult> {
   const input = invocation.rawInput.trim()
   const [verb = '', ...rest] = input.split(/\s+/u)
@@ -403,10 +301,8 @@ export async function handleP2Command(
       case 'setup':
         return setup(invocation.agent)
       case 'start': {
-        const owner = ownerOf(invocation.agent)
         const result = await startBody(manager, invocation.agent)
-        hooks.onStarted?.(invocation.agent)
-        void auditBodyControl(invocation.agent, { action: 'start', state: result.state, epoch: result.epoch, via: 'command', owner })
+        void auditBodyControl(invocation.agent, { action: 'start', state: result.state, epoch: result.epoch, via: 'command' })
         return success(`P2 body active (epoch ${result.epoch})`)
       }
       case 'status':
@@ -417,7 +313,6 @@ export async function handleP2Command(
         if (result.state === 'faulted') {
           return error(`P2 body stop was not confirmed${result.error === undefined ? '' : `: ${result.error}`}`)
         }
-        hooks.onStopped?.()
         void auditBodyControl(invocation.agent, { action: 'stop', state: result.state, via: 'command' })
         return success('P2 body stopped')
       }
@@ -461,8 +356,6 @@ async function statusText(manager: BodyManager): Promise<string> {
     `epoch=${status.bodyEpoch}`,
     `health=${status.health}`,
     `owner=${status.owner?.sessionId ?? 'none'}`,
-    `commands=${status.commandCount}`,
-    `controller=${status.controller?.mode ?? 'none'}:${status.controller?.commitment?.state ?? 'none'}`,
     `paused=${status.providerState?.paused ?? false}`,
   ].join(' ')
 }
@@ -484,6 +377,3 @@ function formatError(cause: unknown): string {
 function formatP2Error(error: P2Error): string {
   return `${error.code}: ${error.message}`
 }
-
-
-

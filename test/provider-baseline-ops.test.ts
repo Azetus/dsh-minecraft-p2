@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Bot } from 'mineflayer'
 
 import { MineflayerProvider } from '../src/provider/mineflayer.ts'
-import type { QueryOutcome } from '../src/core/node-runtime.ts'
+import type { QueryOutcome } from '../src/provider/runtime.ts'
 
 type Vec = { x: number; y: number; z: number }
 
