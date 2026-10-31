@@ -1,14 +1,10 @@
-import { EventEmitter } from 'node:events'
-
 import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
-import { p2Error } from '../src/contracts/protocol.ts'
-import type { JsonValue } from '../src/contracts/types.ts'
-import type { ActHandle, ActPoll } from '../src/provider/runtime.ts'
-import type { MineflayerActSource, MineflayerPortOptions } from '../src/port/mineflayer/index.ts'
+import type { MineflayerPortOptions } from '../src/port/mineflayer/index.ts'
 import { MineflayerClientPort, portCapabilities } from '../src/port/mineflayer/index.ts'
-import type { ClientEvent, WriteToken } from '../src/port/index.ts'
+import type { ClientEvent } from '../src/port/index.ts'
+import { FakeActSource, FakeBot, writeToken } from './helpers/mineflayer-fakes.ts'
 
 /**
  * Category: cross-module contract (CONTRACTS §2, TODO M0-03).
@@ -17,102 +13,6 @@ import type { ClientEvent, WriteToken } from '../src/port/index.ts'
  * reported as success. Failure modes: promise/act errors leak as exceptions,
  * a hung action is reported as failed, an old writer keeps its result.
  */
-
-type Block = {
-  name: string
-  getProperties?: () => Record<string, string | number | boolean>
-}
-
-class FakeBot extends EventEmitter {
-  entity:
-    | {
-        position: { x: number; y: number; z: number }
-        yaw: number
-        pitch: number
-        onGround: boolean
-        isInWater: boolean
-        isInLava: boolean
-      }
-    | undefined = {
-      position: { x: 0, y: 64, z: 0 },
-      yaw: 1,
-      pitch: 2,
-      onGround: true,
-      isInWater: false,
-      isInLava: false,
-    }
-
-  health = 20
-  food = 18
-  heldItem: { name: string; count: number } | null = { name: 'stone', count: 1 }
-  time: { timeOfDay: number | bigint; age: number | bigint } = { timeOfDay: 6000, age: 1234 }
-  entities: Record<number, { id: number; name?: string; position?: { x: number; y: number; z: number } }> = {
-    1: { id: 1, name: 'cow', position: { x: 1, y: 64, z: 1 } },
-    2: { id: 2, name: 'far', position: { x: 40, y: 64, z: 40 } },
-    3: { id: 3, position: { x: 2, y: 64, z: 2 } },
-  }
-
-  readonly blocks = new Map<string, Block>()
-  readonly chats: string[] = []
-
-  inventory = {
-    items: (): Array<{ slot?: number; name: string; count: number }> => [
-      { slot: 36, name: 'dirt', count: 3 },
-    ],
-  }
-
-  blockAt(position: { x: number; y: number; z: number }): Block | null {
-    return this.blocks.get(`${position.x},${position.y},${position.z}`) ?? null
-  }
-
-  chat(text: string): void {
-    this.chats.push(text)
-  }
-}
-
-type Call = { name: string; args: Record<string, JsonValue> }
-
-class FakeHandle implements ActHandle {
-  stopped = false
-
-  constructor(
-    private readonly mode: 'succeed' | 'running' | 'fail',
-    readonly name: string,
-    readonly result?: JsonValue,
-  ) {}
-
-  poll(): ActPoll {
-    if (this.stopped) return { status: 'cancelled' }
-    if (this.mode === 'running') return { status: 'running' }
-    if (this.mode === 'fail') {
-      return { status: 'failed', error: p2Error('DIG_NO_BLOCK', 'environment', 'nothing to dig') }
-    }
-    return this.result === undefined ? { status: 'succeeded' } : { status: 'succeeded', result: this.result }
-  }
-
-  stop(): void {
-    this.stopped = true
-  }
-}
-
-class FakeActSource implements MineflayerActSource {
-  readonly calls: Call[] = []
-  readonly handles: FakeHandle[] = []
-  mode: 'succeed' | 'running' | 'fail' = 'succeed'
-  onStart: ((name: string, args: Record<string, JsonValue>) => void) | undefined
-
-  constructor(readonly capabilities: readonly string[] = ['pathfind', 'dig', 'place', 'use', 'interact', 'attack']) {}
-
-  start(name: string, args: Record<string, JsonValue>): ActHandle {
-    this.calls.push({ name, args })
-    this.onStart?.(name, args)
-    const handle = new FakeHandle(this.mode, name, { name })
-    this.handles.push(handle)
-    return handle
-  }
-}
-
-const token = (seq: number): WriteToken => ({ runId: 'run-1', jobId: `job-${seq}`, seq })
 
 function createPort(
   source = new FakeActSource(),
@@ -128,7 +28,7 @@ function createPort(
     now: () => Date.now(),
     ...options,
   })
-  port.beginWrite(token(1))
+  port.beginWrite(writeToken(1))
   return { port, bot, source }
 }
 
@@ -227,7 +127,7 @@ describe('mineflayer port timeout and authority', () => {
     source.mode = 'running'
     const pending = port.dig({ x: 1, y: 64, z: 1 })
     await new Promise(resolve => setTimeout(resolve, 10))
-    port.beginWrite(token(2))
+    port.beginWrite(writeToken(2))
     const result = await pending
     expect(result).toMatchObject({ state: 'failed', code: 'STALE_WRITE' })
     expect(source.handles[0]?.stopped).toBe(true)
@@ -238,7 +138,7 @@ describe('mineflayer port timeout and authority', () => {
     source.mode = 'running'
     const pending = port.dig({ x: 1, y: 64, z: 1 })
     await new Promise(resolve => setTimeout(resolve, 10))
-    port.endWrite(token(1))
+    port.endWrite(writeToken(1))
     expect((await pending).state).toBe('failed')
     expect(source.handles[0]?.stopped).toBe(true)
   })
@@ -312,7 +212,7 @@ describe('mineflayer port reads', () => {
 describe('mineflayer port events', () => {
   it('forwards chat, damage, death, block updates and collection as data', () => {
     const { port, bot } = createPort()
-    const seen: Array<{ event: ClientEvent; payload: JsonValue }> = []
+    const seen: Array<{ event: ClientEvent; payload: unknown }> = []
     for (const event of ['chat', 'damaged', 'died', 'blockUpdated', 'inventoryChanged'] as const) {
       port.on(event, payload => seen.push({ event, payload }))
     }
