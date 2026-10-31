@@ -13,6 +13,7 @@
 | [../README.md](../README.md) | 项目定位、当前状态、目标用法 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 进程边界、分层、目录、生命周期 |
 | [runtime/P2MIND.md](runtime/P2MIND.md) | P2Mind 控制结构（权威设计） |
+| [runtime/PITFALLS.md](runtime/PITFALLS.md) | 踩坑清单与实现红线（写适配器/驱动前必读） |
 | [CONTRACTS.md](CONTRACTS.md) | ClientPort / Job / WorkGiver / Driver / Tracker / 树的契约 |
 | [RUNTIME.md](RUNTIME.md) | tick 循环、预算、失败与恢复 |
 | [OPERATOR-PLAYBOOK.md](OPERATOR-PLAYBOOK.md) | 操作员/agent 的运行纪律 |

@@ -18,6 +18,7 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 
 开始相关工作前先读 [ARCHITECTURE.md](docs/ARCHITECTURE.md)（进程边界、分层、目录、生命周期），再按需查：
 - [runtime/P2MIND.md](docs/runtime/P2MIND.md)：控制结构（权威设计）
+- [runtime/PITFALLS.md](docs/runtime/PITFALLS.md)：踩坑清单与实现红线
 - [CONTRACTS.md](docs/CONTRACTS.md)：ClientPort / Job / WorkGiver / Driver / JobTracker / 树 / 计划
 - [RUNTIME.md](docs/RUNTIME.md)：tick 循环、预算、失败与恢复
 - [OPERATOR-PLAYBOOK.md](docs/OPERATOR-PLAYBOOK.md)：运行纪律
