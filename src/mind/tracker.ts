@@ -35,6 +35,8 @@ export type JobTrackerOptions = {
   stopTimeoutMs?: number
   /** Failures of the same work key before it is considered blocked. */
   maxFailures?: number
+  /** Write the pending intent before the driver performs its first action. */
+  beforeStart?: (candidate: Candidate, job: Job) => void
   onEvent?: (event: TrackerEvent) => void
 }
 
@@ -71,6 +73,7 @@ export class JobTracker {
   private readonly newRunId: () => string
   private readonly stopTimeoutMs: number
   private readonly maxFailures: number
+  private readonly beforeStart: ((candidate: Candidate, job: Job) => void) | undefined
   private readonly onEvent: ((event: TrackerEvent) => void) | undefined
   private stateValue: TrackerState = 'idle'
   private currentValue: Current | undefined
@@ -91,6 +94,7 @@ export class JobTracker {
     this.newRunId = options.newRunId ?? (() => `run-${this.seq}`)
     this.stopTimeoutMs = options.stopTimeoutMs ?? 2_000
     this.maxFailures = options.maxFailures ?? 3
+    this.beforeStart = options.beforeStart
     this.onEvent = options.onEvent
   }
 
@@ -266,6 +270,14 @@ export class JobTracker {
       this.port.beginWrite(token)
     } catch (error) {
       this.reject(candidate, { state: 'failed', code: errorCode(error, 'STALE_WRITE') }, now)
+      return
+    }
+
+    try {
+      this.beforeStart?.(candidate, job)
+    } catch (error) {
+      try { this.port.endWrite(token) } catch { /* best effort */ }
+      this.reject(candidate, { state: 'failed', code: errorCode(error, 'JOURNAL_FAULT') }, now)
       return
     }
 

@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -145,5 +145,43 @@ describe('order journal', () => {
     const lines = readFileSync(journal, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
     expect(lines.map(entry => entry.kind)).toEqual(['order.accepted', 'order.terminal'])
     expect(lines[1]).toMatchObject({ orderId: 'ord-1', state: 'failed' })
+    expect(lines.every(entry => entry.v === 1)).toBe(true)
+  })
+
+  it('records pending actions and drops them when settled', () => {
+    const journal = tempJournal()
+    const store = new OrderStore({ journalPath: journal })
+    store.enqueue(order('ord-1'))
+    store.recordActionPending({
+      runId: 'run-1',
+      driverId: 'place',
+      keys: 'plan:plan-1:b:0,0,0',
+      orderId: 'ord-1',
+      planId: 'plan-1',
+      workItemId: 'b:0,0,0',
+    })
+    expect(store.pendingActions()).toHaveLength(1)
+
+    const restored = new OrderStore({ journalPath: journal })
+    restored.restore()
+    expect(restored.pendingActions()).toEqual([expect.objectContaining({ runId: 'run-1' })])
+
+    restored.recordActionSettled('run-1', 'succeeded')
+    expect(restored.pendingActions()).toHaveLength(0)
+    const again = new OrderStore({ journalPath: journal })
+    again.restore()
+    expect(again.pendingActions()).toHaveLength(0)
+  })
+
+  it('refuses a journal version it does not understand', () => {
+    const journal = tempJournal()
+    writeFileSync(journal, `${JSON.stringify({
+      v: 2,
+      at: 1,
+      kind: 'order.accepted',
+      order: { id: 'ord-1', verb: 'wander' },
+    })}\n`)
+    const restored = new OrderStore({ journalPath: journal })
+    expect(errorCode(() => restored.restore())).toBe('JOURNAL_VERSION_MISMATCH')
   })
 })

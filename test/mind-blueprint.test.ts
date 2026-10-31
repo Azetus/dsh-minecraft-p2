@@ -50,6 +50,12 @@ describe('blueprint parser', () => {
     })
     expect(bad.ok).toBe(false)
   })
+
+  it('rejects an unknown blueprint version', () => {
+    const parsed = parseBlueprint({ version: 2, blocks: valid.blocks })
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.errors.join(' ')).toContain('version')
+  })
 })
 
 describe('blueprint to plan', () => {

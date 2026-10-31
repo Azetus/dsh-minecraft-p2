@@ -19,10 +19,18 @@ import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
 import { planShortage, materialSources } from '../mind/materials.ts'
 import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
-import { evaluatePlan, instantiatePlan, loadPlanTemplates } from '../mind/plan.ts'
+import {
+  evaluatePlan,
+  instantiatePlan,
+  isAirName,
+  itemPosition,
+  loadPlanTemplates,
+  matchesExpected,
+} from '../mind/plan.ts'
 import type { PlanInstance } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
+import type { WorldView } from '../mind/types.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
@@ -111,14 +119,38 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let planBlockedReported = false
   let planInsufficientReported = false
   let gatherCount = 0
+  let pendingReconciled = false
   const tracker = new JobTracker({
     port: options.port,
     driver: id => registry.driver(id),
     world: () => sensors.read(),
     now,
+    beforeStart: (candidate, job) => {
+      if (candidate.driverId !== 'clear' && candidate.driverId !== 'place') return
+      const active = orders.active()
+      const parsed = parseActionKeys(candidate.keys)
+      orders.recordActionPending({
+        runId: job.runId,
+        driverId: candidate.driverId,
+        keys: candidate.keys,
+        ...(active === undefined ? {} : { orderId: active.order.id }),
+        ...(parsed === undefined ? {} : parsed),
+      })
+    },
     onEvent: event => {
       const data = event as unknown as JsonValue
       events.push(event.kind, event.at, data)
+      if (event.kind === 'job.terminal' && isRecord(event)
+        && typeof event.runId === 'string') {
+        orders.recordActionSettled(
+          event.runId,
+          typeof event.state === 'string' ? event.state : 'unknown',
+          typeof event.code === 'string' ? event.code : undefined,
+        )
+      }
+      if (event.kind === 'job.preempted' && isRecord(event) && typeof event.runId === 'string') {
+        orders.recordActionSettled(event.runId, 'preempted')
+      }
       if (event.kind === 'job.terminal' || event.kind === 'tracker.fault' || event.kind === 'job.stale-result') {
         lastReport = data
       }
@@ -184,6 +216,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       events.push('plan.instantiated', now(), {
         planId: activePlan.planId,
         template: 'blueprint',
+        templateVersion: parsed.blueprint.version,
         origin: activePlan.origin,
         blocks: parsed.blueprint.blocks.length,
       })
@@ -220,6 +253,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     events.push('plan.instantiated', now(), {
       planId: activePlan.planId,
       template: template.id,
+      templateVersion: template.version,
       origin,
     })
   }
@@ -250,7 +284,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   function materialsSufficient(plan: PlanInstance): boolean {
     const policy = currentMaterialPolicy() ?? { mode: 'require-all' as const }
     try {
-      const shortage = planShortage(plan, sensors.read())
+      const world = sensors.read()
+      const shortage = planShortage(plan, world)
       if (Object.keys(shortage.missing).length === 0) return true
       const unsupported = Object.keys(shortage.missing).filter(name => materialSources(name).length === 0)
       if (policy.mode === 'require-all' || unsupported.length > 0) {
@@ -260,6 +295,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           needed: shortage.needed,
           missing: shortage.missing,
           ...(unsupported.length === 0 ? {} : { unsupported }),
+          basis: observationBasis(world),
         }
         events.push('plan.material-short', now(), data)
         orders.complete(plan.orderId, 'blocked')
@@ -276,17 +312,135 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
   }
 
+  function reconcilePending(): boolean {
+    const pending = orders.pendingActions()
+    if (pending.length === 0) return true
+    let world: WorldView
+    try {
+      world = sensors.read()
+    } catch {
+      return true
+    }
+    const active = orders.active()
+    const unresolved: typeof pending = []
+    const reconciled: Array<{ runId: string; driverId: string; state: string }> = []
+
+    for (const action of pending) {
+      // Movement has no persistent effect; only clear/place are recorded.
+      if (action.driverId !== 'clear' && action.driverId !== 'place') {
+        orders.recordActionSettled(action.runId, 'no-effect')
+        reconciled.push({ runId: action.runId, driverId: action.driverId, state: 'no-effect' })
+        continue
+      }
+      if (active === undefined || (action.orderId !== undefined && action.orderId !== active.order.id)) {
+        orders.recordActionSettled(action.runId, 'orphan')
+        reconciled.push({ runId: action.runId, driverId: action.driverId, state: 'orphan' })
+        continue
+      }
+      const position = actionPosition(action)
+      if (position === undefined || activePlan === undefined) {
+        unresolved.push(action)
+        continue
+      }
+      const block = world.blockAt(position)
+      if (block === null || !block.loaded) {
+        unresolved.push(action)
+        continue
+      }
+      if (action.driverId === 'clear') {
+        if (isAirName(block.name)) {
+          orders.recordActionSettled(action.runId, 'settled-by-world')
+          reconciled.push({ runId: action.runId, driverId: action.driverId, state: 'settled-by-world' })
+        } else {
+          unresolved.push(action)
+        }
+        continue
+      }
+      const item = action.workItemId === undefined
+        ? undefined
+        : activePlan.workItems.find(candidate => candidate.id === action.workItemId)
+      if (item?.expected !== undefined && matchesExpected(block, item.expected)) {
+        orders.recordActionSettled(action.runId, 'settled-by-world')
+        reconciled.push({ runId: action.runId, driverId: action.driverId, state: 'settled-by-world' })
+      } else {
+        unresolved.push(action)
+      }
+    }
+
+    if (reconciled.length > 0) {
+      events.push('action.reconciled', now(), { actions: reconciled, basis: observationBasis(world) })
+    }
+    if (unresolved.length === 0) return true
+
+    const data = {
+      actions: unresolved.map(action => ({
+        runId: action.runId,
+        driverId: action.driverId,
+        keys: action.keys,
+        ...(action.orderId === undefined ? {} : { orderId: action.orderId }),
+        ...(action.workItemId === undefined ? {} : { workItemId: action.workItemId }),
+      })),
+      basis: observationBasis(world),
+    }
+    events.push('action.unreconciled', now(), data)
+    lastReport = data
+    for (const action of unresolved) {
+      orders.recordActionSettled(action.runId, 'unreconciled')
+    }
+    if (active !== undefined && !isTerminalState(orders.get(active.order.id)?.state)) {
+      orders.complete(active.order.id, 'blocked')
+    }
+    activePlan = undefined
+    planOrderId = undefined
+    planBlockedReported = false
+    planInsufficientReported = false
+    return false
+  }
+
+  function actionPosition(action: { keys: string; workItemId?: string }): Vec3 | undefined {
+    if (action.workItemId !== undefined && activePlan !== undefined) {
+      const item = activePlan.workItems.find(candidate => candidate.id === action.workItemId)
+      if (item !== undefined) return itemPosition(activePlan, item)
+    }
+    const gather = /^gather:[^:]+:(-?\d+),(-?\d+),(-?\d+)$/u.exec(action.keys)
+    if (gather !== null) {
+      return { x: Number(gather[1]), y: Number(gather[2]), z: Number(gather[3]) }
+    }
+    return undefined
+  }
+
+  function observationBasis(world: WorldView): JsonValue {
+    return {
+      at: now(),
+      self: {
+        x: world.self.pos.x,
+        y: world.self.pos.y,
+        z: world.self.pos.z,
+      },
+      time: {
+        timeOfDay: world.time.timeOfDay,
+        worldAge: world.time.worldAge,
+      },
+      ...(world.stale === true ? { stale: true } : {}),
+    }
+  }
+
   const tick = (): void => {
     syncPlan()
+    if (!pendingReconciled) {
+      pendingReconciled = true
+      if (!reconcilePending()) return
+    }
     loop.tick()
     if (activePlan === undefined || tracker.state() !== 'idle') return
     try {
       const world = sensors.read()
+      const basis = observationBasis(world)
       const evaluation = evaluatePlan(activePlan, world, currentConflictPolicy())
       const policy = currentConflictPolicy()
       if (policy?.mode === 'abort'
         && [...evaluation.states.values()].some(state => state.kind === 'blocked' && state.reason === 'CONFLICT')) {
-        const data = { planId: activePlan.planId, state: 'aborted' }
+        const data = { planId: activePlan.planId, state: 'aborted', basis }
         events.push('plan.abort', now(), data)
         orders.complete(activePlan.orderId, 'failed')
         lastReport = data
@@ -298,12 +452,22 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       if (!planBlockedReported && evaluation.blocked) {
         planBlockedReported = true
-        events.push('plan.blocked', now(), {
-          planId: activePlan.planId,
-          blocked: [...evaluation.states.entries()]
-            .filter(([, state]) => state.kind === 'blocked')
-            .map(([id, state]) => ({ id, reason: (state as { reason: string }).reason })),
-        })
+        const blocked = [...evaluation.states.entries()]
+          .filter(([, state]) => state.kind === 'blocked')
+          .map(([id, state]) => {
+            const item = activePlan?.workItems.find(candidate => candidate.id === id)
+            const position = item === undefined ? undefined : itemPosition(activePlan as PlanInstance, item)
+            const current = position === undefined ? null : world.blockAt(position)
+            return {
+              id,
+              reason: (state as { reason: string }).reason,
+              ...(item?.expected === undefined ? {} : { expected: item.expected.name }),
+              ...(current === null ? {} : { current: current.name }),
+            }
+          })
+        const data = { planId: activePlan.planId, blocked, basis }
+        events.push('plan.blocked', now(), data)
+        lastReport = data
       }
       if (!evaluation.satisfied) return
 
@@ -324,17 +488,21 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           terminal = 'succeeded'
         } else if (verify.state === 'refuted') {
           terminal = 'failed'
-          events.push('plan.verify', now(), verify as unknown as JsonValue)
+          const data = { ...verify, basis }
+          events.push('plan.verify', now(), data)
+          lastReport = data
         } else if (!planInsufficientReported) {
           planInsufficientReported = true
-          events.push('plan.insufficient', now(), verify as unknown as JsonValue)
+          const data = { ...verify, basis }
+          events.push('plan.insufficient', now(), data)
+          lastReport = data
         }
       } else {
         terminal = 'succeeded'
       }
       if (terminal === undefined) return
       orders.complete(activePlan.orderId, terminal)
-      const data = { planId: activePlan.planId, state: terminal }
+      const data = { planId: activePlan.planId, state: terminal, basis }
       events.push('plan.terminal', now(), data)
       lastReport = data
       activePlan = undefined
@@ -425,6 +593,19 @@ function viewOf(record: { order: { id: string; verb: string }; state: string }):
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseActionKeys(keys: string): { planId?: string; workItemId?: string } | undefined {
+  const match = /^plan:([^:]+):(.+)$/u.exec(keys)
+  if (match === null) return undefined
+  const planId = match[1]
+  const workItemId = match[2]
+  return planId === undefined || workItemId === undefined ? undefined : { planId, workItemId }
+}
+
+function isTerminalState(state: string | undefined): boolean {
+  return state === 'succeeded' || state === 'failed' || state === 'blocked'
+    || state === 'cancelled' || state === 'abandoned'
 }
 
 function readOrigin(value: unknown): Vec3 | undefined {

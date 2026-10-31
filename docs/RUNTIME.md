@@ -148,3 +148,17 @@ order 可带 `policy.conflict`：
 - 若缺料中**有任一物品没有来源**，整个 order 直接 blocked，不做部分施工。
 - `maxGatherBlocks` 按已开始的 gather job 计数；达到预算后停止 gather，等待/blocked。
 - 当前没有 crafting：需要合成才能得到的材料不会自动补。
+
+### 10.4 恢复与归因（M3-04）
+
+- 意图日志带 `v: 1`；遇到未知版本直接 `JOURNAL_VERSION_MISMATCH`，拒绝恢复。
+- blueprint 有自己的 `version`（当前 1）；未知版本拒绝，不猜测。
+- 每个有世界副作用（`clear`/`place`）的 job 在第一个动作前写 `action.pending`，终态写 `action.settled`。
+- 重启后 pending **只对账、不重放**：
+  - 世界已满足 → `settled-by-world`，继续；
+  - 无法确认（方块不是 expected、目标未加载、找不到 plan）→ `action.unreconciled`，
+    order `blocked`，绝不自动重放；
+  - 移动类 pending 无持久副作用 → `no-effect`。
+- 已取消 order 恢复后保持取消；不会复活 plan。
+- `plan.material-short` / `plan.blocked` / `plan.verify` / `plan.terminal` / `action.*`
+  都带 `basis`（时间、self、timeOfDay/worldAge、stale），用于区分“观测不足”与“执行失败”。

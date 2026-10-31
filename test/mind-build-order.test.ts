@@ -113,7 +113,8 @@ describe('build order', () => {
 
     expect(mind.orders.get('ord-short')?.state).toBe('blocked')
     expect(fake.places).toBe(0)
-    expect([...mind.events.since(0)].some(event => event.kind === 'plan.material-short')).toBe(true)
+    const event = [...mind.events.since(0)].find(candidate => candidate.kind === 'plan.material-short')
+    expect(event?.data).toMatchObject({ basis: { self: expect.any(Object) } })
   })
 
   it('blocks auto-gather when a missing item has no source', () => {

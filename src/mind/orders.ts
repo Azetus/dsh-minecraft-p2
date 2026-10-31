@@ -54,6 +54,18 @@ export type OrderEvent =
   | { kind: 'order.accepted'; at: number; orderId: string }
   | { kind: 'order.terminal'; at: number; orderId: string; state: OrderState }
 
+/** A driver action written before it starts; it is reconciled, never replayed. */
+export type PendingAction = {
+  runId: string
+  driverId: string
+  keys: string
+  orderId?: string
+  planId?: string
+  workItemId?: string
+}
+
+export const JOURNAL_VERSION = 1
+
 export type OrderStoreOptions = {
   /** JSONL intent journal. Without it the store is memory-only (tests). */
   journalPath?: string
@@ -62,8 +74,10 @@ export type OrderStoreOptions = {
 }
 
 type JournalEntry =
-  | { at: number; kind: 'order.accepted'; order: Order }
-  | { at: number; kind: 'order.terminal'; orderId: string; state: OrderState }
+  | { v?: number; at: number; kind: 'order.accepted'; order: Order }
+  | { v?: number; at: number; kind: 'order.terminal'; orderId: string; state: OrderState }
+  | { v?: number; at: number; kind: 'action.pending'; action: PendingAction }
+  | { v?: number; at: number; kind: 'action.settled'; runId: string; state: string; code?: string }
 
 const TERMINAL_STATES: ReadonlySet<OrderState> = new Set([
   'succeeded',
@@ -84,6 +98,7 @@ export class OrderStore {
   private readonly onEvent: ((event: OrderEvent) => void) | undefined
   private readonly records = new Map<string, OrderRecord>()
   private readonly acceptedOrder: string[] = []
+  private readonly pending = new Map<string, PendingAction>()
   private activeId: string | undefined
 
   constructor(options: OrderStoreOptions = {}) {
@@ -113,12 +128,19 @@ export class OrderStore {
         throw journalError('journal line is not valid JSON')
       }
       const entry = parsed as Partial<JournalEntry>
+      if (entry.v !== undefined && entry.v !== JOURNAL_VERSION) {
+        throw journalVersionError(`journal version ${String(entry.v)} is not ${JOURNAL_VERSION}`)
+      }
       if (entry.kind === 'order.accepted' && isOrder(entry.order)) {
         this.applyAccepted(entry.order, typeof entry.at === 'number' ? entry.at : this.now())
       } else if (entry.kind === 'order.terminal'
         && typeof entry.orderId === 'string'
         && isTerminalState(entry.state)) {
         this.applyTerminal(entry.orderId, entry.state, typeof entry.at === 'number' ? entry.at : this.now())
+      } else if (entry.kind === 'action.pending' && isPendingAction(entry.action)) {
+        this.pending.set(entry.action.runId, entry.action)
+      } else if (entry.kind === 'action.settled' && typeof entry.runId === 'string') {
+        this.pending.delete(entry.runId)
       } else {
         throw journalError(`journal entry is invalid: ${line.slice(0, 120)}`)
       }
@@ -174,6 +196,24 @@ export class OrderStore {
     return this.records.get(id)
   }
 
+  pendingActions(): PendingAction[] {
+    return [...this.pending.values()]
+  }
+
+  recordActionPending(action: PendingAction): void {
+    if (this.pending.has(action.runId)) return
+    const at = this.now()
+    this.appendJournal({ at, kind: 'action.pending', action })
+    this.pending.set(action.runId, action)
+  }
+
+  recordActionSettled(runId: string, state: string, code?: string): void {
+    if (!this.pending.has(runId)) return
+    const at = this.now()
+    this.appendJournal({ at, kind: 'action.settled', runId, state, ...(code === undefined ? {} : { code }) })
+    this.pending.delete(runId)
+  }
+
   private terminate(
     id: string,
     state: Exclude<OrderState, 'queued' | 'active'>,
@@ -218,7 +258,7 @@ export class OrderStore {
     mkdirSync(dirname(path), { recursive: true })
     const fd = openSync(path, 'a')
     try {
-      writeSync(fd, `${JSON.stringify(entry)}\n`)
+      writeSync(fd, `${JSON.stringify({ ...entry, v: JOURNAL_VERSION })}\n`)
       fsyncSync(fd)
     } finally {
       closeSync(fd)
@@ -260,6 +300,17 @@ function isOrder(value: unknown): value is Order {
   return typeof value.id === 'string'
     && typeof value.verb === 'string'
     && (ORDER_VERBS as readonly string[]).includes(value.verb)
+}
+
+function isPendingAction(value: unknown): value is PendingAction {
+  if (!isRecord(value)) return false
+  return typeof value.runId === 'string'
+    && typeof value.driverId === 'string'
+    && typeof value.keys === 'string'
+}
+
+function journalVersionError(message: string): P2Error {
+  return p2Error('JOURNAL_VERSION_MISMATCH', 'validation', message, { module: 'mind.journal' })
 }
 
 function isTerminalState(value: unknown): value is OrderState {

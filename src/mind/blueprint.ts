@@ -20,6 +20,8 @@ export type BlueprintVerify = {
 }
 
 export type Blueprint = {
+  /** Final-geometry schema version; only 1 is accepted now. */
+  version: number
   blocks: BlueprintBlock[]
   verify?: BlueprintVerify
 }
@@ -37,8 +39,12 @@ export function parseBlueprint(value: unknown): BlueprintParse {
   const errors: string[] = []
   if (!isRecord(value)) return { ok: false, errors: ['blueprint must be an object'] }
   for (const key of Object.keys(value)) {
-    if (key !== 'blocks' && key !== 'verify') errors.push(`blueprint.${key}: unknown field`)
+    if (key !== 'blocks' && key !== 'verify' && key !== 'version') {
+      errors.push(`blueprint.${key}: unknown field`)
+    }
   }
+  const version = value.version ?? 1
+  if (version !== 1) errors.push('blueprint.version must be 1')
   if (!Array.isArray(value.blocks)) {
     return { ok: false, errors: [...errors, 'blueprint.blocks must be an array'] }
   }
@@ -90,7 +96,7 @@ export function parseBlueprint(value: unknown): BlueprintParse {
   }
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, blueprint: { blocks, ...(verify === undefined ? {} : { verify }) } }
+  return { ok: true, blueprint: { version: version as number, blocks, ...(verify === undefined ? {} : { verify }) } }
 }
 
 /**
@@ -111,7 +117,7 @@ export function blueprintTemplate(blueprint: Blueprint): PlanTemplate {
   }))
   return {
     id: 'blueprint',
-    version: 1,
+    version: blueprint.version,
     size: [max.x - min.x + 1, max.y - min.y + 1, max.z - min.z + 1],
     materialPolicy: {},
     workItems,
