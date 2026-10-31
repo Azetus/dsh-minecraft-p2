@@ -180,8 +180,10 @@ describe('work item evaluation', () => {
   it('orders enter/prepare by standability and current position', () => {
     const plan = planOf([{ id: 'e', kind: 'enter', at: [1, 0, 0] }])
     const standable = [block('stone', 1, 63, 0), block('air', 1, 64, 0), block('air', 1, 65, 0)]
-    expect(evaluatePlan(plan, world({ blocks: standable })).next?.state)
-      .toEqual({ kind: 'executable', driverId: 'enter' })
+    expect(evaluatePlan(plan, world({
+      blocks: standable,
+      self: { pos: { x: 3.5, y: 64, z: 0.5 } },
+    })).next?.state).toEqual({ kind: 'executable', driverId: 'enter' })
     expect(evaluatePlan(plan, world({ blocks: standable, self: { pos: { x: 1.5, y: 64, z: 0.5 } } })).states.get('e'))
       .toEqual({ kind: 'satisfied' })
     expect(evaluatePlan(plan, world({ blocks: [block('stone', 1, 63, 0), block('stone', 1, 64, 0)] })).states.get('e'))
