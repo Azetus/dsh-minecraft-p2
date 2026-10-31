@@ -274,6 +274,7 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         assertBodyOwner(manager, agent.session.id)
         const result = await startBody(manager, agent)
         hooks.ensureTools(agent)
+        hooks.startChatPolling()
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         return { action, ...result, status: await bodyStatus(manager) }
       }
