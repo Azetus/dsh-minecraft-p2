@@ -51,6 +51,8 @@ export type EvalCtx = {
   home?: Vec3
   /** Active plan for this order, if any. */
   plan?: PlanInstance
+  /** Work keys the tracker has blocked after repeated failures. */
+  isBlocked?: (key: string) => boolean
 }
 
 export interface WorkGiver {

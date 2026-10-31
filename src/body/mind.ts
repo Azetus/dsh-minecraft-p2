@@ -6,6 +6,9 @@ import type { MindStatusView } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
+import { createClearDriver, CLEAR_DRIVER_ID } from '../mind/drivers/clear.ts'
+import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
+import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
@@ -51,6 +54,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const now = options.now ?? (() => Date.now())
   const registry = new Registry()
   registry.registerDriver({ id: MOVE_DRIVER_ID, driver: createMoveDriver() })
+  registry.registerDriver({ id: CLEAR_DRIVER_ID, driver: createClearDriver() })
+  registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
+  registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
+  registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'goHome', factory: () => createGoHomeGiver() })
   registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })

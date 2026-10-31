@@ -17,9 +17,14 @@ export function createPlanGiver(): WorkGiver {
       if (plan === undefined) return null
 
       const evaluation = evaluatePlan(plan, world)
-      if (evaluation.next !== undefined && evaluation.next.state.kind === 'executable') {
-        const item = evaluation.next.item
-        return candidateFor(plan, item, evaluation.next.state.driverId)
+      // Iterate all items: a key blocked by repeated failures is skipped, and
+      // the next executable item is still offered.
+      for (const item of plan.workItems) {
+        const state = evaluation.states.get(item.id)
+        if (state?.kind !== 'executable') continue
+        const candidate = candidateFor(plan, item, state.driverId)
+        if (ctx.isBlocked?.(candidate.keys) === true) continue
+        return candidate
       }
       if (evaluation.satisfied) return null
 
@@ -46,6 +51,7 @@ function candidateFor(plan: PlanInstance, item: WorkItem, driverId: string): Can
   const params: Record<string, JsonValue> = { x: position.x, y: position.y, z: position.z }
   if ((item.kind === 'place' || item.kind === 'hold') && item.expected !== undefined) {
     params.item = item.expected.name
+    if (item.expected.state !== undefined) params.expectedState = item.expected.state
   }
   if (item.kind === 'prepare' || item.kind === 'enter') params.range = 1
   return {

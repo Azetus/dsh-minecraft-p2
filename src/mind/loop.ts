@@ -1,5 +1,6 @@
 import type { JsonValue } from '../contracts/types.ts'
 import type { Vec3 } from '../port/index.ts'
+import type { PlanInstance } from './plan.ts'
 import type { JobTracker } from './tracker.ts'
 import type { TreeResult } from './tree.ts'
 import type { EvalCtx, WorldView } from './types.ts'
@@ -16,6 +17,8 @@ export type MindLoopOptions = {
   tracker: JobTracker
   now?: () => number
   home?: Vec3
+  /** Active plan, if any. A plan keeps the main tree hot instead of idling. */
+  plan?: () => PlanInstance | undefined
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -33,6 +36,7 @@ export class MindLoop {
   private readonly tracker: JobTracker
   private readonly now: () => number
   private readonly home: Vec3 | undefined
+  private readonly plan: (() => PlanInstance | undefined) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -46,6 +50,7 @@ export class MindLoop {
     this.tracker = options.tracker
     this.now = options.now ?? (() => Date.now())
     this.home = options.home
+    this.plan = options.plan
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -60,7 +65,13 @@ export class MindLoop {
       this.emit('mind.world-error', now, { message: messageOf(error) })
       return
     }
-    const ctx: EvalCtx = { now, ...(this.home === undefined ? {} : { home: this.home }) }
+    const activePlan = this.plan?.()
+    const ctx: EvalCtx = {
+      now,
+      ...(this.home === undefined ? {} : { home: this.home }),
+      ...(activePlan === undefined ? {} : { plan: activePlan }),
+      isBlocked: key => this.tracker.isBlocked(key),
+    }
 
     try {
       const constant = this.evaluate('constant', ctx, world)
@@ -71,8 +82,9 @@ export class MindLoop {
       // need-observation: keep the current job, just do not offer this tick.
 
       if (this.tracker.state() === 'idle') {
-        const due = this.mainDirty || now - this.lastMainEvalAt >= this.mainFallbackMs
-        if (due && now - this.lastMainOfferAt >= this.mainIdleDelayMs) {
+        const hasPlan = ctx.plan !== undefined
+        const due = hasPlan || this.mainDirty || now - this.lastMainEvalAt >= this.mainFallbackMs
+        if (due && (hasPlan || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {
           this.lastMainEvalAt = now
           this.mainDirty = false
           const main = this.evaluate('main', ctx, world)
