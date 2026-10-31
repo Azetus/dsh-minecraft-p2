@@ -64,16 +64,25 @@ export type PendingAction = {
   workItemId?: string
 }
 
+export type RecoveryIdentity = {
+  worldId: string
+  characterId: string
+  defVersion: string
+}
+
 export const JOURNAL_VERSION = 1
 
 export type OrderStoreOptions = {
   /** JSONL intent journal. Without it the store is memory-only (tests). */
   journalPath?: string
+  /** Recovery identity; a mismatch with the journal header refuses recovery. */
+  identity?: RecoveryIdentity
   now?: () => number
   onEvent?: (event: OrderEvent) => void
 }
 
 type JournalEntry =
+  | { v?: number; at: number; kind: 'journal.identity'; identity: RecoveryIdentity }
   | { v?: number; at: number; kind: 'order.accepted'; order: Order }
   | { v?: number; at: number; kind: 'order.terminal'; orderId: string; state: OrderState }
   | { v?: number; at: number; kind: 'action.pending'; action: PendingAction }
@@ -94,15 +103,18 @@ const TERMINAL_STATES: ReadonlySet<OrderState> = new Set([
  */
 export class OrderStore {
   private readonly journalPath: string | undefined
+  private readonly identity: RecoveryIdentity | undefined
   private readonly now: () => number
   private readonly onEvent: ((event: OrderEvent) => void) | undefined
   private readonly records = new Map<string, OrderRecord>()
   private readonly acceptedOrder: string[] = []
   private readonly pending = new Map<string, PendingAction>()
+  private headerSeen = false
   private activeId: string | undefined
 
   constructor(options: OrderStoreOptions = {}) {
     this.journalPath = options.journalPath
+    this.identity = options.identity
     this.now = options.now ?? (() => Date.now())
     this.onEvent = options.onEvent
   }
@@ -119,6 +131,7 @@ export class OrderStore {
     }
     const lines = text.split('\n')
     if (!text.endsWith('\n')) lines.pop()
+    const entries: JournalEntry[] = []
     for (const line of lines) {
       if (line.trim().length === 0) continue
       let parsed: unknown
@@ -131,6 +144,33 @@ export class OrderStore {
       if (entry.v !== undefined && entry.v !== JOURNAL_VERSION) {
         throw journalVersionError(`journal version ${String(entry.v)} is not ${JOURNAL_VERSION}`)
       }
+      if (entry.kind !== 'journal.identity' && entry.kind !== 'order.accepted'
+        && entry.kind !== 'order.terminal' && entry.kind !== 'action.pending'
+        && entry.kind !== 'action.settled') {
+        throw journalError(`journal entry is invalid: ${line.slice(0, 120)}`)
+      }
+      if (entry.kind === 'journal.identity' && !isRecoveryIdentity(entry.identity)) {
+        throw journalError('journal identity is invalid')
+      }
+      entries.push(entry as JournalEntry)
+    }
+
+    // Validate identity before applying any entry, so a mismatched journal
+    // cannot partially mutate the in-memory store.
+    const header = entries.find(
+      (entry): entry is Extract<JournalEntry, { kind: 'journal.identity' }> => entry.kind === 'journal.identity',
+    )
+    if (header !== undefined) {
+      if (this.identity !== undefined && !sameIdentity(header.identity, this.identity)) {
+        throw identityError(
+          `journal identity mismatch: ${header.identity.worldId}/${header.identity.characterId}/${header.identity.defVersion}`,
+        )
+      }
+      this.headerSeen = true
+    }
+
+    for (const entry of entries) {
+      if (entry.kind === 'journal.identity') continue
       if (entry.kind === 'order.accepted' && isOrder(entry.order)) {
         this.applyAccepted(entry.order, typeof entry.at === 'number' ? entry.at : this.now())
       } else if (entry.kind === 'order.terminal'
@@ -142,7 +182,7 @@ export class OrderStore {
       } else if (entry.kind === 'action.settled' && typeof entry.runId === 'string') {
         this.pending.delete(entry.runId)
       } else {
-        throw journalError(`journal entry is invalid: ${line.slice(0, 120)}`)
+        throw journalError('journal entry is invalid')
       }
     }
     this.promote()
@@ -258,6 +298,15 @@ export class OrderStore {
     mkdirSync(dirname(path), { recursive: true })
     const fd = openSync(path, 'a')
     try {
+      if (this.identity !== undefined && !this.headerSeen) {
+        writeSync(fd, `${JSON.stringify({
+          v: JOURNAL_VERSION,
+          at: this.now(),
+          kind: 'journal.identity',
+          identity: this.identity,
+        })}\n`)
+        this.headerSeen = true
+      }
       writeSync(fd, `${JSON.stringify({ ...entry, v: JOURNAL_VERSION })}\n`)
       fsyncSync(fd)
     } finally {
@@ -307,6 +356,23 @@ function isPendingAction(value: unknown): value is PendingAction {
   return typeof value.runId === 'string'
     && typeof value.driverId === 'string'
     && typeof value.keys === 'string'
+}
+
+function isRecoveryIdentity(value: unknown): value is RecoveryIdentity {
+  return isRecord(value)
+    && typeof value.worldId === 'string'
+    && typeof value.characterId === 'string'
+    && typeof value.defVersion === 'string'
+}
+
+function sameIdentity(left: RecoveryIdentity, right: RecoveryIdentity): boolean {
+  return left.worldId === right.worldId
+    && left.characterId === right.characterId
+    && left.defVersion === right.defVersion
+}
+
+function identityError(message: string): P2Error {
+  return p2Error('RECOVERY_IDENTITY_MISMATCH', 'validation', message, { module: 'mind.journal' })
 }
 
 function journalVersionError(message: string): P2Error {

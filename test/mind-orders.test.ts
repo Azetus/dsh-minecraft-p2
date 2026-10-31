@@ -184,4 +184,27 @@ describe('order journal', () => {
     const restored = new OrderStore({ journalPath: journal })
     expect(errorCode(() => restored.restore())).toBe('JOURNAL_VERSION_MISMATCH')
   })
+
+  it('writes an identity header and refuses a different world/character/def', () => {
+    const journal = tempJournal()
+    const identity = { worldId: 'world-a', characterId: 'char-a', defVersion: 'def-a' }
+    const store = new OrderStore({ journalPath: journal, identity })
+    store.enqueue(order('ord-1'))
+
+    const lines = readFileSync(journal, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    expect(lines[0]).toMatchObject({ kind: 'journal.identity', identity })
+
+    const same = new OrderStore({ journalPath: journal, identity })
+    same.restore()
+    expect(same.get('ord-1')?.state).toBe('active')
+
+    for (const changed of [
+      { ...identity, worldId: 'world-b' },
+      { ...identity, characterId: 'char-b' },
+      { ...identity, defVersion: 'def-b' },
+    ]) {
+      const mismatch = new OrderStore({ journalPath: journal, identity: changed })
+      expect(errorCode(() => mismatch.restore())).toBe('RECOVERY_IDENTITY_MISMATCH')
+    }
+  })
 })

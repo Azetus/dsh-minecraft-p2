@@ -162,3 +162,16 @@ order 可带 `policy.conflict`：
 - 已取消 order 恢复后保持取消；不会复活 plan。
 - `plan.material-short` / `plan.blocked` / `plan.verify` / `plan.terminal` / `action.*`
   都带 `basis`（时间、self、timeOfDay/worldAge、stale），用于区分“观测不足”与“执行失败”。
+
+### 10.5 恢复身份与故障注入
+
+- journal 头写入 `journal.identity`：
+  - `worldId`：provider 配置 `worldId`（默认 `host:port`）+ dimension；
+  - `characterId`：provider 的玩家 UUID/username；
+  - `defVersion`：trees/plans 内容摘要。
+- 三个字段任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报；
+  legacy（无 identity 头）journal 仍可读，下一次写入会补头。
+- 身份来自 provider，不需要 Agent 每次传；未来 client-mod 可提供更稳定的 world/character ID。
+- 开发测试专用：`.p2/config.json` 的 `crashAfterPending: true` 会在首个
+  `action.pending` 写入后让 body 真实退出一次（标记 `.p2/crash-after-pending.done`），
+  用于验证“pending 窗口崩溃 → 重启对账”。生产配置不应开启。

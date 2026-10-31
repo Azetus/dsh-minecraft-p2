@@ -35,6 +35,8 @@ export type MoveOptions = { range?: number; timeoutMs?: number }
  */
 export interface ClientPort {
   self(): SelfInfo
+  /** Stable recovery identity for this world/character binding. */
+  identity(): { worldId: string; characterId: string }
   blockAt(p: Vec3): BlockInfo | null
   biomeAt(p: Vec3): BiomeInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]

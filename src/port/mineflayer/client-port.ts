@@ -33,6 +33,8 @@ export type MineflayerPortOptions = {
   /** Monotonic clock; tests may substitute one. */
   now?: () => number
   pollIntervalMs?: number
+  /** Stable world id from config; dimension is appended by the port. */
+  worldId?: string
   /** Hard caps may be lowered (never raised) by the body's configuration. */
   timeouts?: Partial<Record<ClientAction, number>>
 }
@@ -83,6 +85,7 @@ export class MineflayerClientPort implements ClientPort {
   private readonly timeouts: Record<ClientAction, number>
   private readonly now: () => number
   private readonly pollIntervalMs: number
+  private readonly worldId: string
 
   constructor(
     private readonly bot: Bot,
@@ -91,6 +94,7 @@ export class MineflayerClientPort implements ClientPort {
   ) {
     this.now = options.now ?? (() => performance.now())
     this.pollIntervalMs = options.pollIntervalMs ?? 20
+    this.worldId = options.worldId ?? 'unknown'
     this.capabilityList = portCapabilities(acts.capabilities)
     this.timeouts = { ...ACTION_TIMEOUTS, ...options.timeouts }
     this.wireEvents()
@@ -123,6 +127,15 @@ export class MineflayerClientPort implements ClientPort {
   blockAt(p: Vec3): BlockInfo | null {
     const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
     return block === null ? null : blockInfo(block)
+  }
+
+  identity(): { worldId: string; characterId: string } {
+    const dimension = (this.bot.game as unknown as { dimension?: string }).dimension ?? 'unknown'
+    const player = this.bot.player as unknown as { uuid?: string; username?: string } | undefined
+    return {
+      worldId: `${this.worldId}:${dimension}`,
+      characterId: player?.uuid ?? player?.username ?? this.bot.username,
+    }
   }
 
   biomeAt(p: Vec3): BiomeInfo | null {

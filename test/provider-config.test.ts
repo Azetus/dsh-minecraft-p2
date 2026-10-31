@@ -41,6 +41,8 @@ describe('provider config', () => {
         version: '1.21.1',
         connectTimeoutMs: 15000,
         serverIdleMs: 1500,
+        worldId: '127.0.0.1:25575',
+        crashAfterPending: false,
       },
     })
   })
@@ -69,6 +71,16 @@ describe('provider config', () => {
     const loaded = await loadProviderConfig(configDir(undefined), { P2_MC_HOST: '127.0.0.1' })
     expect(loaded?.source).toBe('env')
     expect(loaded?.config).toMatchObject({ host: '127.0.0.1', port: 25575, username: 'P2_Bot' })
+  })
+
+  it('accepts an explicit world identity', async () => {
+    const loaded = await loadProviderConfig(configDir({ host: '127.0.0.1', worldId: 'devworld' }), {})
+    expect(loaded?.config.worldId).toBe('devworld')
+  })
+
+  it('accepts the development crash flag', async () => {
+    const loaded = await loadProviderConfig(configDir({ host: '127.0.0.1', crashAfterPending: true }), {})
+    expect(loaded?.config.crashAfterPending).toBe(true)
   })
 
   it('rejects invalid config values', async () => {

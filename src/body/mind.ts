@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { MindStatusView } from '../contracts/protocol.ts'
@@ -58,9 +59,13 @@ export type MindRuntime = {
 export type CreateMindOptions = {
   port: ClientPort
   home?: Vec3
+  /** Recovery identity from the provider; defVersion is computed from content. */
+  identity?: { worldId: string; characterId: string; defVersion?: string }
   contentDir: string
   plansDir: string
   journalPath: string
+  /** Development-only crash injection after the first action.pending write. */
+  crashAfterPending?: boolean
   now?: () => number
 }
 
@@ -105,6 +110,16 @@ export function createMind(options: CreateMindOptions): MindRuntime {
 
   const orders = new OrderStore({
     journalPath: options.journalPath,
+    ...(options.identity === undefined
+      ? {}
+      : {
+          identity: {
+            worldId: options.identity.worldId,
+            characterId: options.identity.characterId,
+            defVersion: options.identity.defVersion
+              ?? definitionVersion(definitions, planDefinitions),
+          },
+        }),
     now,
     onEvent: event => {
       events.push(event.kind, event.at, event as unknown as JsonValue)
@@ -120,6 +135,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let planInsufficientReported = false
   let gatherCount = 0
   let pendingReconciled = false
+  let crashedOnce = false
+  const crashMarker = join(dirname(options.journalPath), 'crash-after-pending.done')
+  const crashOnce = options.crashAfterPending === true && !existsSync(crashMarker)
   const tracker = new JobTracker({
     port: options.port,
     driver: id => registry.driver(id),
@@ -136,6 +154,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         ...(active === undefined ? {} : { orderId: active.order.id }),
         ...(parsed === undefined ? {} : parsed),
       })
+      if (crashOnce && !crashedOnce) {
+        crashedOnce = true
+        mkdirSync(dirname(crashMarker), { recursive: true })
+        writeFileSync(crashMarker, 'test crash after pending\n')
+        process.stderr.write('dsh-minecraft-p2 body: test crash after action.pending\n')
+        process.exit(1)
+      }
     },
     onEvent: event => {
       const data = event as unknown as JsonValue
@@ -606,6 +631,15 @@ function parseActionKeys(keys: string): { planId?: string; workItemId?: string }
 function isTerminalState(state: string | undefined): boolean {
   return state === 'succeeded' || state === 'failed' || state === 'blocked'
     || state === 'cancelled' || state === 'abandoned'
+}
+
+function definitionVersion(
+  trees: Record<string, unknown>,
+  plans: Record<string, unknown>,
+): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ schema: 1, trees, plans }))
+    .digest('hex')
 }
 
 function readOrigin(value: unknown): Vec3 | undefined {

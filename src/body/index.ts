@@ -9,6 +9,7 @@ import { createMind } from './mind.ts'
 import type { MindRuntime } from './mind.ts'
 import { loadBodyInfo } from './manifest.ts'
 import { loadProviderConfig } from './provider-config.ts'
+import type { MinecraftProviderConfig } from './provider-config.ts'
 import { BodyRuntime } from './runtime.ts'
 import { BodyServer } from './server.ts'
 
@@ -19,6 +20,7 @@ console.info = (...args: unknown[]): void => { console.error(...args) }
 
 type ConnectedProvider = {
   port: MineflayerClientPort
+  config: MinecraftProviderConfig
   liveStatus(): ProviderRuntimeStatus
   dispose(): void
 }
@@ -38,9 +40,17 @@ async function main(): Promise<void> {
   if (provider !== undefined) {
     try {
       const home = startHome(provider.port)
+      let identity: { worldId: string; characterId: string } | undefined
+      try {
+        identity = provider.port.identity()
+      } catch {
+        identity = undefined
+      }
       mind = createMind({
         port: provider.port,
         ...(home === undefined ? {} : { home }),
+        ...(identity === undefined ? {} : { identity }),
+        crashAfterPending: provider.config.crashAfterPending,
         contentDir: fileURLToPath(new URL('../../content/trees', import.meta.url)),
         plansDir: fileURLToPath(new URL('../../content/plans', import.meta.url)),
         journalPath: join(process.cwd(), '.p2', 'journal.jsonl'),
@@ -112,9 +122,10 @@ async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | unde
       version: body.manifest.bodyVersion,
       capabilities,
     }
-    const port = new MineflayerClientPort(bot, provider)
+    const port = new MineflayerClientPort(bot, provider, { worldId: loaded.config.worldId })
     return {
       port,
+      config: loaded.config,
       liveStatus: () => provider.liveStatus(),
       dispose: () => {
         try {
