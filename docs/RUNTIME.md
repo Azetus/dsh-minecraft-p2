@@ -105,3 +105,15 @@
 - 终态由 verifier 判定：build order 验证每个期望方块仍在；sealed-room 验证外壳/内部。
 - 执行期间 plan 每 tick 重算工作项：方块消失会重新变成 unsatisfied，按 policy 重试或 blocked；不用计时器或异步稳定窗口。
 - 完成之后的世界变化属于后续观测/check，不归 place 保证。
+
+### 10.1 放置面与朝向（当前限制）
+
+- place driver 目前**不能指定朝向**：它按 `up → down → north → south → east → west` 的固定顺序
+  找第一个实心邻居作为参考面并尝试；这不是随机，也不由 Agent 选择。
+- 没有“自动选面”的显式 API；参考面由 driver 的支撑邻居扫描决定，provider 只是执行。
+- Minecraft 的最终方块状态还取决于玩家朝向、放置面与方块规则；当前不能保证得到特定 state。
+- 因此台阶的上/下半、楼梯/门/火把的朝向、部分红石元件的朝向都可能与 `expected.state` 不一致；
+  `expected.state` 只用于**验证**，不是可指定的放置参数。
+- 不一致会表现为 `PLACE_READBACK_MISMATCH` 或 plan 失败/blocked，而不是被自动纠正。
+- 若未来需要定向放置，应在 place 参数中增加显式的 `face`/`look`/`orientation` 语义，
+  并同步 ClientPort 契约；当前保持现状。
