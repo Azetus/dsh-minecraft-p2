@@ -80,6 +80,7 @@ describe('mind integration', () => {
       port,
       home: { x: 0, y: 64, z: 0 },
       contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
     })
@@ -101,6 +102,7 @@ describe('mind integration', () => {
     const mind = createMind({
       port,
       contentDir: join(process.cwd(), 'content', 'trees'),
+      plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
     })
@@ -154,3 +156,4 @@ describe('mind integration', () => {
     expect(runtime.status().mind).toMatchObject({ tracker: 'idle', queuedOrders: 0 })
   })
 })
+

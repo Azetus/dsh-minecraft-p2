@@ -37,6 +37,7 @@ async function main(): Promise<void> {
         port: provider.port,
         ...(home === undefined ? {} : { home }),
         contentDir: fileURLToPath(new URL('../../content/trees', import.meta.url)),
+        plansDir: fileURLToPath(new URL('../../content/plans', import.meta.url)),
         journalPath: join(process.cwd(), '.p2', 'journal.jsonl'),
       })
     } catch (error) {

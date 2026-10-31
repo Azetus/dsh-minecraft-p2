@@ -1,0 +1,1014 @@
+{
+  "id": "shelter-minimal",
+  "version": 1,
+  "size": [
+    3,
+    2,
+    3
+  ],
+  "materialPolicy": {
+    "dirt": {
+      "auto": true,
+      "maxBudgetTicks": 1200
+    }
+  },
+  "workItems": [
+    {
+      "id": "w0",
+      "kind": "place",
+      "at": [
+        -1,
+        -1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w1",
+      "kind": "place",
+      "at": [
+        -1,
+        -1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w2",
+      "kind": "place",
+      "at": [
+        -1,
+        -1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w3",
+      "kind": "place",
+      "at": [
+        -1,
+        -1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w4",
+      "kind": "place",
+      "at": [
+        -1,
+        -1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w5",
+      "kind": "place",
+      "at": [
+        0,
+        -1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w6",
+      "kind": "place",
+      "at": [
+        0,
+        -1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w7",
+      "kind": "place",
+      "at": [
+        0,
+        -1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w8",
+      "kind": "place",
+      "at": [
+        0,
+        -1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w9",
+      "kind": "place",
+      "at": [
+        0,
+        -1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w10",
+      "kind": "place",
+      "at": [
+        1,
+        -1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w11",
+      "kind": "place",
+      "at": [
+        1,
+        -1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w12",
+      "kind": "place",
+      "at": [
+        1,
+        -1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w13",
+      "kind": "place",
+      "at": [
+        1,
+        -1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w14",
+      "kind": "place",
+      "at": [
+        1,
+        -1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w15",
+      "kind": "place",
+      "at": [
+        2,
+        -1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w16",
+      "kind": "place",
+      "at": [
+        2,
+        -1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w17",
+      "kind": "place",
+      "at": [
+        2,
+        -1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w18",
+      "kind": "place",
+      "at": [
+        2,
+        -1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w19",
+      "kind": "place",
+      "at": [
+        2,
+        -1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w20",
+      "kind": "place",
+      "at": [
+        3,
+        -1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w21",
+      "kind": "place",
+      "at": [
+        3,
+        -1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w22",
+      "kind": "place",
+      "at": [
+        3,
+        -1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w23",
+      "kind": "place",
+      "at": [
+        3,
+        -1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w24",
+      "kind": "place",
+      "at": [
+        3,
+        -1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w25",
+      "kind": "place",
+      "at": [
+        -1,
+        0,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w26",
+      "kind": "place",
+      "at": [
+        -1,
+        0,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w27",
+      "kind": "place",
+      "at": [
+        -1,
+        0,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w28",
+      "kind": "place",
+      "at": [
+        -1,
+        0,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w29",
+      "kind": "place",
+      "at": [
+        -1,
+        0,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w30",
+      "kind": "place",
+      "at": [
+        0,
+        0,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w31",
+      "kind": "place",
+      "at": [
+        0,
+        0,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w32",
+      "kind": "place",
+      "at": [
+        1,
+        0,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w33",
+      "kind": "place",
+      "at": [
+        1,
+        0,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w34",
+      "kind": "place",
+      "at": [
+        2,
+        0,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w35",
+      "kind": "place",
+      "at": [
+        2,
+        0,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w36",
+      "kind": "place",
+      "at": [
+        3,
+        0,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w37",
+      "kind": "place",
+      "at": [
+        3,
+        0,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w38",
+      "kind": "place",
+      "at": [
+        3,
+        0,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w39",
+      "kind": "place",
+      "at": [
+        3,
+        0,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w40",
+      "kind": "place",
+      "at": [
+        3,
+        0,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w41",
+      "kind": "place",
+      "at": [
+        -1,
+        1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w42",
+      "kind": "place",
+      "at": [
+        -1,
+        1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w43",
+      "kind": "place",
+      "at": [
+        -1,
+        1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w44",
+      "kind": "place",
+      "at": [
+        -1,
+        1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w45",
+      "kind": "place",
+      "at": [
+        -1,
+        1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w46",
+      "kind": "place",
+      "at": [
+        0,
+        1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w47",
+      "kind": "place",
+      "at": [
+        0,
+        1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w48",
+      "kind": "place",
+      "at": [
+        1,
+        1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w49",
+      "kind": "place",
+      "at": [
+        1,
+        1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w50",
+      "kind": "place",
+      "at": [
+        2,
+        1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w51",
+      "kind": "place",
+      "at": [
+        2,
+        1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w52",
+      "kind": "place",
+      "at": [
+        3,
+        1,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w53",
+      "kind": "place",
+      "at": [
+        3,
+        1,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w54",
+      "kind": "place",
+      "at": [
+        3,
+        1,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w55",
+      "kind": "place",
+      "at": [
+        3,
+        1,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w56",
+      "kind": "place",
+      "at": [
+        3,
+        1,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w57",
+      "kind": "place",
+      "at": [
+        -1,
+        2,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w58",
+      "kind": "place",
+      "at": [
+        -1,
+        2,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w59",
+      "kind": "place",
+      "at": [
+        -1,
+        2,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w60",
+      "kind": "place",
+      "at": [
+        -1,
+        2,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w61",
+      "kind": "place",
+      "at": [
+        -1,
+        2,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w62",
+      "kind": "place",
+      "at": [
+        0,
+        2,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w63",
+      "kind": "place",
+      "at": [
+        0,
+        2,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w64",
+      "kind": "place",
+      "at": [
+        0,
+        2,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w65",
+      "kind": "place",
+      "at": [
+        0,
+        2,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w66",
+      "kind": "place",
+      "at": [
+        0,
+        2,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w67",
+      "kind": "place",
+      "at": [
+        1,
+        2,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w68",
+      "kind": "place",
+      "at": [
+        1,
+        2,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w69",
+      "kind": "place",
+      "at": [
+        1,
+        2,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w70",
+      "kind": "place",
+      "at": [
+        1,
+        2,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w71",
+      "kind": "place",
+      "at": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w72",
+      "kind": "place",
+      "at": [
+        2,
+        2,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w73",
+      "kind": "place",
+      "at": [
+        2,
+        2,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w74",
+      "kind": "place",
+      "at": [
+        2,
+        2,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w75",
+      "kind": "place",
+      "at": [
+        2,
+        2,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w76",
+      "kind": "place",
+      "at": [
+        2,
+        2,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w77",
+      "kind": "place",
+      "at": [
+        3,
+        2,
+        -1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w78",
+      "kind": "place",
+      "at": [
+        3,
+        2,
+        0
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w79",
+      "kind": "place",
+      "at": [
+        3,
+        2,
+        1
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w80",
+      "kind": "place",
+      "at": [
+        3,
+        2,
+        2
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    },
+    {
+      "id": "w81",
+      "kind": "place",
+      "at": [
+        3,
+        2,
+        3
+      ],
+      "expected": {
+        "name": "dirt"
+      }
+    }
+  ],
+  "verify": {
+    "kind": "sealed-room",
+    "min": [
+      0,
+      0,
+      0
+    ],
+    "max": [
+      2,
+      1,
+      2
+    ]
+  }
+}

@@ -16,10 +16,13 @@ import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
+import { evaluatePlan, instantiatePlan, loadPlanTemplates } from '../mind/plan.ts'
+import type { PlanInstance } from '../mind/plan.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
 import { evaluateTree, loadTrees } from '../mind/tree.ts'
+import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
 export type MindOrderView = { id: string; verb: string; state: string }
@@ -41,6 +44,7 @@ export type CreateMindOptions = {
   port: ClientPort
   home?: Vec3
   contentDir: string
+  plansDir: string
   journalPath: string
   now?: () => number
 }
@@ -63,7 +67,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'wander', factory: () => createWanderGiver() })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
 
-  const definitions = readTreeDefinitions(options.contentDir)
+  const definitions = readJsonDefinitions(options.contentDir, 'tree')
   if (definitions.constant === undefined || definitions.main === undefined) {
     throw p2Error(
       ErrorCodes.DEFINITION_ERROR,
@@ -74,6 +78,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
   const loaded = loadTrees(definitions, registry)
   if (!loaded.ok) throw loaded.error
+
+  const planDefinitions = readJsonDefinitions(options.plansDir, 'plan')
+  const loadedPlans = loadPlanTemplates(planDefinitions)
+  if (!loadedPlans.ok) throw loadedPlans.error
+  const templates = loadedPlans.templates
 
   const events = new MindEvents()
   let lastReport: JsonValue | null = null
@@ -88,6 +97,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   orders.restore()
 
   const sensors = new Sensors({ port: options.port, now })
+  const home = options.home
+  let activePlan: PlanInstance | undefined
+  let planOrderId: string | undefined
+  let planBlockedReported = false
+  let planInsufficientReported = false
   const tracker = new JobTracker({
     port: options.port,
     driver: id => registry.driver(id),
@@ -107,22 +121,137 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     tracker,
     now,
     ...(options.home === undefined ? {} : { home: options.home }),
+    plan: () => activePlan,
     onEvent: event => {
       events.push(event.kind, event.at, event.data)
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
     },
   })
 
-  const home = options.home
+  const syncPlan = (): void => {
+    const active = orders.active()
+    if (active === undefined || active.order.verb !== 'shelter') {
+      if (planOrderId !== undefined) {
+        activePlan = undefined
+        planOrderId = undefined
+        planBlockedReported = false
+        planInsufficientReported = false
+      }
+      return
+    }
+    if (planOrderId === active.order.id) return
+
+    const params = active.order.params ?? {}
+    const templateId = typeof params.template === 'string' ? params.template : 'shelter-minimal'
+    const template = templates.get(templateId)
+    if (template === undefined) {
+      events.push('plan.definition-error', now(), {
+        orderId: active.order.id,
+        template: templateId,
+        message: 'plan template is not loaded',
+      })
+      orders.complete(active.order.id, 'failed')
+      return
+    }
+    const origin = readOrigin(params.origin) ?? defaultOrigin()
+    if (origin === undefined) {
+      events.push('plan.definition-error', now(), {
+        orderId: active.order.id,
+        message: 'no origin for the fixed-point plan',
+      })
+      orders.complete(active.order.id, 'failed')
+      return
+    }
+    activePlan = instantiatePlan(template, active.order.id, origin)
+    planOrderId = active.order.id
+    planBlockedReported = false
+    planInsufficientReported = false
+    events.push('plan.instantiated', now(), {
+      planId: activePlan.planId,
+      template: template.id,
+      origin,
+    })
+  }
+
+  const defaultOrigin = (): Vec3 | undefined => {
+    try {
+      const base = home ?? sensors.read().self.pos
+      return { x: Math.floor(base.x) + 4, y: Math.floor(base.y), z: Math.floor(base.z) }
+    } catch {
+      return undefined
+    }
+  }
+
+  const tick = (): void => {
+    syncPlan()
+    loop.tick()
+    if (activePlan === undefined || tracker.state() !== 'idle') return
+    try {
+      const world = sensors.read()
+      const evaluation = evaluatePlan(activePlan, world)
+      if (!planBlockedReported && evaluation.blocked) {
+        planBlockedReported = true
+        events.push('plan.blocked', now(), {
+          planId: activePlan.planId,
+          blocked: [...evaluation.states.entries()]
+            .filter(([, state]) => state.kind === 'blocked')
+            .map(([id, state]) => ({ id, reason: (state as { reason: string }).reason })),
+        })
+      }
+      if (!evaluation.satisfied) return
+
+      let terminal: 'succeeded' | 'failed' | undefined
+      if (activePlan.verify !== undefined) {
+        const verify = verifySealedRoom(activePlan, activePlan.verify, world)
+        if (verify.state === 'confirmed') {
+          terminal = 'succeeded'
+        } else if (verify.state === 'refuted') {
+          terminal = 'failed'
+          events.push('plan.verify', now(), verify as unknown as JsonValue)
+        } else if (!planInsufficientReported) {
+          planInsufficientReported = true
+          events.push('plan.insufficient', now(), verify as unknown as JsonValue)
+        }
+      } else {
+        terminal = 'succeeded'
+      }
+      if (terminal === undefined) return
+      orders.complete(activePlan.orderId, terminal)
+      const data = { planId: activePlan.planId, state: terminal }
+      events.push('plan.terminal', now(), data)
+      lastReport = data
+      activePlan = undefined
+      planOrderId = undefined
+      planBlockedReported = false
+      planInsufficientReported = false
+    } catch (error) {
+      events.push('mind.error', now(), { message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   let orderSeq = 0
   return {
-    tick(): void {
-      loop.tick()
-    },
+    tick,
     status(): MindStatusView {
       const current = tracker.current()
       const fault = tracker.fault()
       const active = orders.active()
+      let planView: MindStatusView['plan']
+      if (activePlan !== undefined) {
+        try {
+          const evaluation = evaluatePlan(activePlan, sensors.read())
+          planView = {
+            id: activePlan.planId,
+            template: activePlan.template,
+            satisfied: evaluation.satisfied,
+            blocked: evaluation.blocked,
+          }
+        } catch {
+          planView = { id: activePlan.planId, template: activePlan.template, satisfied: false, blocked: false }
+        }
+      } else {
+        planView = null
+      }
       return {
         tracker: tracker.state(),
         job: current === null ? null : { runId: current.job.runId, driverId: current.job.driverId },
@@ -131,6 +260,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         activeOrder: active === undefined ? null : { id: active.order.id, verb: active.order.verb },
         queuedOrders: orders.queued().length,
         eventsSeq: events.lastSeq(),
+        plan: planView,
       }
     },
     report(): JsonValue | null {
@@ -145,6 +275,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
     cancelOrder(id: string): { id: string; state: string } {
       const record = orders.cancel(id)
+      if (planOrderId === id) {
+        tracker.abort()
+        activePlan = undefined
+        planOrderId = undefined
+        planBlockedReported = false
+        planInsufficientReported = false
+      }
       return { id: record.order.id, state: record.state }
     },
     listOrders(): { active: MindOrderView | null; queued: MindOrderView[] } {
@@ -173,7 +310,15 @@ function isRecord(value: unknown): value is Record<string, JsonValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function readTreeDefinitions(dir: string): Record<string, unknown> {
+function readOrigin(value: unknown): Vec3 | undefined {
+  if (!isRecord(value)) return undefined
+  const { x, y, z } = value
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return undefined
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined
+  return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
+}
+
+function readJsonDefinitions(dir: string, kind: 'tree' | 'plan'): Record<string, unknown> {
   const definitions: Record<string, unknown> = {}
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.json')) continue
@@ -184,7 +329,7 @@ function readTreeDefinitions(dir: string): Record<string, unknown> {
       throw p2Error(
         ErrorCodes.DEFINITION_ERROR,
         'validation',
-        `tree ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        `${kind} ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
         { module: 'body.mind' },
       )
     }

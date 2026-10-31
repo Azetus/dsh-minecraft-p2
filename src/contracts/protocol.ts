@@ -110,6 +110,7 @@ export type MindStatusView = {
   activeOrder: { id: string; verb: string } | null
   queuedOrders: number
   eventsSeq: number
+  plan?: { id: string; template: string; satisfied: boolean; blocked: boolean } | null
 }
 
 export type StatusResult = {

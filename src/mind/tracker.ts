@@ -133,6 +133,15 @@ export class JobTracker {
   }
 
   /**
+   * End the current job without a replacement (order cancelled). The stop is
+   * confirmed like any preemption; failure to confirm still faults.
+   */
+  abort(code = 'CANCELLED'): void {
+    if (this.stateValue !== 'running' || this.currentValue === undefined) return
+    this.beginStop(this.now(), { state: 'interrupted', code })
+  }
+
+  /**
    * Report a result a driver produced after its run was dropped. Anything that
    * is not the current run is recorded and never applied.
    */
