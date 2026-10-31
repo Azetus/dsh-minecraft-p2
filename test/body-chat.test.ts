@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import type { BodyInfo, RequestEnvelope } from '../src/contracts/index.ts'
@@ -61,6 +61,10 @@ function request(method: string, params: Record<string, unknown> = {}): RequestE
 }
 
 describe('body chat transport', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('buffers chat and exposes it through chat.poll', async () => {
     const fake = fakePort()
     const runtime = runtimeWith(fake.port)
@@ -107,6 +111,34 @@ describe('body chat transport', () => {
         { kind: 'damaged', severity: 'critical', summary: 'health 8 -> 3' },
         { kind: 'died', severity: 'critical' },
       ],
+    })
+  })
+
+  it('notices a hostile entering eight blocks', async () => {
+    vi.useFakeTimers()
+    const fake = fakePort()
+    const port = fake.port as unknown as Record<string, unknown>
+    port.self = () => ({
+      pos: { x: 0.5, y: 64, z: 0.5 },
+      yaw: 0,
+      pitch: 0,
+      health: 20,
+      food: 20,
+      onGround: true,
+      inWater: false,
+      inLava: false,
+    })
+    port.entities = () => [{
+      id: 'e1',
+      name: 'zombie',
+      position: { x: 3, y: 64, z: 0 },
+      type: 'hostile',
+    }]
+    const runtime = runtimeWith(fake.port)
+    vi.advanceTimersByTime(500)
+    const result = await runtime.handleRequestAsync(request('perception.poll', { afterSeq: 0 }))
+    expect(result.result).toMatchObject({
+      notices: [{ kind: 'hostile-near', severity: 'warning' }],
     })
   })
 })

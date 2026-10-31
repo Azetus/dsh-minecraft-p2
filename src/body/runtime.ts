@@ -38,6 +38,8 @@ import type {
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
 import type { ClientPort } from '../port/index.ts'
+import { boxAround } from '../mind/sensors.ts'
+import { feetOf, HOSTILE_NAMES } from '../mind/givers/common.ts'
 import { previewBlueprint } from './blueprint-preview.ts'
 import type { BlueprintPreview } from './blueprint-preview.ts'
 import { observeEntities } from './entities.ts'
@@ -76,6 +78,9 @@ export class BodyRuntime {
   private lastHealth: number | undefined
   private lastDamageNoticeAt = Number.NEGATIVE_INFINITY
   private readonly lastBlockNotice = new Map<string, number>()
+  private readonly nearHostiles = new Set<string>()
+  private readonly lastHostileNotice = new Map<string, number>()
+  private readonly entityTimer: ReturnType<typeof setInterval> | undefined
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -100,6 +105,8 @@ export class BodyRuntime {
       } catch {
         this.lastHealth = undefined
       }
+      this.entityTimer = setInterval(() => this.sampleHostiles(), 500)
+      this.entityTimer.unref?.()
     }
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     if (options.owner !== undefined) {
@@ -376,8 +383,8 @@ export class BodyRuntime {
     if (expected === undefined || expected === payload.name) return
     const key = `task-block:${pos.x},${pos.y},${pos.z}`
     const at = this.now()
-    const last = this.lastBlockNotice.get(key) ?? 0
-    if (at - last < 5_000) return
+    const last = this.lastBlockNotice.get(key)
+    if (last !== undefined && at - last < 5_000) return
     this.lastBlockNotice.set(key, at)
     this.pushNotice({
       kind: 'task-block',
@@ -386,6 +393,36 @@ export class BodyRuntime {
       summary: `watched block ${pos.x},${pos.y},${pos.z} expected ${expected}, now ${payload.name}`,
       data: { ...pos, expected, actual: payload.name },
     })
+  }
+
+  private sampleHostiles(): void {
+    if (this.port === undefined) return
+    try {
+      const self = this.port.self()
+      const feet = feetOf(self.pos)
+      const entities = this.port.entities(boxAround(feet, 8, 3))
+      const current = new Set<string>()
+      for (const entity of entities) {
+        if (!HOSTILE_NAMES.has(entity.name)) continue
+        current.add(entity.id)
+        if (this.nearHostiles.has(entity.id)) continue
+        const at = this.now()
+        const last = this.lastHostileNotice.get(entity.id)
+        if (last !== undefined && at - last < 30_000) continue
+        this.lastHostileNotice.set(entity.id, at)
+        this.pushNotice({
+          kind: 'hostile-near',
+          severity: 'warning',
+          key: `hostile:${entity.id}`,
+          summary: `hostile ${entity.name} within 8 blocks at ${Math.floor(entity.position.x)},${Math.floor(entity.position.y)},${Math.floor(entity.position.z)}`,
+          data: { id: entity.id, name: entity.name, position: entity.position },
+        })
+      }
+      this.nearHostiles.clear()
+      for (const id of current) this.nearHostiles.add(id)
+    } catch {
+      // Perception sampling must never break the request loop.
+    }
   }
 
   private pushNotice(notice: Omit<PerceptionNotice, 'seq' | 'at'>): void {

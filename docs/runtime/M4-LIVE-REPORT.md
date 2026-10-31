@@ -42,6 +42,7 @@ P2_Observer: 测试三：你能收到吗
 
 ## 感知切片
 
-- body 已接 `damaged`/`died`/`task-block` 三类感知；task-block 只匹配 active plan 关注的坐标。
+- body 已接 `damaged`/`died`/`task-block`/`hostile-near` 四类感知；task-block 只匹配 active plan 关注的坐标。
+- hostile-near 由 body 每 500ms 采样 8 格 hostile，30s/实体去重；本地 escape giver 仍以 50ms 周期做安全反射。
 - 普通 digest 在 Agent running 时本地挂起，idle 后合并 `followup`；critical 才 `steer`。
-- 尚未接 entity near；生存反射仍由现有 escape giver 负责。
+- hostile-near 与 task-block 目前只有单测，实机未遇到 hostile/目标方块被改的场景。

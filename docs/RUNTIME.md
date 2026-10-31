@@ -210,7 +210,9 @@ order 可带 `policy.conflict`：
 - body 维护有界 `perception` 队列：
   - `damaged`：health 下降；<=4 为 critical；
   - `died`：critical；
-  - `task-block`：当前 plan 关注的方块被改成非 expected；5s/坐标去重，normal。
+  - `task-block`：当前 plan 关注的方块被改成非 expected；5s/坐标去重，normal；
+  - `hostile-near`：500ms 采样 8 格内的 hostile 进入事件；30s/实体去重，warning。
+- 本地反射仍是 50ms 的 escape giver（lava/深水/6 格 hostile）；感知通知不承担安全回路。
 - bridge 每 300ms `perception.poll`；普通 notice 1s 防抖、最长 3s 合并成一条 digest；
   critical 立即投递。
 - DSH 侧三档入口（源码 `@deepseek-ai/dsh-agent-loop`）：

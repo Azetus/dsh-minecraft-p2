@@ -288,7 +288,7 @@ export type ChatSayResult = { sent: true }
 export type PerceptionNotice = {
   seq: number
   at: number
-  kind: 'damaged' | 'died' | 'task-block'
+  kind: 'damaged' | 'died' | 'task-block' | 'hostile-near'
   severity: 'info' | 'warning' | 'critical'
   key: string
   summary: string
