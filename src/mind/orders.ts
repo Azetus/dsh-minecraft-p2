@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
+import { parseConflictPolicy } from './policy.ts'
 
 export const ORDER_VERBS = [
   'shelter',
@@ -29,6 +30,8 @@ export type Order = {
   constraints?: JsonValue
   budget?: { maxTicks?: number; maxDeaths?: number }
   blueprint?: JsonValue
+  /** Agent-authored execution policy; unknown keys are rejected. */
+  policy?: JsonValue
 }
 
 export type OrderState =
@@ -233,6 +236,10 @@ function validateOrder(value: unknown): Order {
   }
   if (value.params !== undefined && !isRecord(value.params)) {
     throw orderError('INVALID_ORDER', 'order params must be an object')
+  }
+  if (value.policy !== undefined) {
+    const parsed = parseConflictPolicy(value.policy)
+    if (!parsed.ok) throw orderError('INVALID_ORDER', parsed.error)
   }
   if (value.budget !== undefined) {
     if (!isRecord(value.budget)) throw orderError('INVALID_ORDER', 'order budget must be an object')

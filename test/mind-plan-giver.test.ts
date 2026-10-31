@@ -127,6 +127,38 @@ describe('plan giver', () => {
     }))).toBeNull()
   })
 
+  it('hands off a clear for a solid conflict when the policy allows it', () => {
+    const plan = instantiatePlan(template([
+      { id: 'p', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
+    ]), 'ord-1', origin)
+    const result = createPlanGiver().find({
+      now: 0,
+      plan,
+      conflictPolicy: { mode: 'clear' },
+    }, world({
+      blocks: [block('stone', 1, 63, 0), block('stone', 1, 64, 0)],
+      inventory: [dirt],
+    })) as unknown as { driverId: string; reason: string; params: { x: number; y: number; z: number } }
+    expect(result.driverId).toBe('clear')
+    expect(result.reason).toContain('clear conflict p')
+    expect(result.params).toEqual({ x: 1, y: 64, z: 0 })
+  })
+
+  it('does not hand off a clear for a denied protected block', () => {
+    const plan = instantiatePlan(template([
+      { id: 'p', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
+    ]), 'ord-1', origin)
+    const result = createPlanGiver().find({
+      now: 0,
+      plan,
+      conflictPolicy: { mode: 'clear' },
+    }, world({
+      blocks: [block('stone', 1, 63, 0), block('chest', 1, 64, 0)],
+      inventory: [dirt],
+    }))
+    expect(result).toBeNull()
+  })
+
   it('does not hide a later executable item behind a blocked one', () => {
     const plan = instantiatePlan(template([
       { id: 'blocked', kind: 'place', at: [1, 0, 0], expected: { name: 'diamond_block' } },

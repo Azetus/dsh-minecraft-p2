@@ -1,6 +1,7 @@
 import type { JsonValue } from '../../contracts/types.ts'
-import { evaluatePlan, itemPosition } from '../plan.ts'
+import { evaluatePlan, isAirName, isFluidName, itemPosition } from '../plan.ts'
 import type { PlanInstance, WorkItem } from '../plan.ts'
+import { canClearBlock } from '../policy.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorldView } from '../types.ts'
 import { nearestStandable } from './common.ts'
 
@@ -16,7 +17,30 @@ export function createPlanGiver(): WorkGiver {
       const plan = ctx.plan
       if (plan === undefined) return null
 
-      const evaluation = evaluatePlan(plan, world)
+      const evaluation = evaluatePlan(plan, world, ctx.conflictPolicy)
+      // A clear policy turns an occupied place target into a clear handoff.
+      // Fluids are not cleared: they remain a place attempt.
+      if (ctx.conflictPolicy?.mode === 'clear') {
+        for (const item of plan.workItems) {
+          if (item.expected === undefined) continue
+          const state = evaluation.states.get(item.id)
+          if (state?.kind !== 'blocked' || state.reason !== 'CONFLICT') continue
+          const position = itemPosition(plan, item)
+          const current = world.blockAt(position)
+          if (current === null || !current.loaded) continue
+          if (isAirName(current.name) || isFluidName(current.name)) continue
+          if (!canClearBlock(ctx.conflictPolicy, current.name)) continue
+          const handoff: Handoff = {
+            driverId: 'clear',
+            target: { kind: 'point', pos: position },
+            params: { x: position.x, y: position.y, z: position.z },
+            reason: `clear conflict ${item.id}`,
+          }
+          const key = `handoff:clear:${position.x},${position.y},${position.z}`
+          if (ctx.isBlocked?.(key) === true) continue
+          return handoff
+        }
+      }
       // Iterate all items: a key blocked by repeated failures is skipped, and
       // the next executable item is still offered.
       for (const item of plan.workItems) {

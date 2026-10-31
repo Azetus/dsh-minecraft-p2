@@ -139,6 +139,10 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
           params: { type: 'object' },
           constraints: { type: 'object' },
           blueprint: { type: 'object' },
+          policy: {
+            type: 'object',
+            description: 'Execution policy, e.g. {conflict:{mode:"skip"|"clear"|"abort",allow:[],deny:[]}}',
+          },
         },
         required: ['verb'],
         additionalProperties: false,
@@ -147,7 +151,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       execute: async args => {
         requireActiveOwner(manager, agent)
         const order: Record<string, JsonValue> = { verb: args.verb as JsonValue }
-        for (const key of ['id', 'params', 'constraints', 'blueprint'] as const) {
+        for (const key of ['id', 'params', 'constraints', 'blueprint', 'policy'] as const) {
           if (args[key] !== undefined) order[key] = args[key] as JsonValue
         }
         return await manager.mindOrder(order)

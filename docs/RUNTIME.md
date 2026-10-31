@@ -117,3 +117,19 @@
 - 不一致会表现为 `PLACE_READBACK_MISMATCH` 或 plan 失败/blocked，而不是被自动纠正。
 - 若未来需要定向放置，应在 place 参数中增加显式的 `face`/`look`/`orientation` 语义，
   并同步 ClientPort 契约；当前保持现状。
+
+### 10.2 冲突策略（M3-03）
+
+order 可带 `policy.conflict`：
+
+```jsonc
+{ "policy": { "conflict": { "mode": "skip", "allow": [], "deny": [] } } }
+```
+
+- `skip`（默认）：不预判，place 直接尝试；服务器拒绝后该工作项失败/blocked。
+- `clear`：目标为**实心外来方块**时，place 先 blocked；plan giver 发 `clear` Handoff，
+  清掉后再 place。水/岩浆不算清障目标，仍是 place 尝试。
+- `abort`：出现实心冲突即终止该 order（`plan.abort` + failed）。
+- 默认 deny：箱子/床/熔炉/刷怪笼/基岩/黑曜石等；显式 `allow` 可覆盖默认 deny，
+  显式 `deny` 永远优先。
+- 清障策略只决定“拆不拆”，不参与“目标格是否可替换”的判断；place 仍然不维护 replaceable 名单。

@@ -1,6 +1,7 @@
 import type { JsonValue } from '../contracts/types.ts'
 import type { Vec3 } from '../port/index.ts'
 import type { PlanInstance } from './plan.ts'
+import type { ConflictPolicy } from './policy.ts'
 import type { JobTracker } from './tracker.ts'
 import type { TreeResult } from './tree.ts'
 import type { EvalCtx, WorldView } from './types.ts'
@@ -19,6 +20,8 @@ export type MindLoopOptions = {
   home?: Vec3
   /** Active plan, if any. A plan keeps the main tree hot instead of idling. */
   plan?: () => PlanInstance | undefined
+  /** Conflict policy for the active order. */
+  conflictPolicy?: () => ConflictPolicy | undefined
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -37,6 +40,7 @@ export class MindLoop {
   private readonly now: () => number
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
+  private readonly conflictPolicy: (() => ConflictPolicy | undefined) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -51,6 +55,7 @@ export class MindLoop {
     this.now = options.now ?? (() => Date.now())
     this.home = options.home
     this.plan = options.plan
+    this.conflictPolicy = options.conflictPolicy
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -66,10 +71,12 @@ export class MindLoop {
       return
     }
     const activePlan = this.plan?.()
+    const conflictPolicy = this.conflictPolicy?.()
     const ctx: EvalCtx = {
       now,
       ...(this.home === undefined ? {} : { home: this.home }),
       ...(activePlan === undefined ? {} : { plan: activePlan }),
+      ...(conflictPolicy === undefined ? {} : { conflictPolicy }),
       isBlocked: key => this.tracker.isBlocked(key),
     }
 

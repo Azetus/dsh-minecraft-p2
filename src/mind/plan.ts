@@ -2,6 +2,7 @@ import { asP2Error, p2Error } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BlockInfo, Item, Vec3 } from '../port/index.ts'
+import type { ConflictPolicy } from './policy.ts'
 import type { WorldView } from './types.ts'
 
 export const WORK_ITEM_KINDS = ['clear', 'prepare', 'place', 'enter', 'hold'] as const
@@ -124,12 +125,16 @@ export function itemPosition(plan: PlanInstance, item: WorkItem): Vec3 {
   }
 }
 
-export function evaluatePlan(plan: PlanInstance, world: WorldView): PlanEvaluation {
+export function evaluatePlan(
+  plan: PlanInstance,
+  world: WorldView,
+  conflictPolicy?: ConflictPolicy,
+): PlanEvaluation {
   const states = new Map<string, WorkState>()
   const stateOf = (item: WorkItem): WorkState => {
     const known = states.get(item.id)
     if (known !== undefined) return known
-    const state = evaluateItem(plan, item, world, stateOf)
+    const state = evaluateItem(plan, item, world, stateOf, conflictPolicy)
     states.set(item.id, state)
     return state
   }
@@ -160,6 +165,7 @@ function evaluateItem(
   item: WorkItem,
   world: WorldView,
   stateOf: (item: WorkItem) => WorkState,
+  conflictPolicy: ConflictPolicy | undefined,
 ): WorkState {
   if (world.stale === true) return { kind: 'unknown' }
   for (const dependency of item.after ?? []) {
@@ -198,10 +204,14 @@ function evaluateItem(
       const block = world.blockAt(position)
       if (block === null || !block.loaded) return { kind: 'unknown' }
       if (matchesExpected(block, expected)) return { kind: 'satisfied' }
-      // The target may be a fluid or another block. Placement is an attempt:
-      // the server decides, so a non-matching cell is not blocked here.
-      if (!hasSupport(world, position)) return { kind: 'blocked', reason: 'NO_SUPPORT' }
       if (item.kind === 'hold') return { kind: 'blocked', reason: 'CONFLICT' }
+      // Fluids are always an attempt: the server decides whether the block
+      // replaces them. A solid foreign block obeys the Agent's conflict policy.
+      if (!isAirName(block.name) && !isFluidName(block.name)
+        && conflictPolicy?.mode !== undefined && conflictPolicy.mode !== 'skip') {
+        return { kind: 'blocked', reason: 'CONFLICT' }
+      }
+      if (!hasSupport(world, position)) return { kind: 'blocked', reason: 'NO_SUPPORT' }
       if (countItem(world.inventory, expected.name) < 1) return { kind: 'blocked', reason: 'NO_MATERIAL' }
       if (!withinReach(world, position)) return { kind: 'blocked', reason: 'UNREACHABLE' }
       return { kind: 'executable', driverId: DRIVER_BY_KIND.place }

@@ -10,6 +10,7 @@ import type {
 } from '../port/index.ts'
 import type { SchemaNode } from './schema.ts'
 import type { PlanInstance } from './plan.ts'
+import type { ConflictPolicy } from './policy.ts'
 
 /** A selected target. M1 only needs points; more kinds arrive with plans. */
 export type Target = { kind: 'point'; pos: Vec3 }
@@ -51,6 +52,8 @@ export type EvalCtx = {
   home?: Vec3
   /** Active plan for this order, if any. */
   plan?: PlanInstance
+  /** Agent-authored conflict policy for the active order. */
+  conflictPolicy?: ConflictPolicy
   /** Work keys the tracker has blocked after repeated failures. */
   isBlocked?: (key: string) => boolean
 }

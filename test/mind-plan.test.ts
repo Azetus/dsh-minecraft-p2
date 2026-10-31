@@ -194,6 +194,22 @@ describe('work item evaluation', () => {
       .toEqual({ kind: 'blocked', reason: 'NO_STAND' })
   })
 
+  it('moves a solid conflict to blocked when the policy says clear', () => {
+    const plan = planOf([{ id: 'p', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } }])
+    const occupied = world({
+      blocks: [block('stone', 1, 63, 0), block('stone', 1, 64, 0)],
+      inventory: [dirt],
+    })
+    expect(evaluatePlan(plan, occupied, { mode: 'clear' }).states.get('p'))
+      .toEqual({ kind: 'blocked', reason: 'CONFLICT' })
+    // Water is still an attempt, not a clear conflict.
+    expect(evaluatePlan(plan, world({
+      blocks: [block('stone', 1, 63, 0), block('water', 1, 64, 0)],
+      inventory: [dirt],
+    }), { mode: 'clear' }).states.get('p'))
+      .toEqual({ kind: 'executable', driverId: 'place' })
+  })
+
   it('counts inventory items by normalized name', () => {
     expect(countItem([
       { slot: 1, name: 'dirt', count: 2 },

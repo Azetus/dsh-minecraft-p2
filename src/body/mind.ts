@@ -19,6 +19,8 @@ import { OrderStore } from '../mind/orders.ts'
 import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
 import { evaluatePlan, instantiatePlan, loadPlanTemplates } from '../mind/plan.ts'
 import type { PlanInstance } from '../mind/plan.ts'
+import { parseConflictPolicy } from '../mind/policy.ts'
+import type { ConflictPolicy } from '../mind/policy.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
@@ -125,6 +127,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
+    conflictPolicy: () => currentConflictPolicy(),
     onEvent: event => {
       events.push(event.kind, event.at, event.data)
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
@@ -216,13 +219,33 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
   }
 
+  function currentConflictPolicy(): ConflictPolicy | undefined {
+    const active = orders.active()
+    if (active === undefined) return undefined
+    const parsed = parseConflictPolicy(active.order.policy)
+    return parsed.ok ? parsed.policy : undefined
+  }
+
   const tick = (): void => {
     syncPlan()
     loop.tick()
     if (activePlan === undefined || tracker.state() !== 'idle') return
     try {
       const world = sensors.read()
-      const evaluation = evaluatePlan(activePlan, world)
+      const evaluation = evaluatePlan(activePlan, world, currentConflictPolicy())
+      const policy = currentConflictPolicy()
+      if (policy?.mode === 'abort'
+        && [...evaluation.states.values()].some(state => state.kind === 'blocked' && state.reason === 'CONFLICT')) {
+        const data = { planId: activePlan.planId, state: 'aborted' }
+        events.push('plan.abort', now(), data)
+        orders.complete(activePlan.orderId, 'failed')
+        lastReport = data
+        activePlan = undefined
+        planOrderId = undefined
+        planBlockedReported = false
+        planInsufficientReported = false
+        return
+      }
       if (!planBlockedReported && evaluation.blocked) {
         planBlockedReported = true
         events.push('plan.blocked', now(), {
@@ -283,7 +306,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       let planView: MindStatusView['plan']
       if (activePlan !== undefined) {
         try {
-          const evaluation = evaluatePlan(activePlan, sensors.read())
+          const evaluation = evaluatePlan(activePlan, sensors.read(), currentConflictPolicy())
           planView = {
             id: activePlan.planId,
             template: activePlan.template,
