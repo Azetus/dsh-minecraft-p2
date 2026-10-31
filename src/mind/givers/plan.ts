@@ -2,7 +2,7 @@ import type { JsonValue } from '../../contracts/types.ts'
 import { evaluatePlan, itemPosition } from '../plan.ts'
 import type { PlanInstance, WorkItem } from '../plan.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorldView } from '../types.ts'
-import { feetOf, nearestStandable } from './common.ts'
+import { nearestStandable } from './common.ts'
 
 /**
  * Plan work giver: walks all work items, returns the first executable one, and
@@ -28,20 +28,27 @@ export function createPlanGiver(): WorkGiver {
       }
       if (evaluation.satisfied) return null
 
-      const unreachable = plan.workItems.find(item => evaluation.states.get(item.id)?.kind === 'blocked'
-        && (evaluation.states.get(item.id) as { reason?: string }).reason === 'UNREACHABLE')
-      if (unreachable === undefined) return null
-
-      const target = itemPosition(plan, unreachable)
-      const self = feetOf(world.self.pos)
-      const stand = nearestStandable(world, target, 3, self, 2)
-      if (stand === undefined) return null
-      return {
-        driverId: 'move',
-        target: { kind: 'point', pos: stand },
-        params: { x: stand.x, y: stand.y, z: stand.z, range: 1, timeoutMs: 8_000 },
-        reason: `reach ${unreachable.id}`,
+      const unreachable = plan.workItems.filter(item => {
+        const state = evaluation.states.get(item.id)
+        return state?.kind === 'blocked' && (state as { reason?: string }).reason === 'UNREACHABLE'
+      })
+      for (const item of unreachable) {
+        const target = itemPosition(plan, item)
+        // Stand next to the work item, not merely somewhere near the current
+        // body: a stand three blocks away can still be out of reach.
+        const stand = nearestStandable(world, target, 2, target, 1)
+        if (stand === undefined) continue
+        const handoff: Handoff = {
+          driverId: 'move',
+          target: { kind: 'point', pos: stand },
+          params: { x: stand.x, y: stand.y, z: stand.z, range: 1, timeoutMs: 8_000 },
+          reason: `reach ${item.id}`,
+        }
+        const handoffKey = `handoff:${handoff.driverId}:${stand.x},${stand.y},${stand.z}`
+        if (ctx.isBlocked?.(handoffKey) === true) continue
+        return handoff
       }
+      return null
     },
   }
 }
