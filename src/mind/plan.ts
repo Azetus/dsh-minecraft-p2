@@ -179,7 +179,10 @@ function evaluateItem(
       if (block === null || !block.loaded) return { kind: 'unknown' }
       if (!isStandable(world, position)) return { kind: 'blocked', reason: 'NO_STAND' }
       const self = world.self.pos
-      if (Math.floor(self.x) === position.x && Math.floor(self.y) === position.y && Math.floor(self.z) === position.z) {
+      // "Being at" a stand cell allows the normal position tolerance of a
+      // walk; requiring the exact integer cell makes enter jobs loop forever.
+      const horizontal = Math.hypot(self.x - (position.x + 0.5), self.z - (position.z + 0.5))
+      if (horizontal <= 1.5 && Math.abs(Math.floor(self.y) - position.y) <= 1) {
         return { kind: 'satisfied' }
       }
       return { kind: 'executable', driverId: DRIVER_BY_KIND[item.kind] }
