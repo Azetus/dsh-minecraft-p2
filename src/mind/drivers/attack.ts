@@ -11,12 +11,14 @@ const ATTACK_SCHEMA: SchemaNode = {
     entityId: { type: 'string' },
     targetName: { type: 'string' },
     orderId: { type: 'string' },
+    /** Explicit Agent authorization for a named passive target; players stay protected. */
+    allowPassive: { type: 'boolean' },
   },
   required: ['entityId'],
   additionalProperties: false,
 }
 
-type AttackParams = { entityId: string; targetName?: string; orderId?: string }
+type AttackParams = { entityId: string; targetName?: string; orderId?: string; allowPassive?: boolean }
 
 /**
  * One explicit attack. Target authorization happens in the giver; this driver
@@ -67,8 +69,12 @@ async function attack(port: ClientPort, params: AttackParams): Promise<DriverRes
     target = locate()
     if (target === undefined || distanceTo(target.position) > 3) return { state: 'failed', code: 'ATTACK_TARGET_MOVED' }
   }
-  if (target.type === 'player' || /passive|neutral|tameable/i.test(target.kind ?? '')
-    || (params.targetName !== undefined && target.name !== params.targetName)) return { state: 'failed', code: 'ATTACK_TARGET_CHANGED' }
+  const passive = target.type !== 'player' && /passive|neutral|tameable/i.test(target.kind ?? '')
+  if (target.type === 'player'
+    || (passive && params.allowPassive !== true)
+    || (params.targetName !== undefined && target.name !== params.targetName)) {
+    return { state: 'failed', code: 'ATTACK_TARGET_CHANGED' }
+  }
   const result = await port.attack(params.entityId)
   if (result.state !== 'ok') {
     return { state: 'failed', code: result.code ?? 'ATTACK_FAILED' }

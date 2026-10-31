@@ -97,7 +97,7 @@ describe('mind integration', () => {
     expect(moves).toHaveLength(0)
   })
 
-  it('selects, starts and finishes one wander job', async () => {
+  it('selects, starts and finishes one go job', async () => {
     const { port, moves, pending } = fakePort()
     const mind = createMind({
       port,
@@ -108,7 +108,7 @@ describe('mind integration', () => {
       now: () => 1_000,
     })
 
-    mind.enqueueOrder({ verb: 'wander' })
+    mind.enqueueOrder({ verb: 'go', params: { x: 1, y: 64, z: 1 } })
     mind.tick()
     expect(mind.status().tracker).toBe('running')
     expect(moves).toHaveLength(1)
@@ -151,12 +151,12 @@ describe('mind integration', () => {
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
     })
-    mind.orders.enqueue({ id: 'ord-1', verb: 'wander' })
-    mind.orders.enqueue({ id: 'ord-2', verb: 'hold' })
-    expect(mind.status().activeOrder).toEqual({ id: 'ord-1', verb: 'wander' })
+    mind.orders.enqueue({ id: 'ord-1', verb: 'hold' })
+    mind.orders.enqueue({ id: 'ord-2', verb: 'check', params: { x: 0, y: 64, z: 0 } })
+    expect(mind.status().activeOrder).toEqual({ id: 'ord-1', verb: 'hold' })
     expect(mind.status().queuedOrders).toBe(1)
     mind.orders.cancel('ord-1')
-    expect(mind.status().activeOrder).toEqual({ id: 'ord-2', verb: 'hold' })
+    expect(mind.status().activeOrder).toEqual({ id: 'ord-2', verb: 'check' })
   })
 
   it('runs the mind from BodyRuntime.tick and reports it in status', () => {

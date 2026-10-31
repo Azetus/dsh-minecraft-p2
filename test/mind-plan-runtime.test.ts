@@ -73,7 +73,7 @@ function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; selfPos
 }
 
 describe('plan runtime', () => {
-  it('runs a shelter order through the real clear and enter drivers', async () => {
+  it('runs a build order from observed geometry', async () => {
     const plansDir = tempDir()
     writeFileSync(join(plansDir, 'tiny.json'), JSON.stringify({
       id: 'tiny',
@@ -97,8 +97,11 @@ describe('plan runtime', () => {
 
     const order = mind.enqueueOrder({
       id: 'ord-tiny',
-      verb: 'shelter',
-      params: { template: 'tiny', origin: { x: 0, y: 64, z: 0 } },
+      verb: 'build',
+      blueprint: {
+        version: 1,
+        blocks: [{ x: 0, y: 64, z: 0, name: 'stone' }],
+      },
     })
     expect(order.state).toBe('active')
 

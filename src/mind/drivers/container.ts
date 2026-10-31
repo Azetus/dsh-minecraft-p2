@@ -11,7 +11,10 @@ const CONTAINER_SCHEMA: SchemaNode = {
     x: { type: 'number' },
     y: { type: 'number' },
     z: { type: 'number' },
-    action: { type: 'string', enum: ['withdraw', 'deposit'] },
+    action: {
+      type: 'string',
+      enum: ['withdraw', 'deposit', 'load-input', 'load-fuel', 'take-input', 'take-fuel', 'take-output'],
+    },
     item: { type: 'string' },
     count: { type: 'number' },
   },
@@ -23,7 +26,7 @@ type ContainerParams = {
   x: number
   y: number
   z: number
-  action: 'withdraw' | 'deposit'
+  action: ContainerTransferAction
   item: string
   count?: number
 }
@@ -43,7 +46,8 @@ export function createContainerDriver(): Driver {
       if (!Number.isFinite(params.x) || !Number.isFinite(params.y) || !Number.isFinite(params.z)) {
         return { ok: false, code: 'BAD_ARGS' }
       }
-      if (params.action !== 'withdraw' && params.action !== 'deposit') return { ok: false, code: 'BAD_ARGS' }
+      if (!['withdraw', 'deposit', 'load-input', 'load-fuel', 'take-input', 'take-fuel', 'take-output']
+        .includes(params.action)) return { ok: false, code: 'BAD_ARGS' }
       if (typeof params.item !== 'string' || params.item.length === 0) return { ok: false, code: 'BAD_ARGS' }
       return { ok: true }
     },
@@ -63,7 +67,7 @@ async function transfer(ctx: DriverCtx, params: ContainerParams): Promise<Driver
   if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'CONTAINER_MOVE_FAILED' }
   const result = await ctx.port.containerTransfer(
     chest,
-    params.action as ContainerTransferAction,
+    params.action,
     params.item,
     params.count ?? 1,
   )

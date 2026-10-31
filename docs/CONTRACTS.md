@@ -41,6 +41,7 @@ interface ClientPort {
   lookAt(p: Vec3): ActResult
   dig(p: Vec3): ActResult
   place(p: Vec3, face: Face, item: string): ActResult
+  craft(item: string, count?: number): ActResult
   useItem(): ActResult
   useOn(p: Vec3): ActResult
   attack(entityId: string): ActResult

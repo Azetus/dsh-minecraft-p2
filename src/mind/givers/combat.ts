@@ -60,7 +60,9 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
       if (typeof entityId !== 'string' || entityId.length === 0) return null
       const entity = world.entitiesIn(boxAround(world.self.pos, 32, 8))
         .find(candidate => candidate.id === entityId)
-      if (entity === undefined || isProtected(entity)) return null
+      const allowPassive = current.order.params?.allowPassive === true
+      if (entity === undefined || entity.type === 'player'
+        || (isProtected(entity) && !allowPassive)) return null
       return {
         driverId: 'attack',
         target: { kind: 'point', pos: entity.position },
@@ -68,6 +70,7 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
           entityId: entity.id,
           targetName: entity.name,
           orderId: current.order.id,
+          ...(allowPassive ? { allowPassive: true } : {}),
         },
         keys: `order.attack:${current.order.id}:${entity.id}`,
       }

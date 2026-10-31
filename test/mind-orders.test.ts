@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { OrderStore } from '../src/mind/orders.ts'
+import { ORDER_VERBS, OrderStore } from '../src/mind/orders.ts'
 import type { OrderEvent } from '../src/mind/orders.ts'
 
 /**
@@ -27,7 +27,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-function order(id: string, verb = 'wander'): { id: string; verb: string; params: { radius: number } } {
+function order(id: string, verb = 'hold'): { id: string; verb: string; params: { radius: number } } {
   return { id, verb, params: { radius: 8 } }
 }
 
@@ -58,6 +58,30 @@ describe('order store', () => {
     expect(errorCode(() => store.enqueue(order('bad', 'fly')))).toBe('INVALID_ORDER')
     store.enqueue(order('ord-1'))
     expect(errorCode(() => store.enqueue(order('ord-1')))).toBe('ORDER_EXISTS')
+  })
+
+  it('accepts only the finite execution surface', () => {
+    expect(ORDER_VERBS).toEqual([
+      'go', 'place', 'dig', 'equip', 'use', 'attack', 'check', 'container', 'craft', 'build', 'traverse', 'hold',
+    ])
+    const store = new OrderStore()
+    for (const verb of ['shelter', 'smelt', 'sleep', 'eat', 'wander', 'withdraw', 'deposit',
+      'bed', 'tools', 'mine_copper', 'gather', 'follow', 'combat']) {
+      expect(errorCode(() => store.enqueue(order(`bad-${verb}`, verb)))).toBe('INVALID_ORDER')
+    }
+  })
+
+  it('validates the generic primitive params before execution', () => {
+    const store = new OrderStore()
+    expect(store.enqueue({ id: 'p', verb: 'place', params: { x: 0, y: 64, z: 0, item: 'dirt' } }).state).toBe('active')
+    expect(store.enqueue({ id: 'e', verb: 'equip', params: { item: 'stone_pickaxe' } }).state).toBe('queued')
+    expect(errorCode(() => store.enqueue({ id: 'bad-place', verb: 'place', params: { x: 0, y: 64, z: 0 } })))
+      .toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'bad-use', verb: 'use', params: {} }))).toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'bad-craft', verb: 'craft', params: { item: 'stick', count: 0 } })))
+      .toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'bad-container', verb: 'container',
+      params: { x: 0, y: 64, z: 0, action: 'nope', item: 'coal' } }))).toBe('INVALID_ORDER')
   })
 
   it('validates per-order hazard permissions and the traverse verb', () => {
@@ -205,7 +229,7 @@ describe('order journal', () => {
       v: 2,
       at: 1,
       kind: 'order.accepted',
-      order: { id: 'ord-1', verb: 'wander' },
+      order: { id: 'ord-1', verb: 'hold' },
     })}\n`)
     const restored = new OrderStore({ journalPath: journal })
     expect(errorCode(() => restored.restore())).toBe('JOURNAL_VERSION_MISMATCH')

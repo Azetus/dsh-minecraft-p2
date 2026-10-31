@@ -352,6 +352,12 @@ export class MineflayerClientPort implements ClientPort {
     return await this.action('equip', 'equip', { item })
   }
 
+  async craft(item: string, count = 1): Promise<ActResult> {
+    const denied = this.deny('place')
+    if (denied !== undefined) return denied
+    return await this.run('craft', { item, count }, this.timeouts.place)
+  }
+
   async useOn(p: Vec3): Promise<ActResult> {
     return await this.action('useOn', 'activate', { x: p.x, y: p.y, z: p.z })
   }

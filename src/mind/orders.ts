@@ -6,27 +6,20 @@ import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { parseHazardPolicy } from '../port/terrain.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from './policy.ts'
 
+/** The finite execution surface: goals, not per-CP scripts. */
 export const ORDER_VERBS = [
-  'shelter',
-  'build',
-  'bed',
-  'tools',
-  'mine_copper',
-  'smelt',
-  'gather',
-  'eat',
-  'sleep',
   'go',
-  'follow',
-  'hold',
-  'wander',
-  'check',
-  'attack',
-  'combat',
+  'place',
   'dig',
-  'withdraw',
-  'deposit',
+  'equip',
+  'use',
+  'attack',
+  'check',
+  'container',
+  'craft',
+  'build',
   'traverse',
+  'hold',
 ] as const
 
 export type OrderVerb = (typeof ORDER_VERBS)[number]
@@ -335,6 +328,11 @@ function validateOrder(value: unknown): Order {
     throw orderError('INVALID_ORDER', 'order params must be an object')
   }
   if (value.verb === 'traverse') validateTraverseParams(value.params)
+  if (value.verb === 'place') validatePlaceParams(value.params)
+  if (value.verb === 'equip') validateEquipParams(value.params)
+  if (value.verb === 'use') validateUseParams(value.params)
+  if (value.verb === 'craft') validateCraftParams(value.params)
+  if (value.verb === 'container') validateContainerParams(value.params)
   if (value.policy !== undefined) {
     const conflict = parseConflictPolicy(value.policy)
     if (!conflict.ok) throw orderError('INVALID_ORDER', conflict.error)
@@ -377,6 +375,74 @@ function validateTraverseParams(params: JsonValue | undefined): void {
   if (maxBlocks !== undefined
     && (typeof maxBlocks !== 'number' || !Number.isInteger(maxBlocks) || maxBlocks < 1 || maxBlocks > 64)) {
     throw orderError('INVALID_ORDER', 'traverse.maxBlocks must be an integer between 1 and 64')
+  }
+}
+
+function requirePosition(params: Record<string, JsonValue>, verb: string): void {
+  for (const axis of ['x', 'y', 'z'] as const) {
+    if (typeof params[axis] !== 'number' || !Number.isFinite(params[axis])) {
+      throw orderError('INVALID_ORDER', `${verb}.${axis} must be a finite number`)
+    }
+  }
+}
+
+function validatePlaceParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'place requires params {x,y,z,item}')
+  requirePosition(params, 'place')
+  if (typeof params.item !== 'string' || params.item.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'place.item is required')
+  }
+  if (params.face !== undefined
+    && !['up', 'down', 'north', 'south', 'east', 'west'].includes(String(params.face))) {
+    throw orderError('INVALID_ORDER', 'place.face must be up/down/north/south/east/west')
+  }
+  if (params.expectedState !== undefined && !isRecord(params.expectedState)) {
+    throw orderError('INVALID_ORDER', 'place.expectedState must be an object')
+  }
+}
+
+function validateEquipParams(params: JsonValue | undefined): void {
+  if (!isRecord(params) || typeof params.item !== 'string' || params.item.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'equip.item is required')
+  }
+}
+
+function validateUseParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'use requires a target or item')
+  const hasPosition = params.x !== undefined || params.y !== undefined || params.z !== undefined
+  if (hasPosition) requirePosition(params, 'use')
+  const hasItem = typeof params.item === 'string' && params.item.trim().length > 0
+  if (!hasPosition && !hasItem) throw orderError('INVALID_ORDER', 'use requires a target or item')
+  if (params.durationMs !== undefined
+    && (typeof params.durationMs !== 'number' || !Number.isFinite(params.durationMs) || params.durationMs < 0)) {
+    throw orderError('INVALID_ORDER', 'use.durationMs must be non-negative')
+  }
+}
+
+function validateCraftParams(params: JsonValue | undefined): void {
+  if (!isRecord(params) || typeof params.item !== 'string' || params.item.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'craft.item is required')
+  }
+  if (params.count !== undefined
+    && (typeof params.count !== 'number' || !Number.isInteger(params.count) || params.count < 1 || params.count > 64)) {
+    throw orderError('INVALID_ORDER', 'craft.count must be an integer between 1 and 64')
+  }
+}
+
+function validateContainerParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'container requires params')
+  requirePosition(params, 'container')
+  if (typeof params.item !== 'string' || params.item.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'container.item is required')
+  }
+  if (typeof params.action !== 'string'
+    || !['withdraw', 'deposit', 'load-input', 'load-fuel', 'take-input', 'take-fuel', 'take-output']
+      .includes(params.action)) {
+    throw orderError('INVALID_ORDER', 'container.action is invalid')
+  }
+  if (params.count !== undefined
+    && (typeof params.count !== 'number' || !Number.isInteger(params.count) || params.count < 1 || params.count > 64)) {
+    throw orderError('INVALID_ORDER', 'container.count must be an integer between 1 and 64')
   }
 }
 

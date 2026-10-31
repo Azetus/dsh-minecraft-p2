@@ -218,17 +218,23 @@ order 可带 `policy.conflict`：
 
 - 默认无 order：**hold**，不自动 wander、不自动回家、不自动进食。
 - 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击。
-- Agent 显式 order：
-  - `hold`：原地待命；
-  - `go`：移动到坐标附近；
-  - `wander`：有界游荡（Agent 显式开启，允许夜间）；
-  - `eat`：吃指定/背包食物；
-  - `sleep`：移动到床附近并用床；
-  - `check`：打开容器/熔炉做三态观测；
+- Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
+  - `go`：移动到坐标/附近；
+  - `place`：放任意方块/床，`item` + 目标；
+  - `dig`：破坏指定方块；
+  - `equip`：切换手持物品/工具；
+  - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
   - `attack`：攻击 Agent 明确指定的 entityId，单次；
-  - `combat`：按 `allowedTargets` 白名单和半径索敌 hostile，持续到 Agent 取消；
-    players/neutral 始终受保护。
-- P2 执行原语：move / useOn / sleep / eat / check / attack；失败上报，不自行消耗食物或改变目标。
+  - `check`：打开容器/熔炉做三态观测；
+  - `container`：容器存取，`withdraw/deposit/load-input/load-fuel/take-*`；
+  - `craft`：按配方合成；
+  - `build`：执行最终几何 blueprint/Plan；
+  - `traverse`：Agent 授权的桥/垫脚移动；
+  - `hold`：原地待命。
+- 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `equip` + `dig`；
+  床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`；
+  P2 不新增 `mine_copper`/`bed`/`tools`/`smelt` 专用 order。
+- 失败上报，不自行消耗食物或改变目标。
 - 旧“夜间自动回家/自动进食/自动游荡”已移除；`home` 只是 Agent 可使用的坐标，
   不再是 P2 自动安全锚点。
 - Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察，

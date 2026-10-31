@@ -66,6 +66,25 @@ describe('combat ROE', () => {
     expect(candidate).toMatchObject({ driverId: 'attack', params: { entityId: 'z1' } })
   })
 
+  it('requires explicit allowPassive for a named passive target', () => {
+    const sheep = entity({ id: 's1', name: 'sheep', type: 'animal', kind: 'Passive mobs' })
+    const blocked = createAttackOrderGiver(() => ({
+      order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1' } },
+    }))
+    expect(blocked.find({ now: 0 }, world([sheep]))).toBeNull()
+    const allowed = createAttackOrderGiver(() => ({
+      order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1', allowPassive: true } },
+    }))
+    expect(allowed.find({ now: 0 }, world([sheep]))).toMatchObject({
+      driverId: 'attack', params: { entityId: 's1', allowPassive: true },
+    })
+    const player = entity({ id: 'p1', name: 'Human_Player', type: 'player', kind: 'player' })
+    const playerGiver = createAttackOrderGiver(() => ({
+      order: { id: 'ord-p', verb: 'attack', params: { entityId: 'p1', allowPassive: true } },
+    }))
+    expect(playerGiver.find({ now: 0 }, world([player]))).toBeNull()
+  })
+
   it('does not acquire without allowedTargets', () => {
     const giver = createCombatGiver(() => ({
       order: { id: 'ord-c', verb: 'combat', params: {} },

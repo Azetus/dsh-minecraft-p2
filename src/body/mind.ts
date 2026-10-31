@@ -16,6 +16,9 @@ import { createSmeltDriver, SMELT_DRIVER_ID } from '../mind/drivers/smelt.ts'
 import { createDigDriver, DIG_DRIVER_ID } from '../mind/drivers/dig.ts'
 import { createContainerDriver, CONTAINER_DRIVER_ID } from '../mind/drivers/container.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
+import { createEquipDriver, EQUIP_DRIVER_ID } from '../mind/drivers/equip.ts'
+import { createCraftDriver, CRAFT_DRIVER_ID } from '../mind/drivers/craft.ts'
+import { createUseDriver, USE_DRIVER_ID } from '../mind/drivers/use.ts'
 import { createTraverseDriver, TRAVERSE_DRIVER_ID } from '../mind/drivers/traverse.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
@@ -34,6 +37,12 @@ import { createAttackOrderGiver, createCombatGiver } from '../mind/givers/combat
 import { createSmeltOrderGiver } from '../mind/givers/smelt.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
 import { createContainerOrderGiver } from '../mind/givers/container.ts'
+import {
+  createCraftOrderGiver,
+  createEquipOrderGiver,
+  createPlaceOrderGiver,
+  createUseOrderGiver,
+} from '../mind/givers/primitives.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { createMaterialGiver } from '../mind/givers/material.ts'
 import { MindLoop } from '../mind/loop.ts'
@@ -110,6 +119,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: DIG_DRIVER_ID, driver: createDigDriver() })
   registry.registerDriver({ id: CONTAINER_DRIVER_ID, driver: createContainerDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
+  registry.registerDriver({ id: EQUIP_DRIVER_ID, driver: createEquipDriver() })
+  registry.registerDriver({ id: CRAFT_DRIVER_ID, driver: createCraftDriver() })
+  registry.registerDriver({ id: USE_DRIVER_ID, driver: createUseDriver() })
   registry.registerDriver({ id: TRAVERSE_DRIVER_ID, driver: createTraverseDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
@@ -123,6 +135,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.smelt', factory: () => createSmeltOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.dig', factory: () => createDigOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.container', factory: () => createContainerOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.place', factory: () => createPlaceOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.equip', factory: () => createEquipOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.use', factory: () => createUseOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.craft', factory: () => createCraftOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({
     id: 'order.wander',
@@ -242,11 +258,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (event.kind === 'job.terminal') {
         const active = orders.active()
         if (active !== undefined
-          && (active.order.verb === 'go' || active.order.verb === 'eat'
-            || active.order.verb === 'sleep' || active.order.verb === 'wander'
-            || active.order.verb === 'attack' || active.order.verb === 'smelt'
-            || active.order.verb === 'dig' || active.order.verb === 'withdraw'
-            || active.order.verb === 'deposit' || active.order.verb === 'traverse')) {
+          && (active.order.verb === 'go' || active.order.verb === 'attack'
+            || active.order.verb === 'dig' || active.order.verb === 'traverse'
+            || active.order.verb === 'place' || active.order.verb === 'equip'
+            || active.order.verb === 'use' || active.order.verb === 'craft'
+            || active.order.verb === 'container')) {
           orders.complete(active.order.id, event.state === 'succeeded' ? 'succeeded' : 'failed')
           events.push('order.result', now(), {
             orderId: active.order.id,
@@ -298,7 +314,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       return
     }
-    if (active === undefined || (active.order.verb !== 'shelter' && active.order.verb !== 'build')) {
+    if (active === undefined || active.order.verb !== 'build') {
       if (planOrderId !== undefined) {
         activePlan = undefined
         planOrderId = undefined

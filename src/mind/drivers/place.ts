@@ -82,6 +82,15 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
   }
   if (matchesExpected(before, expected)) return { state: 'succeeded' }
 
+  const self = port.self().pos
+  if (Math.hypot(self.x - target.x, self.y - target.y, self.z - target.z) > 4.5) {
+    const moved = await port.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000 })
+    if (moved.state !== 'ok') {
+      return { state: 'failed', code: moved.code ?? 'PLACE_APPROACH_FAILED',
+        ...(moved.observed === undefined ? {} : { observed: moved.observed }) }
+    }
+  }
+
   const faces = params.face === undefined ? supportFaces(port, target) : [params.face]
   if (faces.length === 0) return { state: 'failed', code: 'NO_SUPPORT' }
 

@@ -92,6 +92,7 @@ export interface ClientPort {
   pillarUp(item: string, levels: number): Promise<ActResult>
   useItem(opts?: { durationMs?: number }): Promise<ActResult>
   equip(item: string): Promise<ActResult>
+  craft(item: string, count?: number): Promise<ActResult>
   useOn(p: Vec3): Promise<ActResult>
   attack(entityId: string): Promise<ActResult>
   sleep(bed: Vec3): Promise<ActResult>

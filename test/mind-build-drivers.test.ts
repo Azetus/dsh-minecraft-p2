@@ -41,6 +41,10 @@ function fakePort(options: PortOptions = {}): {
   let reads = 0
   let pendingMove: (() => void) | undefined
   const port = {
+    self: () => ({
+      pos: { x: 0.5, y: 64, z: 0.5 }, yaw: 0, pitch: 0, health: 20, food: 20,
+      onGround: true, inWater: false, inLava: false,
+    }),
     blockAt: (p: Vec3) => {
       reads += 1
       return world.get(key(p)) ?? null
