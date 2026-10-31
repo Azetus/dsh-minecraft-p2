@@ -12,6 +12,11 @@ import { loadProviderConfig } from './provider-config.ts'
 import { BodyRuntime } from './runtime.ts'
 import { BodyServer } from './server.ts'
 
+// The stdio transport owns stdout. Library logs (mineflayer/protodef) must not
+// corrupt the JSON-lines protocol, so send console output to stderr instead.
+console.log = (...args: unknown[]): void => { console.error(...args) }
+console.info = (...args: unknown[]): void => { console.error(...args) }
+
 type ConnectedProvider = {
   port: MineflayerClientPort
   liveStatus(): ProviderRuntimeStatus
