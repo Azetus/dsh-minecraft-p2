@@ -1468,12 +1468,6 @@ class MineflayerActHandle implements ActHandle {
           const vector = PLACE_FACES[face]
           if (vector === undefined) throw new Error(`unsupported place face: ${face}`)
           const target = new Vec3(x, y, z)
-          const occupied = this.bot.blockAt(target)
-          if (occupied !== null && !isAirName(occupied.name)) {
-            this.failed = new Error(`target position is occupied by ${occupied.name}`)
-            this.failedCode = 'PLACE_UNSUPPORTED'
-            return
-          }
           const reference = new Vec3(x - vector[0], y - vector[1], z - vector[2])
           const referenceBlock = this.bot.blockAt(reference)
           if (referenceBlock === null || isAirName(referenceBlock.name)) {

@@ -129,12 +129,12 @@ describe('plan giver', () => {
 
   it('does not hide a later executable item behind a blocked one', () => {
     const plan = instantiatePlan(template([
-      { id: 'blocked', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
+      { id: 'blocked', kind: 'place', at: [1, 0, 0], expected: { name: 'diamond_block' } },
       { id: 'next', kind: 'place', at: [2, 0, 0], expected: { name: 'dirt' } },
     ]), 'ord-1', origin)
     const result = createPlanGiver().find({ now: 0, plan }, world({
       blocks: [
-        block('stone', 1, 63, 0), block('cobblestone', 1, 64, 0),
+        block('stone', 1, 63, 0), block('air', 1, 64, 0),
         block('stone', 2, 63, 0), block('air', 2, 64, 0),
       ],
       inventory: [dirt],

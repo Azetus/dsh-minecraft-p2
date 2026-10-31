@@ -198,7 +198,8 @@ function evaluateItem(
       const block = world.blockAt(position)
       if (block === null || !block.loaded) return { kind: 'unknown' }
       if (matchesExpected(block, expected)) return { kind: 'satisfied' }
-      if (!isAirName(block.name)) return { kind: 'blocked', reason: 'CONFLICT' }
+      // The target may be a fluid or another block. Placement is an attempt:
+      // the server decides, so a non-matching cell is not blocked here.
       if (!hasSupport(world, position)) return { kind: 'blocked', reason: 'NO_SUPPORT' }
       if (item.kind === 'hold') return { kind: 'blocked', reason: 'CONFLICT' }
       if (countItem(world.inventory, expected.name) < 1) return { kind: 'blocked', reason: 'NO_MATERIAL' }

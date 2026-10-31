@@ -3,7 +3,7 @@ import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import { AsyncDriverHandle, sleep } from './handle.ts'
+import { AsyncDriverHandle } from './handle.ts'
 
 export const PLACE_DRIVER_ID = 'place'
 
@@ -40,8 +40,9 @@ type PlaceParams = {
 }
 
 /**
- * Place one expected block. Toils: observe → choose support face → place →
- * readback #1 → readback #2. The driver only executes the selected cell.
+ * Place one expected block. The target may be air, fluid or any other block:
+ * the server's block update is the authority, so this driver only attempts and
+ * confirms the accepted result once. It does not promise permanence.
  */
 export function createPlaceDriver(): Driver {
   return {
@@ -80,7 +81,6 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
     return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
   }
   if (matchesExpected(before, expected)) return { state: 'succeeded' }
-  if (!isAir(before.name)) return { state: 'failed', code: 'PLACE_CONFLICT' }
 
   const faces = params.face === undefined ? supportFaces(port, target) : [params.face]
   if (faces.length === 0) return { state: 'failed', code: 'NO_SUPPORT' }
@@ -95,11 +95,11 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
       lastCode = result.code ?? 'PLACE_FAILED'
       continue
     }
-    const first = port.blockAt(target)
-    await sleep(200)
-    const second = port.blockAt(target)
-    if (matches(first, expected) && matches(second, expected)) return { state: 'succeeded' }
-    lastCode = 'READBACK_UNSTABLE'
+    // The server accepted the placement. One immediate read confirms the
+    // expected block; permanence is the plan verifier's job, not the driver's.
+    const after = port.blockAt(target)
+    if (matches(after, expected)) return { state: 'succeeded' }
+    lastCode = 'PLACE_READBACK_MISMATCH'
   }
   return { state: 'failed', code: lastCode }
 }

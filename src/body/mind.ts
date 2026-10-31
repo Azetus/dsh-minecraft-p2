@@ -23,7 +23,9 @@ import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
 import { evaluateTree, loadTrees } from '../mind/tree.ts'
+import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
+import type { VerifyResult } from '../mind/verify/sealed-room.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
 export type MindOrderView = { id: string; verb: string; state: string }
@@ -233,8 +235,18 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (!evaluation.satisfied) return
 
       let terminal: 'succeeded' | 'failed' | undefined
-      if (activePlan.verify !== undefined) {
-        const verify = verifySealedRoom(activePlan, activePlan.verify, world)
+      let verify: VerifyResult | undefined
+      if (activePlan.template === 'blueprint') {
+        // Final geometry is the authority; a place accepted then destroyed is
+        // refuted here instead of being accepted as a permanent success.
+        verify = verifyBlueprint(activePlan, world)
+        if (verify.state === 'confirmed' && activePlan.verify !== undefined) {
+          verify = verifySealedRoom(activePlan, activePlan.verify, world)
+        }
+      } else if (activePlan.verify !== undefined) {
+        verify = verifySealedRoom(activePlan, activePlan.verify, world)
+      }
+      if (verify !== undefined) {
         if (verify.state === 'confirmed') {
           terminal = 'succeeded'
         } else if (verify.state === 'refuted') {

@@ -93,4 +93,15 @@
 | 长期无观测更新 | `OBSERVATION_STALE` | 暂停新 job，保留当前，等恢复 |
 | 同一工作项反复失败 | `WORK_ITEM_BLOCKED` | 换工作项；全部阻塞 → order blocked |
 | 材料不足且不可自动补给 | `NO_MATERIAL` | order blocked，唤醒 agent |
+| 服务器拒绝放置 | `PLACE_REFUSED` / `PLACE_READBACK_MISMATCH` | 该 work item 记失败；policy 决定跳过/清障/重试 |
+| 放置被接受但方块后来消失 | `BLUEPRINT_REFUTED` | 终态验证不通过；order failed，agent 决定补建/换址 |
 | 定义错误（树/模板/注册表） | `DEFINITION_ERROR` | 拒绝加载，保持上一版有效内容 |
+
+## 10. 放置是“尝试”，不是永久承诺
+
+- `place` 不预判目标格是否可替换；任何目标都尝试，服务器接受/拒绝才是放置结果。
+- 目标可以是水/岩浆等流体；底层不维护 replaceable 名单，也不把非空气一律当冲突。
+- place 的 `ok` 只表示“服务器接受了这次操作，且即时读回是 expected”；不表示方块会永久存在。
+- 终态由 verifier 判定：build order 验证每个期望方块仍在；sealed-room 验证外壳/内部。
+- 执行期间 plan 每 tick 重算工作项：方块消失会重新变成 unsatisfied，按 policy 重试或 blocked；不用计时器或异步稳定窗口。
+- 完成之后的世界变化属于后续观测/check，不归 place 保证。

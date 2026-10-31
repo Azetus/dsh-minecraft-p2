@@ -133,7 +133,7 @@ describe('work item evaluation', () => {
     expect(evaluatePlan(plan, missing).states.get('c')).toEqual({ kind: 'unknown' })
   })
 
-  it('reports place material/support/conflict states in order', () => {
+  it('reports place material/support/attempt states in order', () => {
     const place: WorkItem = {
       id: 'p', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' },
     }
@@ -144,35 +144,39 @@ describe('work item evaluation', () => {
       .toEqual({ kind: 'blocked', reason: 'NO_MATERIAL' })
     expect(evaluatePlan(plan, world({ blocks: ground, inventory: [dirt] })).states.get('p'))
       .toEqual({ kind: 'executable', driverId: 'place' })
+    // A non-air target is an attempt, not a pre-blocked conflict: the server
+    // decides. This includes fluid targets such as water.
     expect(evaluatePlan(plan, world({ blocks: [block('stone', 1, 63, 0), block('stone', 1, 64, 0)], inventory: [dirt] })).states.get('p'))
-      .toEqual({ kind: 'blocked', reason: 'CONFLICT' })
+      .toEqual({ kind: 'executable', driverId: 'place' })
+    expect(evaluatePlan(plan, world({ blocks: [block('stone', 1, 63, 0), block('water', 1, 64, 0)], inventory: [dirt] })).states.get('p'))
+      .toEqual({ kind: 'executable', driverId: 'place' })
     expect(evaluatePlan(plan, world({ blocks: [block('air', 1, 63, 0), block('air', 1, 64, 0)], inventory: [dirt] })).states.get('p'))
       .toEqual({ kind: 'blocked', reason: 'NO_SUPPORT' })
     expect(evaluatePlan(plan, world({ blocks: ground, inventory: [dirt], stale: true })).states.get('p'))
       .toEqual({ kind: 'unknown' })
   })
 
-  it('honours dependencies and lets a conflicting cell leave other work executable', () => {
+  it('honours dependencies and lets a blocked cell leave other work executable', () => {
     const plan = planOf([
-      { id: 'bad', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
+      { id: 'bad', kind: 'place', at: [1, 0, 0], expected: { name: 'diamond_block' } },
       { id: 'good', kind: 'place', at: [2, 0, 0], expected: { name: 'dirt' }, after: ['bad'] },
     ])
-    const occupied = [
-      block('stone', 1, 63, 0), block('cobblestone', 1, 64, 0),
+    const ground = [
+      block('stone', 1, 63, 0), block('air', 1, 64, 0),
       block('stone', 2, 63, 0), block('air', 2, 64, 0),
     ]
-    const evaluation = evaluatePlan(plan, world({ blocks: occupied, inventory: [dirt] }))
-    expect(evaluation.states.get('bad')).toEqual({ kind: 'blocked', reason: 'CONFLICT' })
+    const evaluation = evaluatePlan(plan, world({ blocks: ground, inventory: [dirt] }))
+    expect(evaluation.states.get('bad')).toEqual({ kind: 'blocked', reason: 'NO_MATERIAL' })
     expect(evaluation.states.get('good')).toEqual({ kind: 'blocked', reason: 'CONFLICT' })
     expect(evaluation.next).toBeUndefined()
     expect(evaluation.blocked).toBe(true)
 
     const plan2 = planOf([
-      { id: 'bad', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
+      { id: 'bad', kind: 'place', at: [1, 0, 0], expected: { name: 'diamond_block' } },
       { id: 'good', kind: 'place', at: [2, 0, 0], expected: { name: 'dirt' } },
     ])
-    const evaluation2 = evaluatePlan(plan2, world({ blocks: occupied, inventory: [dirt] }))
-    expect(evaluation2.states.get('bad')).toEqual({ kind: 'blocked', reason: 'CONFLICT' })
+    const evaluation2 = evaluatePlan(plan2, world({ blocks: ground, inventory: [dirt] }))
+    expect(evaluation2.states.get('bad')).toEqual({ kind: 'blocked', reason: 'NO_MATERIAL' })
     expect(evaluation2.next).toMatchObject({ item: { id: 'good' }, state: { kind: 'executable' } })
     expect(evaluation2.blocked).toBe(false)
   })

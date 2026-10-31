@@ -94,13 +94,13 @@ const world = {} as WorldView
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 describe('place driver', () => {
-  it('places one block and reads it back twice', async () => {
+  it('places one block and confirms the accepted block', async () => {
     const fake = fakePort()
     const target = { x: 1, y: 64, z: 0 }
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', target))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
-    await wait(260)
+    await wait(30)
     expect(handle.result()).toEqual({ state: 'succeeded' })
     expect(fake.world.get('1,64,0')?.name).toBe('dirt')
     expect(fake.places.length).toBeGreaterThanOrEqual(1)
@@ -118,22 +118,24 @@ describe('place driver', () => {
     expect(fake.places.some(face => face !== 'up')).toBe(true)
   })
 
-  it('reports a conflict without placing', async () => {
+  it('attempts a non-air target instead of pre-rejecting it', async () => {
     const fake = fakePort()
-    fake.world.set('1,64,0', block('stone', { x: 1, y: 64, z: 0 }))
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('water', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
-    await wait(20)
-    expect(handle.result()).toEqual({ state: 'failed', code: 'PLACE_CONFLICT' })
-    expect(fake.places).toHaveLength(0)
+    await wait(30)
+    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(fake.places).toHaveLength(1)
+    expect(fake.world.get('1,64,0')?.name).toBe('dirt')
   })
 
-  it('fails when the readback does not stabilize', async () => {
+  it('fails when the accepted placement does not read back', async () => {
     const fake = fakePort({ placeWithoutEffect: true })
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
-    await wait(300)
-    expect(handle.result()).toEqual({ state: 'failed', code: 'READBACK_UNSTABLE' })
+    await wait(30)
+    expect(handle.result()).toEqual({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
   })
 })
 
