@@ -18,13 +18,14 @@ agent 只下**目标级 order**，NPC 自己选工作、执行、失败重试，
 /p2 setup
 /p2 start
 p2_status                      # 精简状态：当前 order / job / 预算 / 最近偏差
+p2_observe {min,max}           # 只读观测：方块（含未加载标记）/ self / 背包 / 实体
 p2_order {verb: "shelter", params: {quality: "minimal"}}   # 下一条 order
 p2_orders                      # 队列
 p2_cancel {id}                 # 取消
 p2_report                      # 最近一次偏离/终态摘要
 ```
 
-角色自己完成：选点、备料、建造、吃饭、回屋、夜间待命；agent 只在被打断时介入。
+Agent 负责选点、蓝图、材料轮次与 order；P2Mind 在 order 内完成移动、挖掘、放置与恢复。
 
 ## 开发
 

@@ -43,6 +43,25 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       execute: async () => statusOf(manager, agent),
     }),
     tools.register({
+      name: 'p2_observe',
+      description: 'Read-only world observation in an absolute box (max 4096 blocks, 64 per axis). Returns blocks with loaded flags; an unloaded cell is never air. Does not act on the world.',
+      parameters: {
+        type: 'object',
+        properties: {
+          min: vecSchema('Minimum corner, inclusive'),
+          max: vecSchema('Maximum corner, inclusive'),
+          includeEntities: { type: 'boolean', description: 'Defaults to true' },
+        },
+        required: ['min', 'max'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        return await manager.worldObserve(args as unknown as JsonValue)
+      },
+    }),
+    tools.register({
       name: 'p2_order',
       description: 'Submit one goal-level order. The NPC chooses and executes the work; do not use it as a micro-command.',
       parameters: {
@@ -157,5 +176,19 @@ function output(): ToolDefinition['output'] {
   return {
     schema: { type: 'object' },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+  }
+}
+
+function vecSchema(description: string): Record<string, unknown> {
+  return {
+    type: 'object',
+    description,
+    properties: {
+      x: { type: 'number' },
+      y: { type: 'number' },
+      z: { type: 'number' },
+    },
+    required: ['x', 'y', 'z'],
+    additionalProperties: false,
   }
 }

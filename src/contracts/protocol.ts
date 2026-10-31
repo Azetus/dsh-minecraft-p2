@@ -19,6 +19,7 @@ export const METHODS = [
   'heartbeat',
   'describe',
   'status',
+  'world.observe',
   'mind.order',
   'mind.orders',
   'mind.cancel',
@@ -130,6 +131,47 @@ export type StatusResult = {
 
 export type HeartbeatParams = { seq: number }
 export type HeartbeatResult = { seq: number; alive: true }
+
+export const OBSERVE_MAX_BLOCKS = 4096
+export const OBSERVE_MAX_AXIS = 64
+
+export type ObserveVec3 = { x: number; y: number; z: number }
+
+export type WorldObserveParams = {
+  min: ObserveVec3
+  max: ObserveVec3
+  /** Defaults to true; entities are then filtered to the same box. */
+  includeEntities?: boolean
+}
+
+export type WorldObserveBlock = {
+  x: number
+  y: number
+  z: number
+  name: string
+  loaded: boolean
+  state?: Record<string, string>
+}
+
+export type WorldObserveResult = {
+  at: number
+  box: { min: ObserveVec3; max: ObserveVec3 }
+  self: {
+    pos: ObserveVec3
+    yaw: number
+    pitch: number
+    health: number
+    food: number
+    onGround: boolean
+    inWater: boolean
+    inLava: boolean
+  }
+  inventory: Array<{ slot: number; name: string; count: number }>
+  time: { timeOfDay: number; worldAge: number }
+  /** Includes `loaded:false` cells; an unknown block is never air. */
+  blocks: WorldObserveBlock[]
+  entities?: Array<{ id: string; name: string; position: ObserveVec3 }>
+}
 
 export type ShutdownResult = { closing: true }
 

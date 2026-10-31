@@ -118,6 +118,7 @@ describe('protocol vocabulary', () => {
       'heartbeat',
       'describe',
       'status',
+      'world.observe',
       'mind.order',
       'mind.orders',
       'mind.cancel',

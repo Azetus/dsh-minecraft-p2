@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     body,
     heartbeatTimeoutMs: 10_000,
     ...(provider === undefined ? {} : { providerStatus: () => provider.liveStatus() }),
+    ...(provider === undefined ? {} : { port: provider.port }),
     ...(mind === undefined ? {} : { mind }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)

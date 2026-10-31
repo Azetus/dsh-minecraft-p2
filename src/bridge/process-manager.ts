@@ -216,6 +216,10 @@ export class BodyManager {
     return this.activeClient().request('mind.order', order)
   }
 
+  worldObserve(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('world.observe', params)
+  }
+
   mindOrders(): Promise<JsonValue> {
     return this.activeClient().request('mind.orders', {})
   }

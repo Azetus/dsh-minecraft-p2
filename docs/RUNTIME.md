@@ -76,6 +76,7 @@
 | 接口 | 内容 |
 |---|---|
 | `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / 最近偏差摘要 |
+| `p2_observe {min,max,includeEntities?}` | 绝对坐标盒内的方块（未加载块 `loaded=false`）、self、inventory、time、entities；上限 4096 块 / 64 轴；只读，不取写令牌 |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | order/job/plan/tracker 事件游标 |
 | 唤醒 | 只在 order 终态、偏离阈值、tracker fault 时推送 |

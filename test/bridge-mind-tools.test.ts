@@ -15,6 +15,7 @@ class FakeManager {
   currentOwner = { sessionId: 's1', agentId: 'a1', cwd: 'C:/p2' }
   readonly orders: unknown[] = []
   readonly cancels: string[] = []
+  readonly observes: unknown[] = []
 
   async status(): Promise<unknown> {
     return {
@@ -40,6 +41,11 @@ class FakeManager {
   async mindOrder(order: unknown): Promise<unknown> {
     this.orders.push(order)
     return { id: 'ord-1', state: 'active' }
+  }
+
+  async worldObserve(params: unknown): Promise<unknown> {
+    this.observes.push(params)
+    return { blocks: [], at: 1 }
   }
 
   async mindOrders(): Promise<unknown> {
@@ -84,6 +90,7 @@ describe('mind operator tools', () => {
     const { definitions } = harness()
     expect([...definitions.keys()]).toEqual([
       'p2_status',
+      'p2_observe',
       'p2_order',
       'p2_orders',
       'p2_cancel',
@@ -112,6 +119,18 @@ describe('mind operator tools', () => {
     )
     expect(value).toEqual({ id: 'ord-1', state: 'active' })
     expect(manager.orders).toEqual([{ verb: 'wander', params: { radius: 6 } }])
+  })
+
+  it('passes an observation request through, without acting', async () => {
+    const { definitions, manager, agent } = harness()
+    const box = {
+      min: { x: 0, y: 64, z: 0 },
+      max: { x: 2, y: 64, z: 2 },
+    }
+    const value = await definitions.get('p2_observe')?.execute(box, { agent })
+    expect(value).toEqual({ blocks: [], at: 1 })
+    expect(manager.observes).toEqual([box])
+    expect(manager.orders).toHaveLength(0)
   })
 
   it('cancels by id and lists events', async () => {

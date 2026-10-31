@@ -28,10 +28,13 @@ import type {
   RequestEnvelope,
   ResponseEnvelope,
   StatusResult,
+  WorldObserveResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
+import type { ClientPort } from '../port/index.ts'
 import type { MindRuntime } from './mind.ts'
+import { observeWorld } from './observe.ts'
 
 export type BodyRuntimeOptions = {
   body: BodyInfo
@@ -43,6 +46,8 @@ export type BodyRuntimeOptions = {
   providerStatus?: () => ProviderRuntimeStatus
   /** P2Mind loop; absent without a provider. */
   mind?: MindRuntime
+  /** Read-only provider view for `world.observe`; absent without a provider. */
+  port?: ClientPort
 }
 
 /**
@@ -55,6 +60,7 @@ export class BodyRuntime {
   private readonly heartbeatTimeoutMs: number | undefined
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly mind: MindRuntime | undefined
+  private readonly port: ClientPort | undefined
   private owner: OwnerContext | undefined
   private lastHeartbeatAt = 0
   private closing = false
@@ -68,6 +74,7 @@ export class BodyRuntime {
     this.leaseTimeoutMs = options.heartbeatTimeoutMs
     this.providerStatus = options.providerStatus
     this.mind = options.mind
+    this.port = options.port
     this.bodyEpoch = (options.newEpoch?.() ?? randomUUID()) as BodyEpoch
     if (options.owner !== undefined) {
       this.owner = options.owner
@@ -116,6 +123,7 @@ export class BodyRuntime {
       case 'heartbeat': return this.heartbeat(params as unknown as HeartbeatParams) as unknown as JsonValue
       case 'describe': return this.describe() as unknown as JsonValue
       case 'status': return this.status() as unknown as JsonValue
+      case 'world.observe': return this.worldObserve(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
@@ -207,6 +215,19 @@ export class BodyRuntime {
   private mindOrder(params: Record<string, JsonValue>): MindOrderResult {
     this.requireOwner()
     return this.requireMind().enqueueOrder(params)
+  }
+
+  private worldObserve(params: Record<string, JsonValue>): WorldObserveResult {
+    this.requireOwner()
+    if (this.port === undefined) {
+      throw p2Error(
+        ErrorCodes.NOT_INITIALIZED,
+        'runtime',
+        'body has no provider to observe',
+        { module: 'body.runtime' },
+      )
+    }
+    return observeWorld(this.port, params, this.now())
   }
 
   private mindOrders(): MindOrdersResult {
