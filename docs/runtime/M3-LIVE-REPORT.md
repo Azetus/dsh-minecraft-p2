@@ -92,3 +92,18 @@ M3-03 的三条主路径在实机可观察：
 - 无源材料按 `auto-gather` 策略 blocked。
 
 `npm run check`：251 passed / 1 skipped。
+
+## 5. M3-04 恢复实机（受控 pending）
+
+- 插件构建包 SHA-256：`7DDABE90…BACC47682`。
+- 做法：停止 body；向意图日志追加一条 `action.pending`
+  （active order `ord-mvw4uxav-1`，place 目标 `b:-13,66,20`，世界中该格是 `gravel`
+  而 expected 是 `dirt`）；重新启动 body。
+- 结果：
+  - `plan.instantiated` → `action.unreconciled`（带 basis：at/self/time）→ order `blocked`；
+  - `action.settled` 写入 `state=unreconciled`；
+  - 没有发出 place job，**没有重放** pending 动作；
+  - 日志：`action.pending` 尾行 → 重启后 `action.settled(unreconciled)` + `order.terminal(blocked)`。
+- 说明：先尝试直接杀 body 进程，动作在重启前已结算/未留下 pending，因此改用受控 pending
+  注入验证恢复路径；真实“pending 窗口内杀进程”的故障注入仍待做。
+
