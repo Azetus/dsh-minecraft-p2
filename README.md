@@ -1,50 +1,30 @@
 # dsh-minecraft-p2
 
-Minecraft 生存 agent 的 DSH 运行时：bridge 进程 + body 子进程 + Mineflayer provider。
+Minecraft 生存 agent 的 DSH 运行时：bridge 进程 + body 子进程 + 可替换的客户端接入。
 
-**版本 0.3.3：P2Controller 是唯一自主控制模式。Behavior/guard/switch/confirm 已删除。**
+**当前方向：P2Mind（NPC AI 控制结构）替代旧 P2Controller。设计已定稿，实现从 M0 开始。**
 
-## 快速开始
+旧实现对 agent 是“逐步操作入口”，实际长跑里只能退化成巨型脚本或微操；P2Mind 把角色交给常驻 NPC AI，
+agent 只下**目标级 order**，NPC 自己选工作、执行、失败重试，并在偏离/终态时唤醒 agent。
+
+## 现在能做什么
+
+- 设计文档：[P2Mind](docs/runtime/P2MIND.md) / [架构](docs/ARCHITECTURE.md) / [契约](docs/CONTRACTS.md) / [运行时](docs/RUNTIME.md)
+- 代码：M0 之前，旧控制层仍留在仓库里（`src/controller/`、`src/core/`、`src/runner/`、`ops/`、`acts/`、`strategies/`），**M0 第一步删除**。
+
+## 目标用法（M1 起）
 
 ```text
 /p2 setup
 /p2 start
-p2_status
-p2_card
+p2_status                      # 精简状态：当前 order / job / 预算 / 最近偏差
+p2_order {verb: "shelter", params: {quality: "minimal"}}   # 下一条 order
+p2_orders                      # 队列
+p2_cancel {id}                 # 取消
+p2_report                      # 最近一次偏离/终态摘要
 ```
 
-检查并启用 act：
-
-```text
-p2_check  {sourcePath: 'acts/goto.mjs', artifactKind: 'act'}
-p2_activate {artifactId}
-```
-
-检查并启用策略：
-
-```text
-p2_check  {sourcePath: 'strategies/probe-walk.strategy.js', artifactKind: 'strategy'}
-p2_activate {artifactId}
-p2_controller action=enable
-p2_controller action=install {artifactId}
-p2_controller action=commit {goal, strategyKey, post, baselineKeys, checkpoint?}
-```
-
-停止：
-
-- `p2_controller action=cancel`：取消当前承诺
-- `p2_controller action=disable`：停止自主行动
-- `/p2 stop`：停止 body
-
-## 文档
-
-- [架构](docs/ARCHITECTURE.md)
-- [契约](docs/CONTRACTS.md)
-- [运行时](docs/RUNTIME.md)
-- [操作员手册](docs/OPERATOR-PLAYBOOK.md)
-- [P2Controller 设计](docs/runtime/P2CONTROLLER.md)
-- [Body 接线](docs/runtime/P2CONTROLLER-BODY-WIRING.md)
-- [Agent 提示词](prompts/runtime-agent.md)
+角色自己完成：选点、备料、建造、吃饭、回屋、夜间待命；agent 只在被打断时介入。
 
 ## 开发
 
@@ -53,4 +33,12 @@ npm run check   # build + typecheck + test
 npm run bundle  # bundles/dsh-minecraft-p2-<version>.tgz
 ```
 
+## 文档
 
+- [架构](docs/ARCHITECTURE.md)
+- [P2Mind 设计](docs/runtime/P2MIND.md)
+- [契约](docs/CONTRACTS.md)
+- [运行时](docs/RUNTIME.md)
+- [操作员手册](docs/OPERATOR-PLAYBOOK.md)
+- [文档目录规则](docs/README.md)
+- 归档（仅供回顾）：[`docs/history/`](docs/history/)

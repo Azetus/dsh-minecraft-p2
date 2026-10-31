@@ -1,71 +1,92 @@
-# 架构（Controller-only）
+# 架构
+
+> 控制结构 = **P2Mind**（详见 [P2Mind 设计](runtime/P2MIND.md)）。旧 P2Controller 已归档到 `history/`。
 
 ## 1. 进程与边界
 
 ```text
 DSH session (bridge plugin)
   ├─ p2_* tools / /p2 command / owner wake
-  └─ BodyManager ── stdio JSON-lines ──> body process
-                                         ├─ ArtifactHost: registry + check/activate + watch
-                                         ├─ P2Controller: S0–S3, lease, commitment, memory
-                                         ├─ Runner (act/policy sandbox)
-                                         ├─ Provider (Mineflayer)
-                                         └─ ActPort / QueryPort / PolicyPort
+  └─ BodyManager ── JSON-lines stdio ──> body process
+                                           ├─ P2Mind（树 / giver / job / tracker / driver）
+                                           ├─ ClientPort（mineflayer 适配器）
+                                           ├─ Verifier + 意图日志
+                                           └─ provider（唯一游戏 I/O）
 ```
 
 - **bridge**：工具、owner 校验、心跳/故障/重启、唤醒、汇总；不执行游戏动作。
-- **body**：`ArtifactHost` 负责 artifact 与观测；`P2Controller` 是**唯一自主控制模式**；`Runner` 只跑 act/policy；`Provider` 是唯一游戏 I/O。
-- 消息帧：`src/contracts/framing.ts` / `transport.ts`；请求/响应类型见 `src/contracts/protocol.ts`。
+- **body**：P2Mind 与 ClientPort 适配器所在的进程；所有游戏 I/O 走 ClientPort。
+- **单写者**：只有持有写令牌的 Driver 能调用 ClientPort 的写操作。
 
-## 2. 控制面
+## 2. 控制结构
 
-没有 behavior run、没有 switch、没有 guard、没有 confirm。
+```text
+agent ──order──► OrderStore ──► Planner ──► PlanInstance
+                                              │
+      常驻树（紧急） / 主树（常规） / 对话管线 ──► WorkGiver ──► Job
+                                              │
+                                        JobTracker ──► Driver ──► ClientPort
+                                              │
+                                        Verifier ──► 证据/唤醒
+```
 
-- `p2_controller action=enable|disable|status|install|commit|cancel|events`
-- `disable` 先冻结评估/dispatch，再取消承诺、撤销租约、等待释放确认。
-- 单 action slot：只有 Controller 的租约可以 dispatch act。
-- S0 危险抢占：S0 策略先占槽；承诺 suspended；危险清除后重新核验再继续。
-- S1 维护：`maintain` 策略在饥饿/受伤时吃食物或等待回血，和 S0/S2 共用同一租约。
-- S0 同一 `holder|intent` 60s 内 3 次未清除 → `blocked(S0_RETRY_EXHAUSTED)`，承诺 `blocked: EMERGENCY_BLOCKED`。
-- 每 tick 决策写入有界 `decisions[]`；`metrics` 记录空转/无进展、S0 四段时延、承诺与动作计数。
-- 死亡点写入 `death` hazard（60 分钟）；非 S0 动作目标落在 hazard 内 → `blocked(HAZARD_TARGET)`。
-- `shadow` 策略只评估、不取租约，用于新策略上线前观察。
+| 层 | 负责 | 不负责 |
+|---|---|---|
+| Order / Plan | 目标、布局、材料政策、工作项 | 调度、执行 |
+| 树 | 选哪个 giver | 选目标、执行 |
+| WorkGiver | 选目标、可达性、前置工作转派 | 执行 |
+| JobTracker | 续做/切换/停止确认/迟到围栏 | 选目标、执行 |
+| Driver | 执行一个已定目标、读回、收尾 | 选目标、改计划 |
+| Verifier | 三态验证（只读观测） | 抢交互、改世界 |
 
-## 3. 内容与沙箱
+## 3. 接入
 
-| 类型 | 运行位置 | 约束 |
-| --- | --- | --- |
-| `act` | runner vm | 单文件、同步 hook；只能声明 op；无网络/文件 |
-| `policy` | runner vm | 单文件纯函数；watch 谓词 |
-| `op` | body 进程 | 扩展 provider 原语；受 capability/ledger 约束 |
-| `strategy` | body 进程 `node:vm` | 单文件、同步、纯 JSON 输入输出；无 timer/async/import/eval/process/fetch |
+```text
+ClientPort（query / act / event / capabilities，纯数据）
+  ├─ MineflayerAdapter   现在：进程内调用
+  └─ ModAdapter          将来：WebSocket 到自研客户端 mod
+```
 
-strategy vm **不是**安全边界：它可逃逸；只应运行可信/复核过的内容。
+- 换接入不换 AI：树、giver、plan、driver 都只依赖 ClientPort。
+- 能力是行为契约（`navigate / interact / observe.screen`），缺能力时 driver 声明 `requires` 并降级或报不支持。
+- 一致性测试（20 场景）是两个适配器的共同验收标准。
 
-`src/controller/strategies/` 只保留测试/参考 fixture；body 能安装的**唯一生产策略来源**是 owner 项目里的 `strategies/*.js` artifact。新增战术应优先写 artifact，而不是改 Controller 核心。
+## 4. 目录
 
-## 4. 观测
+```text
+src/
+  bridge/          DSH 插件、工具、进程管理、唤醒
+  body/            body 运行时（RPC、生命周期、装配）
+  port/            ClientPort 契约 + 能力 + 一致性测试
+  port/mineflayer/ mineflayer 适配器
+  mind/            P2Mind：tree / giver / job / tracker / driver / plan / order
+  mind/verify/     验证器
+  mind/journal/    意图日志与恢复
+  contracts/       协议、framing、通用类型
+content/
+  trees/           常驻树 / 主树 JSON
+  plans/           结构模板 JSON
+```
 
-- provider 只提供 query；`QueryPort` 返回 `ok/failed/pending`，带 `sampledAt/validUntil`。
-- Controller 的 observation bus 记录 `known/unknown + sampledAt + validUntil + scope + evidenceId`，用于 `freshSince` 证据门。
-- watch 是观察-only：声明 query + policy 谓词 + 边沿/冷却/TTL；不拥有控制。
-- 事实源默认：position/health/inventory/nearbyBlocks/entities；策略只能读 manifest 声明的事实。
+> 迁移期：旧的 `src/controller/`、`src/core/`（act/broker/artifact/runner）、`src/runner/`、`ops/`、`acts/`、`strategies/` 在 M0 删除。
 
 ## 5. 生命周期
 
-1. 人类 `/p2 start` → body 连接游戏。
-2. owner `p2_check` → `p2_activate` act/policy/op/strategy。
-3. `p2_controller enable` → `install` → `commit`。
-4. 运行中 `p2_controller status/events`；危险由 S0 处理；结束由证据门判定。
-5. 停止：`p2_controller cancel`（承诺）或 `disable`（自主行动）；`/p2 stop` 停 body。
+1. `/p2 start` 或 `p2_body start` → bridge 启动 body 子进程。
+2. body 连接 provider → 加载 `content/`（树、模板）与注册表 → 读取意图日志恢复未完成 order。
+3. body 进入 tick 循环（50ms）：观测 → 常驻树 → 主树（事件）→ tracker → driver。
+4. 停止：`p2_body stop` 先冻结新 dispatch，请求当前 driver 停止并等待确认，落盘意图日志后退出。
+5. body 重启：epoch 变化，P2Mind 状态从意图日志 + 世界重建；**不重放 pending 动作**。
 
-## 6. 目录
+## 6. 与旧设计的关系
 
-- `src/bridge/`：DSH 插件、工具、进程管理、唤醒。
-- `src/body/`：body runtime/server、controller host、provider/rescue/dev-ops。
-- `src/controller/`：P2Controller 核心（lease/observation/commitment/slots/memory/strategies）。
-- `src/core/`：artifact host、checkers、act/policy/op 端口、runner、broker、logging。
-- `src/contracts/`：协议、类型、artifact 契约、framing/digest。
-- `src/runner/`：act/policy 沙箱子进程。
-- `src/provider/`：Mineflayer 适配（query/act 原语）。
-- `strategies/`：实机/示例 strategy 内容；`acts/` 示例 act；`policies/` 示例 policy。
+| 旧组件 | 处置 |
+|---|---|
+| P2Controller（租约/承诺/槽位/交接 FSM） | 删除；由 JobTracker + 两棵树取代 |
+| act / op / strategy artifact 与 check/activate/install | 删除；由注册表（predicate/giver/driver）+ JSON 取代 |
+| runner 子进程（vm 沙箱） | 删除；driver 与 giver 跑在 body 进程 |
+| broker / artifact host / checkers | 删除 |
+| mineflayer provider | 保留，改造为 ClientPort 的适配器 |
+| bridge 进程管理（spawn/心跳/重启） | 保留 |
+| JSON-lines 协议与 framing | 保留，精简为 ClientPort + 控制命令 |
+| 旧的 `ops/`、`acts/`、`strategies/` | 删除（内容层由 `content/` + driver 取代） |

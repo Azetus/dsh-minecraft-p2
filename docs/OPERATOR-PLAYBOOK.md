@@ -1,55 +1,68 @@
-# 操作员手册（接入游戏时，Controller-only）
+# 操作员手册（P2Mind）
+
+> 目标是让角色像一个有点笨的玩家：agent 下目标，NPC 自己干活；agent 只在中断/偏离时介入。
 
 ## 1. 启动
 
-1. 人类：`/p2 setup` → `/p2 start`。
-2. `p2_status`：`connection=connected`、`version=0.3.0`、`bodyEpoch` 非空、owner 是本 session。
-3. `p2_card` + `p2_observe position`：确认进服、维度、位置。
+1. 人类：`/p2 setup` → `/p2 start`；或开发时 `p2_body start`。
+2. `p2_status`：`connection=connected`、`bodyEpoch` 非空、owner 是本 session、`mind.state=idle`。
+3. `p2_card` + `p2_observe {op:"position"}`：确认进服、维度、位置。
 
-## 2. 启动控制
+## 2. 下 order
 
 ```text
-p2_check  {sourcePath: 'acts/goto.mjs', artifactKind: 'act'}
-p2_activate {artifactId}
-p2_check  {sourcePath: 'strategies/probe-walk.strategy.js', artifactKind: 'strategy'}
-p2_activate {artifactId}
-p2_controller action=enable
-p2_controller action=install {artifactId}
-p2_controller action=commit {id, goal, strategyKey, post, baselineKeys, checkpoint?, deadlineMs?}
+p2_order {verb:"shelter", params:{quality:"minimal"}, constraints:{before:{timeOfDay:10800}, within:{radius:48}}}
+p2_order {verb:"gather", params:{resource:"birch_log", count:6}}
+p2_order {verb:"bed"}
+p2_order {verb:"mine_copper", params:{layer:48}}
+p2_order {verb:"smelt", params:{item:"copper_ingot", count:1}}
 ```
 
-`post` 例：`{kind:'count-at-least', factKey:'inventory', item:'dirt', count:1}`、`{kind:'standing'}`。
+- 词表是受限的；不接受坐标、不接受单格动作。
+- 可带 `blueprint`（模板 JSON）表达非标结构；只给相对布局，选址由 Planner 做。
+- 约束常用：`before`（游戏时间/预算）、`within`（相对 anchor 半径）、`avoid`、`quality`。
+- 一次只推进一条活动 order；后续 order 排队。
 
-## 3. 巡检（每 5–10 分钟或唤醒时）
+## 3. 巡检
 
-- `p2_controller action=status`：`mode`、`lease`、`commitment.state`、`decision.reason`、`degraded`。
-- `p2_controller action=events {sinceSeq}`：动作、承诺、故障。
-- `p2_card`：health/food/position/hostiles。
-- watch 事件经 `p2_events`；watch 到期要续期。
+- `p2_status`：当前 order、job、`reportString`、预算余量、`tracker.state`、最近偏差。
+- `p2_events {sinceSeq}`：order/job/plan/tracker 事件；不要轮询 `status` 全量。
+- 唤醒时读 `p2_report`：`{order, state, step, code, attempts, budgetLeft, lastOk, hint}`。
 
-## 4. 停止与异常
+**只在三种唤醒时行动**：order 终态、偏离阈值、tracker fault。正常执行期间不要介入。
 
-| 情况 | 动作 |
-| --- | --- |
-| 任务完成/放弃 | `p2_controller action=cancel` |
-| 需要人工接管 | `p2_controller action=disable`（等 `mode=off`） |
-| 承诺 `blocked` | 看 `blocked.missing/diagnostics`；不要重复 commit 同一策略 |
-| `control-fault` | `disable` → 检查 provider 状态 → 重新 enable |
-| 危险（水/苦力怕） | 先装 S0 策略；已触发时看 `suspended`，不要 disable 掉逃生动作 |
-| 卡住/掉入坑 | `p2_rescue`（tp/effect）；必要时 `force:true` 覆盖活动动作；确认 `sent:true` 后必须读回位置 |
-| body 重启 | `p2_body action=restart`（开发工具）；epoch 变化，controller/watch 清空，重新 enable/install/commit |
+## 4. 停止与替换
 
-## 5. 验收纪律
+| 操作 | 效果 |
+|---|---|
+| `p2_cancel {id}` | 取消 order；结束其当前 job（等待停止确认） |
+| `p2_order` 新一条 | 排队；替换类命令（`come`/`stop`）走立即替换语义 |
+| `p2_body stop` | 冻结 dispatch → 等停止 → 落盘 → 退出 |
+| `p2_body restart` | 重启 body；P2Mind 从意图日志 + 世界重建 |
 
-1. 回执不是生效：必须读回 position/inventory/blocks。
-2. 承诺成功必须有 `evidence`（`evidenceId/sampledAt` 晚于动作结束）。
-3. 不用 sleep/轮询；等待靠唤醒。
-4. 同一根因第二次出现，先修策略/act/op，不要硬试。
-5. 没有 behavior/guard/switch；不要尝试旧接口。
+## 5. 异常处理
 
-## 6. 安全
+| 现象 | 处理 |
+|---|---|
+| `blocked(NO_MATERIAL)` | 补材料 order，或改 `materialPolicy` 允许自动补给 |
+| `blocked(SITE_NOT_FOUND)` | 换区域/换模板变体（flat/slope/dig-in） |
+| `WORK_ITEM_BLOCKED`（单格反复失败） | 通常是支撑/站位问题；换变体或换点 |
+| `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |
+| `OBSERVATION_STALE` | 检查连接；恢复后自动继续，不重放 pending |
+| 反复同一根因 | 换**计划模板**或 **giver/driver 参数**，不要重复下同一条 order |
 
-- 不在未装 S0 逃生策略时进入水域/水下矿层。
-- 不在据点/重生点 4 格内竖直下挖。
-- 远离基地的测试先确认路径与敌对；随时准备 `p2_rescue`。
-- `p2_controller disable` 不会把 bot 带回基地；需要时手动 rescue。
+## 6. 纪律
+
+1. 不逐步微操：不要用调试入口替角色走路/放置；需要改行为就改模板或 giver。
+2. 不轮询：等唤醒；巡检间隔 ≥60s。
+3. 不重复下同一 order：同一目标第二次失败，先看 `hint`，换策略而不是重试。
+4. 证据优先：order 成功必须有 `confirmed` 证据；`insufficient` 不算完成。
+5. 一次只跑一条控制路径：不要同时开两个 body/两个 order 源。
+
+## 7. 安全
+
+- 危险（水/岩浆/着火/敌对贴身）由常驻树处理，**不要**为了任务压掉逃生。
+- 夜间在屋外：`policy.idle` 设 `shelter-only` 或 `conservative`。
+- 下矿：`policy.idle` 设 `shelter-only`，避免空闲时挖进。
+- 对话：验收场景可 `policy.dialogue=off`；任何情况下都不接受 `/` 开头的请求。
+- 禁止：游戏指令、传送、改模式、改 gamerule、注入物品。

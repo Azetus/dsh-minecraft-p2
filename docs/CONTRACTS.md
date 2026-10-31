@@ -1,82 +1,225 @@
-# P2 契约（Controller-only）
+# 契约（P2Mind）
+
+> 设计背景见 [P2Mind](runtime/P2MIND.md)。本文只列可实现的接口与不变量。
 
 ## 1. 边界
 
-- **bridge ↔ body**：JSON-lines `RequestEnvelope/ResponseEnvelope`（`src/contracts/protocol.ts`）。
-- **body ↔ provider**：`QueryPort`/`ActPort`（`src/core/node-runtime.ts`）。
-- **content ↔ host**：act/policy/op/strategy 单文件 artifact；检查通过后才可激活/安装。
+| 边界 | 传输 | 形状 |
+|---|---|---|
+| bridge ↔ body | JSON-lines stdio | `RequestEnvelope / ResponseEnvelope`（`src/contracts/protocol.ts`） |
+| body ↔ 游戏 | `ClientPort` | 纯数据；不传库对象 |
+| content ↔ 运行时 | 注册表 + JSON | `content/trees/*.json`、`content/plans/*.json` |
 
-## 2. Artifact
+**不变量**
 
-`ArtifactKind = 'act' | 'policy' | 'op' | 'strategy'`。
+1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 ClientPort 层被拒绝并记 `stale-write`。
+2. **结果三态**：`confirmed / refuted / insufficient`；`insufficient` 不得算成功。
+3. **进度可重建**：能从世界重建的优先重建；不能重建的写意图日志。
+4. **树不产坐标**：树只选 giver；目标由 giver 选；driver 不得自行推导目标。
 
-| 类型 | 入口 | 说明 |
-| --- | --- | --- |
-| act | `defineAct({manifest, create})` | 单文件、同步 hook；`queryOps/controlOps` 必须已注册 |
-| policy | `definePolicy({manifest, run})` | 纯函数；watch 谓词 |
-| op | `defineOp(...)` | body 进程；扩展 query/control 原语 |
-| strategy | `defineStrategy({manifest, evaluate})` | 纯 JSON；见 `strategy.ts` |
+## 2. ClientPort
 
-所有 artifact 的 manifest/artifact id/digest/binding 必须一致；依赖在 check 时锁定精确 artifactId。
+```ts
+type Vec3 = { x: number; y: number; z: number }
+type BlockInfo = { name: string; state?: Record<string, string>; loaded: boolean }
+type Item = { slot: number; name: string; count: number }
 
-## 3. 检查与激活
+interface ClientPort {
+  // 查询
+  self(): { pos: Vec3; yaw: number; pitch: number; health: number; food: number; onGround: boolean; inWater: boolean; inLava: boolean }
+  blockAt(p: Vec3): BlockInfo | null           // null = 未加载
+  blocksIn(box: { min: Vec3; max: Vec3 }, filter?: string[]): BlockInfo[]
+  inventory(): Item[]
+  entities(box: { min: Vec3; max: Vec3 }): EntityInfo[]
+  screen(): ScreenInfo | null                  // 未支持时 null + capability 缺失
+  time(): { timeOfDay: number; worldAge: number }
 
-- `p2_check {sourcePath, artifactKind?, timeoutMs?}` → `{artifactId, definitionId, sourceDigest, bindingId, kind, enabled:false}`。
-- `p2_activate {artifactId}` → 启用默认映射；policy 只作为依赖，不单独启用。
-- 重新 check 同一 source 会得到同一 artifactId；同 definition 新版本需要重新 check/activate。
+  // 动作（写）：必须持令牌
+  beginWrite(token: WriteToken): void
+  endWrite(token: WriteToken): void
+  moveTo(target: Vec3 | Landmark, opts?: { range?: number; timeoutMs?: number }): ActResult
+  lookAt(p: Vec3): ActResult
+  dig(p: Vec3): ActResult
+  place(p: Vec3, face: Face, item: string): ActResult
+  useItem(): ActResult
+  useOn(p: Vec3): ActResult
+  attack(entityId: string): ActResult
+  sleep(bed: Vec3): ActResult
+  say(text: string): void                      // 独立限流通道，不受写令牌约束
 
-## 4. Controller 协议
+  // 事件
+  on(event: 'blockUpdated' | 'inventoryChanged' | 'screenOpened' | 'damaged' | 'died' | 'chat', cb: (payload: unknown) => void): void
 
-| 方法 | 语义 |
-| --- | --- |
-| `controller.enable` | 进入唯一控制模式；要求无已启用 action |
-| `controller.disable` | 冻结 dispatch → 取消承诺 → 撤销租约 → 等待释放 → off |
-| `controller.install {artifactId, mode?, shadow?}` | 安装已激活 strategy；同 definition 版本变更走 pending takeover；`shadow:true` 只评估、不取得租约 |
-| `controller.commit {goal, strategyKey, post, baselineKeys?, checkpoint?}` | 创建承诺；baseline 在 commit 时采样 |
-| `controller.queue`（同一组参数） | 入队；当前承诺终止后自动提交下一个，队列上限 32；body 重启清空 |
-| `controller.cancel {commitmentId?, reason?}` | 取消承诺并撤销其动作 |
-| `controller.status` | 完整 `ControllerView` |
-| `controller.events {sinceSeq?, limit?}` | 事件游标 |
+  capabilities(): Capability[]                // 'navigate' | 'interact' | 'observe.screen' | 'combat'
+}
 
-`post`：`{kind:'count-at-least', factKey, item?, count}` | `{kind:'fact-equals', factKey, value}` | `{kind:'standing'}`。
+type WriteToken = { runId: string; jobId: string; seq: number }
+type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?: unknown; elapsedMs: number }
+```
 
-完成门：`candidate-complete` → cleanup → 收尾后 fresh 证据 → `succeeded`；证据缺失/过期/baseline 未知 → `blocked`，不伪造成功。
+**语义**
 
-### 4.1 可解释性与度量
+- `blockAt` 返回 `null` 表示未加载，**不等于空气**。
+- `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
+- 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 
-`ControllerStatus` 现在还提供：
+## 3. Job
 
-- `decisions[]`：最近 64 个 tick 的 `{tick, reason, selected, candidates, suppressedSlots, evidence}`；`evidence` 是事实 key 引用。
-- `metrics`：`ticks / commitmentActiveMs / noProgressMs / idleMs / actionsStarted / actionsFailed / commitmentsSucceeded / commitmentsFailed / commitmentsBlocked / deaths / deathsByClass / s0Latency[]`。
-- `s0Latency[]` 分段：`detectedAt → decidedAt → preemptAt → effectiveAt`，`totalMs` 是危险可观测到 S0 动作生效的总时长（最近 16 次）。
+```ts
+type Job = {
+  driverId: string
+  target?: Target
+  params: Record<string, unknown>       // 已通过 driver.schema
+  orderId?: string
+  workItemId?: string
+  runId: string
+  issuedAt: number
+  budget: { maxTicks: number; maxWallMs: number }
+}
+```
 
-**空转口径**：没有承诺时安静待命是合法的，不要求巡游；`noProgressMs / commitmentActiveMs` 才是有可执行承诺时的无进展比例。
+- `runId` 在每次尝试时新生成；旧 `runId` 的结果只对账。
+- 失败计数键 = `(orderId|workItemId|driverId)`。
 
-### 4.2 危险记忆
+## 4. WorkGiver
 
-- `death` 是独立 hazard 类别：死亡点半径 4，TTL 60 分钟；同时写入 `deaths/deathsByClass`。
-- 所有 hazard 默认 TTL 60 分钟（artifact 可显式给更短/更长）。
-- Controller 在非 S0 动作启动前检查 action 的 `args.pos/x,y,z`；目标落在未过期 hazard 内 → `blocked`，诊断 `HAZARD_TARGET`，不依赖 strategy 自觉。
+```ts
+interface WorkGiver {
+  id: string
+  requires?: Capability[]
+  score?(ctx: EvalCtx, world: WorldView): number
+  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null
+}
+type Candidate = { driverId: string; target: Target; params: object; keys: string }
+type Handoff = { driverId: string; target: Target; params: object; reason: string }
+```
 
-### 4.3 救援与重启
+- `null`：暂无工作（正常）。
+- `Handoff`：先做前置工作（清障/补支撑/站位），完成后重新 `find`。
+- `keys`：续做键；与 `DriverHandle.continuationKey()` 相同即“延续”，不重启。
 
-- `p2_rescue` 支持 `force:true`：仅在紧急情况下允许在 controller 动作仍活动时做位置救援；效果类救援不受 `force` 影响。
-- `p2_body action=restart`：stop → start 一条命令完成 provider 断线/重启恢复（开发工具）。
-- 开发模式下 provider 连续 2 次状态轮询为 disconnected 时，BodyManager 以 `provider-disconnected` fault 自动重启 body（受 autoRestart 预算/退避约束）。
+## 5. Driver
 
-## 5. 状态与事件
+```ts
+interface Driver {
+  id: string
+  schema: JSONSchema
+  requires?: Capability[]
+  defaults: { budget: Budget; interrupt: 'constant-only' | 'never' | 'any'; suspendable: boolean }
+  validate(job: Job, world: WorldView): { ok: true } | { ok: false; code: string }
+  start(job: Job, ctx: DriverCtx): DriverHandle
+}
 
-`p2_status` 含 `controller`（mode/queueLength/lease/action/decision/decisions/metrics/commitment/strategies/verification/stall/memory/degraded/events）、`watches`、`providerState`。没有 run/guard/confirm 字段。
+interface DriverHandle {
+  tick(): void
+  requestStop(): void
+  stopStatus(): 'stopping' | 'stopped' | 'unconfirmed'
+  result(): { state: 'running' | 'succeeded' | 'failed' | 'interrupted'; code?: string; observed?: unknown }
+  continuationKey(): string
+}
+```
 
-事件类型（`controller.events`）：策略安装/接管、action start/complete/preempt、承诺创建/挂起/恢复/成功/失败/blocked、control-fault、strategy-blocked。
+- `tick()` 必须有界；异步动作以句柄表示，**未结束不得重复启动**。
+- `requestStop()` 后进入 `stopping`；`unconfirmed` 超过阈值 → tracker 记 `fault`。
+- 读回是稳定性观察，不是服务端接受的证明；强证据走独立观测。
 
-## 6. Watch
+## 6. JobTracker
 
-`watch.add {queries, predicate, edge?, cooldownMs?, ttlMs?}`；`predicate` 是已 check 的 policy artifactId。watch 只通过 `p2_events` 通知并唤醒 owner，不能控制。
+```
+idle ─offer─► starting ─► running ─terminal─► idle
+running ─preempt─► stopping ─stopped─► idle
+stopping ─超时/不可确认─► fault ─► 冻结新 dispatch + 上报
+```
 
-## 7. 错误
+接口：
 
-- 协议：`UNKNOWN_METHOD`、`NOT_INITIALIZED`、`STALE_EPOCH`、`INVALID_MESSAGE`、`COMMAND_NOT_FOUND`。
-- 控制：`CONTROL_FAULT`、`LEASE_*`、`COMMITMENT_*`、`STRATEGY_*`、`ACT_*`、`OP_*`。
-- `blocked.reason`：`EVIDENCE_TIMEOUT`、`REVERIFY_TIMEOUT`、`MISSING_OBSERVATION`、`STRATEGY_BLOCKED`、`RELEASE_UNCONFIRMED`、`EMERGENCY_BLOCKED`、`COMMITMENT_DEADLINE`。
-- hazard 否决诊断：`HAZARD_TARGET`（非 S0 动作目标落在未过期 hazard 内）。
+```ts
+interface JobTracker {
+  offer(candidate: Candidate | null): void
+  tick(): void
+  current(): { job: Job; driverId: string } | null
+  state(): 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
+  fault(): { code: string; since: number } | null
+}
+```
+
+规则：
+
+1. 续做：`candidate.keys === current.continuationKey()` → 只续期。
+2. 切换：`seq++`（旧令牌失效）→ `requestStop()` → 等 `stopped` → 起新 job。
+3. 迟到：`runId` 不匹配的结果只记 `stale-result`。
+4. 失败：按 `(orderId|workItemId|driverId)` 计数；超限上报 `blocked`。
+
+## 7. 树与谓词注册表
+
+```jsonc
+{ "type": "priority", "children": [] }
+{ "type": "sorter",   "children": [] }
+{ "type": "when", "predicate": "isNight", "onUnknown": "skip", "then": {}, "else": {} }
+{ "type": "subtree", "ref": "NightGuard" }
+{ "type": "sequence", "children": [] }
+{ "type": "giver", "ref": "plan.work" }
+```
+
+- 谓词注册项：`{ id, schema, fn(ctx, world): true | false | 'unknown' }`。
+- giver 注册项：`{ id, factory }`；树只能引用已注册 id，未知 id 在加载期报 `DefinitionError`。
+- 求值结果：`Job | NoWork | NeedObservation | DefinitionError`。
+- 一次求值使用**同一份** `WorldView`；谓词不得自行查询。
+
+## 8. Plan / WorkItem
+
+```ts
+type PlanInstance = {
+  planId: string
+  orderId: string
+  template: string
+  templateVersion: number
+  origin: Vec3                       // 内空最小角（地板层）
+  size: [number, number, number]     // 内空尺寸
+  materialPolicy: Record<string, { auto: boolean; maxBudgetTicks?: number }>
+  workItems: WorkItem[]
+  verify: VerifySpec
+}
+
+type WorkItem = {
+  id: string
+  kind: 'clear' | 'prepare' | 'place' | 'enter' | 'hold'
+  at: [number, number, number]                        // 相对 origin
+  expected?: { name: string; state?: Record<string, string> }
+  after?: string[]
+}
+
+type WorkState =
+  | { kind: 'satisfied' }
+  | { kind: 'executable'; driverId: string }
+  | { kind: 'blocked'; reason: 'NO_SUPPORT' | 'NO_STAND' | 'NO_MATERIAL' | 'UNREACHABLE' | 'CONFLICT' }
+  | { kind: 'unknown' }
+```
+
+- 匹配用 `name + state 子集`，不用 `block.name === item`。
+- WorkGiver 遍历**全部**工作项，返回任一 `executable`。
+
+## 9. 意图日志（恢复用）
+
+```jsonc
+{"at": 1793..., "kind": "order.accepted", "order": {...}}
+{"at": 1793..., "kind": "plan.instantiated", "planId": "...", "templateVersion": 1, "origin": {...}}
+{"at": 1793..., "kind": "workItem.terminal", "planId": "...", "workItemId": "w7", "state": "satisfied"}
+{"at": 1793..., "kind": "action.pending", "runId": "...", "driverId": "place", "target": {...}}
+{"at": 1793..., "kind": "order.terminal", "orderId": "...", "state": "succeeded", "evidence": {...}}
+```
+
+恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；版本不匹配拒绝恢复。
+
+## 10. 错误码
+
+| 码 | 含义 |
+|---|---|
+| `CAPABILITY_MISSING` | 端口不具备所需能力 |
+| `STALE_WRITE` | 写令牌不匹配（旧实例） |
+| `CLIENT_TIMEOUT` | 动作超时，效果未确认 |
+| `NO_MATERIAL` / `NO_SUPPORT` / `NO_STAND` / `UNREACHABLE` / `CONFLICT` | 工作项不可执行 |
+| `DRIVER_FAULT` | driver 内部错误 |
+| `STOP_UNCONFIRMED` | 停止无法确认 → tracker fault |
+| `DEFINITION_ERROR` | 树/模板/注册表定义错误 |
+| `INSUFFICIENT_EVIDENCE` | 验证证据不足（不等于失败） |

@@ -1,51 +1,91 @@
-# 运行时（Controller-only）
+# 运行时（P2Mind）
 
-## 1. Body 生命周期
+## 1. body 生命周期
 
-`/p2 start` 启动 body 子进程：连接 provider → 创建 `ArtifactHost` → 创建 `BodyController` → 进入 hello/心跳循环。没有 provider 时 body 仍可 check/activate，但 controller 不可用。
+1. `p2_body start`（或 `/p2 start`）→ bridge 启动 body 子进程。
+2. body 连接 provider（ClientPort 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。
+3. 进入 tick 循环（50ms）。
+4. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出。
+5. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**。
 
-`/p2 stop` 走 `shutdown`：停止 controller（撤销租约）→ 关闭 provider/runner → 退出。bridge 负责故障检测与可选重启；body epoch 变化后 controller/watch 状态清空。
+## 2. tick 循环
 
-## 2. Tick
+```text
+每 tick (50ms):
+  obs = sensors.tick(budget ≤ 2ms)                     // 观测缓存，不做网络查询
+  if (cheapDanger || 10Hz 到期)
+      tracker.offer(constantTree.evaluate(obs))
+  if (mainTreeDirty || 3s 兜底) {
+      mainTreeDirty = false
+      tracker.offer(mainTree.evaluate(obs, orders, plan))
+  }
+  tracker.tick()
+  if (tracker.state() === 'idle' && 无候选) idleFallback()
+```
 
-body 每 50ms：
+`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
 
-1. `ArtifactHost.tick(now)`：推进 watch 采样（观察-only，任何 mode 都运行）。
-2. 若 controller engaged：`BodyController.tick(now)`：租约/动作完成 → 观测 → 策略评估 → 承诺更新 → 仲裁 → dispatch。
+## 3. 预算
 
-`disable` 期间 controller 冻结评估/dispatch，只推进释放；释放确认后 `mode=off`。
+| 项 | 预算 | 超限行为 |
+|---|---|---|
+| 传感器刷新 | ≤2ms/tick | 跳过本轮，保留旧观测并标 `stale` |
+| 常驻树求值 | ≤2ms | 本轮放弃，下轮重试 |
+| 主树求值 | ≤10ms | 记 `EVAL_TIMEOUT`，保持当前 job |
+| driver tick | 有界（不阻塞循环） | 由 driver 自己分片 |
+| 单 job | `maxTicks` + `maxWallMs` | 超限 → `failed(BUDGET_EXCEEDED)` |
 
-## 3. 单 action slot
+游戏 tick 与单调墙钟分开：连接停滞时 `maxTicks` 不会推进，必须由 `maxWallMs` 兜底。
 
-- 只有租约持有者可以 `act.start`。
-- 交接顺序：revoke → stop → confirm release → grant → start；超时 `control-fault`。
-- generation/attempt 隔离旧动作；旧 attempt 的结果不驱动新策略。
-- 完成门：动作结束后必须重新采样证据；baseline 与 `freshSince` 都满足才 `succeeded`。
+## 4. 抢占与停止
 
-## 4. 槽位
+- 常驻树提出候选 → **先判续做**：`keys` 相同则只续期，不重启（避免“着火时每 50ms 重开一次逃生”）。
+- 确需切换：`seq++`（旧写令牌失效）→ `driver.requestStop()` → 等 `stopStatus()==='stopped'`。
+- `stopping` 超时或 `unconfirmed` → `fault`：冻结新 dispatch、上报 owner；恢复需人工或自愈流程。
+- 打断时**结束当前 job**，不保留“半步状态”；恢复时由 WorkGiver 重算“下一个可执行工作项”。
 
-`S0` 危险抢占（`hazardClass` 必填）> `S1` 维护 > `S2` 任务 > `S3` 探索。承诺绑定 S2；S0 抢占使承诺 `suspended`，危险清除后 `verifying` → 继续。
+## 5. 工作选择与重试
 
-S0 重试预算：同一 `holder|intent` 60s 内 3 次启动未清除 → `blocked(S0_RETRY_EXHAUSTED)`；承诺 `EMERGENCY_BLOCKED`。
+1. 常驻树 → 紧急 giver → 候选（逃生/进食/脱离）。
+2. 主树 → 维护 giver → 当前 order 的 plan giver → 空闲 giver。
+3. giver 返回 `Handoff` → 先执行前置工作，完成后重新 `find`。
+4. 失败按 `(orderId|workItemId|driverId)` 计数：
+   - ≤2 次：同一工作项换站位/换面/换材料重试；
+   - 3 次：标记该工作项 `blocked`，WorkGiver 换下一个可执行项；
+   - 全部 `blocked`：order `blocked`，唤醒 agent 并附 digest。
 
-## 5. 观测
+## 6. 恢复
 
-- provider query 返回 `ok/failed/pending`；host 记录 `sampledAt/validUntil/scope`。
-- Controller 事实源：position/health/inventory/nearbyBlocks/entities；TTL 600–2000ms，coherence 1200ms。
-- 策略只读 manifest 声明的事实；未知事实 → `unknown`，承诺 `blocked`（fail closed）。
+| 情形 | 处理 |
+|---|---|
+| 意图日志尾部半行 | 丢弃 |
+| `action.pending` 未结算 | 只对账（必要时 `check` Job），不重放 |
+| order 已取消 | 恢复后保持取消，plan 不复活 |
+| 世界/角色/模板/定义版本不匹配 | 拒绝恢复，上报 |
+| 能从世界重建的进度（已建方块） | 重建，不依赖内存 |
 
-## 6. 停止语义
+## 7. 观测与证据
 
-| 操作 | 效果 |
-| --- | --- |
-| `controller.cancel` | 取消当前承诺，撤销其动作 |
-| `controller.disable` | 冻结 dispatch，取消承诺，撤销租约，等释放后 off |
-| `/p2 stop` | 停止整个 body |
-| `p2_rescue` | 实验救援通道；不在 controller 控制路径内 |
+- `WorldView` 是同一份快照，供一次求值使用；谓词不得自行查询。
+- 证据三态：`confirmed / refuted / insufficient`；`insufficient` 时发 `check` Job 或超时上报。
+- 开熔炉/看箱子这类需要交互的观测，只能由 `check` Job 完成；Verifier 不抢交互能力。
+- 三级检查（job 读回 / plan verify / order post）不是三个独立证据源，除非观测路径确实不同。
 
-## 7. 失败与恢复
+## 8. agent 能看到什么
 
-- `control-fault`：停止/释放无法确认；controller `fault`，需 disable/重新 enable。
-- 动作失败：记录 `action-completed: failed` + memory failure，由策略决定重试/换路；核心不做隐式重试。
-- 策略异常：诊断 `STRATEGY_ERROR`，该 tick `blocked`；不落回低槽位。
-- body 重启：controller 状态丢失；需重新 enable/install/commit。
+| 接口 | 内容 |
+|---|---|
+| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / 最近偏差摘要 |
+| `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
+| `p2_events {sinceSeq}` | order/job/plan/tracker 事件游标 |
+| 唤醒 | 只在 order 终态、偏离阈值、tracker fault 时推送 |
+
+## 9. 失败模式
+
+| 现象 | 判定 | 处理 |
+|---|---|---|
+| driver 停止无法确认 | `STOP_UNCONFIRMED` | tracker fault，冻结 dispatch，上报 |
+| 长期无观测更新 | `OBSERVATION_STALE` | 暂停新 job，保留当前，等恢复 |
+| 同一工作项反复失败 | `WORK_ITEM_BLOCKED` | 换工作项；全部阻塞 → order blocked |
+| 材料不足且不可自动补给 | `NO_MATERIAL` | order blocked，唤醒 agent |
+| 定义错误（树/模板/注册表） | `DEFINITION_ERROR` | 拒绝加载，保持上一版有效内容 |
