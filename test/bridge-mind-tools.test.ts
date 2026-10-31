@@ -16,6 +16,7 @@ class FakeManager {
   readonly orders: unknown[] = []
   readonly cancels: string[] = []
   readonly observes: unknown[] = []
+  readonly entityQueries: unknown[] = []
 
   async status(): Promise<unknown> {
     return {
@@ -46,6 +47,11 @@ class FakeManager {
   async worldObserve(params: unknown): Promise<unknown> {
     this.observes.push(params)
     return { blocks: [], at: 1 }
+  }
+
+  async worldEntities(params: unknown): Promise<unknown> {
+    this.entityQueries.push(params)
+    return { entities: [], total: 0 }
   }
 
   async mindOrders(): Promise<unknown> {
@@ -91,6 +97,7 @@ describe('mind operator tools', () => {
     expect([...definitions.keys()]).toEqual([
       'p2_status',
       'p2_observe',
+      'p2_entities',
       'p2_order',
       'p2_orders',
       'p2_cancel',
@@ -130,6 +137,15 @@ describe('mind operator tools', () => {
     const value = await definitions.get('p2_observe')?.execute(box, { agent })
     expect(value).toEqual({ blocks: [], at: 1 })
     expect(manager.observes).toEqual([box])
+    expect(manager.orders).toHaveLength(0)
+  })
+
+  it('passes an entity query through, without acting', async () => {
+    const { definitions, manager, agent } = harness()
+    const args = { radius: 64, names: ['item'] }
+    const value = await definitions.get('p2_entities')?.execute(args, { agent })
+    expect(value).toEqual({ entities: [], total: 0 })
+    expect(manager.entityQueries).toEqual([args])
     expect(manager.orders).toHaveLength(0)
   })
 

@@ -24,6 +24,18 @@ export type EntityInfo = {
   id: string
   name: string
   position: Vec3
+  /** Adapter-provided entity category: player/animal/hostile/other/... */
+  type?: string
+  /** Human-readable category, when the adapter has one. */
+  kind?: string
+  username?: string
+  /** Dropped item stack, resolved by the adapter when it can. */
+  item?: { name: string; count: number }
+}
+
+export type BiomeInfo = {
+  id: number
+  name: string
 }
 
 /** A named place the adapter resolves to a position. */

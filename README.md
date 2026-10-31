@@ -19,6 +19,7 @@ agent 只下**目标级 order**，NPC 自己选工作、执行、失败重试，
 /p2 start
 p2_status                      # 精简状态：当前 order / job / 预算 / 最近偏差
 p2_observe {min,max,detail}    # 只读观测：方块/计数/表面，或 points 定向查询
+p2_entities {radius,names}     # 不移动的实体/掉落物观测（按距离排序）
 p2_order {verb: "shelter", params: {quality: "minimal"}}   # 下一条 order
 p2_orders                      # 队列
 p2_cancel {id}                 # 取消

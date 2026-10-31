@@ -79,6 +79,36 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       },
     }),
     tools.register({
+      name: 'p2_entities',
+      description: 'Read-only entity observation without moving. Radius capped at 160; returns entities sorted by distance, with type/kind/username and dropped-item name/count when available. Server tracking range still limits what exists.',
+      parameters: {
+        type: 'object',
+        properties: {
+          center: vecSchema('Center; defaults to the body position'),
+          radius: { type: 'number', minimum: 0, maximum: 160, description: 'Defaults to 64' },
+          types: {
+            type: 'array',
+            description: 'Entity categories such as animal/hostile/player/other',
+            items: { type: 'string' },
+            maxItems: 16,
+          },
+          names: {
+            type: 'array',
+            description: 'Entity names such as sheep/item',
+            items: { type: 'string' },
+            maxItems: 32,
+          },
+          limit: { type: 'number', minimum: 1, maximum: 512, description: 'Defaults to 128' },
+        },
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        return await manager.worldEntities(args as unknown as JsonValue)
+      },
+    }),
+    tools.register({
       name: 'p2_order',
       description: 'Submit one goal-level order. The NPC chooses and executes the work; do not use it as a micro-command.',
       parameters: {

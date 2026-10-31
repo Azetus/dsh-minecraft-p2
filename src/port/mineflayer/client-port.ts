@@ -9,6 +9,7 @@ import { checkCapability } from '../capabilities.ts'
 import type { ClientEvent, ClientPort, MoveOptions } from '../client-port.ts'
 import type {
   ActResult,
+  BiomeInfo,
   BlockInfo,
   Box,
   EntityInfo,
@@ -60,7 +61,9 @@ type EntityLike = {
   name?: string
   username?: string
   type?: string
+  kind?: string
   position?: { x: number; y: number; z: number }
+  metadata?: Record<number, unknown>
 }
 
 type WaitResult =
@@ -122,6 +125,20 @@ export class MineflayerClientPort implements ClientPort {
     return block === null ? null : blockInfo(block)
   }
 
+  biomeAt(p: Vec3): BiomeInfo | null {
+    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as {
+      biome?: { id?: number; name?: string }
+    } | null
+    const biome = block?.biome
+    if (biome === undefined) return null
+    const id = typeof biome.id === 'number' ? biome.id : -1
+    const registered = (this.bot.registry as unknown as { biomes?: Record<string, { name?: string }> }).biomes?.[String(id)]
+    const name = typeof biome.name === 'string' && biome.name.length > 0
+      ? biome.name
+      : registered?.name ?? `biome_${id}`
+    return { id, name }
+  }
+
   blocksIn(box: Box, filter?: string[]): BlockInfo[] {
     const result: BlockInfo[] = []
     const minX = Math.floor(box.min.x)
@@ -163,10 +180,15 @@ export class MineflayerClientPort implements ClientPort {
       if (position.x < box.min.x || position.x > box.max.x) continue
       if (position.y < box.min.y || position.y > box.max.y) continue
       if (position.z < box.min.z || position.z > box.max.z) continue
+      const item = resolveDroppedItem(this.bot.registry, entity)
       result.push({
         id: String(entity.id ?? -1),
         name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
         position: { x: position.x, y: position.y, z: position.z },
+        ...(entity.type === undefined ? {} : { type: entity.type }),
+        ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+        ...(entity.username === undefined ? {} : { username: entity.username }),
+        ...(item === undefined ? {} : { item }),
       })
     }
     return result
@@ -399,6 +421,21 @@ function blockInfo(block: BlockLike): BlockInfo {
     ...(solid === undefined ? {} : { solid }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
+}
+
+function resolveDroppedItem(
+  registry: unknown,
+  entity: EntityLike,
+): { name: string; count: number } | undefined {
+  if (entity.name !== 'item' && entity.name !== 'item_stack') return undefined
+  const stack = entity.metadata?.[8]
+  if (typeof stack !== 'object' || stack === null) return undefined
+  const itemId = (stack as { itemId?: unknown }).itemId
+  const count = (stack as { itemCount?: unknown }).itemCount
+  if (typeof itemId !== 'number') return undefined
+  const items = (registry as { items?: Record<string, { name?: string }> }).items
+  const name = items?.[String(itemId)]?.name ?? `item_${itemId}`
+  return { name, count: typeof count === 'number' ? count : 1 }
 }
 
 function isVec3(value: Vec3 | Landmark): value is Vec3 {

@@ -48,6 +48,7 @@ export function observeWorld(
     },
     inventory,
     time: { ...time },
+    biome: port.biomeAt(self.pos),
   }
 
   if (params.points !== undefined) {
@@ -56,7 +57,7 @@ export function observeWorld(
   return observeBox(port, params, common)
 }
 
-type Common = Pick<WorldObserveResult, 'at' | 'self' | 'inventory' | 'time'>
+type Common = Pick<WorldObserveResult, 'at' | 'self' | 'inventory' | 'time' | 'biome'>
 
 function observePoints(port: ClientPort, params: Record<string, unknown>, common: Common): WorldObserveResult {
   if (!Array.isArray(params.points) || params.points.length === 0) {

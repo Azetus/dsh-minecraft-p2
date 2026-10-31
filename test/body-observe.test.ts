@@ -52,6 +52,7 @@ function fakePort(blocks: RawBlock[] = defaultBlocks): { port: ClientPort; write
   const port = {
     self: () => self,
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
+    biomeAt: () => ({ id: 39, name: 'plains' }),
     blocksIn: () => blocks,
     blockAt: (p: { x: number; y: number; z: number }): BlockInfo | null => {
       const found = blocks.find(block => block.pos.x === p.x && block.pos.y === p.y && block.pos.z === p.z)
@@ -96,6 +97,7 @@ describe('world.observe', () => {
     expect(response.error).toBeUndefined()
     expect(result.at).toBe(1234)
     expect(result.self.pos).toEqual(self.pos)
+    expect(result.biome).toEqual({ id: 39, name: 'plains' })
     expect(result.inventory).toEqual([{ slot: 0, name: 'dirt', count: 2 }])
     expect(result.blocks).toEqual([
       { x: 0, y: 64, z: 0, name: 'stone', loaded: true },

@@ -2,6 +2,7 @@ import type { JsonValue } from '../contracts/types.ts'
 import type { Capability } from './capabilities.ts'
 import type {
   ActResult,
+  BiomeInfo,
   BlockInfo,
   Box,
   EntityInfo,
@@ -35,6 +36,7 @@ export type MoveOptions = { range?: number; timeoutMs?: number }
 export interface ClientPort {
   self(): SelfInfo
   blockAt(p: Vec3): BlockInfo | null
+  biomeAt(p: Vec3): BiomeInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]
   inventory(): Item[]
   entities(box: Box): EntityInfo[]

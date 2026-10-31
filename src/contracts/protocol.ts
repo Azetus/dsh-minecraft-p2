@@ -20,6 +20,7 @@ export const METHODS = [
   'describe',
   'status',
   'world.observe',
+  'world.entities',
   'mind.order',
   'mind.orders',
   'mind.cancel',
@@ -200,11 +201,50 @@ export type WorldObserveResult = {
   }
   inventory: Array<{ slot: number; name: string; count: number }>
   time: { timeOfDay: number; worldAge: number }
+  /** Biome at the body position; null when the adapter cannot tell. */
+  biome?: { id: number; name: string } | null
   /** Present for detail=blocks / points; includes loaded:false cells. */
   blocks?: WorldObserveBlock[]
   counts?: WorldObserveCounts
   surface?: WorldObserveSurface[]
   entities?: Array<{ id: string; name: string; position: ObserveVec3 }>
+}
+
+export const ENTITIES_MAX_RADIUS = 160
+export const ENTITIES_MAX_LIMIT = 512
+
+export type WorldEntitiesParams = {
+  /** Defaults to the body position. */
+  center?: ObserveVec3
+  /** Defaults to 64; capped at 160 (server tracking range still applies). */
+  radius?: number
+  /** Entity categories such as animal/hostile/player/other. */
+  types?: string[]
+  /** Entity names such as sheep/item; max 32. */
+  names?: string[]
+  /** Defaults to 128. */
+  limit?: number
+}
+
+export type WorldEntityView = {
+  id: string
+  name: string
+  type?: string
+  kind?: string
+  username?: string
+  /** Dropped item stack when the adapter could resolve it. */
+  item?: { name: string; count: number }
+  position: ObserveVec3
+  distance: number
+}
+
+export type WorldEntitiesResult = {
+  at: number
+  center: ObserveVec3
+  radius: number
+  /** Matches before limit; entities is sorted by distance. */
+  total: number
+  entities: WorldEntityView[]
 }
 
 export type ShutdownResult = { closing: true }

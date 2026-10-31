@@ -28,11 +28,13 @@ import type {
   RequestEnvelope,
   ResponseEnvelope,
   StatusResult,
+  WorldEntitiesResult,
   WorldObserveResult,
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
 import type { ClientPort } from '../port/index.ts'
+import { observeEntities } from './entities.ts'
 import type { MindRuntime } from './mind.ts'
 import { observeWorld } from './observe.ts'
 
@@ -124,6 +126,7 @@ export class BodyRuntime {
       case 'describe': return this.describe() as unknown as JsonValue
       case 'status': return this.status() as unknown as JsonValue
       case 'world.observe': return this.worldObserve(params) as unknown as JsonValue
+      case 'world.entities': return this.worldEntities(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
@@ -228,6 +231,19 @@ export class BodyRuntime {
       )
     }
     return observeWorld(this.port, params, this.now())
+  }
+
+  private worldEntities(params: Record<string, JsonValue>): WorldEntitiesResult {
+    this.requireOwner()
+    if (this.port === undefined) {
+      throw p2Error(
+        ErrorCodes.NOT_INITIALIZED,
+        'runtime',
+        'body has no provider to observe',
+        { module: 'body.runtime' },
+      )
+    }
+    return observeEntities(this.port, params, this.now())
   }
 
   private mindOrders(): MindOrdersResult {

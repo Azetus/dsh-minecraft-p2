@@ -220,6 +220,10 @@ export class BodyManager {
     return this.activeClient().request('world.observe', params)
   }
 
+  worldEntities(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('world.entities', params)
+  }
+
   mindOrders(): Promise<JsonValue> {
     return this.activeClient().request('mind.orders', {})
   }
