@@ -52,8 +52,15 @@
 | 自然变化 / bot 方块改变 | 0 / 0 |
 | 未加载基线格 | 0 |
 
-## 4. order 工具（1s 内生效）
+## 3.1 通过 `/p2 start` 启动的复测（owner 要求）
 
+- owner 在 DSH 用 `/p2 start` 启动 body（epoch `e9511d75-6acb-4892-9cd7-71bd6e793db6`），`p2_status` 为 `active`；
+  `/p2` 命令路径同样注册了 `p2_*` 工具。
+- order：`wander` → active，`hold` → queued，cancel 首条后 `hold` 提升；`p2_events` 序列完整。
+- 观察 600s：`ok:true`、missing 0、maxRadius 5.84、path 147.19、maxGap 15.04s、naturalChanges 0、blockViolations 0；`lastDeathAt = null`。
+- 证据：`.m5-runs/m1-lan-p2-start-observer.json`。
+
+## 4. order 工具（1s 内生效）
 在 LAN 的 body 上通过 DSH 工具执行：
 
 1. `p2_order {verb:"wander",params:{radius:6}}` → `{"id":"ord-mvvylba9-1","state":"active"}`。
