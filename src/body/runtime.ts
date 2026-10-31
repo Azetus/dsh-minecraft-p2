@@ -34,6 +34,8 @@ import type {
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
 import type { ClientPort } from '../port/index.ts'
+import { previewBlueprint } from './blueprint-preview.ts'
+import type { BlueprintPreview } from './blueprint-preview.ts'
 import { observeEntities } from './entities.ts'
 import type { MindRuntime } from './mind.ts'
 import { observeWorld } from './observe.ts'
@@ -127,6 +129,7 @@ export class BodyRuntime {
       case 'status': return this.status() as unknown as JsonValue
       case 'world.observe': return this.worldObserve(params) as unknown as JsonValue
       case 'world.entities': return this.worldEntities(params) as unknown as JsonValue
+      case 'blueprint.preview': return this.blueprintPreview(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
@@ -244,6 +247,19 @@ export class BodyRuntime {
       )
     }
     return observeEntities(this.port, params, this.now())
+  }
+
+  private blueprintPreview(params: Record<string, JsonValue>): BlueprintPreview {
+    this.requireOwner()
+    if (this.port === undefined) {
+      throw p2Error(
+        ErrorCodes.NOT_INITIALIZED,
+        'runtime',
+        'body has no provider to observe',
+        { module: 'body.runtime' },
+      )
+    }
+    return previewBlueprint(this.port, params.blueprint, this.now())
   }
 
   private mindOrders(): MindOrdersResult {

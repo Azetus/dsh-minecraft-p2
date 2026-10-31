@@ -109,6 +109,26 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       },
     }),
     tools.register({
+      name: 'p2_preview_blueprint',
+      description: 'Dry-run a final-geometry blueprint: required/missing materials, conflicts (current/clearable), unknown cells and invalid fields. Read-only; no material is consumed and no block is cleared or placed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          blueprint: {
+            type: 'object',
+            description: '{ blocks: [{x,y,z,name,state?}], verify?: {kind:"sealed-room",min,max} }',
+          },
+        },
+        required: ['blueprint'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        return await manager.blueprintPreview(args.blueprint as JsonValue)
+      },
+    }),
+    tools.register({
       name: 'p2_order',
       description: 'Submit one goal-level order. The NPC chooses and executes the work; do not use it as a micro-command.',
       parameters: {

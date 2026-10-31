@@ -120,6 +120,7 @@ describe('protocol vocabulary', () => {
       'status',
       'world.observe',
       'world.entities',
+      'blueprint.preview',
       'mind.order',
       'mind.orders',
       'mind.cancel',

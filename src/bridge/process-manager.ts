@@ -224,6 +224,10 @@ export class BodyManager {
     return this.activeClient().request('world.entities', params)
   }
 
+  blueprintPreview(blueprint: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('blueprint.preview', { blueprint })
+  }
+
   mindOrders(): Promise<JsonValue> {
     return this.activeClient().request('mind.orders', {})
   }

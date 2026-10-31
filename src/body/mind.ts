@@ -16,6 +16,7 @@ import { createGoHomeGiver, createWanderGiver } from '../mind/givers/home.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
 import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
+import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
 import { evaluatePlan, instantiatePlan, loadPlanTemplates } from '../mind/plan.ts'
 import type { PlanInstance } from '../mind/plan.ts'
 import { Registry } from '../mind/registry.ts'
@@ -130,7 +131,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
 
   const syncPlan = (): void => {
     const active = orders.active()
-    if (active === undefined || active.order.verb !== 'shelter') {
+    if (active === undefined || (active.order.verb !== 'shelter' && active.order.verb !== 'build')) {
       if (planOrderId !== undefined) {
         activePlan = undefined
         planOrderId = undefined
@@ -140,6 +141,37 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     if (planOrderId === active.order.id) return
+
+    if (active.order.verb === 'build') {
+      if (active.order.blueprint === undefined) {
+        events.push('plan.definition-error', now(), {
+          orderId: active.order.id,
+          message: 'build order requires a blueprint',
+        })
+        orders.complete(active.order.id, 'failed')
+        return
+      }
+      const parsed = parseBlueprint(active.order.blueprint)
+      if (!parsed.ok) {
+        events.push('plan.definition-error', now(), {
+          orderId: active.order.id,
+          errors: parsed.errors,
+        })
+        orders.complete(active.order.id, 'failed')
+        return
+      }
+      activePlan = blueprintPlan(parsed.blueprint, active.order.id)
+      planOrderId = active.order.id
+      planBlockedReported = false
+      planInsufficientReported = false
+      events.push('plan.instantiated', now(), {
+        planId: activePlan.planId,
+        template: 'blueprint',
+        origin: activePlan.origin,
+        blocks: parsed.blueprint.blocks.length,
+      })
+      return
+    }
 
     const params = active.order.params ?? {}
     const templateId = typeof params.template === 'string' ? params.template : 'shelter-minimal'

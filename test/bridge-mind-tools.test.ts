@@ -17,6 +17,7 @@ class FakeManager {
   readonly cancels: string[] = []
   readonly observes: unknown[] = []
   readonly entityQueries: unknown[] = []
+  readonly previews: unknown[] = []
 
   async status(): Promise<unknown> {
     return {
@@ -52,6 +53,11 @@ class FakeManager {
   async worldEntities(params: unknown): Promise<unknown> {
     this.entityQueries.push(params)
     return { entities: [], total: 0 }
+  }
+
+  async blueprintPreview(blueprint: unknown): Promise<unknown> {
+    this.previews.push(blueprint)
+    return { ok: true, blocks: 0 }
   }
 
   async mindOrders(): Promise<unknown> {
@@ -98,6 +104,7 @@ describe('mind operator tools', () => {
       'p2_status',
       'p2_observe',
       'p2_entities',
+      'p2_preview_blueprint',
       'p2_order',
       'p2_orders',
       'p2_cancel',
@@ -146,6 +153,15 @@ describe('mind operator tools', () => {
     const value = await definitions.get('p2_entities')?.execute(args, { agent })
     expect(value).toEqual({ entities: [], total: 0 })
     expect(manager.entityQueries).toEqual([args])
+    expect(manager.orders).toHaveLength(0)
+  })
+
+  it('previews a blueprint without acting', async () => {
+    const { definitions, manager, agent } = harness()
+    const blueprint = { blocks: [{ x: 0, y: 64, z: 0, name: 'dirt' }] }
+    const value = await definitions.get('p2_preview_blueprint')?.execute({ blueprint }, { agent })
+    expect(value).toEqual({ ok: true, blocks: 0 })
+    expect(manager.previews).toEqual([blueprint])
     expect(manager.orders).toHaveLength(0)
   })
 

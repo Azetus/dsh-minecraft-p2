@@ -6,6 +6,7 @@ import type { JsonValue, P2Error } from '../contracts/types.ts'
 
 export const ORDER_VERBS = [
   'shelter',
+  'build',
   'bed',
   'tools',
   'mine_copper',
