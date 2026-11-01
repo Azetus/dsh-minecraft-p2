@@ -1,6 +1,6 @@
 import { isRecord } from '../../contracts/protocol.ts'
-import { HAZARD_KINDS } from '../../port/terrain.ts'
-import type { ActResult, MoveOptions, Vec3 } from '../../port/index.ts'
+import { HAZARD_KINDS, standingAt } from '../../port/terrain.ts'
+import type { ActResult, ClientPort, MoveOptions, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
   Driver,
@@ -101,11 +101,17 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
   const visited = new Set<string>()
 
   for (let segment = 0; segment < MAX_SEGMENTS; segment += 1) {
-    if (goalIsFinal && typeof ctx.port.blockAt === 'function' && ctx.port.blockAt(goal) === null) {
-      const prefix = forwardPrefix(ctx.port.self().pos, finalGoal)
-      if (prefix !== undefined && !samePoint(prefix, goal)) {
-        goal = prefix
-        goalIsFinal = false
+    if (goalIsFinal && typeof ctx.port.blockAt === 'function') {
+      const targetBlock = ctx.port.blockAt(goal)
+      if (targetBlock === null) {
+        const prefix = forwardPrefix(ctx.port, ctx.port.self().pos, finalGoal)
+        if (prefix !== undefined && !samePoint(prefix, goal)) {
+          goal = prefix
+          goalIsFinal = false
+        }
+      } else if (standingAt(point => ctx.port.blockAt(point), goal).state !== 'valid') {
+        const stand = nearestStandable(ctx.port, goal)
+        if (stand !== undefined) goal = stand
       }
     }
     const remaining = totalMs - (ctx.now() - startedAt)
@@ -181,20 +187,40 @@ function samePoint(left: Vec3, right: Vec3): boolean {
 }
 
 /** An unloaded final target is advanced by a near, same-level prefix. */
-function forwardPrefix(self: Vec3, target: Vec3, step = 16): Vec3 | undefined {
+function forwardPrefix(port: ClientPort, self: Vec3, target: Vec3, step = 16): Vec3 | undefined {
   const dx = target.x - self.x
   const dz = target.z - self.z
   const distance = Math.hypot(dx, dz)
   if (distance <= 1) return undefined
   const advance = Math.min(step, distance - 1)
-  const point = {
+  const projected = {
     x: Math.floor(self.x + dx / distance * advance),
     y: Math.floor(self.y),
     z: Math.floor(self.z + dz / distance * advance),
   }
-  return samePoint(point, { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) })
-    ? undefined
-    : point
+  if (samePoint(projected, { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) })) {
+    return undefined
+  }
+  return nearestStandable(port, projected) ?? projected
+}
+
+function nearestStandable(port: ClientPort, center: Vec3): Vec3 | undefined {
+  let best: Vec3 | undefined
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let dx = -2; dx <= 2; dx += 1) {
+    for (let dz = -2; dz <= 2; dz += 1) {
+      for (let dy = -3; dy <= 3; dy += 1) {
+        const candidate = { x: center.x + dx, y: center.y + dy, z: center.z + dz }
+        if (standingAt(point => port.blockAt(point), candidate).state !== 'valid') continue
+        const value = Math.hypot(candidate.x - center.x, candidate.y - center.y, candidate.z - center.z)
+        if (value < bestDistance) {
+          best = candidate
+          bestDistance = value
+        }
+      }
+    }
+  }
+  return best
 }
 
 function pointKey(point: Vec3): string {
