@@ -1,0 +1,16 @@
+{
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25575,
+    "username": "P2_Bot",
+    "version": "1.21.1",
+    "connectTimeoutMs": 15000,
+    "serverIdleMs": 1500
+  },
+  "experiment": {
+    "allowRescue": false,
+    "rescueTpRadius": 32,
+    "devOps": false,
+    "devOpsPath": ".p2/dev-ops.mjs"
+  }
+}

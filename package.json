@@ -1,0 +1,62 @@
+{
+  "name": "dsh-minecraft-p2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-package DSH Minecraft P2 runtime: bridge, body, P2Mind and built-in provider.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "npm@12.0.2",
+  "main": "./lib/bridge.js",
+  "types": "./lib/bridge/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/bridge/index.d.ts",
+      "default": "./lib/bridge.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**",
+    "content/**",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "0.2.1-rc.3"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests --pool=threads",
+    "check": "npm run build && npm run typecheck && npm run test",
+    "bundle": "npm run build && node scripts/bundle.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:check": "node scripts/dev.mjs --no-start",
+    "dev:smoke": "node scripts/dev-api-smoke.mjs",
+    "verify:dist": "node scripts/verify-dist.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "minecraft-data": "3.114.0",
+    "minecraft-protocol": "1.67.0",
+    "mineflayer": "4.39.0",
+    "mineflayer-pathfinder": "^2.4.5"
+  }
+}
