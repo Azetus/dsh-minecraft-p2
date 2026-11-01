@@ -19,6 +19,8 @@ import { createTraverseDriver, TRAVERSE_DRIVER_ID } from '../mind/drivers/traver
 import { createStepDriver } from '../mind/drivers/step.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
+import { classifyFailure } from '../mind/diagnostics.ts'
+import { MindMetrics } from '../mind/metrics.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
 import { AreaResourceIndex } from '../mind/area.ts'
@@ -145,6 +147,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const templates = loadedPlans.templates
 
   const events = new MindEvents()
+  const metrics = new MindMetrics()
   for (const event of ['move.started', 'move.progress', 'move.no_path', 'move.stuck', 'move.finished', 'move.door', 'move.unstick-dig'] as const) {
     options.port.on(event, data => events.push(event, now(), data))
   }
@@ -166,6 +169,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     onEvent: event => {
       events.push(event.kind, event.at, event as unknown as JsonValue)
+      metrics.record(event.kind, event as unknown as JsonValue, event.at)
       if (event.kind === 'order.accepted' || event.kind === 'order.terminal') {
         loopRef?.invalidate()
       }
@@ -214,8 +218,19 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         ? orders.get(event.orderId)
         : undefined
       const retry = shouldRetryOrderJob(event, order?.order.verb)
-      const data = (retry ? { ...event, retry: true } : event) as unknown as JsonValue
+      const code = event.kind === 'job.terminal' && typeof (event as { code?: unknown }).code === 'string'
+        ? (event as { code: string }).code
+        : undefined
+      const diagnostic = event.kind === 'job.terminal' && code !== undefined
+        ? classifyFailure(code)
+        : undefined
+      const data = {
+        ...event,
+        ...(retry ? { retry: true } : {}),
+        ...(diagnostic === undefined ? {} : { diagnostic }),
+      } as unknown as JsonValue
       events.push(event.kind, event.at, data)
+      metrics.record(event.kind, data, event.at)
       if (event.kind === 'job.terminal' && isRecord(event)
         && typeof event.runId === 'string') {
         orders.recordActionSettled(
@@ -277,6 +292,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,
     onEvent: event => {
+      metrics.record(event.kind, event.data, event.at)
       events.push(event.kind, event.at, event.data)
       if (event.kind === 'job.started' && isRecord(event.data)
         && typeof event.data.keys === 'string' && event.data.keys.startsWith('gather:')) {
@@ -676,6 +692,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         queuedOrders: orders.queued().length,
         eventsSeq: events.lastSeq(),
         plan: planView,
+        metrics: metrics.view(),
       }
     },
     report(): JsonValue | null {

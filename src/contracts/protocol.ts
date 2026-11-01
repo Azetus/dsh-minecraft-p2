@@ -107,6 +107,17 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type MindMetricsView = {
+  orders: { accepted: number; succeeded: number; failed: number; blocked: number; cancelled: number }
+  jobs: { started: number; succeeded: number; failed: number; interrupted: number; retried: number; preempted: number }
+  holds: number
+  holdReasons: Record<string, number>
+  failureCodes: Record<string, number>
+  completionRate: number | null
+  lastFailure: { code: string; category: string; hint: string } | null
+  updatedAt: number
+}
+
 export type MindStatusView = {
   tracker: 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
   job: { runId: string; driverId: string } | null
@@ -116,6 +127,7 @@ export type MindStatusView = {
   queuedOrders: number
   eventsSeq: number
   plan?: { id: string; template: string; satisfied: boolean; blocked: boolean } | null
+  metrics?: MindMetricsView
 }
 
 export type StatusResult = {
