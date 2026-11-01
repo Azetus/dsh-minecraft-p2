@@ -135,7 +135,15 @@ agent 下达的目标，不是动作。
 
 规则：**遍历全部工作项，返回任一 `executable`**；全部 `blocked` 才向上报，绝不因“第一处冲突”堵死其余工作。
 
-**坐标语义**：`origin` = 内空最小角；`at` = 相对 `origin` 的偏移；`size` = 内空尺寸；门/床等带状态方块用 `expected.state` 子集匹配。
+**坐标语义**：`origin` = 蓝图几何最小角；`at` = 相对 `origin` 的偏移；`size` = 几何尺寸；门/床等带状态方块用 `expected.state` 子集匹配。
+
+**多格放置（group）**：一个门（lower/upper）或床（foot/head）是**一个** work item：`at/expected` 是锚点（门下半/床脚），`cells[]` 是同一 placement 必须产出的其余格。蓝图必须声明全部两格（床另需 `state.part`），缺第二格在 `parseBlueprint` 阶段即 `DEFINITION_ERROR`；`usable-room` 读回两格并检查 `half`/`part`/`facing`/床头空间。材料账按 placement 计一次，不按格计。
+
+**构建阶段（barrier）**：1 地板（interior 下方）、2 下层壳（`interior.min.y` 与 +1）、3 上层壳/屋顶、4 室内家具、5 临时入口（`deferredWorkItems`）。阶段是硬屏障：只有当前阶段可派工，前序阶段未完成不得进入下一阶段。事件：`stage.started/progress/completed/blocked`，`plan.blocked` 负载带 stage、workItemId、target、triedStances、每个 stance 的拒绝原因、最后 job code 与材料账。
+
+**放置站位账本（PlanItemLedger）**：失败按 `(plan, workItem, stance)` 记账，不跨工作项共享；同一 stance 2 次无世界变化 → 失败，最多 3 个 stance，全部失败 → item blocked `NO_PLACE_STANCE`；世界指纹（目标格 + 六邻）变化或阶段切换时自动重评。`executable place` 也走同一账本，driver 逐个 stance 移动→放置，只有读回一致才算成功；`moveTo arrived` 不算放置成功。未知格先定向重读；仍未知则 item blocked `UNKNOWN`，不再用 move 循环。
+
+**暂停语义**：provider 的 server age 停滞是 `suspended`，不是失败。`GAME_PAUSED` 中的动作以 `interrupted/SUSPENDED` 收尾（不计重试、不 blocked），order/plan 保持 active，watchdog 与墙钟预算冻结；恢复后强制重观测再继续。超长暂停只通知，不自动 blocked。provider 记录 age 变化、`update_time` 包数与事件循环延迟，给出 `server-paused | client-stalled | event-loop-blocked | unknown` 判定。
 
 **材料账**：初始账 − 已消耗 + 已拾取 + 已有建筑抵扣，运行时重算；每次消耗写意图日志。
 

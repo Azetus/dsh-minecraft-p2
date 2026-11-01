@@ -18,6 +18,11 @@ export type SensorOptions = {
  * Builds bounded world snapshots on a 10 Hz budget. A sample failure keeps the
  * previous snapshot but marks it stale, so the tree reports
  * `need-observation` instead of deciding on a fabricated world.
+ *
+ * Observation groups registered with `setObservation` are re-read on **every**
+ * sample, not merged into one snapshot. A one-off merge used to be lost on the
+ * next sample, which turned plan walls/roof/stances back into `unknown` as soon
+ * as the default box moved with the body.
  */
 export class Sensors {
   private readonly port: ClientPort
@@ -27,26 +32,58 @@ export class Sensors {
   private readonly entityRadius: number
   private readonly refreshMs: number
   private readonly now: () => number
+  private readonly observation = new Map<string, Box[]>()
   private current: SnapshotWorld | undefined
   private lastData: SnapshotData | undefined
   private sampledAt = 0
 
   constructor(options: SensorOptions) {
     this.port = options.port
-    this.blockRadius = options.blockRadius ?? 6
-    this.verticalMin = options.verticalMin ?? -3
-    this.verticalMax = options.verticalMax ?? 2
+    this.blockRadius = options.blockRadius ?? 10
+    this.verticalMin = options.verticalMin ?? -6
+    this.verticalMax = options.verticalMax ?? 8
     this.entityRadius = options.entityRadius ?? 12
     this.refreshMs = options.refreshMs ?? 100
     this.now = options.now ?? (() => Date.now())
   }
 
+  /** Persist a named observation group; every later sample includes it. */
+  setObservation(id: string, boxes: Box[]): SnapshotWorld {
+    this.observation.set(id, boxes)
+    return this.resample()
+  }
+
+  clearObservation(id?: string): void {
+    if (id === undefined) this.observation.clear()
+    else this.observation.delete(id)
+  }
+
+  hasObservation(id: string): boolean {
+    return this.observation.has(id)
+  }
+
+  /**
+   * Targeted P2-internal observation. This is not an Agent-facing payload: the
+   * blocks are merged into a freshly sampled snapshot used by the tree and
+   * never dumped into the model context. Unloaded cells stay `loaded:false`.
+   * The whole snapshot is refreshed so self/time/inventory do not freeze while
+   * an unknown cell is being re-read.
+   */
+  observeBox(box: Box): SnapshotWorld {
+    return this.resample([box])
+  }
+
   read(now = this.now()): SnapshotWorld {
-    if (this.current !== undefined && now - this.sampledAt < this.refreshMs) {
+    const targeted = this.targetedBoxes()
+    if (this.current !== undefined && targeted.length === 0 && now - this.sampledAt < this.refreshMs) {
       return this.current
     }
+    return this.resample(undefined, now)
+  }
+
+  private resample(extra?: Box[], now = this.now()): SnapshotWorld {
     try {
-      const data = this.sample()
+      const data = this.sample(extra)
       this.lastData = data
       this.current = new SnapshotWorld(data)
       this.sampledAt = now
@@ -59,7 +96,13 @@ export class Sensors {
     }
   }
 
-  private sample(): SnapshotData {
+  private targetedBoxes(): Box[] {
+    const boxes: Box[] = []
+    for (const group of this.observation.values()) boxes.push(...group)
+    return boxes
+  }
+
+  private sample(extra?: Box[]): SnapshotData {
     const self = this.port.self()
     const time = this.port.time()
     const feet = {
@@ -76,6 +119,8 @@ export class Sensors {
       max: { x: feet.x + this.entityRadius, y: feet.y + 8, z: feet.z + this.entityRadius },
     }
     const blocks = this.port.blocksIn(blockBox)
+    for (const box of this.targetedBoxes()) blocks.push(...this.port.blocksIn(box))
+    for (const box of extra ?? []) blocks.push(...this.port.blocksIn(box))
     const entities = this.port.entities(entityBox)
     const inventory = this.port.inventory()
     return { self, time, entities, blocks, inventory }

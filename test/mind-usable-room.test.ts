@@ -17,19 +17,36 @@ const self: SelfInfo = {
   inLava: false,
 }
 
+/**
+ * A door and a bed are one two-cell placement each. The template declares both
+ * cells; the verifier's `door`/`bed` anchor is the lower/foot cell.
+ */
 const template: PlanTemplate = {
   id: 'room',
   version: 1,
   size: [3, 2, 3],
   materialPolicy: {},
   workItems: [
-    { id: 'door', kind: 'place', at: [1, 0, -1], expected: { name: 'oak_door' } },
-    { id: 'bed', kind: 'place', at: [0, 0, 0], expected: { name: 'red_bed' } },
+    {
+      id: 'door',
+      kind: 'place',
+      at: [1, 0, -1],
+      expected: { name: 'oak_door', state: { half: 'lower' } },
+      cells: [{ at: [1, 1, -1], expected: { name: 'oak_door', state: { half: 'upper' } } }],
+    },
+    {
+      id: 'bed',
+      kind: 'place',
+      at: [0, 0, 2],
+      expected: { name: 'red_bed', state: { part: 'foot' } },
+      cells: [{ at: [1, 0, 2], expected: { name: 'red_bed', state: { part: 'head' } } }],
+    },
   ],
-  verify: { kind: 'usable-room', min: [0, 0, 0], max: [2, 1, 2], door: [1, 0, -1], bed: [0, 0, 0] },
+  verify: { kind: 'usable-room', min: [0, 0, 0], max: [2, 1, 2], door: [1, 0, -1], bed: [0, 0, 2] },
 }
 
 const plan = instantiatePlan(template, 'ord-room', { x: 0, y: 64, z: 0 })
+const spec = template.verify as Extract<typeof template.verify, { kind: 'usable-room' }>
 
 function roomBlocks(): BlockInfo[] {
   const blocks: BlockInfo[] = []
@@ -42,28 +59,23 @@ function roomBlocks(): BlockInfo[] {
       }
     }
   }
-  for (const at of [
-    { x: 1, y: 64, z: -1 },
-    { x: 1, y: 65, z: -1 },
-    { x: 0, y: 64, z: 0 },
-  ]) {
+  const set = (at: { x: number; y: number; z: number }, name: string, state?: Record<string, string>): void => {
     const index = blocks.findIndex(block => block.pos?.x === at.x && block.pos.y === at.y && block.pos.z === at.z)
-    if (index >= 0) blocks[index] = {
-      name: at.x === 0 ? 'red_bed' : 'oak_door',
-      loaded: true,
-      pos: at,
-    }
+    const block: BlockInfo = { name, loaded: true, pos: at, ...(state === undefined ? {} : { state }) }
+    if (index >= 0) blocks[index] = block
+    else blocks.push(block)
   }
+  set({ x: 1, y: 64, z: -1 }, 'oak_door', { half: 'lower', facing: 'north', open: 'false' })
+  set({ x: 1, y: 65, z: -1 }, 'oak_door', { half: 'upper', facing: 'north', open: 'false' })
+  set({ x: 0, y: 64, z: 2 }, 'red_bed', { part: 'foot', facing: 'south' })
+  set({ x: 1, y: 64, z: 2 }, 'red_bed', { part: 'head', facing: 'south' })
   // Outside the door needs a floor and two air cells to stand.
   for (const at of [
     { x: 1, y: 63, z: -2 },
     { x: 1, y: 64, z: -2 },
     { x: 1, y: 65, z: -2 },
   ]) {
-    const index = blocks.findIndex(block => block.pos?.x === at.x && block.pos.y === at.y && block.pos.z === at.z)
-    const block = { name: at.y === 63 ? 'stone' : 'air', loaded: true, pos: at }
-    if (index >= 0) blocks[index] = block
-    else blocks.push(block)
+    set(at, at.y === 63 ? 'stone' : 'air')
   }
   return blocks
 }
@@ -78,9 +90,14 @@ function world(blocks: BlockInfo[]): SnapshotWorld {
   })
 }
 
+function withoutState(block: BlockInfo): BlockInfo {
+  const { state: _state, ...rest } = block
+  return rest
+}
+
 describe('usable-room verifier', () => {
-  it('confirms a room with a door, standable floor and usable bed', () => {
-    const result = verifyUsableRoom(plan, template.verify as Extract<typeof template.verify, { kind: 'usable-room' }>, world(roomBlocks()))
+  it('confirms a room with a two-cell door, standable floor and usable bed', () => {
+    const result = verifyUsableRoom(plan, spec, world(roomBlocks()))
     expect(result).toEqual({ state: 'confirmed' })
   })
 
@@ -88,7 +105,7 @@ describe('usable-room verifier', () => {
     const blocks = roomBlocks().map(block => block.pos?.x === 1 && block.pos?.z === -1 && block.pos.y >= 64
       ? { ...block, name: 'air' }
       : block)
-    const result = verifyUsableRoom(plan, template.verify as Extract<typeof template.verify, { kind: 'usable-room' }>, world(blocks))
+    const result = verifyUsableRoom(plan, spec, world(blocks))
     expect(result.state).toBe('refuted')
     expect(result.detail).toContain('door')
     expect(result.workItemId).toBe('door')
@@ -96,8 +113,42 @@ describe('usable-room verifier', () => {
 
   it('refutes a sealed shell with no opening', () => {
     const blocks = roomBlocks().map(block => block.name === 'oak_door' ? { ...block, name: 'stone' } : block)
-    const result = verifyUsableRoom(plan, template.verify as Extract<typeof template.verify, { kind: 'usable-room' }>, world(blocks))
+    const result = verifyUsableRoom(plan, spec, world(blocks))
     expect(result.state).toBe('refuted')
     expect(result.detail).toContain('door')
+  })
+
+  it('refutes a door whose halves or facing disagree', () => {
+    const blocks = roomBlocks().map(block => block.pos?.x === 1 && block.pos?.z === -1 && block.pos.y === 65
+      ? { ...block, state: { half: 'upper', facing: 'south', open: 'false' } }
+      : block)
+    const result = verifyUsableRoom(plan, spec, world(blocks))
+    expect(result.state).toBe('refuted')
+    expect(result.detail).toContain('facing')
+  })
+
+  it('reports missing block state as insufficient, not a pass', () => {
+    const blocks = roomBlocks().map(block => block.name === 'red_bed' ? withoutState(block) : block)
+    const result = verifyUsableRoom(plan, spec, world(blocks))
+    expect(result.state).toBe('insufficient')
+    expect(result.detail).toContain('part')
+  })
+
+  it('refutes a bed whose head cell is still air', () => {
+    const blocks = roomBlocks().map(block => block.pos?.x === 1 && block.pos?.z === 2 && block.pos.y === 64
+      ? { name: 'air', loaded: true, pos: block.pos }
+      : block)
+    const result = verifyUsableRoom(plan, spec, world(blocks))
+    expect(result.state).toBe('refuted')
+    expect(result.detail).toContain('bed')
+  })
+
+  it('refutes a bed without head space', () => {
+    const blocks = roomBlocks().map(block => block.pos?.x === 1 && block.pos?.z === 2 && block.pos.y === 65
+      ? { ...block, name: 'stone' }
+      : block)
+    const result = verifyUsableRoom(plan, spec, world(blocks))
+    expect(result.state).toBe('refuted')
+    expect(result.detail).toContain('head space')
   })
 })

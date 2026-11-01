@@ -24,6 +24,8 @@ export type Candidate = {
   keys: string
   /** Owning order, when the candidate serves a task; absent for reflexes. */
   orderId?: string
+  /** Plan work item this job advances; drives item-level failure accounting. */
+  workItemId?: string
 }
 
 /** Prerequisite work a giver asks for; the caller re-runs `find` afterwards. */
@@ -33,6 +35,7 @@ export type Handoff = {
   params: Record<string, JsonValue>
   reason: string
   orderId?: string
+  workItemId?: string
 }
 
 /**
@@ -89,6 +92,11 @@ export type EvalCtx = {
   gatherCount?: number
   /** Work keys the tracker has blocked after repeated failures. */
   isBlocked?: (key: string) => boolean
+  /**
+   * Bounded P2-internal targeted observation. Merges the box into the current
+   * snapshot; it never reaches the Agent payload.
+   */
+  observe?: (box: Box) => void
 }
 
 export interface WorkGiver {

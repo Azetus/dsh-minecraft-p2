@@ -93,6 +93,35 @@ export type ProviderRuntimeStatus = {
   lastDeathAt?: number | null
   /** Where the bot died, when the provider observed it. */
   lastDeathPosition?: { x: number; y: number; z: number } | null
+  /** Diagnostics used to tell server pause, client stall and our loop lag apart. */
+  pauseDiagnostics?: PauseDiagnostics
+}
+
+export type PauseDiagnostics = {
+  /** Wall-clock time the current suspension was first observed. */
+  suspendedSince?: number
+  /** How many distinct server ages were observed in this connection. */
+  ageChanges: number
+  /** `update_time` packets observed (or age changes when the event is absent). */
+  timePackets: number
+  /** Worst delay of the 250 ms watchdog interval, a proxy for a blocked loop. */
+  eventLoopLagMs: number
+  /** Wall-clock ms since the last age change. */
+  ageIdleMs: number
+  /** Best explanation consistent with the counters. */
+  verdict: 'running' | 'server-paused' | 'client-stalled' | 'event-loop-blocked' | 'unknown'
+  /** Current world age and the wall clock when it was sampled. */
+  lastAgeAt: number
+  lastAge: number | null
+}
+
+/** Provider-reported pause transition; a pause is never an action failure. */
+export type SuspensionState = {
+  suspended: boolean
+  at: number
+  idleMs: number
+  serverAge: number | null
+  diagnostics: PauseDiagnostics
 }
 
 export type DescribeResult = {
@@ -139,7 +168,18 @@ export type MindStatusView = {
   activeOrder: { id: string; verb: string } | null
   queuedOrders: number
   eventsSeq: number
-  plan?: { id: string; template: string; satisfied: boolean; blocked: boolean } | null
+  /** The provider paused the server; work is frozen, not failed. */
+  suspended?: boolean
+  plan?: {
+    id: string
+    template: string
+    satisfied: boolean
+    blocked: boolean
+    /** Current build stage (1..5), when the plan is staged. */
+    stage?: number
+    total?: number
+    done?: number
+  } | null
   duty?: DutyStatusView | null
   metrics?: MindMetricsView
 }

@@ -48,6 +48,7 @@ interface ClientPort {
   endWrite(token: WriteToken): void
   moveTo(target: Vec3 | Landmark, opts?: { range?: number; timeoutMs?: number }): ActResult
   lookAt(p: Vec3): ActResult
+  lookYaw?(yaw: number): ActResult               // 定向放置（床 head 方向）；可选能力
   dig(p: Vec3): ActResult
   place(p: Vec3, face: Face, item: string): ActResult
   craft(item: string, count?: number): ActResult
@@ -58,9 +59,13 @@ interface ClientPort {
   say(text: string): void                      // 独立限流通道，不受写令牌约束
 
   // 事件
-  on(event: 'blockUpdated' | 'inventoryChanged' | 'screenOpened' | 'damaged' | 'died' | 'chat', cb: (payload: unknown) => void): void
+  on(event: 'blockUpdated' | 'inventoryChanged' | 'screenOpened' | 'damaged' | 'died' | 'chat'
+    | 'provider.suspended' | 'provider.resumed' | 'move.started' | 'move.progress' | 'move.no_path'
+    | 'move.stuck' | 'move.finished', cb: (payload: unknown) => void): void
 
   capabilities(): Capability[]                // 'navigate' | 'interact' | 'observe.screen' | 'combat'
+  /** 暂停是挂起，不是失败；缺省表示适配器不报告。 */
+  suspension?(): SuspensionState
 }
 
 type WriteToken = { runId: string; jobId: string; seq: number }
@@ -134,7 +139,7 @@ interface WorkGiver {
   score?(ctx: EvalCtx, world: WorldView): number
   find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | Hold | null
 }
-type Candidate = { driverId: string; target: Target; params: object; keys: string; orderId?: string }
+type Candidate = { driverId: string; target: Target; params: object; keys: string; orderId?: string; workItemId?: string }
 type Handoff = { driverId: string; target: Target; params: object; reason: string; orderId?: string }
 type Hold = { kind: 'hold'; reason: string; notify?: boolean }
 ```

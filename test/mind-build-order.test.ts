@@ -29,9 +29,13 @@ const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
 
 function fakePort(dirtCount = 2): { port: ClientPort; blocks: Map<string, BlockInfo>; places: number } {
   const blocks = new Map<string, BlockInfo>()
-  blocks.set('0,63,0', { name: 'stone', loaded: true, pos: { x: 0, y: 63, z: 0 } })
-  blocks.set('0,64,0', { name: 'air', loaded: true, pos: { x: 0, y: 64, z: 0 } })
-  blocks.set('0,65,0', { name: 'air', loaded: true, pos: { x: 0, y: 65, z: 0 } })
+  for (let x = -1; x <= 2; x += 1) {
+    for (let z = -1; z <= 1; z += 1) {
+      blocks.set(`${x},63,${z}`, { name: 'stone', loaded: true, pos: { x, y: 63, z } })
+      blocks.set(`${x},64,${z}`, { name: 'air', loaded: true, pos: { x, y: 64, z } })
+      blocks.set(`${x},65,${z}`, { name: 'air', loaded: true, pos: { x, y: 65, z } })
+    }
+  }
   const self: SelfInfo = {
     pos: { x: 1.5, y: 64, z: 0.5 },
     yaw: 0,
@@ -57,6 +61,10 @@ function fakePort(dirtCount = 2): { port: ClientPort; blocks: Map<string, BlockI
     inventory: () => (dirtCount === 0 ? [] : [{ slot: 36, name: 'dirt', count: dirtCount }]),
     beginWrite: () => {},
     endWrite: () => {},
+    moveTo: async (target: Vec3) => {
+      self.pos = { x: target.x + 0.5, y: target.y, z: target.z + 0.5 }
+      return { state: 'ok' as const, elapsedMs: 1 }
+    },
     place: async (p: Vec3) => {
       places += 1
       blocks.set(key(p), { name: 'dirt', loaded: true, pos: { ...p } })

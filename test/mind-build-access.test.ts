@@ -97,7 +97,7 @@ describe('build access planner', () => {
   })
 
   it('works when a blueprint origin is the geometry corner, not the interior corner', () => {
-    const blocks: Array<{ x: number; y: number; z: number; name: string }> = []
+    const blocks: Array<{ x: number; y: number; z: number; name: string; state?: Record<string, string> }> = []
     for (let x = -1; x <= 2; x += 1) {
       for (let y = 120; y <= 123; y += 1) {
         for (let z = -1; z <= 2; z += 1) {
@@ -108,7 +108,8 @@ describe('build access planner', () => {
         }
       }
     }
-    blocks.push({ x: 1, y: 121, z: 1, name: 'red_bed' })
+    blocks.push({ x: 1, y: 121, z: 1, name: 'red_bed', state: { part: 'foot' } })
+    blocks.push({ x: 1, y: 121, z: 0, name: 'red_bed', state: { part: 'head' } })
     blocks.push({ x: 0, y: 120, z: -2, name: 'mystery_block' })
     const parsed = parseBlueprint({
       blocks,
@@ -126,8 +127,12 @@ describe('build access planner', () => {
     const access = planBuildAccess(plan, world(), self.pos)
     expect(plan.origin).toEqual({ x: -1, y: 120, z: -2 })
     expect(access.blocked).toBeUndefined()
-    expect(access.deferred.size).toBe(2)
-    expect([...access.deferred]).toEqual(expect.arrayContaining(['b:0,121,-1', 'b:0,122,-1']))
+    // The door is one grouped work item (lower + upper), so deferring the
+    // entrance defers that single item, not two independent placements.
+    expect(access.deferred.size).toBe(1)
+    expect([...access.deferred]).toEqual(['b:0,121,-1'])
+    const door = plan.workItems.find(item => access.deferred.has(item.id))
+    expect(door?.cells?.map(cell => cell.at)).toEqual([[1, 2, 1]])
     expect(access.entrance?.inside).toEqual({ x: 0, y: 121, z: 0 })
   })
 })

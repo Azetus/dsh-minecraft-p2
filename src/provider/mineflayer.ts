@@ -14,7 +14,7 @@ import { parseHazardPolicy, parseUnstickBlocks } from '../port/terrain.ts'
  */
 export const mineflayerModule: unknown = mineflayer
 
-import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
+import type { PauseDiagnostics, ProviderRuntimeStatus, SuspensionState } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type {
@@ -294,6 +294,9 @@ async function closeWindowQuietly(window: AnyWindow | null | undefined): Promise
   }
 }
 
+/** A pause is `suspended`, never a failed action. */
+export type ProviderSuspension = SuspensionState
+
 /** Query/act adapter over one connected Mineflayer bot. */
 export class MineflayerProvider implements ActPort {
   readonly capabilities = PROVIDER_CAPABILITIES
@@ -309,6 +312,14 @@ export class MineflayerProvider implements ActPort {
   private readonly pauseTimer: ReturnType<typeof setInterval>
   private readonly options: Required<MineflayerProviderOptions>
   private readonly movements: Movements | undefined
+  private readonly suspensionListeners = new Set<(state: ProviderSuspension) => void>()
+  private ageChanges = 0
+  private timePackets = 0
+  private lastTimerAt = 0
+  private eventLoopLagMs = 0
+  private suspendedSince = 0
+  private packetsAtSuspend = 0
+  private ageChangesAtSuspend = 0
 
   constructor(
     private readonly bot: Bot,
@@ -322,8 +333,20 @@ export class MineflayerProvider implements ActPort {
     }
     this.providerVersion = this.options.providerVersion
     this.movements = createMovements(this.bot)
-    this.pauseTimer = setInterval(() => this.refreshPauseState(), 250)
+    this.lastTimerAt = Date.now()
+    this.pauseTimer = setInterval(() => {
+      const now = Date.now()
+      // A late 250 ms timer is evidence that our event loop (or the process)
+      // was blocked, which otherwise looks exactly like a paused server.
+      const lag = Math.max(0, now - this.lastTimerAt - 250)
+      this.eventLoopLagMs = Math.max(lag, Math.floor(this.eventLoopLagMs * 0.9))
+      this.lastTimerAt = now
+      this.refreshPauseState(now)
+    }, 250)
     this.pauseTimer.unref?.()
+    bot.on('time', () => {
+      this.timePackets += 1
+    })
     bot.once('end', reason => {
       clearInterval(this.pauseTimer)
       this.disconnected = new Error(`Mineflayer connection ended: ${String(reason)}`)
@@ -373,6 +396,36 @@ export class MineflayerProvider implements ActPort {
       controlRelease: current?.controlRelease() ?? null,
       lastDeathAt: this.lastDeath?.at ?? null,
       lastDeathPosition: this.lastDeath?.position ?? null,
+      pauseDiagnostics: this.pauseDiagnostics(),
+    }
+  }
+
+  /** Subscribe to provider pause/resume transitions (one listener per port). */
+  onSuspension(listener: (state: ProviderSuspension) => void): () => void {
+    this.suspensionListeners.add(listener)
+    return () => this.suspensionListeners.delete(listener)
+  }
+
+  pauseDiagnostics(now = Date.now()): PauseDiagnostics {
+    const ageIdleMs = this.lastServerAgeAt > 0 ? now - this.lastServerAgeAt : 0
+    const packetsDuringPause = this.timePackets - this.packetsAtSuspend
+    const agesDuringPause = this.ageChanges - this.ageChangesAtSuspend
+    let verdict: PauseDiagnostics['verdict'] = 'running'
+    if (this.paused) {
+      if (this.eventLoopLagMs > 1_000) verdict = 'event-loop-blocked'
+      else if (agesDuringPause === 0 && packetsDuringPause > 0) verdict = 'server-paused'
+      else if (agesDuringPause === 0 && packetsDuringPause === 0) verdict = 'client-stalled'
+      else verdict = 'unknown'
+    }
+    return {
+      ...(this.suspendedSince > 0 ? { suspendedSince: this.suspendedSince } : {}),
+      ageChanges: this.ageChanges,
+      timePackets: this.timePackets,
+      eventLoopLagMs: this.eventLoopLagMs,
+      ageIdleMs,
+      verdict,
+      lastAgeAt: this.lastServerAgeAt,
+      lastAge: this.lastServerAge ?? null,
     }
   }
 
@@ -403,15 +456,35 @@ export class MineflayerProvider implements ActPort {
     if (age !== this.lastServerAge) {
       this.lastServerAge = age
       this.lastServerAgeAt = now
-      this.paused = false
+      this.ageChanges += 1
+      if (this.paused) {
+        this.paused = false
+        this.suspendedSince = 0
+        this.emitSuspension(false, now)
+      }
       return
     }
     if (!this.paused && now - this.lastServerAgeAt >= this.options.serverIdleMs) {
       this.paused = true
+      this.suspendedSince = now
+      this.packetsAtSuspend = this.timePackets
+      this.ageChangesAtSuspend = this.ageChanges
       this.bot.clearControlStates()
       const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
       current?.abort?.(new Error('server ticks are paused'), 'GAME_PAUSED')
+      this.emitSuspension(true, now)
     }
+  }
+
+  private emitSuspension(suspended: boolean, at: number): void {
+    const state: ProviderSuspension = {
+      suspended,
+      at,
+      idleMs: suspended ? Math.max(0, at - this.lastServerAgeAt) : 0,
+      serverAge: this.serverAge(),
+      diagnostics: this.pauseDiagnostics(at),
+    }
+    for (const listener of this.suspensionListeners) listener(state)
   }
 
   private queryMeta(scope: string, sampledAt: number): ValueMeta {

@@ -42,6 +42,19 @@ function block(name: string, x: number, y: number, z: number): BlockInfo {
   return { name, loaded: true, pos: { x, y, z } }
 }
 
+/** A walkable floor around the origin; a placement needs a real stance. */
+function floor(): BlockInfo[] {
+  const blocks: BlockInfo[] = []
+  for (let x = -1; x <= 3; x += 1) {
+    for (let z = -1; z <= 1; z += 1) {
+      blocks.push(block('stone', x, 63, z))
+      blocks.push(block('air', x, 64, z))
+      blocks.push(block('air', x, 65, z))
+    }
+  }
+  return blocks
+}
+
 function template(workItems: WorkItem[]): PlanTemplate {
   return { id: 'p', version: 1, size: [3, 2, 3], materialPolicy: {}, workItems }
 }
@@ -60,7 +73,7 @@ describe('plan giver', () => {
     ]), 'ord-1', origin)
     const ctx: EvalCtx = { now: 0, plan }
     const result = createPlanGiver().find(ctx, world({
-      blocks: [block('stone', 1, 63, 0), block('air', 1, 64, 0)],
+      blocks: [...floor(), block('stone', 1, 63, 0)],
       inventory: [dirt],
     })) as unknown as { driverId: string; params: { x: number; y: number; z: number; item: string }; keys: string }
     expect(result.driverId).toBe('place')
@@ -103,21 +116,24 @@ describe('plan giver', () => {
     expect(result.driverId).toBe('move')
     expect(result.reason).toContain('reach far')
     expect(Math.hypot(result.target.pos.x - 20, result.target.pos.z - 0)).toBeLessThanOrEqual(3)
-    expect(result.params).toMatchObject({ range: 0, intent: 'interact' })
+    expect(result.params).toMatchObject({ range: 0 })
   })
 
-  it('hands off an approach move when the work item is outside the snapshot', () => {
+  it('does not walk at an unloaded work item; it reports the observation gap', () => {
     const plan = instantiatePlan(template([
       { id: 'far', kind: 'clear', at: [30, 0, 0] },
     ]), 'ord-1', origin)
-    const result = createPlanGiver().find({ now: 0, plan }, world()) as unknown as {
-      driverId: string
+    const giver = createPlanGiver()
+    // The first evaluation requests a targeted re-read and yields no job.
+    expect(giver.find({ now: 0, plan }, world())).toBeNull()
+    const result = giver.find({ now: 0, plan }, world()) as unknown as {
+      kind: string
       reason: string
-      target: { pos: { x: number; y: number; z: number } }
+      data: { items: Array<{ workItemId: string; reason: string }> }
     }
-    expect(result.driverId).toBe('move')
-    expect(result.reason).toContain('approach far')
-    expect(result.target.pos).toEqual({ x: 30, y: 64, z: 0 })
+    expect(result.kind).toBe('hold')
+    expect(result.reason).toBe('PLAN_BLOCKED')
+    expect(result.data.items[0]?.reason).toBe('UNKNOWN')
   })
 
   it('returns null when every work item is satisfied', () => {
@@ -168,6 +184,7 @@ describe('plan giver', () => {
     ]), 'ord-1', origin)
     const result = createPlanGiver().find({ now: 0, plan }, world({
       blocks: [
+        ...floor(),
         block('stone', 1, 63, 0), block('air', 1, 64, 0),
         block('stone', 2, 63, 0), block('air', 2, 64, 0),
       ],

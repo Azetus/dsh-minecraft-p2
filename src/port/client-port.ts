@@ -1,4 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
+import type { SuspensionState } from '../contracts/protocol.ts'
 import type { Capability } from './capabilities.ts'
 import type {
   ActResult,
@@ -24,6 +25,8 @@ export type ClientEvent =
   | 'damaged'
   | 'died'
   | 'chat'
+  | 'provider.suspended'
+  | 'provider.resumed'
   | 'move.started'
   | 'move.progress'
   | 'move.no_path'
@@ -61,6 +64,11 @@ export type ContainerTransferAction =
   | 'take-output'
 
 export interface ClientPort {
+  /**
+   * Current provider suspension, when the adapter can report it. A paused
+   * server is a temporary loss of observation, not a failed action.
+   */
+  suspension?(): SuspensionState
   /** Open a container/furnace for a check job; closes it before resolving. */
   containerAt(p: Vec3): Promise<ContainerCheckResult>
   /** Transfer items through a chest/furnace window; one bounded action. */
@@ -86,6 +94,12 @@ export interface ClientPort {
 
   moveTo(target: Vec3 | Landmark, opts?: MoveOptions): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
+  /**
+   * Set the horizontal look direction (radians, 0 = +z) for an oriented
+   * placement such as a bed. Optional: adapters without direct yaw control can
+   * omit it, and the placement then relies on the current facing.
+   */
+  lookYaw?(yaw: number): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
   /** Jump and place the held material under the feet, once per level. */

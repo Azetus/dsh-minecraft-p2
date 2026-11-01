@@ -333,5 +333,54 @@ describe('job tracker', () => {
     expect(tracker.state()).toBe('idle')
     expect(events.at(-1)).toMatchObject({ kind: 'job.terminal', code: 'BUDGET_EXCEEDED' })
   })
+
+  it('suspends the running job without counting a failure or blocking the key', () => {
+    const { tracker, driver, events } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick(0)
+    const handle = driver.handles[0] as FakeHandle
+
+    tracker.suspend('SUSPENDED', 100)
+    expect(tracker.isSuspended()).toBe(true)
+    expect(handle.stopRequested).toBe(true)
+    handle.stopState = 'stopped'
+    tracker.tick(101)
+
+    const terminal = events.find(event => event.kind === 'job.terminal')
+    expect(terminal).toMatchObject({ state: 'interrupted', code: 'SUSPENDED', blocked: false })
+    expect(tracker.isBlocked('key-1')).toBe(false)
+    expect(tracker.failureCount('key-1')).toBe(0)
+  })
+
+  it('dispatches nothing while suspended and re-offers work after resume', () => {
+    const { tracker, driver } = harness()
+    tracker.suspend('SUSPENDED', 0)
+    tracker.offer(candidate(1))
+    tracker.tick(10)
+    expect(driver.starts).toHaveLength(0)
+
+    tracker.resume(20)
+    tracker.offer(candidate(1))
+    tracker.tick(21)
+    expect(driver.starts).toHaveLength(1)
+  })
+
+  it('does not fault a stop confirmation that is waiting through a pause', () => {
+    const { tracker, driver } = harness({ stopTimeoutMs: 5 })
+    tracker.offer(candidate(1))
+    tracker.tick(0)
+    const handle = driver.handles[0] as FakeHandle
+    handle.stopState = 'stopping'
+
+    tracker.suspend('SUSPENDED', 10)
+    for (let time = 11; time < 60; time += 1) tracker.tick(time)
+    expect(tracker.state()).toBe('stopping')
+    expect(tracker.fault()).toBeNull()
+
+    handle.stopState = 'stopped'
+    tracker.resume(60)
+    tracker.tick(61)
+    expect(tracker.state()).toBe('idle')
+  })
 })
 

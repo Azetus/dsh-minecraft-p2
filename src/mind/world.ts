@@ -34,6 +34,13 @@ export class SnapshotWorld implements WorldView {
     return this.blocks.get(blockKey(p)) ?? null
   }
 
+  /** Merge a targeted observation into this snapshot. */
+  addBlocks(blocks: BlockInfo[]): void {
+    for (const block of blocks) {
+      if (block.pos !== undefined) this.blocks.set(blockKey(block.pos), block)
+    }
+  }
+
   blocksIn(box: Box, filter?: string[]): BlockInfo[] {
     const result: BlockInfo[] = []
     for (const block of this.blocks.values()) {

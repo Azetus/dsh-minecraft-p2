@@ -14,12 +14,21 @@ export type ExpectedBlock = {
   state?: Record<string, string>
 }
 
+/** A secondary cell of a multi-cell placement (door upper, bed head). */
+export type WorkCell = {
+  /** Relative to the plan origin, like the anchor `at`. */
+  at: [number, number, number]
+  expected: ExpectedBlock
+}
+
 export type WorkItem = {
   id: string
   kind: WorkItemKind
-  /** Relative to the plan origin (interior minimum corner, floor layer). */
+  /** Anchor cell, relative to the plan origin. One placement covers every cell. */
   at: [number, number, number]
   expected?: ExpectedBlock
+  /** Extra cells the same placement must produce (door upper, bed head). */
+  cells?: WorkCell[]
   after?: string[]
 }
 
@@ -138,6 +147,26 @@ export function itemPosition(plan: PlanInstance, item: WorkItem): Vec3 {
   }
 }
 
+/** Absolute anchor plus every secondary cell of a single placement. */
+export function itemCells(
+  plan: PlanInstance,
+  item: WorkItem,
+): Array<{ pos: Vec3; expected: ExpectedBlock }> {
+  const cells: Array<{ pos: Vec3; expected: ExpectedBlock }> = []
+  if (item.expected !== undefined) cells.push({ pos: itemPosition(plan, item), expected: item.expected })
+  for (const cell of item.cells ?? []) {
+    cells.push({
+      pos: {
+        x: plan.origin.x + cell.at[0],
+        y: plan.origin.y + cell.at[1],
+        z: plan.origin.z + cell.at[2],
+      },
+      expected: cell.expected,
+    })
+  }
+  return cells
+}
+
 export function evaluatePlan(
   plan: PlanInstance,
   world: WorldView,
@@ -212,21 +241,36 @@ function evaluateItem(
     }
     case 'place':
     case 'hold': {
-      const expected = item.expected
-      if (expected === undefined) return { kind: 'blocked', reason: 'CONFLICT' }
-      const block = world.blockAt(position)
-      if (block === null || !block.loaded) return { kind: 'unknown' }
-      if (matchesExpected(block, expected)) return { kind: 'satisfied' }
-      if (item.kind === 'hold') return { kind: 'blocked', reason: 'CONFLICT' }
-      // Fluids are always an attempt: the server decides whether the block
-      // replaces them. A solid foreign block obeys the Agent's conflict policy.
-      if (!isAirName(block.name) && !isFluidName(block.name)
-        && conflictPolicy?.mode !== undefined && conflictPolicy.mode !== 'skip') {
-        return { kind: 'blocked', reason: 'CONFLICT' }
+      const cells = itemCells(plan, item)
+      if (cells.length === 0) return { kind: 'blocked', reason: 'CONFLICT' }
+      let unknown = false
+      let matched = 0
+      let occupied = false
+      for (const cell of cells) {
+        const block = world.blockAt(cell.pos)
+        if (block === null || !block.loaded) {
+          unknown = true
+          continue
+        }
+        if (matchesExpected(block, cell.expected)) {
+          matched += 1
+          continue
+        }
+        // Fluids are always an attempt: the server decides whether the block
+        // replaces them. A solid foreign block obeys the Agent's policy.
+        if (isAirName(block.name) || isFluidName(block.name)) continue
+        if (conflictPolicy?.mode !== undefined && conflictPolicy.mode !== 'skip') occupied = true
       }
-      if (!hasSupport(world, position)) return { kind: 'blocked', reason: 'NO_SUPPORT' }
-      if (countItem(world.inventory, expected.name) < 1) return { kind: 'blocked', reason: 'NO_MATERIAL' }
-      if (!withinReach(world, position)) return { kind: 'blocked', reason: 'UNREACHABLE' }
+      if (matched === cells.length) return { kind: 'satisfied' }
+      if (item.kind === 'hold') return { kind: 'blocked', reason: 'CONFLICT' }
+      // A multi-cell placement is atomic: a half-placed group cannot be
+      // repaired by placing the anchor again, so it is a conflict, not a retry.
+      if (matched > 0) return { kind: 'blocked', reason: 'CONFLICT' }
+      if (unknown) return { kind: 'unknown' }
+      if (occupied) return { kind: 'blocked', reason: 'CONFLICT' }
+      if (!cells.some(cell => hasSupport(world, cell.pos))) return { kind: 'blocked', reason: 'NO_SUPPORT' }
+      if (countItem(world.inventory, item.expected?.name ?? '') < 1) return { kind: 'blocked', reason: 'NO_MATERIAL' }
+      if (!withinReachAny(world, cells.map(cell => cell.pos))) return { kind: 'blocked', reason: 'UNREACHABLE' }
       return { kind: 'executable', driverId: DRIVER_BY_KIND.place }
     }
   }
@@ -277,12 +321,16 @@ function hasSupport(world: WorldView, position: Vec3): boolean {
 }
 
 function withinReach(world: WorldView, position: Vec3): boolean {
+  return withinReachAny(world, [position])
+}
+
+function withinReachAny(world: WorldView, positions: Vec3[]): boolean {
   const eye = { x: world.self.pos.x, y: world.self.pos.y + 1.5, z: world.self.pos.z }
-  return Math.hypot(
+  return positions.some(position => Math.hypot(
     position.x + 0.5 - eye.x,
     position.y + 0.5 - eye.y,
     position.z + 0.5 - eye.z,
-  ) <= 4.5
+  ) <= 4.5)
 }
 
 function normalizeName(name: string): string {
@@ -397,7 +445,7 @@ function parseTemplate(value: unknown, name: string): ParseResult {
 
 function parseWorkItem(value: unknown, path: string): { ok: true; item: WorkItem } | { ok: false; error: P2Error } {
   if (!isRecord(value)) return fail(path, 'work item must be an object')
-  onlyKeys(value, ['id', 'kind', 'at', 'expected', 'after'], path)
+  onlyKeys(value, ['id', 'kind', 'at', 'expected', 'cells', 'after'], path)
   if (typeof value.id !== 'string' || value.id.length === 0) return fail(`${path}.id`, 'id is required')
   if (typeof value.kind !== 'string' || !(WORK_ITEM_KINDS as readonly string[]).includes(value.kind)) {
     return fail(`${path}.kind`, `unsupported kind: ${String(value.kind)}`)
@@ -407,24 +455,31 @@ function parseWorkItem(value: unknown, path: string): { ok: true; item: WorkItem
 
   let expected: ExpectedBlock | undefined
   if (value.expected !== undefined) {
-    if (!isRecord(value.expected)) return fail(`${path}.expected`, 'must be an object')
-    onlyKeys(value.expected, ['name', 'state'], `${path}.expected`)
-    if (typeof value.expected.name !== 'string' || value.expected.name.length === 0) {
-      return fail(`${path}.expected.name`, 'name is required')
-    }
-    let state: Record<string, string> | undefined
-    if (value.expected.state !== undefined) {
-      if (!isRecord(value.expected.state)) return fail(`${path}.expected.state`, 'must be an object')
-      state = {}
-      for (const [key, entry] of Object.entries(value.expected.state)) {
-        if (typeof entry !== 'string') return fail(`${path}.expected.state.${key}`, 'state values must be strings')
-        state[key] = entry
-      }
-    }
-    expected = { name: value.expected.name, ...(state === undefined ? {} : { state }) }
+    const parsed = parseExpected(value.expected, `${path}.expected`)
+    if (!parsed.ok) return parsed
+    expected = parsed.expected
   }
   if ((kind === 'place' || kind === 'hold') && expected === undefined) {
     return fail(`${path}.expected`, `${kind} requires an expected block`)
+  }
+
+  let cells: WorkCell[] | undefined
+  if (value.cells !== undefined) {
+    if (!Array.isArray(value.cells) || value.cells.length === 0) {
+      return fail(`${path}.cells`, 'cells must be a non-empty array')
+    }
+    cells = []
+    for (let index = 0; index < value.cells.length; index += 1) {
+      const entry = value.cells[index]
+      const entryPath = `${path}.cells[${index}]`
+      if (!isRecord(entry)) return fail(entryPath, 'cell must be an object')
+      onlyKeys(entry, ['at', 'expected'], entryPath)
+      if (!isTriple(entry.at)) return fail(`${entryPath}.at`, 'at must be three integers')
+      if (entry.expected === undefined) return fail(`${entryPath}.expected`, 'expected is required')
+      const parsed = parseExpected(entry.expected, `${entryPath}.expected`)
+      if (!parsed.ok) return parsed
+      cells.push({ at: [...entry.at] as [number, number, number], expected: parsed.expected })
+    }
   }
 
   let after: string[] | undefined
@@ -442,9 +497,28 @@ function parseWorkItem(value: unknown, path: string): { ok: true; item: WorkItem
       kind,
       at: [...value.at] as [number, number, number],
       ...(expected === undefined ? {} : { expected }),
+      ...(cells === undefined ? {} : { cells }),
       ...(after === undefined ? {} : { after }),
     },
   }
+}
+
+function parseExpected(value: unknown, path: string): { ok: true; expected: ExpectedBlock } | { ok: false; error: P2Error } {
+  if (!isRecord(value)) return fail(path, 'must be an object')
+  onlyKeys(value, ['name', 'state'], path)
+  if (typeof value.name !== 'string' || value.name.length === 0) {
+    return fail(`${path}.name`, 'name is required')
+  }
+  let state: Record<string, string> | undefined
+  if (value.state !== undefined) {
+    if (!isRecord(value.state)) return fail(`${path}.state`, 'must be an object')
+    state = {}
+    for (const [key, entry] of Object.entries(value.state)) {
+      if (typeof entry !== 'string') return fail(`${path}.state.${key}`, 'state values must be strings')
+      state[key] = entry
+    }
+  }
+  return { ok: true, expected: { name: value.name, ...(state === undefined ? {} : { state }) } }
 }
 
 function hasCycle(items: WorkItem[]): boolean {

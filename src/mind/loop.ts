@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { Vec3 } from '../port/index.ts'
+import type { Box, Vec3 } from '../port/index.ts'
 import type { HazardPolicy } from '../port/terrain.ts'
 import type { PlanInstance } from './plan.ts'
 import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
@@ -35,6 +35,8 @@ export type MindLoopOptions = {
   materialPolicy?: () => MaterialPolicy | undefined
   /** Gather jobs already started for the active plan. */
   gatherCount?: () => number
+  /** Bounded internal re-read for unknown plan cells; never an Agent payload. */
+  observe?: (box: Box) => void
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -60,6 +62,7 @@ export class MindLoop {
   private readonly conflictPolicy: (() => ConflictPolicy | undefined) | undefined
   private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
   private readonly gatherCount: (() => number) | undefined
+  private readonly observe: ((box: Box) => void) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -83,6 +86,7 @@ export class MindLoop {
     this.conflictPolicy = options.conflictPolicy
     this.materialPolicy = options.materialPolicy
     this.gatherCount = options.gatherCount
+    this.observe = options.observe
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -115,6 +119,7 @@ export class MindLoop {
       ...(materialPolicy === undefined ? {} : { materialPolicy }),
       ...(gatherCount === undefined ? {} : { gatherCount }),
       isBlocked: key => this.tracker.isBlocked(key),
+      ...(this.observe === undefined ? {} : { observe: this.observe }),
     }
 
     try {

@@ -18,10 +18,10 @@ export type TrackerFault = {
 }
 
 export type TrackerEvent =
-  | { kind: 'job.started'; at: number; runId: string; driverId: string; keys: string; orderId?: string }
+  | { kind: 'job.started'; at: number; runId: string; driverId: string; keys: string; orderId?: string; workItemId?: string }
   | { kind: 'job.renewed'; at: number; runId: string; keys: string }
-  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed']; orderId?: string }
-  | { kind: 'job.preempted'; at: number; runId: string }
+  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed']; orderId?: string; keys: string; workItemId?: string }
+  | { kind: 'job.preempted'; at: number; runId: string; keys: string }
   | { kind: 'job.stale-result'; at: number; runId: string; state: DriverResult['state'] }
   | { kind: 'tracker.fault'; at: number; code: string }
 
@@ -85,6 +85,8 @@ export class JobTracker {
   private readonly blocked = new Set<string>()
   private lastRenewedKeys: string | undefined
   private rejectedSeq = 0
+  private suspended = false
+  private pausedAt = 0
 
   constructor(options: JobTrackerOptions) {
     this.port = options.port
@@ -121,12 +123,15 @@ export class JobTracker {
 
   /** Offer the latest candidate. A null offer means "no work right now". */
   offer(candidate: Candidate | null): void {
-    if (this.stateValue === 'fault') return
+    if (this.stateValue === 'fault' || this.suspended) return
     if (candidate === null) {
       this.pending = undefined
       return
     }
-    if (this.blocked.has(candidate.keys)) return
+    // Work-item candidates are governed by the plan's item ledger: it can
+    // re-evaluate a block after the world changes. A key blocked here would
+    // otherwise swallow every offer and stall the plan without a job.
+    if (candidate.workItemId === undefined && this.blocked.has(candidate.keys)) return
     if (this.stateValue === 'running' && this.currentValue !== undefined) {
       if (candidate.keys === this.currentValue.handle.continuationKey()) {
         this.renew(this.currentValue.job.runId, candidate.keys)
@@ -134,6 +139,35 @@ export class JobTracker {
       }
     }
     this.pending = candidate
+  }
+
+  isSuspended(): boolean {
+    return this.suspended
+  }
+
+  /**
+   * Game/server suspension is not failure: stop the current act so no control
+   * stays pressed, but never count it as a retry. The order/plan stays active.
+   */
+  suspend(code = 'SUSPENDED', now = this.now()): void {
+    if (this.suspended || this.stateValue === 'fault') return
+    this.suspended = true
+    this.pausedAt = now
+    this.pending = undefined
+    if (this.stateValue === 'running' && this.currentValue !== undefined) {
+      this.beginStop(now, { state: 'interrupted', code })
+    }
+  }
+
+  /** Resume after the server ticks again; the giver recomputes the next step. */
+  resume(now = this.now()): void {
+    if (!this.suspended) return
+    this.suspended = false
+    // Paused wall time is not budget: shift a pending stop confirmation.
+    if (this.stopInfo !== undefined && this.pausedAt > 0) {
+      this.stopInfo.since += now - this.pausedAt
+    }
+    this.pausedAt = 0
   }
 
   /**
@@ -157,6 +191,12 @@ export class JobTracker {
 
   tick(now = this.now(), gameAge?: number): void {
     if (this.stateValue === 'fault') return
+    if (this.suspended) {
+      // A stop already requested still needs its confirmation; nothing new is
+      // dispatched and no wall-clock budget is consumed while paused.
+      if (this.stateValue === 'stopping') this.tickStopping(now)
+      return
+    }
     if (this.stateValue === 'idle' && this.pending !== undefined) {
       const candidate = this.pending
       this.pending = undefined
@@ -213,7 +253,7 @@ export class JobTracker {
     }
     info.handle.tick()
     const status = info.handle.stopStatus()
-    if (status === 'unconfirmed' || now - info.since > this.stopTimeoutMs) {
+    if (status === 'unconfirmed' || (!this.suspended && now - info.since > this.stopTimeoutMs)) {
       this.faultValue = { code: 'STOP_UNCONFIRMED', since: now }
       this.stateValue = 'fault'
       this.pending = undefined
@@ -225,7 +265,7 @@ export class JobTracker {
     if (info.final !== undefined) {
       this.recordTerminal(info.keys, info.job, info.final, now)
     } else {
-      this.emit({ kind: 'job.preempted', at: now, runId: info.job.runId })
+      this.emit({ kind: 'job.preempted', at: now, runId: info.job.runId, keys: info.keys })
     }
     this.currentValue = undefined
     this.stopInfo = undefined
@@ -256,6 +296,7 @@ export class JobTracker {
       target: candidate.target,
       params: candidate.params,
       ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
+      ...(candidate.workItemId === undefined ? {} : { workItemId: candidate.workItemId }),
       runId,
       issuedAt: now,
       budget: driver.defaults.budget,
@@ -302,7 +343,8 @@ export class JobTracker {
     this.lastRenewedKeys = undefined
     this.stateValue = 'running'
     this.emit({ kind: 'job.started', at: now, runId, driverId: job.driverId, keys: candidate.keys,
-      ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }) })
+      ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
+      ...(candidate.workItemId === undefined ? {} : { workItemId: candidate.workItemId }) })
   }
 
   private beginStop(now: number, final: DriverResult | undefined): void {
@@ -340,6 +382,7 @@ export class JobTracker {
       target: candidate.target,
       params: candidate.params,
       ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
+      ...(candidate.workItemId === undefined ? {} : { workItemId: candidate.workItemId }),
       runId: `rejected-${this.rejectedSeq}`,
       issuedAt: now,
       budget: { maxTicks: 0, maxWallMs: 0 },
@@ -363,9 +406,11 @@ export class JobTracker {
       ...(result.code === undefined ? {} : { code: result.code }),
       ...(result.observed === undefined ? {} : { observed: result.observed }),
       ...(job.orderId === undefined ? {} : { orderId: job.orderId }),
+      ...(job.workItemId === undefined ? {} : { workItemId: job.workItemId }),
+      keys,
       blocked,
     })
-    if (blocked) this.blocked.add(keys)
+    if (blocked && job.workItemId === undefined) this.blocked.add(keys)
   }
 
   private renew(runId: string, keys: string): void {

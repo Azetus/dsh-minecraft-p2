@@ -1,6 +1,6 @@
 import type { ObserveVec3 } from '../contracts/protocol.ts'
 import { countItem, isAirName, matchesExpected } from '../mind/plan.ts'
-import { parseBlueprint } from '../mind/blueprint.ts'
+import { groupBlueprintBlocks, parseBlueprint } from '../mind/blueprint.ts'
 import type { ClientPort } from '../port/index.ts'
 
 export type BlueprintConflict = {
@@ -64,6 +64,7 @@ export function previewBlueprint(
   }
 
   const { blueprint } = parsed
+  const grouped = groupBlueprintBlocks(blueprint)
   const inventory = port.inventory()
   const required: Record<string, number> = {}
   const need: Record<string, number> = {}
@@ -73,34 +74,43 @@ export function previewBlueprint(
   const conflicts: BlueprintConflict[] = []
   let conflictTotal = 0
 
-  for (const block of blueprint.blocks) {
-    required[block.name] = (required[block.name] ?? 0) + 1
-    const current = port.blockAt(block)
-    if (current === null || !current.loaded) {
-      unknownTotal += 1
-      if (unknown.length < MAX_REPORTED_UNKNOWN) unknown.push({ x: block.x, y: block.y, z: block.z })
-      need[block.name] = (need[block.name] ?? 0) + 1
-      continue
-    }
-    if (matchesExpected(current, { name: block.name, ...(block.state === undefined ? {} : { state: block.state }) })) {
-      satisfied += 1
-      continue
-    }
-    need[block.name] = (need[block.name] ?? 0) + 1
-    if (!isAirName(current.name)) {
-      conflictTotal += 1
-      if (conflicts.length < MAX_REPORTED_CONFLICTS) {
-        conflicts.push({
-          x: block.x,
-          y: block.y,
-          z: block.z,
-          expected: block.name,
-          current: current.name,
-          ...(current.solid === undefined ? {} : { solid: current.solid }),
-          clearable: isClearable(current.name),
-        })
+  for (let index = 0; index < blueprint.blocks.length; index += 1) {
+    if (grouped.consumed.has(index)) continue
+    const anchor = blueprint.blocks[index]!
+    // One work item = one placement. A door/bed group consumes one item, so
+    // counting its two cells would report a material that is not needed.
+    const cells = [anchor, ...(grouped.groups.get(index) ?? [])]
+    required[anchor.name] = (required[anchor.name] ?? 0) + 1
+    let allSatisfied = true
+    for (const cell of cells) {
+      const current = port.blockAt(cell)
+      if (current === null || !current.loaded) {
+        unknownTotal += 1
+        if (unknown.length < MAX_REPORTED_UNKNOWN) unknown.push({ x: cell.x, y: cell.y, z: cell.z })
+        allSatisfied = false
+        continue
+      }
+      if (matchesExpected(current, { name: cell.name, ...(cell.state === undefined ? {} : { state: cell.state }) })) {
+        satisfied += 1
+        continue
+      }
+      allSatisfied = false
+      if (!isAirName(current.name)) {
+        conflictTotal += 1
+        if (conflicts.length < MAX_REPORTED_CONFLICTS) {
+          conflicts.push({
+            x: cell.x,
+            y: cell.y,
+            z: cell.z,
+            expected: cell.name,
+            current: current.name,
+            ...(current.solid === undefined ? {} : { solid: current.solid }),
+            clearable: isClearable(current.name),
+          })
+        }
       }
     }
+    if (!allSatisfied) need[anchor.name] = (need[anchor.name] ?? 0) + 1
   }
 
   const missing: Record<string, number> = {}

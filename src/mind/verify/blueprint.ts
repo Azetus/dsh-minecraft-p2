@@ -1,32 +1,33 @@
 import type { PlanInstance } from '../plan.ts'
-import { itemPosition, matchesExpected } from '../plan.ts'
+import { itemCells, matchesExpected } from '../plan.ts'
 import type { WorldView } from '../types.ts'
 import type { VerifyResult } from './sealed-room.ts'
 
 /**
- * Generic final-geometry verifier: every expected work item must still match
- * its name+state subset. It is the authority for a build order; a placement
- * that the server accepted but the world later removed is refuted here.
+ * Generic final-geometry verifier: every expected cell (including the second
+ * cell of a door/bed placement) must still match its name+state subset. It is
+ * the authority for a build order; a placement that the server accepted but the
+ * world later removed is refuted here.
  */
 export function verifyBlueprint(plan: PlanInstance, world: WorldView): VerifyResult {
-  let expectedItems = 0
+  let expectedCells = 0
   for (const item of plan.workItems) {
-    if (item.expected === undefined) continue
-    expectedItems += 1
-    const at = itemPosition(plan, item)
-    const block = world.blockAt(at)
-    if (block === null || !block.loaded) {
-      return { state: 'insufficient', at, detail: 'expected block is not loaded' }
-    }
-    if (!matchesExpected(block, item.expected)) {
-      return {
-        state: 'refuted',
-        at,
-        detail: `expected ${item.expected.name}, found ${block.name}`,
+    for (const cell of itemCells(plan, item)) {
+      expectedCells += 1
+      const block = world.blockAt(cell.pos)
+      if (block === null || !block.loaded) {
+        return { state: 'insufficient', at: cell.pos, detail: 'expected block is not loaded' }
+      }
+      if (!matchesExpected(block, cell.expected)) {
+        return {
+          state: 'refuted',
+          at: cell.pos,
+          detail: `expected ${cell.expected.name}, found ${block.name}`,
+        }
       }
     }
   }
-  return expectedItems === 0
+  return expectedCells === 0
     ? { state: 'insufficient', detail: 'plan has no expected blocks' }
     : { state: 'confirmed' }
 }

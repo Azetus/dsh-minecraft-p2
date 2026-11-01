@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { MindStatusView } from '../contracts/protocol.ts'
+import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
+import type { SuspensionState } from '../contracts/protocol.ts'
 import type { DutyStatusView } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
@@ -38,6 +40,9 @@ import {
   createUseOrderGiver,
 } from '../mind/givers/primitives.ts'
 import { createPlanGiver } from '../mind/givers/plan.ts'
+import { currentStage, stageItems, stageKey, stageSummaries } from '../mind/build-stage.ts'
+import { planObservationBoxes, verifyObservationBoxes } from '../mind/plan-observation.ts'
+import { PlanItemLedger } from '../mind/placement.ts'
 import { createMaterialGiver } from '../mind/givers/material.ts'
 import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
@@ -95,6 +100,8 @@ export type CreateMindOptions = {
   home?: Vec3
   /** Recovery identity from the provider; defVersion is computed from plans. */
   identity?: { worldId: string; characterId: string; defVersion?: string }
+  /** Live provider state, used to record why a pause was reported. */
+  providerStatus?: () => ProviderRuntimeStatus
   plansDir: string
   journalPath: string
   /** Development-only crash injection after the first action.pending write. */
@@ -130,6 +137,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     chunkBudget: 2,
   })
   options.port.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
+  const planLedger = new PlanItemLedger()
   const duty = new DutyController({
     statePath: join(dirname(options.journalPath), 'duty.json'),
     ...(options.identity === undefined
@@ -148,7 +156,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.craft', factory: () => createCraftOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.hold', factory: () => createHoldOrderGiver(() => activeOrderLookup?.()) })
-  registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
+  registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver({ ledger: planLedger }) })
   registry.registerGiver({ id: 'duty.work', factory: () => createDutyGiver(duty, areaResources) })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver(areaResources) })
 
@@ -200,6 +208,16 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const sensors = new Sensors({ port: options.port, now })
   const home = options.home
   let activePlan: PlanInstance | undefined
+  let planStage = 0
+  let planStageKey = ''
+  let planStageSatisfied = -1
+  let planProgressAt = 0
+  let planLastJobAt = 0
+  let suspended = false
+  let suspendedSince = 0
+  let pausedMs = 0
+  let lastPauseNoticeAt = 0
+  const jobWorkItems = new Map<string, { workItemId: string; stands: Vec3[]; orderId?: string }>()
   let planOrderId: string | undefined
   let planBlockedReported = false
   let planInsufficientReported = false
@@ -215,6 +233,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     beforeStart: (candidate, job) => {
       if (candidate.keys.startsWith('duty:gather:')) duty.recordJobStart(now())
+      if (candidate.workItemId !== undefined) {
+        jobWorkItems.set(job.runId, {
+          workItemId: candidate.workItemId,
+          stands: candidateStances(candidate.params),
+          ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
+        })
+      }
       if (candidate.driverId !== 'clear' && candidate.driverId !== 'place') return
       const parsed = parseActionKeys(candidate.keys)
       const orderId = candidate.orderId ?? orders.active()?.order.id
@@ -296,6 +321,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (event.kind === 'job.terminal' || event.kind === 'tracker.fault' || event.kind === 'job.stale-result') {
         lastReport = data
       }
+      if (event.kind === 'job.terminal') recordPlanJob(event)
+      if (event.kind === 'job.started') planLastJobAt = event.at
     },
   })
   const loop = new MindLoop({
@@ -312,6 +339,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     conflictPolicy: () => currentConflictPolicy(),
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,
+    observe: box => sensors.observeBox(box),
     onEvent: event => {
       metrics.record(event.kind, event.data, event.at)
       events.push(event.kind, event.at, event.data)
@@ -322,6 +350,23 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
       if (event.kind === 'mind.hold' && isRecord(event.data) && event.data.notify !== false) {
         lastReport = event.data
+      }
+      // The giver reports a stage with no advanceable item; this is the formal
+      // plan block (the old path left the order active until a watchdog fired).
+      if (event.kind === 'mind.hold' && isRecord(event.data) && event.data.reason === 'PLAN_BLOCKED'
+        && activePlan !== undefined) {
+        const detail = isRecord(event.data.data) ? event.data.data : {}
+        try {
+          const world = sensors.read()
+          blockPlanNow(
+            typeof detail.stage === 'number' ? detail.stage : planStage,
+            (detail.items ?? []) as JsonValue,
+            world,
+            observationBasis(world),
+          )
+        } catch (error) {
+          events.push('mind.error', now(), { message: error instanceof Error ? error.message : String(error) })
+        }
       }
     },
   })
@@ -340,12 +385,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     if (active === undefined || active.order.verb !== 'build') {
-      if (planOrderId !== undefined) {
-        activePlan = undefined
-        planOrderId = undefined
-        planBlockedReported = false
-        planInsufficientReported = false
-      }
+      if (planOrderId !== undefined) finishPlan()
       return
     }
     if (planOrderId === active.order.id) return
@@ -376,7 +416,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         deferredWorkItems: [...access.deferred],
         ...(access.entrance === undefined ? {} : { entranceInside: access.entrance.inside }),
       }
+      sensors.setObservation('plan', planObservationBoxes(activePlan, activePlan.workItems))
       planOrderId = active.order.id
+      planStage = 0
+      planStageKey = ''
+      planStageSatisfied = -1
+      planProgressAt = now()
+      planLastJobAt = now()
       planBlockedReported = false
       planInsufficientReported = false
       gatherCount = 0
@@ -417,7 +463,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     activePlan = instantiatePlan(template, active.order.id, origin)
+    sensors.setObservation('plan', planObservationBoxes(activePlan, activePlan.workItems))
     planOrderId = active.order.id
+    planStage = 0
+    planStageKey = ''
+    planStageSatisfied = -1
+    planProgressAt = now()
+    planLastJobAt = now()
     planBlockedReported = false
     planInsufficientReported = false
     gatherCount = 0
@@ -478,10 +530,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         events.push('plan.material-short', now(), data)
         orders.complete(plan.orderId, 'blocked')
         lastReport = data
-        activePlan = undefined
-        planOrderId = undefined
-        planBlockedReported = false
-        planInsufficientReported = false
+        finishPlan()
         return false
       }
       return true
@@ -568,10 +617,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     if (active !== undefined && !isTerminalState(orders.get(active.order.id)?.state)) {
       orders.complete(active.order.id, 'blocked')
     }
-    activePlan = undefined
-    planOrderId = undefined
-    planBlockedReported = false
-    planInsufficientReported = false
+    finishPlan()
     return false
   }
 
@@ -585,6 +631,56 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return { x: Number(gather[1]), y: Number(gather[2]), z: Number(gather[3]) }
     }
     return undefined
+  }
+
+  /**
+   * Attribute a finished job to its work item. A stance that produced no world
+   * change is counted here; placement success is world-proven, never inferred
+   * from `moveTo arrived`.
+   */
+  function recordPlanJob(event: Extract<TrackerEvent, { kind: 'job.terminal' }>): void {
+    const info = jobWorkItems.get(event.runId)
+    jobWorkItems.delete(event.runId)
+    if (info === undefined || activePlan === undefined) return
+    if (info.orderId !== undefined && info.orderId !== activePlan.orderId) return
+    if (event.state === 'interrupted') return
+    const item = activePlan.workItems.find(candidate => candidate.id === info.workItemId)
+    if (item === undefined) return
+    let world: WorldView
+    try {
+      world = sensors.read()
+    } catch {
+      return
+    }
+    const attempts = readAttempts(event.observed)
+    if (attempts.length > 0) {
+      for (const attempt of attempts) {
+        if (attempt.ok && event.state === 'succeeded') {
+          planLedger.record(activePlan, item, attempt.stance, { ok: true }, world)
+          continue
+        }
+        const code = attempt.code ?? event.code
+        planLedger.record(
+          activePlan,
+          item,
+          attempt.stance,
+          { ok: false, ...(code === undefined ? {} : { code }) },
+          world,
+        )
+      }
+      return
+    }
+    const stance = info.stands[0]
+    if (stance === undefined) return
+    planLedger.record(
+      activePlan,
+      item,
+      stance,
+      event.state === 'succeeded'
+        ? { ok: true }
+        : { ok: false, ...(event.code === undefined ? {} : { code: event.code }) },
+      world,
+    )
   }
 
   function observationBasis(world: WorldView): JsonValue {
@@ -603,18 +699,199 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
   }
 
+  function setPlanObservation(plan: PlanInstance): void {
+    const world = sensors.read()
+    const deferred = new Set(plan.deferredWorkItems ?? [])
+    const evaluation = evaluatePlan(plan, world, currentConflictPolicy())
+    const stage = currentStage(plan, deferred, evaluation.states)
+    sensors.setObservation('plan', planObservationBoxes(plan, stageItems(plan, deferred, stage)))
+    planStage = stage
+    planStageKey = ''
+    planProgressAt = now()
+  }
+
+  function finishPlan(): void {
+    sensors.clearObservation('plan')
+    activePlan = undefined
+    planOrderId = undefined
+    planStage = 0
+    planStageKey = ''
+    planStageSatisfied = -1
+    planBlockedReported = false
+    planInsufficientReported = false
+    jobWorkItems.clear()
+  }
+
+  function updateStageEvents(
+    stage: number,
+    summaries: ReturnType<typeof stageSummaries>,
+    basis: JsonValue,
+  ): void {
+    const key = stageKey(summaries, stage)
+    if (key === planStageKey) return
+    const previous = planStage
+    planStageKey = key
+    planProgressAt = now()
+    const summary = summaries[stage - 1]
+    if (stage !== previous) {
+      const completed = previous > 0 ? summaries[previous - 1] : undefined
+      if (completed?.done === true) {
+        events.push('stage.completed', now(), { stage: previous, total: completed.total, basis })
+      }
+      planStage = stage
+      planStageSatisfied = summary?.satisfied ?? 0
+      events.push('stage.started', now(), {
+        ...(summary ?? { stage }),
+        basis,
+      } as unknown as JsonValue)
+      return
+    }
+    // Reachability flickers as the body moves; only a real satisfied/blocked
+    // change is progress worth an event.
+    if (summary !== undefined && summary.satisfied !== planStageSatisfied) {
+      planStageSatisfied = summary.satisfied
+      events.push('stage.progress', now(), {
+        ...summary,
+        basis,
+      } as unknown as JsonValue)
+    }
+  }
+
+  function materialReport(plan: PlanInstance, world: WorldView): JsonValue {
+    const inventory: Record<string, number> = {}
+    for (const item of world.inventory) inventory[item.name] = (inventory[item.name] ?? 0) + item.count
+    try {
+      return { inventory, shortage: planShortage(plan, world) as unknown as JsonValue }
+    } catch {
+      return { inventory }
+    }
+  }
+
+  /**
+   * Formal plan block: stage/item payload first, then the terminal state. This
+   * replaces the old silent `PLAN_ITEMS_BLOCKED` hold and the global 45 s
+   * watchdog, which could only report "something stalled".
+   */
+  function blockPlanNow(stage: number, items: JsonValue, world: WorldView, basis: JsonValue): void {
+    const plan = activePlan
+    if (plan === undefined) return
+    const summaries = stageSummaries(
+      plan,
+      new Set(plan.deferredWorkItems ?? []),
+      evaluatePlan(plan, world, currentConflictPolicy()).states,
+    )
+    const data = {
+      planId: plan.planId,
+      orderId: plan.orderId,
+      stage,
+      items,
+      stages: summaries as unknown as JsonValue,
+      material: materialReport(plan, world),
+      basis,
+    }
+    events.push('stage.blocked', now(), { planId: plan.planId, stage, items, basis })
+    events.push('plan.blocked', now(), data)
+    lastReport = data
+    orders.complete(plan.orderId, 'blocked')
+    finishPlan()
+  }
+
+  function enterSuspend(state: SuspensionState): void {
+    suspended = true
+    suspendedSince = state.at > 0 ? state.at : now()
+    lastPauseNoticeAt = now()
+    tracker.suspend('SUSPENDED', now())
+    events.push('mind.suspended', now(), {
+      since: suspendedSince,
+      idleMs: state.idleMs,
+      serverAge: state.serverAge,
+      diagnostics: state.diagnostics as unknown as JsonValue,
+      ...(options.providerStatus === undefined
+        ? {}
+        : { provider: options.providerStatus() as unknown as JsonValue }),
+    })
+  }
+
+  function leaveSuspend(): void {
+    const at = now()
+    pausedMs = Math.max(0, at - suspendedSince)
+    suspended = false
+    suspendedSince = 0
+    tracker.resume(at)
+    planProgressAt = at
+    planLastJobAt = at
+    // Re-observe before deciding again: the world may have changed while the
+    // server was frozen, and the interrupted job is not resumed mid-step.
+    if (activePlan !== undefined) {
+      try {
+        setPlanObservation(activePlan)
+      } catch {
+        // The next tick retries; a stale snapshot is still reported as stale.
+      }
+    }
+    loopRef?.invalidate()
+    events.push('mind.resumed', at, { pausedMs })
+  }
+
   const tick = (): void => {
+    const suspension = options.port.suspension?.()
+    if (suspension?.suspended === true) {
+      if (!suspended) enterSuspend(suspension)
+      else if (now() - suspendedSince >= 60_000 && now() - lastPauseNoticeAt >= 60_000) {
+        // Long pauses are reported, never turned into a blocked plan.
+        lastPauseNoticeAt = now()
+        events.push('plan.paused-long', now(), {
+          since: suspendedSince,
+          elapsedMs: now() - suspendedSince,
+        })
+      }
+      return
+    }
+    if (suspended) leaveSuspend()
     syncPlan()
     if (!pendingReconciled) {
       pendingReconciled = true
       if (!reconcilePending()) return
     }
     loop.tick()
-    if (activePlan === undefined || tracker.state() !== 'idle') return
+    if (activePlan === undefined) return
     try {
       const world = sensors.read()
       const basis = observationBasis(world)
+      const deferred = new Set(activePlan.deferredWorkItems ?? [])
       const evaluation = evaluatePlan(activePlan, world, currentConflictPolicy())
+      const stage = currentStage(activePlan, deferred, evaluation.states)
+      const summaries = stageSummaries(activePlan, deferred, evaluation.states)
+      updateStageEvents(stage, summaries, basis)
+      if (stage !== planStage) {
+        planStage = stage
+        sensors.setObservation('plan', planObservationBoxes(activePlan, stageItems(activePlan, deferred, stage)))
+      }
+      // Any started job is progress; only a genuinely silent plan can time out.
+      if (planLastJobAt > planProgressAt) planProgressAt = planLastJobAt
+      if (now() - planProgressAt >= 60_000 && tracker.state() === 'idle' && !evaluation.satisfied) {
+        const data = {
+          planId: activePlan.planId,
+          orderId: activePlan.orderId,
+          elapsedMs: now() - planProgressAt,
+          stage,
+          stages: summaries as unknown as JsonValue,
+          items: planLedger.entries(activePlan).map(entry => ({
+            workItemId: entry.itemId,
+            stage: entry.stage,
+            target: entry.target,
+            ...(entry.blocked === undefined
+              ? {}
+              : { reason: entry.blocked.reason, detail: entry.blocked.detail }),
+            ...(entry.lastCode === undefined ? {} : { lastCode: entry.lastCode }),
+          })) as unknown as JsonValue,
+          basis,
+        }
+        events.push('plan.stalled', now(), data)
+        blockPlanNow(stage, data.items, world, basis)
+        return
+      }
+      if (tracker.state() !== 'idle') return
       const policy = currentConflictPolicy()
       if (policy?.mode === 'abort'
         && [...evaluation.states.values()].some(state => state.kind === 'blocked' && state.reason === 'CONFLICT')) {
@@ -622,56 +899,37 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         events.push('plan.abort', now(), data)
         orders.complete(activePlan.orderId, 'failed')
         lastReport = data
-        activePlan = undefined
-        planOrderId = undefined
-        planBlockedReported = false
-        planInsufficientReported = false
+        finishPlan()
         return
       }
-      if (!planBlockedReported && evaluation.blocked) {
-        planBlockedReported = true
-        const blocked = [...evaluation.states.entries()]
-          .filter(([, state]) => state.kind === 'blocked')
-          .map(([id, state]) => {
-            const item = activePlan?.workItems.find(candidate => candidate.id === id)
-            const position = item === undefined ? undefined : itemPosition(activePlan as PlanInstance, item)
-            const current = position === undefined ? null : world.blockAt(position)
-            return {
-              id,
-              reason: (state as { reason: string }).reason,
-              ...(item?.expected === undefined ? {} : { expected: item.expected.name }),
-              ...(current === null ? {} : { current: current.name }),
-            }
-          })
-        const data = { planId: activePlan.planId, blocked, basis }
-        events.push('plan.blocked', now(), data)
-        lastReport = data
-      }
       if (!evaluation.satisfied) return
+      // Final geometry is verified against one fresh, fully observed snapshot.
+      const verifyWorld = sensors.setObservation('plan', verifyObservationBoxes(activePlan))
+      const verifyBasis = observationBasis(verifyWorld)
 
       let terminal: 'succeeded' | 'failed' | undefined
       let verify: VerifyResult | undefined
       if (activePlan.template === 'blueprint') {
         // Final geometry is the authority; a place accepted then destroyed is
         // refuted here instead of being accepted as a permanent success.
-        verify = verifyBlueprint(activePlan, world)
+        verify = verifyBlueprint(activePlan, verifyWorld)
         if (verify.state === 'confirmed' && activePlan.verify !== undefined) {
-          verify = verifyRoom(activePlan, activePlan.verify, world)
+          verify = verifyRoom(activePlan, activePlan.verify, verifyWorld)
         }
       } else if (activePlan.verify !== undefined) {
-        verify = verifyRoom(activePlan, activePlan.verify, world)
+        verify = verifyRoom(activePlan, activePlan.verify, verifyWorld)
       }
       if (verify !== undefined) {
         if (verify.state === 'confirmed') {
           terminal = 'succeeded'
         } else if (verify.state === 'refuted') {
           terminal = 'failed'
-          const data = { ...verify, basis }
+          const data = { ...verify, basis: verifyBasis }
           events.push('plan.verify', now(), data)
           lastReport = data
         } else if (!planInsufficientReported) {
           planInsufficientReported = true
-          const data = { ...verify, basis }
+          const data = { ...verify, basis: verifyBasis }
           events.push('plan.insufficient', now(), data)
           lastReport = data
         }
@@ -680,13 +938,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       if (terminal === undefined) return
       orders.complete(activePlan.orderId, terminal)
-      const data = { planId: activePlan.planId, state: terminal, basis }
+      const data = { planId: activePlan.planId, state: terminal, basis: verifyBasis }
       events.push('plan.terminal', now(), data)
       lastReport = data
-      activePlan = undefined
-      planOrderId = undefined
-      planBlockedReported = false
-      planInsufficientReported = false
+      finishPlan()
     } catch (error) {
       events.push('mind.error', now(), { message: error instanceof Error ? error.message : String(error) })
     }
@@ -703,11 +958,17 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       if (activePlan !== undefined) {
         try {
           const evaluation = evaluatePlan(activePlan, sensors.read(), currentConflictPolicy())
+          const deferred = new Set(activePlan.deferredWorkItems ?? [])
+          const summaries = stageSummaries(activePlan, deferred, evaluation.states)
+          const stage = currentStage(activePlan, deferred, evaluation.states)
           planView = {
             id: activePlan.planId,
             template: activePlan.template,
             satisfied: evaluation.satisfied,
             blocked: evaluation.blocked,
+            stage,
+            total: summaries.reduce((total, summary) => total + summary.total, 0),
+            done: summaries.reduce((total, summary) => total + summary.satisfied, 0),
           }
         } catch {
           planView = { id: activePlan.planId, template: activePlan.template, satisfied: false, blocked: false }
@@ -723,6 +984,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         activeOrder: active === undefined ? null : { id: active.order.id, verb: active.order.verb },
         queuedOrders: orders.queued().length,
         eventsSeq: events.lastSeq(),
+        ...(suspended ? { suspended: true } : {}),
         plan: planView,
         duty: duty.view() ?? null,
         metrics: metrics.view(),
@@ -743,10 +1005,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       const record = orders.cancel(id)
       if (planOrderId === id || activeBefore?.order.id === id) {
         tracker.abort()
-        activePlan = undefined
-        planOrderId = undefined
-        planBlockedReported = false
-        planInsufficientReported = false
+        finishPlan()
       }
       return { id: record.order.id, state: record.state }
     },
@@ -869,4 +1128,43 @@ function verifyRoom(plan: PlanInstance, spec: VerifySpec, world: WorldView): Ver
   return spec.kind === 'usable-room'
     ? verifyUsableRoom(plan, spec, world)
     : verifySealedRoom(plan, spec, world)
+}
+
+/** Read the stance list a started job will try, for item-level accounting. */
+function candidateStances(params: Record<string, JsonValue>): Vec3[] {
+  const stands = params.stands
+  if (Array.isArray(stands)) {
+    const result: Vec3[] = []
+    for (const entry of stands) {
+      if (!isRecord(entry)) continue
+      const { x, y, z } = entry
+      if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') result.push({ x, y, z })
+    }
+    if (result.length > 0) return result
+  }
+  const { x, y, z } = params
+  if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+    return [{ x, y, z }]
+  }
+  return []
+}
+
+function readAttempts(observed: JsonValue | undefined): Array<{ stance: Vec3; ok: boolean; code?: string }> {
+  if (!isRecord(observed)) return []
+  const attempts = observed.attempts
+  if (!Array.isArray(attempts)) return []
+  const result: Array<{ stance: Vec3; ok: boolean; code?: string }> = []
+  for (const entry of attempts) {
+    if (!isRecord(entry)) continue
+    const stance = entry.stance
+    if (!isRecord(stance)) continue
+    const { x, y, z } = stance
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') continue
+    result.push({
+      stance: { x, y, z },
+      ok: entry.ok === true,
+      ...(typeof entry.code === 'string' ? { code: entry.code } : {}),
+    })
+  }
+  return result
 }

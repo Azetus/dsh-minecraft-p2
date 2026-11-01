@@ -130,6 +130,7 @@
 |---|---|---|
 | driver 停止无法确认 | `STOP_UNCONFIRMED` | tracker fault，冻结 dispatch，上报 |
 | 长期无观测更新 | `OBSERVATION_STALE` | 暂停新 job，保留当前，等恢复 |
+| 服务器暂停（server age 停滞） | `GAME_PAUSED` → `suspended` | 中止当前动作但不计失败；order/plan 保持 active；watchdog/墙钟冻结；恢复后重观测再继续；超长暂停只通知 |
 | 同一工作项反复失败 | `WORK_ITEM_BLOCKED` | 换工作项；全部阻塞 → order blocked |
 | 材料不足且不可自动补给 | `NO_MATERIAL` | order blocked，唤醒 agent |
 | 服务器拒绝放置 | `PLACE_REFUSED` / `PLACE_READBACK_MISMATCH` | 该 work item 记失败；policy 决定跳过/清障/重试 |

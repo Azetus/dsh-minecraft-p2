@@ -26,6 +26,28 @@ const PLACE_SCHEMA: SchemaNode = {
     item: { type: 'string' },
     face: { type: 'string', enum: ['up', 'down', 'north', 'south', 'east', 'west'] },
     expectedState: { type: 'object' },
+    yaw: { type: 'number' },
+    cells: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+        required: ['x', 'y', 'z'],
+        additionalProperties: false,
+      },
+    },
+    standX: { type: 'number' },
+    standY: { type: 'number' },
+    standZ: { type: 'number' },
+    stands: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+        required: ['x', 'y', 'z'],
+        additionalProperties: false,
+      },
+    },
   },
   required: ['x', 'y', 'z', 'item'],
   additionalProperties: false,
@@ -38,19 +60,36 @@ type PlaceParams = {
   item: string
   face?: Face
   expectedState?: Record<string, string>
+  yaw?: number
+  cells?: Array<{ x: number; y: number; z: number }>
+  standX?: number
+  standY?: number
+  standZ?: number
+  stands?: Array<{ x: number; y: number; z: number }>
+}
+
+type Cell = { x: number; y: number; z: number }
+
+type Attempt = {
+  stance: Cell
+  move: string
+  place?: string
+  code?: string
+  ok: boolean
 }
 
 /**
- * Place one expected block. The target may be air, fluid or any other block:
- * the server's block update is the authority, so this driver only attempts and
- * confirms the accepted result once. It does not promise permanence.
+ * Place one expected block (or one two-cell group: door, bed). The placement
+ * is issued once at the anchor cell; every cell the server produced is read
+ * back, so a half group is never reported as success. Movement to a stance is
+ * not progress: only the readback decides.
  */
 export function createPlaceDriver(): Driver {
   return {
     id: PLACE_DRIVER_ID,
     schema: PLACE_SCHEMA,
     defaults: {
-      budget: { maxTicks: 200, maxWallMs: 15_000 },
+      budget: { maxTicks: 300, maxWallMs: 45_000 },
       interrupt: 'constant-only',
       suspendable: true,
     },
@@ -76,12 +115,53 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
     name: params.item,
     ...(params.expectedState === undefined ? {} : { state: params.expectedState }),
   }
+  const cells: Cell[] = [target, ...(params.cells ?? [])]
 
   const before = port.blockAt(target)
   if (before === null || !before.loaded) {
     return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
   }
-  if (matchesExpected(before, expected)) return { state: 'succeeded' }
+  if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
+
+  const explicit = params.stands ?? (params.standX !== undefined && params.standY !== undefined
+    && params.standZ !== undefined
+    ? [{ x: params.standX, y: params.standY, z: params.standZ }]
+    : [])
+
+  if (explicit.length > 0) {
+    const attempts: Attempt[] = []
+    for (const stand of explicit) {
+      const moved = await port.moveTo(stand, { range: 0.5, timeoutMs: 20_000 })
+      if (moved.state !== 'ok') {
+        attempts.push({ stance: stand, move: 'failed', code: moved.code ?? 'PLACE_APPROACH_FAILED', ok: false })
+        continue
+      }
+      if (params.yaw !== undefined) {
+        const looked = await lookYaw(port, params.yaw)
+        if (looked !== undefined) {
+          attempts.push({ stance: stand, move: 'ok', code: looked, ok: false })
+          continue
+        }
+      }
+      const placed = await placeFaces(port, cells, params, expected)
+      attempts.push({
+        stance: stand,
+        move: 'ok',
+        place: placed.state === 'succeeded' ? 'ok' : 'failed',
+        ...(placed.code === undefined ? {} : { code: placed.code }),
+        ok: placed.state === 'succeeded',
+      })
+      if (placed.state === 'succeeded') {
+        return { state: 'succeeded', observed: { attempts: attempts as unknown as never } }
+      }
+    }
+    const last = attempts[attempts.length - 1]
+    return {
+      state: 'failed',
+      code: last?.code ?? 'PLACE_FAILED',
+      observed: { attempts: attempts as unknown as never },
+    }
+  }
 
   const self = port.self().pos
   if (Math.hypot(self.x - target.x, self.y - target.y, self.z - target.z) > 4.5) {
@@ -98,7 +178,20 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
       }
     }
   }
+  if (params.yaw !== undefined) {
+    const looked = await lookYaw(port, params.yaw)
+    if (looked !== undefined) return { state: 'failed', code: looked }
+  }
+  return placeFaces(port, cells, params, expected)
+}
 
+async function placeFaces(
+  port: ClientPort,
+  cells: Cell[],
+  params: PlaceParams,
+  expected: ExpectedBlock,
+): Promise<DriverResult> {
+  const target = cells[0]!
   const faces = params.face === undefined ? supportFaces(port, target) : [params.face]
   if (faces.length === 0) return { state: 'failed', code: 'NO_SUPPORT' }
 
@@ -112,16 +205,34 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
       lastCode = result.code ?? 'PLACE_FAILED'
       continue
     }
-    // The server accepted the placement. One immediate read confirms the
-    // expected block; permanence is the plan verifier's job, not the driver's.
-    const after = port.blockAt(target)
-    if (matches(after, expected)) return { state: 'succeeded' }
+    // The server accepted the placement. One immediate read confirms every
+    // cell of the group; permanence is the plan verifier's job.
+    if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
     lastCode = 'PLACE_READBACK_MISMATCH'
   }
   return { state: 'failed', code: lastCode }
 }
 
-function supportFaces(port: ClientPort, target: { x: number; y: number; z: number }): Face[] {
+async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefined> {
+  if (port.lookYaw === undefined) return undefined
+  const result = await port.lookYaw(yaw)
+  return result.state === 'ok' ? undefined : (result.code ?? 'PLACE_LOOK_FAILED')
+}
+
+function cellsMatch(port: ClientPort, cells: Cell[], expected: ExpectedBlock): boolean {
+  return cells.every(cell => {
+    const block = port.blockAt(cell)
+    return block !== null && block.loaded && matchesName(block, expected)
+  })
+}
+
+function matchesName(block: BlockInfo, expected: ExpectedBlock): boolean {
+  // The driver proves the block identity; the plan verifier proves the state
+  // subset (door half, bed part) once the server's update has applied.
+  return matchesExpected({ name: block.name, loaded: block.loaded }, { name: expected.name })
+}
+
+function supportFaces(port: ClientPort, target: Cell): Face[] {
   const faces: Face[] = []
   for (const face of FACES) {
     const reference = port.blockAt({
@@ -132,10 +243,6 @@ function supportFaces(port: ClientPort, target: { x: number; y: number; z: numbe
     if (isSolid(reference)) faces.push(face.name)
   }
   return faces
-}
-
-function matches(block: BlockInfo | null, expected: ExpectedBlock): boolean {
-  return block !== null && block.loaded && matchesExpected(block, expected)
 }
 
 function isAir(name: string): boolean {

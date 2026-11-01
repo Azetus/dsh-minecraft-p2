@@ -3,6 +3,8 @@ import { Vec3 as Vec3Class } from 'vec3'
 
 import { p2Error } from '../../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../../contracts/types.ts'
+import type { SuspensionState } from '../../contracts/protocol.ts'
+import type { ProviderSuspension } from '../../provider/mineflayer.ts'
 import type { ActHandle, ActPoll } from '../../provider/runtime.ts'
 import type { Capability, ClientAction } from '../capabilities.ts'
 import { checkCapability } from '../capabilities.ts'
@@ -28,6 +30,8 @@ import { WriteGate, staleWriteResult, type WriteToken } from '../write-token.ts'
 export type MineflayerActSource = {
   capabilities: readonly string[]
   start(name: string, args: Record<string, JsonValue>): ActHandle
+  /** Provider pause/resume transitions, when the adapter reports them. */
+  onSuspension?: (listener: (state: ProviderSuspension) => void) => () => void
 }
 
 export type MineflayerPortOptions = {
@@ -96,6 +100,21 @@ export class MineflayerClientPort implements ClientPort {
   private readonly now: () => number
   private readonly pollIntervalMs: number
   private readonly worldId: string
+  private suspensionState: SuspensionState = {
+    suspended: false,
+    at: 0,
+    idleMs: 0,
+    serverAge: null,
+    diagnostics: {
+      ageChanges: 0,
+      timePackets: 0,
+      eventLoopLagMs: 0,
+      ageIdleMs: 0,
+      verdict: 'unknown',
+      lastAgeAt: 0,
+      lastAge: null,
+    },
+  }
 
   constructor(
     private readonly bot: Bot,
@@ -108,6 +127,15 @@ export class MineflayerClientPort implements ClientPort {
     this.capabilityList = portCapabilities(acts.capabilities)
     this.timeouts = { ...ACTION_TIMEOUTS, ...options.timeouts }
     this.wireEvents()
+    acts.onSuspension?.(state => {
+      this.suspensionState = state
+      this.emit(state.suspended ? 'provider.suspended' : 'provider.resumed', state as unknown as JsonValue)
+    })
+  }
+
+  /** Provider pause state; the mind freezes work instead of failing it. */
+  suspension(): SuspensionState {
+    return this.suspensionState
   }
 
   self(): SelfInfo {
@@ -328,6 +356,12 @@ export class MineflayerClientPort implements ClientPort {
 
   async lookAt(p: Vec3): Promise<ActResult> {
     return await this.action('lookAt', 'lookAt', { x: p.x, y: p.y, z: p.z })
+  }
+
+  /** Direct yaw control for oriented placement (bed head direction). */
+  async lookYaw(yaw: number): Promise<ActResult> {
+    if (!Number.isFinite(yaw)) return actFailed('INVALID_TARGET', 0)
+    return await this.run('look', { yaw, pitch: 0 }, this.timeouts.lookAt)
   }
 
   async dig(p: Vec3): Promise<ActResult> {

@@ -130,25 +130,94 @@ export function parseBlueprint(value: unknown): BlueprintParse {
   }
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, blueprint: { version: version as number, blocks, ...(verify === undefined ? {} : { verify }) } }
+  const blueprint: Blueprint = { version: version as number, blocks, ...(verify === undefined ? {} : { verify }) }
+  validatePlacementGroups(blueprint, errors)
+  if (errors.length > 0) return { ok: false, errors }
+  return { ok: true, blueprint }
+}
+
+/**
+ * A usable-room door and bed are two-cell placements. The blueprint is final
+ * geometry, so both cells must be declared; a missing second cell would either
+ * place a half block or make the verifier's state check unreachable.
+ */
+function validatePlacementGroups(blueprint: Blueprint, errors: string[]): void {
+  const verify = blueprint.verify
+  if (verify === undefined || verify.kind !== 'usable-room') return
+  const byPosition = new Map(blueprint.blocks.map(block => [`${block.x},${block.y},${block.z}`, block]))
+  if (verify.door !== undefined) {
+    const lower = byPosition.get(`${verify.door.x},${verify.door.y},${verify.door.z}`)
+    const upper = byPosition.get(`${verify.door.x},${verify.door.y + 1},${verify.door.z}`)
+    if (lower === undefined) {
+      errors.push('blueprint.verify.door has no block at the door cell')
+    } else if (lower.state?.half !== undefined && lower.state.half !== 'lower') {
+      errors.push('blueprint.verify.door block state.half must be "lower"')
+    }
+    if (upper === undefined) {
+      errors.push('blueprint.verify.door requires the upper cell as a blueprint block (a door is one two-cell placement)')
+    } else if (upper.state?.half !== undefined && upper.state.half !== 'upper') {
+      errors.push('blueprint.verify.door upper block state.half must be "upper"')
+    }
+  }
+  if (verify.bed !== undefined) {
+    const foot = byPosition.get(`${verify.bed.x},${verify.bed.y},${verify.bed.z}`)
+    if (foot === undefined) {
+      errors.push('blueprint.verify.bed has no block at the bed cell')
+      return
+    }
+    // The head must be declared explicitly: a single bed cell cannot describe
+    // which direction the second half occupies, and guessing it would place a
+    // half block that the verifier can never accept.
+    const head = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+      .map(([dx, dz]) => byPosition.get(`${foot.x + (dx as number)},${foot.y},${foot.z + (dz as number)}`))
+      .find(block => block !== undefined && block.name === foot.name)
+    if (head === undefined) {
+      errors.push('blueprint.verify.bed requires the head cell as an adjacent blueprint block (a bed is one two-cell placement)')
+      return
+    }
+    if (foot.state?.part !== 'foot') {
+      errors.push('blueprint.verify.bed block state.part must be "foot"')
+    }
+    if (head.state?.part !== 'head') {
+      errors.push('blueprint.verify.bed head block state.part must be "head"')
+    }
+  }
 }
 
 /**
  * Translate final geometry to place work items. The support order is not
  * encoded: plan evaluation derives it from the live world.
+ *
+ * A door (lower/upper) or a bed (foot/head) is **one** work item: the server
+ * produces both cells from one placement, so a second placement at the other
+ * cell would fail and the verifier could never see a consistent pair. Grouping
+ * uses declared block state (`half` / `part`) or the verifier's door/bed
+ * anchors; it never matches a block name.
  */
 export function blueprintTemplate(blueprint: Blueprint): PlanTemplate {
   const min = minCorner(blueprint.blocks)
   const max = maxCorner(blueprint.blocks)
-  const workItems: WorkItem[] = blueprint.blocks.map(block => ({
-    id: `b:${block.x},${block.y},${block.z}`,
-    kind: 'place',
-    at: [block.x - min.x, block.y - min.y, block.z - min.z],
-    expected: {
-      name: block.name,
-      ...(block.state === undefined ? {} : { state: { ...block.state } }),
-    },
-  }))
+  const grouped = groupBlueprintBlocks(blueprint)
+  const workItems: WorkItem[] = []
+  for (let index = 0; index < blueprint.blocks.length; index += 1) {
+    const anchor = blueprint.blocks[index]!
+    if (grouped.consumed.has(index)) continue
+    const group = grouped.groups.get(index)
+    if (group === undefined) {
+      workItems.push(singleItem(anchor, min))
+      continue
+    }
+    workItems.push({
+      id: `b:${anchor.x},${anchor.y},${anchor.z}`,
+      kind: 'place',
+      at: [anchor.x - min.x, anchor.y - min.y, anchor.z - min.z],
+      expected: expectedOf(anchor),
+      cells: group.map(block => ({
+        at: [block.x - min.x, block.y - min.y, block.z - min.z] as [number, number, number],
+        expected: expectedOf(block),
+      })),
+    })
+  }
   return {
     id: 'blueprint',
     version: blueprint.version,
@@ -179,6 +248,96 @@ export function blueprintTemplate(blueprint: Blueprint): PlanTemplate {
   }
 }
 
+function singleItem(block: BlueprintBlock, min: Vec3): WorkItem {
+  return {
+    id: `b:${block.x},${block.y},${block.z}`,
+    kind: 'place',
+    at: [block.x - min.x, block.y - min.y, block.z - min.z],
+    expected: expectedOf(block),
+  }
+}
+
+function expectedOf(block: BlueprintBlock): { name: string; state?: Record<string, string> } {
+  return {
+    name: block.name,
+    ...(block.state === undefined ? {} : { state: { ...block.state } }),
+  }
+}
+
+export type BlueprintGroups = {
+  /** Anchor block index → the other cells this one placement must produce. */
+  groups: Map<number, BlueprintBlock[]>
+  /** Indices consumed as a secondary cell (never a separate work item). */
+  consumed: Set<number>
+}
+
+/** Exposed for tests and for the definition-error path. */
+export function groupBlueprintBlocks(blueprint: Blueprint): BlueprintGroups {
+  const byPosition = new Map<string, number>()
+  blueprint.blocks.forEach((block, index) => byPosition.set(`${block.x},${block.y},${block.z}`, index))
+  const groups = new Map<number, BlueprintBlock[]>()
+  const consumed = new Set<number>()
+
+  const pair = (index: number, other: number | undefined): void => {
+    if (other === undefined || consumed.has(other) || other === index) return
+    const existing = groups.get(index)
+    if (existing === undefined) groups.set(index, [blueprint.blocks[other]!])
+    else existing.push(blueprint.blocks[other]!)
+    consumed.add(other)
+  }
+
+  for (let index = 0; index < blueprint.blocks.length; index += 1) {
+    if (consumed.has(index)) continue
+    const block = blueprint.blocks[index]!
+    if (block.state?.half === 'upper') continue
+    if (block.state?.part === 'head') continue
+    // Vertical pair (door lower/upper) from declared state.
+    if (block.state?.half === 'lower') {
+      pair(index, byPosition.get(`${block.x},${block.y + 1},${block.z}`))
+    }
+    // Horizontal pair (bed foot/head) from declared state.
+    if (block.state?.part === 'foot') {
+      pair(index, neighbourIndex(blueprint.blocks, byPosition, block, true))
+    }
+  }
+
+  // Without declared state, the verifier anchors still identify the pair.
+  const verify = blueprint.verify
+  if (verify !== undefined && verify.kind === 'usable-room') {
+    if (verify.door !== undefined) {
+      const lower = byPosition.get(`${verify.door.x},${verify.door.y},${verify.door.z}`)
+      if (lower !== undefined && !consumed.has(lower)) {
+        pair(lower, byPosition.get(`${verify.door.x},${verify.door.y + 1},${verify.door.z}`))
+      }
+    }
+    if (verify.bed !== undefined) {
+      const foot = byPosition.get(`${verify.bed.x},${verify.bed.y},${verify.bed.z}`)
+      if (foot !== undefined && !consumed.has(foot) && blueprint.blocks[foot]!.state?.part === 'foot') {
+        pair(foot, neighbourIndex(blueprint.blocks, byPosition, blueprint.blocks[foot]!, false))
+      }
+    }
+  }
+  return { groups, consumed }
+}
+
+function neighbourIndex(
+  blocks: BlueprintBlock[],
+  byPosition: Map<string, number>,
+  block: BlueprintBlock,
+  preferHead: boolean,
+): number | undefined {
+  const candidates: number[] = []
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const index = byPosition.get(`${block.x + dx},${block.y},${block.z + dz}`)
+    if (index === undefined) continue
+    const other = blocks[index]!
+    if (other.name !== block.name) continue
+    if (preferHead && other.state?.part !== 'head') continue
+    candidates.push(index)
+  }
+  return candidates[0]
+}
+
 function relative(point: Vec3, origin: Vec3): [number, number, number] {
   return [point.x - origin.x, point.y - origin.y, point.z - origin.z]
 }
@@ -189,8 +348,10 @@ export function blueprintPlan(blueprint: Blueprint, orderId: string): PlanInstan
 
 export function blueprintMaterials(blueprint: Blueprint): Record<string, number> {
   const required: Record<string, number> = {}
-  for (const block of blueprint.blocks) {
-    required[block.name] = (required[block.name] ?? 0) + 1
+  // One work item consumes one item, even when it produces two cells.
+  for (const item of blueprintTemplate(blueprint).workItems) {
+    if (item.expected === undefined) continue
+    required[item.expected.name] = (required[item.expected.name] ?? 0) + 1
   }
   return required
 }

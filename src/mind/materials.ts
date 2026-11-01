@@ -1,5 +1,5 @@
 import type { PlanInstance } from './plan.ts'
-import { countItem, itemPosition, matchesExpected } from './plan.ts'
+import { countItem, itemCells, matchesExpected } from './plan.ts'
 import type { WorldView } from './types.ts'
 
 export type MaterialShortage = {
@@ -9,8 +9,10 @@ export type MaterialShortage = {
 }
 
 /**
- * Bill of materials for a plan against one snapshot. Already-satisfied blocks
- * need no material; unknown cells are counted as needed (conservative).
+ * Bill of materials for a plan against one snapshot. One placement consumes
+ * one item even when it produces several cells (door, bed), so a group is
+ * counted once. Already-satisfied placements need no material; unknown cells
+ * are counted as needed (conservative).
  */
 export function planShortage(plan: PlanInstance, world: WorldView): MaterialShortage {
   const required: Record<string, number> = {}
@@ -19,8 +21,12 @@ export function planShortage(plan: PlanInstance, world: WorldView): MaterialShor
     if (item.expected === undefined) continue
     const name = item.expected.name
     required[name] = (required[name] ?? 0) + 1
-    const block = world.blockAt(itemPosition(plan, item))
-    if (block !== null && block.loaded && matchesExpected(block, item.expected)) continue
+    const cells = itemCells(plan, item)
+    const satisfied = cells.every(cell => {
+      const block = world.blockAt(cell.pos)
+      return block !== null && block.loaded && matchesExpected(block, cell.expected)
+    })
+    if (satisfied) continue
     needed[name] = (needed[name] ?? 0) + 1
   }
   const missing: Record<string, number> = {}

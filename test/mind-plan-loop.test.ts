@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import { createPlanGiver } from '../src/mind/givers/plan.ts'
 import { MindLoop } from '../src/mind/loop.ts'
-import { evaluatePlan, instantiatePlan } from '../src/mind/plan.ts'
+import { evaluatePlan, instantiatePlan, itemPosition } from '../src/mind/plan.ts'
 import type { PlanTemplate, WorkItem } from '../src/mind/plan.ts'
+import { PlanItemLedger } from '../src/mind/placement.ts'
 import { Registry } from '../src/mind/registry.ts'
 import { JobTracker } from '../src/mind/tracker.ts'
 import { evaluateTree } from '../src/mind/tree.ts'
@@ -127,7 +128,8 @@ function instantDriver(id: string, mutate: (job: Job, fake: Fake) => void, fake:
 
 function buildLoop(fake: Fake, plan: ReturnType<typeof instantiatePlan>, drivers: Driver[]): MindLoop {
   const registry = new Registry()
-  registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
+  const ledger = new PlanItemLedger()
+  registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver({ ledger }) })
   for (const driver of drivers) registry.registerDriver({ id: driver.id, driver })
   const trees: TreeMap = new Map([['main', { type: 'giver', ref: 'plan.work' }]])
   const tracker = new JobTracker({
@@ -136,6 +138,21 @@ function buildLoop(fake: Fake, plan: ReturnType<typeof instantiatePlan>, drivers
     world: () => fake.snapshot(),
     now: () => Date.now(),
     stopTimeoutMs: 500,
+    // The body owns this wiring: a work-item job failure feeds the item
+    // ledger, which is what eventually blocks that item.
+    onEvent: event => {
+      if (event.kind !== 'job.terminal' || event.workItemId === undefined) return
+      if (event.state === 'interrupted' || event.state === 'succeeded') return
+      const item = plan.workItems.find(candidate => candidate.id === event.workItemId)
+      if (item === undefined) return
+      ledger.record(
+        plan,
+        item,
+        itemPosition(plan, item),
+        { ok: false, ...(event.code === undefined ? {} : { code: event.code }) },
+        fake.snapshot(),
+      )
+    },
   })
   return new MindLoop({
     world: () => fake.snapshot(),

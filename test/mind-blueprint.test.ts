@@ -55,9 +55,10 @@ describe('blueprint parser', () => {
     const parsed = parseBlueprint({
       blocks: [
         { x: 5, y: 64, z: -2, name: 'dirt' },
-        { x: 6, y: 64, z: -2, name: 'dirt' },
-        { x: 7, y: 64, z: -2, name: 'red_bed' },
-        { x: 5, y: 64, z: -1, name: 'oak_door' },
+        { x: 6, y: 64, z: -2, name: 'red_bed', state: { part: 'head' } },
+        { x: 7, y: 64, z: -2, name: 'red_bed', state: { part: 'foot' } },
+        { x: 5, y: 64, z: -1, name: 'oak_door', state: { half: 'lower' } },
+        { x: 5, y: 65, z: -1, name: 'oak_door', state: { half: 'upper' } },
       ],
       verify: {
         kind: 'usable-room',
@@ -77,6 +78,31 @@ describe('blueprint parser', () => {
       door: [0, 0, 1],
       bed: [2, 0, 0],
     })
+    // One placement produces both cells, so the bed is one work item.
+    expect(plan.workItems.filter(item => item.expected?.name === 'red_bed')).toHaveLength(1)
+    const bed = plan.workItems.find(item => item.expected?.name === 'red_bed')
+    expect(bed?.cells).toHaveLength(1)
+    expect(bed?.expected?.state).toEqual({ part: 'foot' })
+  })
+
+  it('rejects a bed without its head cell and a door without its upper cell', () => {
+    const missingHead = parseBlueprint({
+      blocks: [
+        { x: 5, y: 64, z: -2, name: 'red_bed', state: { part: 'foot' } },
+      ],
+      verify: { kind: 'usable-room', min: { x: 5, y: 64, z: -2 }, max: { x: 5, y: 64, z: -2 }, bed: { x: 5, y: 64, z: -2 } },
+    })
+    expect(missingHead.ok).toBe(false)
+    if (!missingHead.ok) expect(missingHead.errors.join(' ')).toContain('head')
+
+    const missingUpper = parseBlueprint({
+      blocks: [
+        { x: 5, y: 64, z: -1, name: 'oak_door', state: { half: 'lower' } },
+      ],
+      verify: { kind: 'usable-room', min: { x: 5, y: 64, z: -2 }, max: { x: 5, y: 64, z: -2 }, door: { x: 5, y: 64, z: -1 } },
+    })
+    expect(missingUpper.ok).toBe(false)
+    if (!missingUpper.ok) expect(missingUpper.errors.join(' ')).toContain('upper')
   })
 
   it('rejects a usable-room verifier without proper triples', () => {

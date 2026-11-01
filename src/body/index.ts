@@ -50,6 +50,7 @@ async function main(): Promise<void> {
         port: provider.port,
         ...(home === undefined ? {} : { home }),
         ...(identity === undefined ? {} : { identity }),
+        providerStatus: () => provider.liveStatus(),
         crashAfterPending: provider.config.crashAfterPending,
         plansDir: fileURLToPath(new URL('../../content/plans', import.meta.url)),
         journalPath: process.env.P2_JOURNAL_PATH ?? join(process.cwd(), '.p2', 'journal.jsonl'),

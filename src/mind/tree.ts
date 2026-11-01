@@ -183,6 +183,7 @@ function handoffCandidate(handoff: Handoff): Candidate {
     params: handoff.params,
     keys: `handoff:${handoff.driverId}:${x},${y},${z}`,
     ...(handoff.orderId === undefined ? {} : { orderId: handoff.orderId }),
+    ...(handoff.workItemId === undefined ? {} : { workItemId: handoff.workItemId }),
   }
 }
 

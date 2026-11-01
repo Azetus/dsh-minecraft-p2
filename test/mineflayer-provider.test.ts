@@ -33,6 +33,44 @@ function fakeBot() {
   return { bot: bot as unknown as Bot, controls, emitter: bot }
 }
 
+describe('MineflayerProvider pause semantics', () => {
+  it('reports a frozen server age as suspended with diagnostics, then resumed', () => {
+    const { bot, emitter } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    const states: Array<{ suspended: boolean; diagnostics: { verdict: string } }> = []
+    provider.onSuspension(state => states.push(state))
+
+    provider.refreshPauseState(0)
+    expect(provider.liveStatus().paused).toBe(false)
+    // No time packets and no age change: the client is not receiving updates.
+    provider.refreshPauseState(1_600)
+    expect(provider.liveStatus().paused).toBe(true)
+    expect(states.at(-1)?.suspended).toBe(true)
+    expect(states.at(-1)?.diagnostics.verdict).toBe('client-stalled')
+
+    // update_time packets keep arriving while the age is frozen: the server is
+    // paused, not the connection.
+    emitter.emit('time')
+    provider.refreshPauseState(1_700)
+    expect(provider.liveStatus().pauseDiagnostics?.verdict).toBe('server-paused')
+
+    // Age advancing again is a resume, not a failed action.
+    ;(bot as unknown as { time: { age: number } }).time.age = 101
+    provider.refreshPauseState(1_800)
+    expect(provider.liveStatus().paused).toBe(false)
+    expect(states.at(-1)?.suspended).toBe(false)
+  })
+
+  it('does not abort on a first sample and keeps counters observable', () => {
+    const { bot } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    provider.refreshPauseState(0)
+    const diagnostics = provider.liveStatus().pauseDiagnostics
+    expect(diagnostics).toMatchObject({ ageChanges: 0, verdict: 'running' })
+    expect(typeof diagnostics?.eventLoopLagMs).toBe('number')
+  })
+})
+
 describe('MineflayerProvider', () => {
   it('returns query values with source/freshness metadata', () => {
     const { bot } = fakeBot()
