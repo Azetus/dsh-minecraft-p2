@@ -9,6 +9,7 @@ describe('failure diagnostics', () => {
     expect(classifyFailure('GOTO_NO_PATH')).toMatchObject({ category: 'reachability' })
     expect(classifyFailure('ATTACK_TARGET_PROTECTED')).toMatchObject({ category: 'safety' })
     expect(classifyFailure('BUDGET_EXCEEDED')).toMatchObject({ category: 'budget' })
+    expect(classifyFailure('PICKUP_UNREACHABLE')).toMatchObject({ category: 'world' })
     expect(classifyFailure('SOMETHING_NEW')).toMatchObject({ category: 'unknown' })
   })
 })
