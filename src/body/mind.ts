@@ -293,6 +293,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
+    dutyActive: () => duty.view()?.state === 'active',
     orderVerb: () => orders.active()?.order.verb,
     orderParams: () => orders.active()?.order.params,
     hazards: () => currentHazardPolicy(),

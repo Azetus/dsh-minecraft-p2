@@ -21,6 +21,8 @@ export type MindLoopOptions = {
   home?: Vec3
   /** Active plan, if any. A plan keeps the main tree hot instead of idling. */
   plan?: () => PlanInstance | undefined
+  /** A standing duty keeps the main tree hot too. */
+  dutyActive?: () => boolean
   /** Active order verb, if any. */
   orderVerb?: () => string | undefined
   /** Active order params, if any; the safety reflex reads explicit targets. */
@@ -51,6 +53,7 @@ export class MindLoop {
   private readonly now: () => number
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
+  private readonly dutyActive: (() => boolean) | undefined
   private readonly orderVerb: (() => string | undefined) | undefined
   private readonly orderParams: (() => Record<string, JsonValue> | undefined) | undefined
   private readonly hazards: (() => HazardPolicy | undefined) | undefined
@@ -73,6 +76,7 @@ export class MindLoop {
     this.now = options.now ?? (() => Date.now())
     this.home = options.home
     this.plan = options.plan
+    this.dutyActive = options.dutyActive
     this.orderVerb = options.orderVerb
     this.orderParams = options.orderParams
     this.hazards = options.hazards
@@ -139,9 +143,11 @@ export class MindLoop {
 
       if (!constantHandled && this.tracker.state() === 'idle') {
         const hasPlan = ctx.plan !== undefined
+        const hasDuty = this.dutyActive?.() === true
+        const hot = hasPlan || hasDuty
         const forced = this.mainDirty
-        const due = hasPlan || forced || now - this.lastMainEvalAt >= this.mainFallbackMs
-        if (due && (hasPlan || forced || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {
+        const due = hot || forced || now - this.lastMainEvalAt >= this.mainFallbackMs
+        if (due && (hot || forced || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {
           this.lastMainEvalAt = now
           this.mainDirty = false
           const main = this.evaluate('main', ctx, world)
