@@ -133,6 +133,21 @@ export class CompletionFeed {
           pending.push({ item: causeItem(event.kind, 'TRACKER_FAULT', data), cause: false })
           break
         }
+        case 'mind.hold': {
+          if (data.notify === false) break
+          pending.push({
+            item: {
+              severity: 'critical',
+              payload: compact({
+                kind: 'mind.hold',
+                tree: text(data.tree) ?? null,
+                reason: text(data.reason) ?? 'HOLD',
+              }),
+            },
+            cause: false,
+          })
+          break
+        }
         case 'order.terminal': {
           const orderId = text(data.orderId)
           const state = text(data.state) ?? 'unknown'

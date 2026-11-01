@@ -50,6 +50,9 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |
 | `OBSERVATION_STALE` | 检查连接；恢复后自动继续，不重放 pending |
+| `mind.hold(NO_SAFE_TARGET)` | 常驻树找不到安全格；先人工确认环境/改任务，不要重复下同一 order |
+| `mind.hold(ATTACK_TARGET_LOST/PROTECTED)` | 目标丢失或受保护；重新指定目标或取消该 order |
+| `HOLD_ORDER` | 已知等待，不需要处理；取消 order 才结束 |
 | 反复同一根因 | 换蓝图、区域或 giver/driver 参数，不要重复下同一条 order |
 
 ## 6. 纪律
@@ -62,7 +65,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 
 ## 7. 安全
 
-- 危险（水/岩浆/着火/敌对贴身）由常驻树处理，**不要**为了任务压掉逃生。
-- 夜间/危险环境由 Agent 决定休息或避险，P2Mind 不做自主生活决策。
+- 危险（水/岩浆/着火/敌对贴身）由常驻树处理，**不要**为了任务压掉逃生；只有 order 显式 `hazards.allow` 才允许压过对应反射。
+- 夜间/危险环境由 Agent 决定休息或避险；P2Mind 不做自主睡眠/建造/采集决策，v1 只做 eat/retreat/unstuck。
 - 对话：验收场景可关闭对话；任何情况下都不接受 `/` 开头的请求。
 - 禁止：游戏指令、传送、改模式、改 gamerule、注入物品。

@@ -21,7 +21,7 @@ import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
-import { createGoOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
+import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
 import { createContainerOrderGiver } from '../mind/givers/container.ts'
@@ -48,6 +48,8 @@ import {
 import type { PlanInstance } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
+import { parseHazardPolicy } from '../port/terrain.ts'
+import type { HazardPolicy } from '../port/terrain.ts'
 import type { WorldView } from '../mind/types.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
@@ -122,6 +124,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.use', factory: () => createUseOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.craft', factory: () => createCraftOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.hold', factory: () => createHoldOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver() })
 
@@ -254,6 +257,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
     orderVerb: () => orders.active()?.order.verb,
+    orderParams: () => orders.active()?.order.params,
+    hazards: () => currentHazardPolicy(),
     conflictPolicy: () => currentConflictPolicy(),
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,
@@ -264,6 +269,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         gatherCount += 1
       }
       if (event.kind === 'mind.definition-error' || event.kind === 'mind.error') lastReport = event.data
+      if (event.kind === 'mind.hold' && isRecord(event.data) && event.data.notify !== false) {
+        lastReport = event.data
+      }
     },
   })
   loopRef = loop
@@ -374,6 +382,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     if (active === undefined) return undefined
     const parsed = parseConflictPolicy(active.order.policy)
     return parsed.ok ? parsed.policy : undefined
+  }
+
+  function currentHazardPolicy(): HazardPolicy | undefined {
+    const active = orders.active()
+    if (active === undefined || !isRecord(active.order.policy)) return undefined
+    return parseHazardPolicy(active.order.policy.hazards) ?? undefined
   }
 
   function currentMaterialPolicy(): MaterialPolicy | undefined {

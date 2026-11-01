@@ -47,7 +47,7 @@ describe('combat ROE', () => {
       driverId: 'attack',
       params: { entityId: 'e1' },
     })
-    expect(giver.find({ now: 0 }, world([]))).toBeNull()
+    expect(giver.find({ now: 0 }, world([]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
   it('requires explicit allowPassive for a named passive target', () => {
@@ -55,7 +55,7 @@ describe('combat ROE', () => {
     const blocked = createAttackOrderGiver(() => ({
       order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1' } },
     }))
-    expect(blocked.find({ now: 0 }, world([sheep]))).toBeNull()
+    expect(blocked.find({ now: 0 }, world([sheep]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' })
     const allowed = createAttackOrderGiver(() => ({
       order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1', allowPassive: true } },
     }))
@@ -66,7 +66,7 @@ describe('combat ROE', () => {
     const playerGiver = createAttackOrderGiver(() => ({
       order: { id: 'ord-p', verb: 'attack', params: { entityId: 'p1', allowPassive: true } },
     }))
-    expect(playerGiver.find({ now: 0 }, world([player]))).toBeNull()
+    expect(playerGiver.find({ now: 0 }, world([player]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' })
   })
 
   it('executes one attack and reports success', async () => {

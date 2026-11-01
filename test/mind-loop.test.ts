@@ -44,20 +44,24 @@ function world(stale = false): WorldView {
 type FakeTracker = {
   offers: Array<Candidate | null>
   ticks: number
+  aborts: string[]
   stateValue: 'idle' | 'running'
   state(): string
   offer(candidate: Candidate | null): void
   tick(): void
+  abort(code: string): void
 }
 
 function fakeTracker(): FakeTracker {
   const tracker: FakeTracker = {
     offers: [],
     ticks: 0,
+    aborts: [],
     stateValue: 'idle',
     state: () => tracker.stateValue,
     offer: value => tracker.offers.push(value),
     tick: () => { tracker.ticks += 1 },
+    abort: code => { tracker.aborts.push(code); tracker.stateValue = 'idle' },
   }
   return tracker
 }
@@ -95,6 +99,42 @@ describe('mind loop', () => {
     loop.tick()
     expect(mainCalls).toBe(0)
     expect(tracker.offers.map(entry => entry?.keys)).toEqual(['escape:lava'])
+  })
+
+  it('aborts a running job and reports a constant hold', () => {
+    const tracker = fakeTracker()
+    tracker.stateValue = 'running'
+    const events: Array<{ kind: string; data: unknown }> = []
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => tree === 'constant'
+        ? { kind: 'hold', reason: 'NO_SAFE_TARGET' }
+        : { kind: 'nowork' },
+      tracker: tracker as unknown as JobTracker,
+      onEvent: event => events.push({ kind: event.kind, data: event.data }),
+    })
+    loop.tick()
+    expect(tracker.aborts).toEqual(['CONSTANT_HOLD'])
+    expect(tracker.offers).toHaveLength(0)
+    expect(events.find(event => event.kind === 'mind.hold')?.data)
+      .toMatchObject({ tree: 'constant', reason: 'NO_SAFE_TARGET', notify: true })
+  })
+
+  it('reports a main-tree hold without offering a job', () => {
+    const tracker = fakeTracker()
+    const events: Array<{ kind: string; data: unknown }> = []
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => tree === 'constant'
+        ? { kind: 'nowork' }
+        : { kind: 'hold', reason: 'PLAN_BLOCKED', notify: false },
+      tracker: tracker as unknown as JobTracker,
+      onEvent: event => events.push({ kind: event.kind, data: event.data }),
+    })
+    loop.tick()
+    expect(tracker.offers).toEqual([null])
+    expect(events.find(event => event.kind === 'mind.hold')?.data)
+      .toMatchObject({ tree: 'main', reason: 'PLAN_BLOCKED', notify: false })
   })
 
   it('does not evaluate the main tree when the constant tree needs observation', () => {

@@ -2,7 +2,8 @@ import { p2Error } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { Registry } from './registry.ts'
-import type { Candidate, EvalCtx, Handoff, WorldView } from './types.ts'
+import type { Candidate, EvalCtx, Handoff, Hold, WorldView } from './types.ts'
+import { isHold } from './types.ts'
 
 export type TreeNode =
   | { type: 'priority'; children: TreeNode[] }
@@ -21,6 +22,7 @@ export type TreeNode =
 export type TreeResult =
   | { kind: 'job'; candidate: Candidate }
   | { kind: 'nowork' }
+  | { kind: 'hold'; reason: string; notify?: boolean }
   | { kind: 'need-observation'; reason: string }
   | { kind: 'definition-error'; error: P2Error }
 
@@ -76,6 +78,7 @@ type NodeOutcome =
   | { kind: 'job'; candidate: Candidate }
   | { kind: 'nowork' }
   | { kind: 'skip' }
+  | { kind: 'hold'; reason: string; notify?: boolean }
   | { kind: 'need-observation'; reason: string }
   | { kind: 'definition-error'; error: P2Error }
 
@@ -111,6 +114,7 @@ function evalNode(node: TreeNode, env: EvalEnv): NodeOutcome {
       for (const child of node.children) {
         const outcome = evalNode(child, env)
         if (outcome.kind === 'need-observation' || outcome.kind === 'definition-error') return outcome
+        if (outcome.kind === 'hold') return outcome
         if (outcome.kind === 'skip' || outcome.kind === 'nowork') continue
         const score = scoreOf(child, env)
         if (best === undefined || score > best.score) best = { score, candidate: outcome.candidate }
@@ -150,6 +154,13 @@ function evalNode(node: TreeNode, env: EvalEnv): NodeOutcome {
       const giver = env.registry.giver(node.ref)
       const found = giver.find(env.ctx, env.world)
       if (found === null) return { kind: 'nowork' }
+      if (isHold(found)) {
+        return {
+          kind: 'hold',
+          reason: found.reason,
+          ...(found.notify === false ? { notify: false } : {}),
+        }
+      }
       return { kind: 'job', candidate: isHandoff(found) ? handoffCandidate(found) : found }
     }
   }
@@ -160,8 +171,8 @@ function scoreOf(node: TreeNode, env: EvalEnv): number {
   return env.registry.giver(node.ref).score?.(env.ctx, env.world) ?? 0
 }
 
-function isHandoff(value: Candidate | Handoff): value is Handoff {
-  return 'reason' in value
+function isHandoff(value: Candidate | Handoff | Hold): value is Handoff {
+  return !('kind' in value) && 'reason' in value
 }
 
 function handoffCandidate(handoff: Handoff): Candidate {

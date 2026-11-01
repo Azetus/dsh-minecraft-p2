@@ -55,6 +55,7 @@ function registryWithGivers(): Registry {
     factory: () => ({ id: 'scored', score: () => 10, find: () => candidate('scored') }),
   })
   registry.registerGiver({ id: 'none', factory: () => ({ id: 'none', find: () => null }) })
+  registry.registerGiver({ id: 'hold', factory: () => ({ id: 'hold', find: () => ({ kind: 'hold', reason: 'BLOCKED' }) }) })
   registry.registerGiver({
     id: 'handoff',
     factory: () => ({
@@ -153,6 +154,25 @@ describe('tree evaluation', () => {
     if ('ok' in result || result.kind !== 'job') throw new Error('expected a job')
     expect(result.candidate.driverId).toBe('move')
     expect(result.candidate.keys).toBe('handoff:move:1,64,2')
+  })
+
+  it('stops at a hold instead of falling through to a lower-priority giver', () => {
+    const result = load({
+      root: {
+        type: 'priority',
+        children: [{ type: 'giver', ref: 'none' }, { type: 'giver', ref: 'hold' }, { type: 'giver', ref: 'a' }],
+      },
+    })
+    expect(jobRef(result)).toBe('hold')
+    if ('ok' in result || result.kind !== 'hold') throw new Error('expected a hold')
+    expect(result.reason).toBe('BLOCKED')
+  })
+
+  it('stops a sorter at a hold instead of scoring later givers', () => {
+    const result = load({
+      root: { type: 'sorter', children: [{ type: 'giver', ref: 'hold' }, { type: 'giver', ref: 'scored' }] },
+    })
+    expect(jobRef(result)).toBe('hold')
   })
 
   it('returns need-observation for a stale snapshot', () => {

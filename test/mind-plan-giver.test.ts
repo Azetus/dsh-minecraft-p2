@@ -146,7 +146,7 @@ describe('plan giver', () => {
     expect(result.params).toEqual({ x: 1, y: 64, z: 0 })
   })
 
-  it('does not hand off a clear for a denied protected block', () => {
+  it('returns a silent hold when every work item is blocked', () => {
     const plan = instantiatePlan(template([
       { id: 'p', kind: 'place', at: [1, 0, 0], expected: { name: 'dirt' } },
     ]), 'ord-1', origin)
@@ -158,7 +158,7 @@ describe('plan giver', () => {
       blocks: [block('stone', 1, 63, 0), block('chest', 1, 64, 0)],
       inventory: [dirt],
     }))
-    expect(result).toBeNull()
+    expect(result).toMatchObject({ kind: 'hold', reason: 'PLAN_BLOCKED', notify: false })
   })
 
   it('does not hide a later executable item behind a blocked one', () => {

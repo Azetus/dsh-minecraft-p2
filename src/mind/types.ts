@@ -1,4 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
+import type { HazardPolicy } from '../port/terrain.ts'
 import type {
   BlockInfo,
   Box,
@@ -32,6 +33,23 @@ export type Handoff = {
 }
 
 /**
+ * Retain the current intent without producing a job. `notify: false` is for a
+ * deliberate wait (a `hold` order) whose caller already knows; everything else
+ * is a blocked report worth surfacing.
+ */
+export type Hold = {
+  kind: 'hold'
+  reason: string
+  notify?: boolean
+}
+
+export type WorkGiverResult = Candidate | Handoff | Hold | null
+
+export function isHold(value: WorkGiverResult): value is Hold {
+  return value !== null && 'kind' in value && value.kind === 'hold'
+}
+
+/**
  * One consistent observation snapshot. Predicates and givers read only this;
  * they never query the game themselves.
  */
@@ -54,6 +72,10 @@ export type EvalCtx = {
   plan?: PlanInstance
   /** Active order verb; lets safety reflex know when combat was authorized. */
   orderVerb?: string
+  /** Active order params; gives the reflex the explicitly named target. */
+  orderParams?: Record<string, JsonValue>
+  /** Explicit hazard permission from the active order. */
+  hazards?: HazardPolicy
   /** Agent-authored conflict policy for the active order. */
   conflictPolicy?: ConflictPolicy
   /** Material policy for the active order; default is require-all. */
@@ -67,7 +89,7 @@ export type EvalCtx = {
 export interface WorkGiver {
   id: string
   score?(ctx: EvalCtx, world: WorldView): number
-  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null
+  find(ctx: EvalCtx, world: WorldView): WorkGiverResult
 }
 
 export type Budget = { maxTicks: number; maxWallMs: number }

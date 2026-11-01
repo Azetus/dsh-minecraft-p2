@@ -62,6 +62,15 @@
 - 正常终态也经过停止确认；“promise 已结束”不能代替控制释放。
 - 打断时**结束当前 job**，不保留“半步状态”；恢复时由 WorkGiver 重算“下一个可执行工作项”。
 
+### 4.1 让出、hold、blocked、cancel
+
+- `nowork`：让出选择，继续看后续分支。
+- `hold`：保留意图，不产生 job，停止下降；order/plan 保持 active。
+- `blocked`：`hold` + 明确 reason + 上报；不自动换任务。
+- `cancel`：终态，不自动恢复。
+
+常驻树的 `hold` 会停止当前 job（`CONSTANT_HOLD`）并 critical 上报；同一原因 10s 内不重复，持续 hold 会再次上报，不静默。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
+
 ## 5. 工作选择与重试
 
 1. 常驻树 → 紧急 giver → 候选（逃生/进食/脱离）。

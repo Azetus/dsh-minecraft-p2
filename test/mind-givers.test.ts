@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
-import { createGoOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
+import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
+import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
 import { MAIN_TREE } from '../src/mind/trees.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
@@ -89,6 +90,50 @@ describe('escape giver', () => {
     const cow: EntityInfo = { id: 'cow', name: 'cow', position: { x: 2, y: 64, z: 0 } }
     expect(createEscapeGiver().find(ctx, flatWorld({ entities: [cow] }))).toBeNull()
   })
+
+  it('holds and reports when there is no safe cell', () => {
+    const empty = new SnapshotWorld({
+      self: self({ inLava: true }),
+      time: { timeOfDay: 1000, worldAge: 100 },
+      entities: [],
+      blocks: [],
+      inventory: [],
+    })
+    expect(createEscapeGiver().find(ctx, empty)).toMatchObject({ kind: 'hold', reason: 'NO_SAFE_TARGET' })
+  })
+
+  it('does not flee from an explicitly authorized attack target', () => {
+    const target: EntityInfo = { id: 'z1', name: 'zombie', position: { x: 2, y: 64, z: 0 } }
+    const attackCtx: EvalCtx = {
+      now: 0,
+      home: { x: 0, y: 64, z: 0 },
+      orderVerb: 'attack',
+      orderParams: { entityId: 'z1' },
+    }
+    expect(createEscapeGiver().find(attackCtx, flatWorld({ entities: [target] }))).toBeNull()
+  })
+
+  it('still flees from an uncovered second hostile', () => {
+    const target: EntityInfo = { id: 'z1', name: 'zombie', position: { x: 2, y: 64, z: 0 } }
+    const other: EntityInfo = { id: 'z2', name: 'zombie', position: { x: 3, y: 64, z: 0 } }
+    const attackCtx: EvalCtx = {
+      now: 0,
+      home: { x: 0, y: 64, z: 0 },
+      orderVerb: 'attack',
+      orderParams: { entityId: 'z1' },
+    }
+    const result = asCandidate(createEscapeGiver().find(attackCtx, flatWorld({ entities: [target, other] })))
+    expect(result.keys).toBe('escape:hostile:z2')
+  })
+
+  it('does not override an explicit lava grant', () => {
+    const granted: EvalCtx = {
+      now: 0,
+      home: { x: 0, y: 64, z: 0 },
+      hazards: { allow: ['lava'] },
+    }
+    expect(createEscapeGiver().find(granted, flatWorld({ self: { inLava: true } }))).toBeNull()
+  })
 })
 
 describe('main tree wiring', () => {
@@ -118,6 +163,16 @@ describe('order and traverse givers', () => {
       driverId: 'traverse',
       params: { mode: 'bridge', x: 3, y: 64, z: 0, item: 'dirt', maxBlocks: 4 },
     })
+  })
+
+  it('holds a hold order and a lost attack target without producing a job', () => {
+    const hold = createHoldOrderGiver(() => ({ order: { id: 'h-1', verb: 'hold' } }))
+    expect(hold.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'HOLD_ORDER', notify: false })
+
+    const attack = createAttackOrderGiver(() => ({
+      order: { id: 'a-1', verb: 'attack', params: { entityId: 'zombie-1' } },
+    }))
+    expect(attack.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
 })

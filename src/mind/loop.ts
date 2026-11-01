@@ -1,5 +1,6 @@
 import type { JsonValue } from '../contracts/types.ts'
 import type { Vec3 } from '../port/index.ts'
+import type { HazardPolicy } from '../port/terrain.ts'
 import type { PlanInstance } from './plan.ts'
 import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
 import type { JobTracker } from './tracker.ts'
@@ -22,6 +23,10 @@ export type MindLoopOptions = {
   plan?: () => PlanInstance | undefined
   /** Active order verb, if any. */
   orderVerb?: () => string | undefined
+  /** Active order params, if any; the safety reflex reads explicit targets. */
+  orderParams?: () => Record<string, JsonValue> | undefined
+  /** Explicit hazard permission from the active order. */
+  hazards?: () => HazardPolicy | undefined
   /** Conflict policy for the active order. */
   conflictPolicy?: () => ConflictPolicy | undefined
   /** Material policy for the active order. */
@@ -47,6 +52,8 @@ export class MindLoop {
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
   private readonly orderVerb: (() => string | undefined) | undefined
+  private readonly orderParams: (() => Record<string, JsonValue> | undefined) | undefined
+  private readonly hazards: (() => HazardPolicy | undefined) | undefined
   private readonly conflictPolicy: (() => ConflictPolicy | undefined) | undefined
   private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
   private readonly gatherCount: (() => number) | undefined
@@ -55,6 +62,8 @@ export class MindLoop {
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
   private lastMainOfferAt = Number.NEGATIVE_INFINITY
   private lastMainEvalAt = Number.NEGATIVE_INFINITY
+  private lastHoldKey: string | undefined
+  private lastHoldAt = Number.NEGATIVE_INFINITY
   private mainDirty = true
 
   constructor(options: MindLoopOptions) {
@@ -65,6 +74,8 @@ export class MindLoop {
     this.home = options.home
     this.plan = options.plan
     this.orderVerb = options.orderVerb
+    this.orderParams = options.orderParams
+    this.hazards = options.hazards
     this.conflictPolicy = options.conflictPolicy
     this.materialPolicy = options.materialPolicy
     this.gatherCount = options.gatherCount
@@ -84,6 +95,8 @@ export class MindLoop {
     }
     const activePlan = this.plan?.()
     const orderVerb = this.orderVerb?.()
+    const orderParams = this.orderParams?.()
+    const hazards = this.hazards?.()
     const conflictPolicy = this.conflictPolicy?.()
     const materialPolicy = this.materialPolicy?.()
     const gatherCount = this.gatherCount?.()
@@ -92,6 +105,8 @@ export class MindLoop {
       ...(this.home === undefined ? {} : { home: this.home }),
       ...(activePlan === undefined ? {} : { plan: activePlan }),
       ...(orderVerb === undefined ? {} : { orderVerb }),
+      ...(orderParams === undefined ? {} : { orderParams }),
+      ...(hazards === undefined ? {} : { hazards }),
       ...(conflictPolicy === undefined ? {} : { conflictPolicy }),
       ...(materialPolicy === undefined ? {} : { materialPolicy }),
       ...(gatherCount === undefined ? {} : { gatherCount }),
@@ -106,7 +121,14 @@ export class MindLoop {
       let constantHandled = false
       if (constant.kind === 'job') {
         constantHandled = true
+        this.lastHoldKey = undefined
         this.tracker.offer(constant.candidate)
+      } else if (constant.kind === 'hold') {
+        constantHandled = true
+        // A constant hold means the body cannot safely continue the current
+        // work. Stop the running job; the order/plan stays active.
+        if (this.tracker.state() === 'running') this.tracker.abort('CONSTANT_HOLD')
+        this.emitHold('constant', constant, now)
       } else if (constant.kind === 'need-observation') {
         constantHandled = true
       } else if (constant.kind === 'definition-error') {
@@ -125,7 +147,11 @@ export class MindLoop {
           const main = this.evaluate('main', ctx, world)
           if (main.kind === 'job') {
             this.lastMainOfferAt = now
+            this.lastHoldKey = undefined
             this.tracker.offer(main.candidate)
+          } else if (main.kind === 'hold') {
+            this.tracker.offer(null)
+            this.emitHold('main', main, now)
           } else if (main.kind === 'nowork') {
             this.tracker.offer(null)
           } else if (main.kind === 'definition-error') {
@@ -143,6 +169,23 @@ export class MindLoop {
   /** Mark the main tree for re-evaluation on the next idle tick. */
   invalidate(): void {
     this.mainDirty = true
+  }
+
+  /** Emit one hold per reason per window; a persistent hold is not silent. */
+  private emitHold(
+    tree: 'constant' | 'main',
+    hold: { reason: string; notify?: boolean },
+    now: number,
+  ): void {
+    const key = `${tree}:${hold.reason}`
+    if (this.lastHoldKey === key && now - this.lastHoldAt < 10_000) return
+    this.lastHoldKey = key
+    this.lastHoldAt = now
+    this.emit('mind.hold', now, {
+      tree,
+      reason: hold.reason,
+      notify: hold.notify !== false,
+    })
   }
 
   private emit(kind: string, at: number, data: JsonValue): void {

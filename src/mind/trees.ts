@@ -24,6 +24,7 @@ export const MAIN_TREE: TreeNode = {
     { type: 'giver', ref: 'order.craft' },
     { type: 'giver', ref: 'order.container' },
     { type: 'giver', ref: 'order.traverse' },
+    { type: 'giver', ref: 'order.hold' },
     { type: 'giver', ref: 'material.gather' },
     { type: 'giver', ref: 'plan.work' },
   ],

@@ -108,13 +108,15 @@ interface WorkGiver {
   id: string
   requires?: Capability[]
   score?(ctx: EvalCtx, world: WorldView): number
-  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null
+  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | Hold | null
 }
 type Candidate = { driverId: string; target: Target; params: object; keys: string }
 type Handoff = { driverId: string; target: Target; params: object; reason: string }
+type Hold = { kind: 'hold'; reason: string; notify?: boolean }
 ```
 
-- `null`：暂无工作（正常）。
+- `null`：让出选择（正常，继续看后续分支）。
+- `Hold`：保留意图，不产生 job，停止下降；`notify: false` 用于 `hold` order 这类已知的等待。
 - `Handoff`：先做前置工作（清障/补支撑/站位），完成后重新 `find`。
 - `keys`：续做键；与 `DriverHandle.continuationKey()` 相同即“延续”，不重启。
 
@@ -185,7 +187,7 @@ interface JobTracker {
 
 - 谓词注册项：`{ id, schema, fn(ctx, world): true | false | 'unknown' }`。
 - giver 注册项：`{ id, factory }`；树只能引用已注册 id，未知 id 在加载期报 `DefinitionError`。
-- 求值结果：`Job | NoWork | NeedObservation | DefinitionError`。
+- 求值结果：`Job | NoWork | Hold | NeedObservation | DefinitionError`。
 - 一次求值使用**同一份** `WorldView`；谓词不得自行查询。
 
 ## 8. Plan / WorkItem

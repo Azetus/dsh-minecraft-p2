@@ -160,7 +160,7 @@ agent 下达的目标，不是动作。
 
 - 谓词三态；`unknown` **不得**进入 `else`（节点必须声明 `onUnknown: skip | noCandidate`）。
 - 一次求值只用**一份**观测快照。
-- 结果四类：`Job / NoWork / NeedObservation / DefinitionError`，**不折叠成 NoJob**。
+- 结果五类：`Job / NoWork / Hold / NeedObservation / DefinitionError`，**不折叠成 NoJob**。
 - 子树加载期校验：存在、无环、深度 ≤8、节点 ≤500。
 
 ### 4.4 WorkGiver
@@ -169,13 +169,15 @@ agent 下达的目标，不是动作。
 interface WorkGiver {
   id: string
   score?(ctx: EvalCtx, world: WorldView): number
-  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null
+  find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | Hold | null
 }
 type Candidate = { driverId: string; target: Target; params: object; keys: string }
 type Handoff   = { driverId: string; target: Target; params: object; reason: string }
+type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 ```
 
-- `null` = 现在没工作（正常，不记失败）。
+- `null` = 让出选择（正常，不记失败）；继续看后续分支。
+- `Hold` = 保留意图，不产生 job，停止下降；`notify: false` 用于已知的等待。
 - `Handoff` = 先做前置工作（清障 / 补支撑 / 站位），完成后重新 `find`。
 - `keys` 是续做键：同一个 `keys` 复活不重启 job。
 

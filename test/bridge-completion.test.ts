@@ -41,6 +41,22 @@ function event(seq: number, kind: string, data: JsonValue): MindEvent {
 
 function createCompletionFeedTest(): void {
   describe('completion feed', () => {
+    it('wakes on a critical hold but not on a deliberate silent hold', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const items = feed.accept([
+        event(1, 'mind.hold', { tree: 'constant', reason: 'NO_SAFE_TARGET', notify: true }),
+        event(2, 'mind.hold', { tree: 'main', reason: 'HOLD_ORDER', notify: false }),
+      ])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.severity).toBe('critical')
+      expect(items[0]?.payload).toEqual({
+        kind: 'mind.hold',
+        tree: 'constant',
+        reason: 'NO_SAFE_TARGET',
+      })
+    })
+
     it('folds a failed job terminal into one structured order result', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')

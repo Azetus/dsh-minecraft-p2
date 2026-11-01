@@ -2,7 +2,7 @@ import type { JsonValue } from '../../contracts/types.ts'
 import { evaluatePlan, isAirName, isFluidName, itemPosition } from '../plan.ts'
 import type { PlanInstance, WorkItem } from '../plan.ts'
 import { canClearBlock } from '../policy.ts'
-import type { Candidate, EvalCtx, Handoff, WorkGiver, WorldView } from '../types.ts'
+import type { Candidate, EvalCtx, Handoff, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
 import { nearestStandable } from './common.ts'
 
 /**
@@ -13,7 +13,7 @@ import { nearestStandable } from './common.ts'
 export function createPlanGiver(): WorkGiver {
   return {
     id: 'plan.work',
-    find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null {
+    find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
       const plan = ctx.plan
       if (plan === undefined) return null
 
@@ -105,6 +105,7 @@ export function createPlanGiver(): WorkGiver {
         if (ctx.isBlocked?.(handoffKey) === true) continue
         return handoff
       }
+      if (evaluation.blocked) return { kind: 'hold', reason: 'PLAN_BLOCKED', notify: false }
       return null
     },
   }

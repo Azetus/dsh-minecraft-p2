@@ -1,5 +1,5 @@
 import type { JsonValue } from '../../contracts/types.ts'
-import type { Candidate, EvalCtx, WorkGiver, WorldView } from '../types.ts'
+import type { Candidate, EvalCtx, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
 
 type OrderView = {
   order: { id: string; verb: string; params?: Record<string, JsonValue>; policy?: JsonValue }
@@ -43,6 +43,18 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
         },
         keys: `order.go:${current.order.id}`,
       }
+    },
+  }
+}
+
+/** Explicit wait: retain the active order without producing a job. */
+export function createHoldOrderGiver(active: () => OrderView | undefined): WorkGiver {
+  return {
+    id: 'order.hold',
+    find(_ctx: EvalCtx, _world: WorldView): WorkGiverResult {
+      const current = activeOrder(active, 'hold')
+      if (current === undefined) return null
+      return { kind: 'hold', reason: 'HOLD_ORDER', notify: false }
     },
   }
 }
