@@ -72,7 +72,7 @@
 常驻树的 `hold` 会停止当前 job（`CONSTANT_HOLD`）并 critical 上报；同一原因 10s 内不重复，持续 hold 会再次上报，不静默。
 `material.gather` 用 32 格区域索引找最近来源；索引按 16×16 列分块、每 tick 最多 2 块，`blockUpdated` 直接增删，中心移动/超时重建并标记 stale；不会每 tick 全量扫 32 格。
 `mind.status.metrics` 提供进程内 run metrics：`orders`（accepted/succeeded/failed/blocked/cancelled）、`jobs`（started/succeeded/failed/interrupted/retried/preempted）、`holds`、`holdReasons`、`failureCodes`、`completionRate`、`lastFailure`。`job.terminal` 事件附带 `diagnostic {code,category,hint}`；指标只从事件派生，不读世界。
-`mind.status.duty` 是 D1 常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
+`mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。D2 将 active duty 写入 journal 同目录的 `duty.json`：body 重启后，未过期且 identity 匹配的 active duty 自动恢复，`collected` 从背包重算，`jobs` 保留；过期恢复为 `blocked DUTY_DEADLINE`，completed/blocked/stopped 不复活。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
 
 ## 5. 工作选择与重试
 

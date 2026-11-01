@@ -81,7 +81,10 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失、受保护或名字变化立即失败，绝不换目标。目标消失视为完成，并回读 `attacks/killed`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
-- **Duty（D1）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan 时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；`p2_duty stop` → stopped。D1 只支持单物品 gather 配额，不自行选新目标。
+- **Duty（D1/D2）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan 时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；`p2_duty stop` → stopped。只支持单物品 gather 配额，不自行选新目标。
+  - D2 将 duty 状态写入 journal 同目录的 `duty.json`（sidecar，含 worldId/characterId）。start、每次 job start、terminal 时落盘。
+  - body 重启时只恢复 `state=active`、identity 匹配、deadline 未过的 duty；`collected` 从当前背包重算，`jobs` 从文件恢复。completed/blocked/stopped 不复活。
+  - 过期 duty 恢复为 `blocked`，`lastError=DUTY_DEADLINE`，不自动继续；恢复后由主树继续工作，显式 order/plan 仍优先。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 

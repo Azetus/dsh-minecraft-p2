@@ -3,7 +3,7 @@
 > 状态：已实现，并在实机中验证有限 order、计划、树、tracker、driver 与 completion wake。
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
 > 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
-> 常驻任务不走 order 面：D1 用 `p2_duty` 启动单物品 gather 配额；显式 order/plan 优先并暂停 duty。
+> 常驻任务不走 order 面：D1 用 `p2_duty` 启动单物品 gather 配额；显式 order/plan 优先并暂停 duty。D2 将 active duty 持久化到 journal 同目录的 `duty.json`，body 重启后恢复未过期 duty；过期变为 `blocked DUTY_DEADLINE`，终态不复活。
 
 ## 1. 目标
 

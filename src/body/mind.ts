@@ -128,7 +128,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     chunkBudget: 2,
   })
   options.port.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
-  const duty = new DutyController()
+  const duty = new DutyController({
+    statePath: join(dirname(options.journalPath), 'duty.json'),
+    ...(options.identity === undefined
+      ? {}
+      : { identity: { worldId: options.identity.worldId, characterId: options.identity.characterId } }),
+  })
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
@@ -183,6 +188,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
   })
   orders.restore()
+  const restoredDuty = duty.restore(options.port.inventory(), now())
+  if (restoredDuty !== undefined) {
+    events.push('duty.restored', now(), restoredDuty as unknown as JsonValue)
+    if (restoredDuty.state === 'active') loopRef?.invalidate()
+  }
   activeOrderLookup = () => orders.active()
 
   const sensors = new Sensors({ port: options.port, now })
