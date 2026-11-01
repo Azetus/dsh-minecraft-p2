@@ -39,6 +39,7 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 - **JobTracker 只仲裁**：续做（continuationKey）、切换、停止确认、迟到结果围栏；不选目标、不执行。
 - 同一时刻只有一条控制路径；不得引入第二控制者或双写者。
 - **决策权二分**：Agent 决定目标与约束，P2 决定任务内方法；常驻树只放紧急/自理，主树只推进 order/duty，树不生成任务。详见 [AUTHORITY.md](docs/AUTHORITY.md)。
+- **紧急抢占门**：常驻树只在 Agent 未覆盖的即时危险上先行动；P2 通知与行动并发，Agent 的新命令到达后让位。任务层服从 Agent，身体层保留最小生存反射。详见 [AUTHORITY.md](docs/AUTHORITY.md) §2.1。
 
 ### 执行与控制权
 
