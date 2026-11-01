@@ -1,0 +1,167 @@
+import { HAZARD_KINDS } from '../../port/terrain.ts'
+import type { ActResult, MoveOptions } from '../../port/index.ts'
+import type { SchemaNode } from '../schema.ts'
+import type {
+  Driver,
+  DriverCtx,
+  DriverHandle,
+  DriverResult,
+  DriverValidation,
+  Job,
+  WorldView,
+} from '../types.ts'
+
+export const MOVE_DRIVER_ID = 'move'
+
+const MOVE_SCHEMA: SchemaNode = {
+  type: 'object',
+  properties: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' },
+    range: { type: 'number', minimum: 0, maximum: 8 },
+    timeoutMs: { type: 'integer', minimum: 1 },
+    exact: { type: 'boolean' },
+    approach: { type: 'boolean' },
+    intent: { type: 'string', enum: ['interact', 'attack'] },
+    unstickDig: { type: 'array', items: { type: 'object', properties: {
+      x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
+    }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
+    hazards: {
+      type: 'object',
+      properties: {
+        allow: { type: 'array', items: { type: 'string', enum: [...HAZARD_KINDS] } },
+        reason: { type: 'string' },
+      },
+      required: ['allow'],
+      additionalProperties: false,
+    },
+  },
+  required: ['x', 'y', 'z'],
+  additionalProperties: false,
+}
+
+type MoveParams = {
+  x: number
+  y: number
+  z: number
+  range?: number
+  timeoutMs?: number
+  exact?: boolean
+  approach?: boolean
+  unstickDig?: MoveOptions['unstickDig']
+  intent?: MoveOptions['intent']
+  hazards?: MoveOptions['hazards']
+}
+
+/**
+ * The M1 movement driver: one bounded `ClientPort.moveTo` per job. It never
+ * chooses the target; the giver already did.
+ */
+export function createMoveDriver(): Driver {
+  return {
+    id: MOVE_DRIVER_ID,
+    schema: MOVE_SCHEMA,
+    defaults: {
+      // 400 game ticks / 30 wall seconds is enough for a local walk and short
+      // enough that a stuck path does not hold the tracker.
+      budget: { maxTicks: 400, maxWallMs: 30_000 },
+      interrupt: 'constant-only',
+      suspendable: true,
+    },
+    validate(job: Job, _world: WorldView): DriverValidation {
+      const params = job.params as unknown as MoveParams
+      if (!Number.isFinite(params.x) || !Number.isFinite(params.y) || !Number.isFinite(params.z)) {
+        return { ok: false, code: 'BAD_ARGS' }
+      }
+      return { ok: true }
+    },
+    start(job: Job, ctx: DriverCtx): DriverHandle {
+      const params = job.params as unknown as MoveParams
+      const range = params.range ?? 1
+      const timeoutMs = params.timeoutMs ?? job.budget.maxWallMs
+      const keys = `move:${params.x},${params.y},${params.z},${range}`
+      const promise = ctx.port.moveTo(
+        { x: params.x, y: params.y, z: params.z },
+        { range, timeoutMs,
+          ...(params.exact === undefined ? {} : { exact: params.exact }),
+          ...(params.approach === undefined ? {} : { approach: params.approach }),
+          ...(params.unstickDig === undefined ? {} : { unstickDig: params.unstickDig }),
+          ...(params.intent === undefined ? {} : { intent: params.intent }),
+          ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
+        },
+      )
+      return new MoveHandle(keys, promise)
+    },
+  }
+}
+
+class MoveHandle implements DriverHandle {
+  private resultValue: DriverResult = { state: 'running' }
+  private stopRequested = false
+  private settled = false
+  private releaseUnconfirmed = false
+
+  constructor(
+    private readonly keys: string,
+    promise: Promise<ActResult>,
+  ) {
+    void promise.then(
+      result => {
+        this.settled = true
+        this.releaseUnconfirmed = result.code === 'STOP_UNCONFIRMED'
+        this.resultValue = this.stopRequested
+          ? { state: 'interrupted' }
+          : toDriverResult(result)
+      },
+      error => {
+        this.settled = true
+        this.releaseUnconfirmed = true
+        this.resultValue = {
+          state: this.stopRequested ? 'interrupted' : 'failed',
+          code: errorCode(error),
+        }
+      },
+    )
+  }
+
+  tick(): void {
+    // Completion is delivered by the port promise; tick stays bounded.
+  }
+
+  requestStop(): void {
+    this.stopRequested = true
+  }
+
+  stopStatus(): 'stopping' | 'stopped' | 'unconfirmed' {
+    if (!this.stopRequested) return 'stopping'
+    if (this.releaseUnconfirmed) return 'unconfirmed'
+    return this.settled ? 'stopped' : 'stopping'
+  }
+
+  result(): DriverResult {
+    return this.resultValue
+  }
+
+  continuationKey(): string {
+    return this.keys
+  }
+}
+
+function toDriverResult(result: ActResult): DriverResult {
+  if (result.state === 'ok') {
+    return result.observed === undefined
+      ? { state: 'succeeded' }
+      : { state: 'succeeded', observed: result.observed }
+  }
+  if (result.state === 'unknown') {
+    // `unknown` is never success: the driver reports failure with the reason.
+    return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT', ...(result.observed === undefined ? {} : { observed: result.observed }) }
+  }
+  return { state: 'failed', code: result.code ?? 'ACT_FAILED', ...(result.observed === undefined ? {} : { observed: result.observed }) }
+}
+
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : 'DRIVER_FAULT'
+}

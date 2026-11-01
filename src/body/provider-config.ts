@@ -8,6 +8,10 @@ export type MinecraftProviderConfig = {
   version: string
   connectTimeoutMs: number
   serverIdleMs: number
+  /** Stable recovery identity for the world; defaults to host:port. */
+  worldId: string
+  /** Development-only: crash the body after the first pending action write. */
+  crashAfterPending: boolean
 }
 
 export type ProviderConfigSource = 'file' | 'env' | 'file+env'
@@ -114,6 +118,16 @@ export async function loadProviderConfig(
     'serverIdleMs',
     DEFAULTS.serverIdleMs,
   )
+  const worldId = asString(
+    envValue(env, 'P2_WORLD_ID') ?? file?.worldId,
+    'worldId',
+    `${host}:${port}`,
+  )
+  const crashAfterPending = envValue(env, 'P2_CRASH_AFTER_PENDING') === '1'
+    || file?.crashAfterPending === true
+  if (file?.crashAfterPending !== undefined && typeof file.crashAfterPending !== 'boolean') {
+    throw new Error('provider config: crashAfterPending must be a boolean')
+  }
 
   if (envHost !== undefined) source = file === undefined ? 'env' : 'file+env'
   return {
@@ -124,6 +138,8 @@ export async function loadProviderConfig(
       version,
       connectTimeoutMs,
       serverIdleMs,
+      worldId,
+      crashAfterPending,
     },
     source,
   }

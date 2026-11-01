@@ -1,0 +1,203 @@
+{
+  "id": "dig-room-3x3x2",
+  "version": 1,
+  "size": [
+    3,
+    2,
+    3
+  ],
+  "materialPolicy": {},
+  "workItems": [
+    {
+      "id": "clear-0-0-0",
+      "kind": "clear",
+      "at": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "clear-0-0-1",
+      "kind": "clear",
+      "at": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "clear-0-0-2",
+      "kind": "clear",
+      "at": [
+        0,
+        0,
+        2
+      ]
+    },
+    {
+      "id": "clear-1-0-0",
+      "kind": "clear",
+      "at": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "clear-1-0-1",
+      "kind": "clear",
+      "at": [
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "clear-1-0-2",
+      "kind": "clear",
+      "at": [
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "id": "clear-2-0-0",
+      "kind": "clear",
+      "at": [
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "clear-2-0-1",
+      "kind": "clear",
+      "at": [
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "clear-2-0-2",
+      "kind": "clear",
+      "at": [
+        2,
+        0,
+        2
+      ]
+    },
+    {
+      "id": "clear-0-1-0",
+      "kind": "clear",
+      "at": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "id": "clear-0-1-1",
+      "kind": "clear",
+      "at": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "clear-0-1-2",
+      "kind": "clear",
+      "at": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "clear-1-1-0",
+      "kind": "clear",
+      "at": [
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "id": "clear-1-1-1",
+      "kind": "clear",
+      "at": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "clear-1-1-2",
+      "kind": "clear",
+      "at": [
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "clear-2-1-0",
+      "kind": "clear",
+      "at": [
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "id": "clear-2-1-1",
+      "kind": "clear",
+      "at": [
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "clear-2-1-2",
+      "kind": "clear",
+      "at": [
+        2,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "enter",
+      "kind": "enter",
+      "at": [
+        1,
+        0,
+        1
+      ],
+      "after": [
+        "clear-0-0-0",
+        "clear-0-0-1",
+        "clear-0-0-2",
+        "clear-1-0-0",
+        "clear-1-0-1",
+        "clear-1-0-2",
+        "clear-2-0-0",
+        "clear-2-0-1",
+        "clear-2-0-2",
+        "clear-0-1-0",
+        "clear-0-1-1",
+        "clear-0-1-2",
+        "clear-1-1-0",
+        "clear-1-1-1",
+        "clear-1-1-2",
+        "clear-2-1-0",
+        "clear-2-1-1",
+        "clear-2-1-2"
+      ]
+    }
+  ]
+}

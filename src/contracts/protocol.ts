@@ -11,14 +11,24 @@ export const PROTOCOL_VERSION = 1
 export const DEFAULT_MAX_FRAME_BYTES = 1024 * 1024
 
 /**
- * Body/bridge control plane. P2Mind is not wired yet: after M0-01 the body
- * only answers lifecycle and health questions.
+ * Body/bridge control plane: lifecycle, health, order and observation methods.
  */
 export const METHODS = [
   'hello',
   'heartbeat',
   'describe',
   'status',
+  'world.observe',
+  'world.entities',
+  'blueprint.preview',
+  'chat.poll',
+  'chat.say',
+  'perception.poll',
+  'mind.order',
+  'mind.orders',
+  'mind.cancel',
+  'mind.report',
+  'mind.events',
   'shutdown',
 ] as const
 
@@ -97,6 +107,17 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type MindStatusView = {
+  tracker: 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
+  job: { runId: string; driverId: string } | null
+  fault: { code: string; since: number } | null
+  home: { x: number; y: number; z: number } | null
+  activeOrder: { id: string; verb: string } | null
+  queuedOrders: number
+  eventsSeq: number
+  plan?: { id: string; template: string; satisfied: boolean; blocked: boolean } | null
+}
+
 export type StatusResult = {
   bodyEpoch: BodyEpoch
   /** Package/body version from body.manifest.json. */
@@ -108,12 +129,173 @@ export type StatusResult = {
   capabilities: string[]
   provider: ProviderSummary | null
   providerState?: ProviderRuntimeStatus | null
+  /** P2Mind state; null when this body has no provider/mind. */
+  mind?: MindStatusView | null
 }
 
 export type HeartbeatParams = { seq: number }
 export type HeartbeatResult = { seq: number; alive: true }
 
+export const OBSERVE_MAX_BLOCKS = 4096
+export const OBSERVE_MAX_AXIS = 64
+
+export type ObserveVec3 = { x: number; y: number; z: number }
+
+export type WorldObserveParams = {
+  /** Box query; provide min+max, or `points` instead. */
+  min?: ObserveVec3
+  max?: ObserveVec3
+  /** Targeted query (1..256 unique points); no box, no entities. */
+  points?: ObserveVec3[]
+  includeEntities?: boolean
+  /** Box detail level; ignored for a points query. */
+  detail?: 'blocks' | 'counts' | 'surface'
+  /** Block names to include in the blocks view; unknown cells stay visible. */
+  only?: string[]
+  /** Omit loaded air from the blocks view. */
+  excludeAir?: boolean
+}
+
+export type WorldObserveBlock = {
+  x: number
+  y: number
+  z: number
+  name: string
+  loaded: boolean
+  /** Provider collision hint; undefined when the adapter cannot tell. */
+  solid?: boolean
+  state?: Record<string, string>
+}
+
+export type WorldObserveCounts = {
+  total: number
+  loaded: number
+  unloaded: number
+  byName: Record<string, number>
+}
+
+export type WorldObserveSurface = {
+  x: number
+  z: number
+  /** Highest non-air block (includes plants/fluids); null when all air. */
+  y: number | null
+  name: string | null
+  /** Highest block with a collision box (ground/structure); null if none. */
+  solidY: number | null
+  solidName: string | null
+  /** false when any cell in the column is unloaded: the surface is unknown. */
+  loaded: boolean
+}
+
+export type WorldObserveResult = {
+  at: number
+  mode: 'box' | 'points'
+  detail: 'blocks' | 'counts' | 'surface' | 'points'
+  box?: { min: ObserveVec3; max: ObserveVec3 }
+  self: {
+    pos: ObserveVec3
+    yaw: number
+    pitch: number
+    health: number
+    food: number
+    onGround: boolean
+    inWater: boolean
+    inLava: boolean
+  }
+  inventory: Array<{ slot: number; name: string; count: number }>
+  time: { timeOfDay: number; worldAge: number }
+  /** Biome at the body position; null when the adapter cannot tell. */
+  biome?: { id: number; name: string } | null
+  /** Present for detail=blocks / points; includes loaded:false cells. */
+  blocks?: WorldObserveBlock[]
+  counts?: WorldObserveCounts
+  surface?: WorldObserveSurface[]
+  entities?: Array<{ id: string; name: string; position: ObserveVec3 }>
+}
+
+export const ENTITIES_MAX_RADIUS = 160
+export const ENTITIES_MAX_LIMIT = 512
+
+export type WorldEntitiesParams = {
+  /** Defaults to the body position. */
+  center?: ObserveVec3
+  /** Defaults to 64; capped at 160 (server tracking range still applies). */
+  radius?: number
+  /** Entity categories such as animal/hostile/player/other. */
+  types?: string[]
+  /** Entity names such as sheep/item; max 32. */
+  names?: string[]
+  /** Defaults to 128. */
+  limit?: number
+}
+
+export type WorldEntityView = {
+  id: string
+  name: string
+  type?: string
+  kind?: string
+  username?: string
+  /** Dropped item stack when the adapter could resolve it. */
+  item?: { name: string; count: number }
+  position: ObserveVec3
+  distance: number
+}
+
+export type WorldEntitiesResult = {
+  at: number
+  center: ObserveVec3
+  radius: number
+  /** Matches before limit; entities is sorted by distance. */
+  total: number
+  entities: WorldEntityView[]
+}
+
 export type ShutdownResult = { closing: true }
+
+export type MindOrderView = { id: string; verb: string; state: string }
+
+export type MindOrderResult = { id: string; state: string }
+
+export type MindOrdersResult = {
+  active: MindOrderView | null
+  queued: MindOrderView[]
+}
+
+export type MindCancelResult = { id: string; state: string }
+
+export type MindReportResult = { report: JsonValue | null }
+
+export type MindEventsParams = { sinceSeq?: number; limit?: number }
+
+export type MindEventsResult = {
+  events: Array<{ seq: number; at: number; kind: string; data: JsonValue }>
+  seq: number
+}
+
+export type ChatMessage = {
+  seq: number
+  at: number
+  username: string
+  message: string
+}
+
+export type ChatPollParams = { afterSeq?: number }
+export type ChatPollResult = { messages: ChatMessage[]; seq: number }
+export type ChatSayParams = { text: string }
+export type ChatSayResult = { sent: true }
+
+export type PerceptionNotice = {
+  seq: number
+  at: number
+  kind: 'damaged' | 'died' | 'task-block' | 'hostile-near'
+  severity: 'info' | 'warning' | 'critical'
+  key: string
+  summary: string
+  data?: JsonValue
+}
+
+export type PerceptionPollParams = { afterSeq?: number }
+export type PerceptionPollResult = { notices: PerceptionNotice[]; seq: number }
 
 export type BodyInfo = {
   manifest: BodyManifest

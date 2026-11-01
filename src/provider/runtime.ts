@@ -4,8 +4,6 @@ import type { JsonValue, P2Error, ValueMeta } from '../contracts/types.ts'
  * Provider-facing outcome shapes for the current adapter surface.
  */
 
- */
-
 export type QueryOutcome =
   | { status: 'ok'; value: JsonValue; meta?: ValueMeta }
   | { status: 'failed'; error: P2Error }

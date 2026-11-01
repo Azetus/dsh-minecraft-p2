@@ -39,6 +39,7 @@ export const ErrorCodes = {
   INVALID_OWNER: 'INVALID_OWNER',
   SHUTTING_DOWN: 'SHUTTING_DOWN',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  DEFINITION_ERROR: 'DEFINITION_ERROR',
 } as const
 
 export type BodyManifest = {

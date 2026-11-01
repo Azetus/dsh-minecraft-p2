@@ -6,18 +6,28 @@ import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
 
+import { ChatBatcher } from './chat-batcher.ts'
+import { CompletionFeed, formatCompletionWake } from './completion-wake.ts'
+import type { CompletionItem, MindEventView } from './completion-wake.ts'
 import type { JsonValue } from '../contracts/index.ts'
-import type { OwnerContext } from '../contracts/protocol.ts'
+import type { ChatMessage, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
+import { registerP2Tools } from './tools.ts'
+import type { AgentLike, ToolDefinition, ToolsService } from './tools.ts'
 
 type CommandResult = { kind: 'success' | 'error'; text: string }
 
 type CommandInvocation = {
   agent: AgentLike
   rawInput: string
+}
+
+type CommandHooks = {
+  onStarted?: (agent: AgentLike) => void
+  onStopped?: () => void
 }
 
 type CommandsService = {
@@ -50,30 +60,9 @@ type AgentsService = {
     status?: 'idle' | 'running'
     followup(message: WakeMessage): void
     steer?(message: WakeMessage): void
+    /** Attach context to a running turn without waking it. */
+    inject?(message: WakeMessage): void
   } | undefined
-}
-
-type AgentLike = {
-  id: string
-  session: {
-    id: string
-    header?: { cwd?: string }
-  }
-}
-
-type ToolsService = {
-  register(definition: ToolDefinition): () => void
-}
-
-type ToolDefinition = {
-  name: string
-  description: string
-  parameters: Record<string, unknown>
-  output: {
-    schema: Record<string, unknown>
-    render: (args: Record<string, unknown>, value: unknown) => Array<{ type: 'text'; text: string }>
-  }
-  execute: (args: Record<string, unknown>, exec: { agent?: AgentLike; signal?: AbortSignal }) => Promise<JsonValue>
 }
 
 export type P2PluginOptions = {
@@ -121,27 +110,114 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     name: 'dsh-minecraft-p2',
     inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
+      let chatCursor = 0
+      let chatTimer: ReturnType<typeof setInterval> | undefined
+      let chatPolling = false
+      let perceptionCursor = 0
+      let perceptionPolling = false
+      let perceptionTimer: ReturnType<typeof setTimeout> | undefined
+      const pendingPerception: string[] = []
+      let perceptionFirstAt = 0
+      let startChatPolling: (() => void) | undefined
+      let stopChatPolling: (() => void) | undefined
+      const pendingNormal: string[] = []
+      const completion = new CompletionFeed()
+      const pendingCompletion: CompletionItem[] = []
+      let completionTimer: ReturnType<typeof setTimeout> | undefined
+      let completionUnavailable = false
+      let mindPolling = false
       /** Runtime faults steer a running owner; idle owners get a follow-up turn. */
-      const deliverWake = (text: string): void => {
+      const wakeMessage = (text: string): WakeMessage => ({
+        id: randomUUID(),
+        role: 'user',
+        content: [{ type: 'text', text }],
+        source: { kind: 'p2-runtime' },
+      })
+      const followup = (text: string): void => {
         const owner = manager.currentOwner
         if (owner === undefined) return
         const agent = ctx.agents?.get(owner.sessionId)
         if (agent === undefined) return
-        const message: WakeMessage = {
-          id: randomUUID(),
-          role: 'user',
-          content: [{ type: 'text', text }],
-          source: { kind: 'p2-runtime' },
-        }
         try {
-          if (agent.status === 'running' && agent.steer !== undefined) agent.steer(message)
-          else agent.followup(message)
+          agent.followup(wakeMessage(text))
         } catch (cause) {
-          // Waking is best effort, but a silent swallow hides a broken wake path.
           options.log?.(`p2 runtime wake failed: ${formatError(cause)}`)
         }
       }
+      const flushPendingNormal = (): void => {
+        if (pendingNormal.length === 0) return
+        const owner = manager.currentOwner
+        if (owner === undefined) return
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined || agent.status !== 'idle') return
+        const text = pendingNormal.splice(0).join('\n\n')
+        followup(text)
+      }
+      const deliverWake = (text: string, kind: 'normal' | 'critical' = 'normal'): void => {
+        const owner = manager.currentOwner
+        if (owner === undefined) return
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined) return
+        const status = agent.status ?? 'idle'
+        if (kind === 'critical' && status === 'running' && agent.steer !== undefined) {
+          try {
+            agent.steer(wakeMessage(text))
+          } catch (cause) {
+            options.log?.(`p2 runtime steer failed: ${formatError(cause)}`)
+          }
+          return
+        }
+        if (status === 'idle') {
+          followup(text)
+          return
+        }
+        // Normal notices wait for the current turn to finish; never interrupt it.
+        pendingNormal.push(text)
+        if (pendingNormal.length > 8) pendingNormal.splice(0, pendingNormal.length - 8)
+      }
+      const clearCompletionTimer = (): void => {
+        if (completionTimer !== undefined) clearTimeout(completionTimer)
+        completionTimer = undefined
+      }
+      const flushCompletion = (): void => {
+        clearCompletionTimer()
+        if (pendingCompletion.length === 0) return
+        const items = pendingCompletion.splice(0)
+        deliverWake(formatCompletionWake(items, manager.bodyEpoch), 'normal')
+      }
+      const deliverCompletion = (items: CompletionItem[], epoch: string | undefined): void => {
+        if (items.length === 0) return
+        if (!items.some(item => item.severity === 'critical')) {
+          // Successful results are merged into one digest; a finished job does
+          // not wake a running turn by itself. The window starts at the first
+          // pending result so a later success cannot delay it past 1 s.
+          pendingCompletion.push(...items)
+          if (completionTimer === undefined) {
+            completionTimer = setTimeout(flushCompletion, 250)
+            completionTimer.unref?.()
+          }
+          return
+        }
+        // Critical results never wait for the merge window, but pending normal
+        // results ride along so a restart or failure wake does not drop them.
+        const merged = [...pendingCompletion.splice(0), ...items]
+        clearCompletionTimer()
+        deliverWake(formatCompletionWake(merged, epoch), 'critical')
+      }
+      const resetCompletion = (): void => {
+        pendingCompletion.length = 0
+        clearCompletionTimer()
+        completion.reset()
+        completionUnavailable = false
+      }
+      const chatBatcher = new ChatBatcher(messages => {
+        const lines = messages.map(message => `${message.username}: ${message.message}`).join('\n')
+        deliverWake(`[p2 chat]\n${lines}\n请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`)
+      })
       notifyBodyFault = fault => {
+        stopChatPolling?.()
+        pendingNormal.length = 0
+        resetCompletion()
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
           : fault.autoRestart === 'exhausted'
@@ -149,18 +225,168 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
             : 'Start a new body manually with /p2 start.'
         deliverWake(
           `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and was lost with the epoch. ${next}`,
+          'critical',
         )
       }
       notifyBodyRestart = info => {
+        chatCursor = 0
+        perceptionCursor = 0
+        pendingNormal.length = 0
+        resetCompletion()
+        startChatPolling?.()
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
+          'critical',
         )
       }
 
+      const pollChat = async (): Promise<void> => {
+        flushPendingNormal()
+        if (chatPolling || manager.currentState !== 'active') return
+        chatPolling = true
+        try {
+          const result = await manager.chatPoll(chatCursor) as unknown as {
+            messages?: ChatMessage[]
+            seq?: number
+          }
+          const messages = result.messages ?? []
+          if (messages.length > 0) {
+            chatCursor = messages[messages.length - 1]?.seq ?? chatCursor
+            for (const message of messages) chatBatcher.add(message)
+          }
+        } catch (error) {
+          // Polling is a side channel; a transient body failure must not fault it.
+          options.log?.(`p2 chat poll failed: ${formatError(error)}`)
+        } finally {
+          chatPolling = false
+          flushPendingNormal()
+        }
+      }
+      const flushPerception = (): void => {
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        perceptionTimer = undefined
+        perceptionFirstAt = 0
+        if (pendingPerception.length === 0) return
+        const lines = pendingPerception.splice(0)
+        deliverWake(
+          `[p2 perception][DIGEST]\n${lines.join('\n')}\nNo immediate action required; assess after current work.`,
+          'normal',
+        )
+      }
+      const schedulePerception = (): void => {
+        const at = Date.now()
+        if (perceptionFirstAt === 0) perceptionFirstAt = at
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        const wait = Math.max(0, Math.min(1_000, 3_000 - (at - perceptionFirstAt)))
+        perceptionTimer = setTimeout(flushPerception, wait)
+        perceptionTimer.unref?.()
+      }
+      const pollPerception = async (): Promise<void> => {
+        if (perceptionPolling || manager.currentState !== 'active') return
+        perceptionPolling = true
+        try {
+          const result = await manager.perceptionPoll(perceptionCursor) as unknown as {
+            notices?: Array<{ seq: number; kind: string; severity: string; summary: string; at: number }>
+          }
+          for (const notice of result.notices ?? []) {
+            perceptionCursor = Math.max(perceptionCursor, notice.seq)
+            if (notice.severity === 'critical') {
+              deliverWake(
+                [
+                  '[p2 perception][IMMEDIATE]',
+                  `- ${notice.kind}: ${notice.summary}`,
+                  'FIRST ACTION (do not call p2_observe first):',
+                  'FIGHT only if your combat ROE already allows this target:',
+                  '  p2_order {verb:"attack", params:{entityId:"<id from summary>"}}',
+                  'FLIGHT is the default without ROE / low health / creeper / multiple threats:',
+                  '  p2_order {verb:"go", params:{x:<safe> y:<safe> z:<safe>}} or p2_cancel',
+                  'Then verify; never auto-attack without an explicit combat order.',
+                ].join('\n'),
+                'critical',
+              )
+            } else {
+              pendingPerception.push(`- ${notice.kind}: ${notice.summary}`)
+              schedulePerception()
+            }
+          }
+        } catch (error) {
+          options.log?.(`p2 perception poll failed: ${formatError(error)}`)
+        } finally {
+          perceptionPolling = false
+        }
+      }
+      const pollMind = async (): Promise<void> => {
+        if (mindPolling || manager.currentState !== 'active') return
+        const epoch = manager.bodyEpoch
+        if (completion.attach(epoch)) {
+          // A new body epoch starts a fresh event ring and cursor; results
+          // queued for the old epoch are no longer actionable.
+          pendingCompletion.length = 0
+          clearCompletionTimer()
+          completionUnavailable = false
+        }
+        if (completionUnavailable) return
+        mindPolling = true
+        try {
+          const result = await manager.mindEvents(completion.cursor) as unknown as {
+            events?: MindEventView[]
+          }
+          deliverCompletion(completion.accept(result.events ?? []), epoch)
+        } catch (error) {
+          if (error instanceof BodyClientError && error.error.code === 'MIND_UNAVAILABLE') {
+            // A providerless test body has no mind; do not log every 300 ms.
+            completionUnavailable = true
+            options.log?.('p2 completion polling disabled: this body has no mind runtime')
+          } else {
+            options.log?.(`p2 completion poll failed: ${formatError(error)}`)
+          }
+        } finally {
+          mindPolling = false
+        }
+      }
+      startChatPolling = (): void => {
+        if (chatTimer !== undefined) return
+        perceptionCursor = 0
+        chatTimer = setInterval(() => {
+          void pollChat()
+          void pollPerception()
+          void pollMind()
+        }, 300)
+        chatTimer.unref?.()
+        void pollChat()
+        void pollPerception()
+        void pollMind()
+      }
+      stopChatPolling = (): void => {
+        if (chatTimer !== undefined) clearInterval(chatTimer)
+        chatTimer = undefined
+        if (perceptionTimer !== undefined) clearTimeout(perceptionTimer)
+        perceptionTimer = undefined
+        pendingPerception.length = 0
+        perceptionFirstAt = 0
+        perceptionCursor = 0
+        chatBatcher.stop()
+        pendingNormal.length = 0
+        resetCompletion()
+      }
+
       const globalDisposers: Array<() => void> = []
+      const registrations: Array<{ dispose(): void }> = []
+      const ensureTools = (agent: AgentLike): void => {
+        if (ctx.tools === undefined || registrations.length > 0) return
+        registrations.push(registerP2Tools(agent, manager, ctx.tools))
+      }
+      const disposeTools = (): void => {
+        for (const registration of registrations.splice(0)) registration.dispose()
+      }
 
       if (options.devBodyControl === true && ctx.tools !== undefined) {
-        globalDisposers.push(ctx.tools.register(createBodyTool(manager)))
+        globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
+          ensureTools,
+          disposeTools,
+          startChatPolling: () => startChatPolling?.(),
+          stopChatPolling: () => stopChatPolling?.(),
+        })))
       }
 
       ctx.effect(
@@ -168,7 +394,16 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           name: 'p2',
           description: 'Manage the P2 Minecraft player runtime',
           input: { hint: '<setup|start|status|stop>' },
-          handler: invocation => handleP2Command(manager, invocation),
+          handler: invocation => handleP2Command(manager, invocation, {
+            onStarted: agent => {
+              ensureTools(agent)
+              startChatPolling?.()
+            },
+            onStopped: () => {
+              stopChatPolling?.()
+              disposeTools()
+            },
+          }),
         }),
         'p2.commands',
       )
@@ -176,6 +411,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         () => async () => {
           notifyBodyFault = undefined
           notifyBodyRestart = undefined
+          stopChatPolling?.()
+          disposeTools()
           for (const dispose of globalDisposers.splice(0)) dispose()
           await manager.dispose()
         },
@@ -186,7 +423,14 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 }
 
 /** Development-only global tool; the human `/p2` command remains the shipped path. */
-function createBodyTool(manager: BodyManager): ToolDefinition {
+type BodyToolHooks = {
+  ensureTools: (agent: AgentLike) => void
+  disposeTools: () => void
+  startChatPolling: () => void
+  stopChatPolling: () => void
+}
+
+function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
   return {
     name: 'p2_body',
     description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command.',
@@ -213,6 +457,8 @@ function createBodyTool(manager: BodyManager): ToolDefinition {
       if (action === 'start') {
         assertBodyOwner(manager, agent.session.id)
         const result = await startBody(manager, agent)
+        hooks.ensureTools(agent)
+        hooks.startChatPolling()
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         return { action, ...result, status: await bodyStatus(manager) }
       }
@@ -221,12 +467,16 @@ function createBodyTool(manager: BodyManager): ToolDefinition {
         const stopped = await stopBody(manager)
         if (stopped.state === 'faulted') return { action, ...stopped }
         const result = await startBody(manager, agent)
+        hooks.ensureTools(agent)
+        hooks.startChatPolling()
         void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
         return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
         assertBodyOwner(manager, agent.session.id)
         const result = await stopBody(manager)
+        hooks.stopChatPolling()
+        hooks.disposeTools()
         void auditBodyControl(agent, { action, state: result.state })
         return { action, ...result }
       }
@@ -289,6 +539,7 @@ async function stopBody(manager: BodyManager): Promise<StopResult> {
 export async function handleP2Command(
   manager: BodyManager,
   invocation: CommandInvocation,
+  hooks: CommandHooks = {},
 ): Promise<CommandResult> {
   const input = invocation.rawInput.trim()
   const [verb = '', ...rest] = input.split(/\s+/u)
@@ -302,6 +553,7 @@ export async function handleP2Command(
         return setup(invocation.agent)
       case 'start': {
         const result = await startBody(manager, invocation.agent)
+        hooks.onStarted?.(invocation.agent)
         void auditBodyControl(invocation.agent, { action: 'start', state: result.state, epoch: result.epoch, via: 'command' })
         return success(`P2 body active (epoch ${result.epoch})`)
       }
@@ -313,6 +565,7 @@ export async function handleP2Command(
         if (result.state === 'faulted') {
           return error(`P2 body stop was not confirmed${result.error === undefined ? '' : `: ${result.error}`}`)
         }
+        hooks.onStopped?.()
         void auditBodyControl(invocation.agent, { action: 'stop', state: result.state, via: 'command' })
         return success('P2 body stopped')
       }

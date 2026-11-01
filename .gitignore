@@ -32,6 +32,10 @@ node_modules/
 # 本地 Minecraft provider 配置
 /.p2/config.json
 
+# P2Mind 意图日志（本机）
+/.p2/journal.jsonl
+/.p2/*.jsonl
+
 # M5 验证运行证据（本机）
 /.m5-runs/
 

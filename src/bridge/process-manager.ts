@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
 } from '../contracts/index.ts'
 import type {
+  JsonValue,
   MessageTransport,
   OwnerContext,
   StatusResult,
@@ -209,6 +210,60 @@ export class BodyManager {
       void this.fault('heartbeat-missed', `status request failed: ${errorText(error)}`)
       throw error
     }
+  }
+
+  mindOrder(order: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('mind.order', order)
+  }
+
+  worldObserve(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('world.observe', params)
+  }
+
+  worldEntities(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('world.entities', params)
+  }
+
+  blueprintPreview(blueprint: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('blueprint.preview', { blueprint })
+  }
+
+  chatPoll(afterSeq: number): Promise<JsonValue> {
+    return this.activeClient().request('chat.poll', { afterSeq })
+  }
+
+  chatSay(text: string): Promise<JsonValue> {
+    return this.activeClient().request('chat.say', { text })
+  }
+
+  perceptionPoll(afterSeq: number): Promise<JsonValue> {
+    return this.activeClient().request('perception.poll', { afterSeq })
+  }
+
+  mindOrders(): Promise<JsonValue> {
+    return this.activeClient().request('mind.orders', {})
+  }
+
+  mindCancel(id: string): Promise<JsonValue> {
+    return this.activeClient().request('mind.cancel', { id })
+  }
+
+  mindReport(): Promise<JsonValue> {
+    return this.activeClient().request('mind.report', {})
+  }
+
+  mindEvents(sinceSeq: number, limit?: number): Promise<JsonValue> {
+    return this.activeClient().request('mind.events', {
+      sinceSeq,
+      ...(limit === undefined ? {} : { limit }),
+    })
+  }
+
+  private activeClient(): BodyClient {
+    if (this.state !== 'active' || this.client === undefined) {
+      throw new Error(`body is ${this.state}`)
+    }
+    return this.client
   }
 
   async stop(): Promise<StopResult> {
