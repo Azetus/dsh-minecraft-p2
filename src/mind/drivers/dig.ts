@@ -1,5 +1,6 @@
 import type { BlockInfo } from '../../port/index.ts'
 import { approachBlock } from '../approach.ts'
+import { pickupNearby } from '../pickup.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { DigPurpose } from '../tools.ts'
@@ -31,7 +32,7 @@ export function createDigDriver(): Driver {
     id: DIG_DRIVER_ID,
     schema: DIG_SCHEMA,
     defaults: {
-      budget: { maxTicks: 400, maxWallMs: 20_000 },
+      budget: { maxTicks: 600, maxWallMs: 30_000 },
       interrupt: 'constant-only',
       suspendable: false,
     },
@@ -100,7 +101,8 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     return { state: 'failed', code: 'DIG_READBACK_UNSTABLE' }
   }
 
-  await sleep(600)
+  const pickup = purpose === 'harvest' ? await pickupNearby(ctx.port, target) : undefined
+  await sleep(300)
   const inventoryAfter = ctx.port.inventory()
   const afterCount = totalCount(inventoryAfter)
   const observed = {
@@ -112,6 +114,14 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     inventoryBefore: beforeCount,
     inventoryAfter: afterCount,
     dropDelta: afterCount - beforeCount,
+    ...(pickup === undefined ? {} : { pickup: pickup.observed }),
+  }
+  if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0) {
+    return {
+      state: 'failed',
+      code: pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED',
+      observed,
+    }
   }
   return { state: 'succeeded', observed }
 }

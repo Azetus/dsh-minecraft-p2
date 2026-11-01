@@ -34,6 +34,7 @@ describe('interaction approach', () => {
       blockAt: (p: Vec3) => blocks.get(key(p))
         ?? (p.y === 63 ? { name: 'stone', loaded: true } : { name: 'air', loaded: true }),
       inventory: () => items,
+      entities: () => [],
       moveTo: async (target: Vec3) => { moves.push(target); return { state: 'ok', elapsedMs: 1 } },
       equip: async () => ({ state: 'ok', elapsedMs: 1 }),
       dig: async (p: Vec3) => {

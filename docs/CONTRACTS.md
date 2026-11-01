@@ -74,7 +74,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
   - `harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；
   - `clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
-  - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 还读回背包增量作为证据，但不因掉落尚未拾取而判失败。
+  - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。
 - `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
@@ -267,3 +267,5 @@ type WorkState =
 | `TOOL_INSUFFICIENT` | `harvest` 没有可用工具 |
 | `BLOCK_UNBREAKABLE` | 方块不可破坏 |
 | `DIG_NO_BLOCK` | 目标是空气/没有方块 |
+| `PICKUP_UNREACHABLE` | 掉落物存在但无法走到 |
+| `PICKUP_NOT_COLLECTED` | 已到达掉落物附近，背包仍未增加 |

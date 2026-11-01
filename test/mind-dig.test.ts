@@ -45,6 +45,7 @@ function portWith(options: {
       return null
     },
     inventory: () => items,
+    entities: () => [],
     equip: async (item: string) => { equips.push(item); return { state: 'ok' as const, elapsedMs: 1 } },
     dig: async (p: Vec3) => {
       digs += 1

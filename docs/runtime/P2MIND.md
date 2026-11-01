@@ -238,7 +238,7 @@ interface DriverHandle {
 
 toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → readback → progress`。
 
-**读回要求**：`place` 读目标方块两次（间隔 200ms）；`dig` 读空气，`harvest` 还读背包增量；`craft` 读背包增量；`smelt` 读输出槽。读回是**稳定性观察**，不是“服务端已接受”的证明；需要强证据时走独立观测路径。
+**读回要求**：`place` 读目标方块两次（间隔 200ms）；`dig` 读空气，`harvest` 还走到掉落物处并读背包增量；`craft` 读背包增量；`smelt` 读输出槽。读回是**稳定性观察**，不是“服务端已接受”的证明；需要强证据时走独立观测路径。
 
 ### 4.8 Verifier
 

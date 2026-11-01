@@ -49,6 +49,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(TOOL_INSUFFICIENT)` | 先装备/合成合适工具；只想清掉方块时用 `dig purpose:"clear"` |
 | `hold(GO_NO_STAND)` | 目标 2 格内没有可站立格；换坐标，或先整理/确认目标高度 |
 | `failed(APPROACH_NO_STAND)` | 目标方块周围没有可站立格；换目标面或先清理/接近 |
+| `failed(PICKUP_UNREACHABLE)` | 掉落物不可达；换落点、先整理地形，或接受掉落损失 |
+| `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |

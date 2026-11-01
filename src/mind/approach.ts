@@ -40,7 +40,7 @@ export async function approachBlock(
   }
 }
 
-function nearestStandableCell(port: ClientPort, target: Vec3): Vec3 | undefined {
+export function nearestStandableCell(port: ClientPort, target: Vec3): Vec3 | undefined {
   const read = (point: Vec3) => port.blockAt(point)
   let best: Vec3 | undefined
   let bestDistance = Number.POSITIVE_INFINITY
