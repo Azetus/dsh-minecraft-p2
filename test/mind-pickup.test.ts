@@ -46,6 +46,23 @@ describe('pickup', () => {
     expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 1 })
   })
 
+  it('counts an automatic pickup even when the move reports failure', async () => {
+    const items: Item[] = []
+    const port = {
+      inventory: () => items,
+      entities: () => [drop({ x: 1.5, y: 64, z: 0.5 })],
+      blockAt: () => null,
+      moveTo: async () => {
+        items.push({ slot: 36, name: 'dirt', count: 1 })
+        return { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1 }
+      },
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, target)
+
+    expect(result).toMatchObject({ drops: 1, picked: 1, unreachable: 0 })
+  })
+
   it('does nothing when there is no drop entity', async () => {
     const port = {
       inventory: () => [],
@@ -96,5 +113,40 @@ describe('dig then pickup', () => {
       state: 'succeeded',
       observed: { kind: 'dig', dropDelta: 1, pickup: { drops: 1, picked: 1 } },
     })
+  })
+
+  it('does not fail harvest when the inventory rose despite pickup bookkeeping', async () => {
+    const item: Item[] = [{ slot: 36, name: 'stone_pickaxe', count: 1 }]
+    const blocks = new Map<string, BlockInfo>([['1,64,0', {
+      name: 'stone', loaded: true, material: 'mineable/pickaxe', diggable: true,
+      harvestTools: ['stone_pickaxe'],
+    }]])
+    const port = {
+      self: () => ({ pos: { x: 1.5, y: 64, z: 0.5 } }),
+      blockAt: (point: Vec3) => blocks.get(`${point.x},${point.y},${point.z}`) ?? null,
+      inventory: () => item,
+      entities: () => [drop({ x: 1.5, y: 64, z: 0.5 })],
+      equip: async () => ({ state: 'ok', elapsedMs: 1 }),
+      dig: async (point: Vec3) => {
+        blocks.set(`${point.x},${point.y},${point.z}`, { name: 'air', loaded: true })
+        return { state: 'ok', elapsedMs: 1 }
+      },
+      moveTo: async () => {
+        item.push({ slot: 37, name: 'cobblestone', count: 1 })
+        return { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1 }
+      },
+    } as unknown as ClientPort
+
+    const job = {
+      driverId: 'dig', target: { kind: 'point', pos: target },
+      params: { ...target, purpose: 'harvest' }, runId: 'run-1', issuedAt: 0,
+      budget: { maxTicks: 600, maxWallMs: 30_000 },
+    } as unknown as Job
+    const handle = createDigDriver().start(job, { port, now: () => 0 })
+    for (let index = 0; index < 300 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { dropDelta: 1 } })
   })
 })

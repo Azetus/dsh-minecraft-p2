@@ -116,7 +116,7 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     dropDelta: afterCount - beforeCount,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
   }
-  if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0) {
+  if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0 && afterCount <= beforeCount) {
     return {
       state: 'failed',
       code: pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED',

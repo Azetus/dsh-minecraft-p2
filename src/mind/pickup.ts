@@ -35,6 +35,7 @@ export async function pickupNearby(port: ClientPort, center: Vec3): Promise<Pick
     .slice(0, MAX_DROPS)
 
   let before = totalCount(port.inventory())
+  const start = before
   let picked = 0
   let unreachable = 0
   let notCollected = 0
@@ -44,7 +45,13 @@ export async function pickupNearby(port: ClientPort, center: Vec3): Promise<Pick
       intent: 'interact',
       timeoutMs: MOVE_TIMEOUT_MS,
     })
+    let after = totalCount(port.inventory())
     if (moved.state !== 'ok') {
+      if (after > before) {
+        picked += after - before
+        before = after
+        continue
+      }
       const stand = nearestStandableCell(port, drop.position)
       if (stand === undefined) {
         unreachable += 1
@@ -55,12 +62,31 @@ export async function pickupNearby(port: ClientPort, center: Vec3): Promise<Pick
         intent: 'interact',
         timeoutMs: MOVE_TIMEOUT_MS,
       })
-      if (retry.state !== 'ok') {
-        unreachable += 1
+      after = totalCount(port.inventory())
+      if (retry.state !== 'ok' || after <= before) {
+        if (after > before) {
+          picked += after - before
+          before = after
+        } else {
+          unreachable += 1
+        }
         continue
       }
     }
-    const after = await waitForIncrease(port, before)
+    after = await waitForIncrease(port, before)
+    if (after > before) {
+      picked += after - before
+      before = after
+      continue
+    }
+    // The coarse move can stop just outside pickup range. Try a tighter stop
+    // before calling the drop not-collected.
+    const closer = await port.moveTo(drop.position, {
+      range: 0.5,
+      intent: 'interact',
+      timeoutMs: MOVE_TIMEOUT_MS,
+    })
+    if (closer.state === 'ok') after = await waitForIncrease(port, before)
     if (after > before) {
       picked += after - before
       before = after
@@ -68,6 +94,12 @@ export async function pickupNearby(port: ClientPort, center: Vec3): Promise<Pick
       notCollected += 1
     }
   }
+
+  // Items can be picked up automatically while a move is in flight; the
+  // inventory delta is the authority, not the per-drop bookkeeping.
+  const finalCount = totalCount(port.inventory())
+  const auto = finalCount - start
+  if (auto > picked) picked = auto
 
   return {
     drops: drops.length,
