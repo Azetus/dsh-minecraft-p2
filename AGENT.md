@@ -17,6 +17,7 @@
 P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责选工作、执行与恢复，DSH agent 只下目标级 order 并在偏离/终态时介入。模型响应不进入逐动作执行的等待路径。
 
 开始相关工作前先读 [ARCHITECTURE.md](docs/ARCHITECTURE.md)（进程边界、分层、目录、生命周期），再按需查：
+- [AUTHORITY.md](docs/AUTHORITY.md)：Agent/P2 决策权二分与新增行为评审清单
 - [runtime/P2MIND.md](docs/runtime/P2MIND.md)：控制结构（权威设计）
 - [runtime/PITFALLS.md](docs/runtime/PITFALLS.md)：踩坑清单与实现红线
 - [CONTRACTS.md](docs/CONTRACTS.md)：ClientPort / Job / WorkGiver / Driver / JobTracker / 树 / 计划
@@ -37,6 +38,7 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 - **driver 只执行**：入参目标由 giver 选定；**不得自行推导目标**；只做 toil 推进、读回、收尾。
 - **JobTracker 只仲裁**：续做（continuationKey）、切换、停止确认、迟到结果围栏；不选目标、不执行。
 - 同一时刻只有一条控制路径；不得引入第二控制者或双写者。
+- **决策权二分**：Agent 决定目标与约束，P2 决定任务内方法；常驻树只放紧急/自理，主树只推进 order/duty，树不生成任务。详见 [AUTHORITY.md](docs/AUTHORITY.md)。
 
 ### 执行与控制权
 
@@ -69,6 +71,7 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 ## 4. 实施与验证
 
 - 按当前 P2Mind 实现与验收推进；当前任务获准后，只实现明确范围。
+- 新增 giver/driver/行为前，按 [AUTHORITY.md](docs/AUTHORITY.md) 的评审清单确认职责归属；答不出归属的不写。
 - 不保留旧控制层，也不设运行时双路径。
 - 修改某项运行语义时，先明确输入、状态转换、失败及收尾结果，再同步契约、运行规则和对应验收条件。
 - 分开报告三类证据：加载校验（树/模板/Schema）、核心软件测试、真实游戏/DSH/发行验证。开发用受控输入测试不应变成游戏模拟依赖。
