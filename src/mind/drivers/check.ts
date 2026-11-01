@@ -1,4 +1,5 @@
 import type { ClientPort } from '../../port/index.ts'
+import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -48,7 +49,20 @@ export function createCheckDriver(): Driver {
 }
 
 async function checkContainer(port: ClientPort, params: CheckParams): Promise<DriverResult> {
-  const result = await port.containerAt({ x: params.x, y: params.y, z: params.z })
+  const target = { x: params.x, y: params.y, z: params.z }
+  const approach = await approachBlock(port, target, {
+    range: 2,
+    timeoutMs: 12_000,
+    code: 'CHECK_APPROACH_FAILED',
+  })
+  if (!approach.ok) {
+    return {
+      state: 'failed',
+      code: approach.code,
+      ...(approach.observed === undefined ? {} : { observed: approach.observed }),
+    }
+  }
+  const result = await port.containerAt(target)
   return {
     state: result.state === 'unknown' ? 'failed' : 'succeeded',
     ...(result.state === 'failed' ? { code: result.code } : {}),

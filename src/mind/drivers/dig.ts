@@ -1,4 +1,5 @@
 import type { BlockInfo } from '../../port/index.ts'
+import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { DigPurpose } from '../tools.ts'
@@ -69,6 +70,18 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
   const beforeCount = totalCount(inventoryBefore)
   const choice = chooseTool(before, inventoryBefore, purpose)
   if (choice.error !== undefined) return { state: 'failed', code: choice.error }
+  const approach = await approachBlock(ctx.port, target, {
+    range: 2,
+    timeoutMs: 12_000,
+    code: 'DIG_APPROACH_FAILED',
+  })
+  if (!approach.ok) {
+    return {
+      state: 'failed',
+      code: approach.code,
+      ...(approach.observed === undefined ? {} : { observed: approach.observed }),
+    }
+  }
   if (choice.item !== undefined) {
     const equipped = await ctx.port.equip(choice.item)
     if (equipped.state !== 'ok') {
@@ -99,9 +112,6 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     inventoryBefore: beforeCount,
     inventoryAfter: afterCount,
     dropDelta: afterCount - beforeCount,
-  }
-  if (purpose === 'harvest' && afterCount <= beforeCount) {
-    return { state: 'failed', code: 'HARVEST_NO_DROP', observed }
   }
   return { state: 'succeeded', observed }
 }

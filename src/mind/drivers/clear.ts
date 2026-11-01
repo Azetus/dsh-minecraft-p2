@@ -1,4 +1,5 @@
 import type { BlockInfo, ClientPort } from '../../port/index.ts'
+import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
@@ -56,6 +57,18 @@ async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverR
 
   const choice = chooseTool(before, port.inventory(), 'clear')
   if (choice.error !== undefined) return { state: 'failed', code: choice.error }
+  const approach = await approachBlock(port, target, {
+    range: 2,
+    timeoutMs: 12_000,
+    code: 'CLEAR_APPROACH_FAILED',
+  })
+  if (!approach.ok) {
+    return {
+      state: 'failed',
+      code: approach.code,
+      ...(approach.observed === undefined ? {} : { observed: approach.observed }),
+    }
+  }
   if (choice.item !== undefined) {
     const equipped = await port.equip(choice.item)
     if (equipped.state !== 'ok') return { state: 'failed', code: equipped.code ?? 'EQUIP_FAILED' }

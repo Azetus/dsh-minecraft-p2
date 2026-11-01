@@ -47,7 +47,8 @@ p2_body    {action: start|stop|restart|status}
 |---|---|
 | `NO_MATERIAL` | 补材料 order，或调整 `materialPolicy`（仅声明过的材料可自动补给） |
 | `TOOL_INSUFFICIENT` | 先装备/合成合适工具；或确认是否应该用 `purpose:"clear"` |
-| `HARVEST_NO_DROP` | 检查工具类型/等级与背包空间；不要用同一条命令重复挖 |
+| `GO_NO_STAND` | 目标附近没有可站立格；换一个坐标或高度，不要重复同一条 go |
+| `APPROACH_NO_STAND` | 目标方块周围没有可站立格；换目标面或先接近/清理 |
 | `SITE_NOT_FOUND` | 换区域（`within` 换 anchor/半径）或换模板变体（flat/slope/dig-in） |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位；换模板或换点，不要重复同一条 order |
 | `UNREACHABLE` | 检查 anchor 与路径；必要时先 `go` 到开阔处 |

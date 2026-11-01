@@ -1,7 +1,9 @@
 import type { BlockInfo, EntityInfo, Vec3 } from '../../port/index.ts'
-import { standingAt } from '../../port/terrain.ts'
 import { boxAround } from '../sensors.ts'
+import { isStandable } from '../standing.ts'
 import type { Candidate, WorldView } from '../types.ts'
+
+export { isStandable } from '../standing.ts'
 
 /** Lower-level entity names the escape giver treats as immediate danger. */
 export const HOSTILE_NAMES: ReadonlySet<string> = new Set([
@@ -41,10 +43,6 @@ export function isFluidName(name: string): boolean {
 
 export function isSolid(block: BlockInfo | null): boolean {
   return block !== null && block.loaded && !isAirName(block.name) && !isFluidName(block.name)
-}
-
-export function isStandable(world: WorldView, p: Vec3): boolean {
-  return standingAt(point => world.blockAt(point), p).state === 'valid'
 }
 
 export function hostilesNear(world: WorldView, center: Vec3, radius: number): EntityInfo[] {

@@ -12,7 +12,11 @@ import type { ClientPort } from '../src/port/index.ts'
  */
 
 function fakePort(result: unknown): ClientPort {
-  return { containerAt: async () => result } as unknown as ClientPort
+  return {
+    self: () => ({ pos: { x: 1.5, y: 64, z: 1.5 } }),
+    moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
+    containerAt: async () => result,
+  } as unknown as ClientPort
 }
 
 async function runCheck(result: unknown) {

@@ -1,15 +1,16 @@
+import { isRecord } from '../../contracts/protocol.ts'
 import { HAZARD_KINDS } from '../../port/terrain.ts'
-import type { ActResult, MoveOptions } from '../../port/index.ts'
+import type { ActResult, MoveOptions, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
   Driver,
   DriverCtx,
-  DriverHandle,
   DriverResult,
   DriverValidation,
   Job,
   WorldView,
 } from '../types.ts'
+import { AsyncDriverHandle } from './handle.ts'
 
 export const MOVE_DRIVER_ID = 'move'
 
@@ -54,18 +55,23 @@ type MoveParams = {
   hazards?: MoveOptions['hazards']
 }
 
+/** One port call may not exceed the provider's 30s action cap. */
+const SEGMENT_MS = 30_000
+const MAX_SEGMENTS = 64
+
 /**
- * The M1 movement driver: one bounded `ClientPort.moveTo` per job. It never
- * chooses the target; the giver already did.
+ * Movement driver with bounded streaming segments. A long path is advanced to
+ * the reachable prefix reported by the provider, then re-planned from there.
+ * The driver still owns one already-selected goal; it never picks a new one.
  */
 export function createMoveDriver(): Driver {
   return {
     id: MOVE_DRIVER_ID,
     schema: MOVE_SCHEMA,
     defaults: {
-      // 400 game ticks / 30 wall seconds is enough for a local walk and short
-      // enough that a stuck path does not hold the tracker.
-      budget: { maxTicks: 400, maxWallMs: 30_000 },
+      // A 165-block walk can exceed one 30s action; the progress watchdog and
+      // per-segment search still bound a stuck path.
+      budget: { maxTicks: 3_000, maxWallMs: 150_000 },
       interrupt: 'constant-only',
       suspendable: true,
     },
@@ -76,92 +82,121 @@ export function createMoveDriver(): Driver {
       }
       return { ok: true }
     },
-    start(job: Job, ctx: DriverCtx): DriverHandle {
+    start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as MoveParams
-      const range = params.range ?? 1
-      const timeoutMs = params.timeoutMs ?? job.budget.maxWallMs
-      const keys = `move:${params.x},${params.y},${params.z},${range}`
-      const promise = ctx.port.moveTo(
-        { x: params.x, y: params.y, z: params.z },
-        { range, timeoutMs,
-          ...(params.exact === undefined ? {} : { exact: params.exact }),
-          ...(params.approach === undefined ? {} : { approach: params.approach }),
-          ...(params.unstickDig === undefined ? {} : { unstickDig: params.unstickDig }),
-          ...(params.intent === undefined ? {} : { intent: params.intent }),
-          ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
-        },
-      )
-      return new MoveHandle(keys, promise)
+      const keys = `move:${params.x},${params.y},${params.z},${params.range ?? 1}`
+      return new AsyncDriverHandle(keys, move(ctx, params, job))
     },
   }
 }
 
-class MoveHandle implements DriverHandle {
-  private resultValue: DriverResult = { state: 'running' }
-  private stopRequested = false
-  private settled = false
-  private releaseUnconfirmed = false
+async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<DriverResult> {
+  const finalGoal: Vec3 = { x: params.x, y: params.y, z: params.z }
+  const range = params.range ?? 1
+  const totalMs = params.timeoutMs ?? job.budget.maxWallMs
+  const startedAt = ctx.now()
+  let goal: Vec3 = finalGoal
+  let goalIsFinal = true
+  let last: ActResult | undefined
+  const visited = new Set<string>()
 
-  constructor(
-    private readonly keys: string,
-    promise: Promise<ActResult>,
-  ) {
-    void promise.then(
-      result => {
-        this.settled = true
-        this.releaseUnconfirmed = result.code === 'STOP_UNCONFIRMED'
-        this.resultValue = this.stopRequested
-          ? { state: 'interrupted' }
-          : toDriverResult(result)
-      },
-      error => {
-        this.settled = true
-        this.releaseUnconfirmed = true
-        this.resultValue = {
-          state: this.stopRequested ? 'interrupted' : 'failed',
-          code: errorCode(error),
-        }
-      },
-    )
+  for (let segment = 0; segment < MAX_SEGMENTS; segment += 1) {
+    if (goalIsFinal && typeof ctx.port.blockAt === 'function' && ctx.port.blockAt(goal) === null) {
+      const prefix = forwardPrefix(ctx.port.self().pos, finalGoal)
+      if (prefix !== undefined && !samePoint(prefix, goal)) {
+        goal = prefix
+        goalIsFinal = false
+      }
+    }
+    const remaining = totalMs - (ctx.now() - startedAt)
+    if (remaining <= 0) {
+      return {
+        state: 'failed',
+        code: 'GOTO_TIMEOUT',
+        ...(last?.observed === undefined ? {} : { observed: last.observed }),
+      }
+    }
+    const result = await ctx.port.moveTo(goal, {
+      range: goalIsFinal ? range : 1,
+      timeoutMs: Math.min(remaining, SEGMENT_MS),
+      ...(goalIsFinal && params.exact !== undefined ? { exact: params.exact } : {}),
+      ...(goalIsFinal && params.approach !== undefined ? { approach: params.approach } : {}),
+      ...(goalIsFinal && params.unstickDig !== undefined ? { unstickDig: params.unstickDig } : {}),
+      ...(params.intent === undefined ? {} : { intent: params.intent }),
+      ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
+    })
+    last = result
+    if (result.state === 'ok') {
+      if (goalIsFinal) {
+        return result.observed === undefined
+          ? { state: 'succeeded' }
+          : { state: 'succeeded', observed: result.observed }
+      }
+      // Reached the prefix; continue to the original goal.
+      goal = finalGoal
+      goalIsFinal = true
+      continue
+    }
+
+    const next = bestReachable(result.observed)
+    if (next === undefined || samePoint(next, goal)) {
+      return {
+        state: 'failed',
+        code: result.code ?? (result.state === 'unknown' ? 'CLIENT_TIMEOUT' : 'GOTO_NO_PATH'),
+        ...(result.observed === undefined ? {} : { observed: result.observed }),
+      }
+    }
+    const key = pointKey(next)
+    if (visited.has(key)) {
+      return {
+        state: 'failed',
+        code: result.code ?? 'GOTO_NO_PATH',
+        ...(result.observed === undefined ? {} : { observed: result.observed }),
+      }
+    }
+    visited.add(key)
+    goal = next
+    goalIsFinal = false
   }
 
-  tick(): void {
-    // Completion is delivered by the port promise; tick stays bounded.
-  }
-
-  requestStop(): void {
-    this.stopRequested = true
-  }
-
-  stopStatus(): 'stopping' | 'stopped' | 'unconfirmed' {
-    if (!this.stopRequested) return 'stopping'
-    if (this.releaseUnconfirmed) return 'unconfirmed'
-    return this.settled ? 'stopped' : 'stopping'
-  }
-
-  result(): DriverResult {
-    return this.resultValue
-  }
-
-  continuationKey(): string {
-    return this.keys
+  return {
+    state: 'failed',
+    code: 'GOTO_SEGMENTS_EXCEEDED',
+    ...(last?.observed === undefined ? {} : { observed: last.observed }),
   }
 }
 
-function toDriverResult(result: ActResult): DriverResult {
-  if (result.state === 'ok') {
-    return result.observed === undefined
-      ? { state: 'succeeded' }
-      : { state: 'succeeded', observed: result.observed }
-  }
-  if (result.state === 'unknown') {
-    // `unknown` is never success: the driver reports failure with the reason.
-    return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT', ...(result.observed === undefined ? {} : { observed: result.observed }) }
-  }
-  return { state: 'failed', code: result.code ?? 'ACT_FAILED', ...(result.observed === undefined ? {} : { observed: result.observed }) }
+function bestReachable(observed: unknown): Vec3 | undefined {
+  if (!isRecord(observed)) return undefined
+  const best = observed.bestReachable
+  if (!isRecord(best)) return undefined
+  const { x, y, z } = best
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return undefined
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined
+  return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
 }
 
-function errorCode(error: unknown): string {
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' ? code : 'DRIVER_FAULT'
+function samePoint(left: Vec3, right: Vec3): boolean {
+  return left.x === right.x && left.y === right.y && left.z === right.z
+}
+
+/** An unloaded final target is advanced by a near, same-level prefix. */
+function forwardPrefix(self: Vec3, target: Vec3, step = 16): Vec3 | undefined {
+  const dx = target.x - self.x
+  const dz = target.z - self.z
+  const distance = Math.hypot(dx, dz)
+  if (distance <= 1) return undefined
+  const advance = Math.min(step, distance - 1)
+  const point = {
+    x: Math.floor(self.x + dx / distance * advance),
+    y: Math.floor(self.y),
+    z: Math.floor(self.z + dz / distance * advance),
+  }
+  return samePoint(point, { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) })
+    ? undefined
+    : point
+}
+
+function pointKey(point: Vec3): string {
+  return `${point.x},${point.y},${point.z}`
 }

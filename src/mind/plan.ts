@@ -3,6 +3,7 @@ import type { P2Error } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BlockInfo, Item, Vec3 } from '../port/index.ts'
 import type { ConflictPolicy } from './policy.ts'
+import { isStandable } from './standing.ts'
 import type { WorldView } from './types.ts'
 
 export const WORK_ITEM_KINDS = ['clear', 'prepare', 'place', 'enter', 'hold'] as const
@@ -249,15 +250,6 @@ export function countItem(inventory: Item[], name: string): number {
   return inventory
     .filter(item => normalizeName(item.name) === normalized)
     .reduce((total, item) => total + item.count, 0)
-}
-
-function isStandable(world: WorldView, position: Vec3): boolean {
-  const at = world.blockAt(position)
-  const head = world.blockAt({ x: position.x, y: position.y + 1, z: position.z })
-  const below = world.blockAt({ x: position.x, y: position.y - 1, z: position.z })
-  return at !== null && at.loaded && isAirName(at.name)
-    && head !== null && head.loaded && isAirName(head.name)
-    && isSolidBlock(below)
 }
 
 function hasSupport(world: WorldView, position: Vec3): boolean {

@@ -113,7 +113,7 @@ describe('mind integration', () => {
     expect(mind.status().job?.driverId).toBe('move')
 
     pending[0]?.({ state: 'ok', elapsedMs: 1 })
-    await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
     mind.tick()
     expect(mind.status().tracker).toBe('idle')
     expect(mind.status().job).toBeNull()

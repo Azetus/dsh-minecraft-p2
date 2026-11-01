@@ -84,7 +84,7 @@
    - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
    - `equip / traverse / check` 是一次性，首次失败即终态；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
-   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / HARVEST_NO_DROP` 也不重试（重试同一目标不会改变结果）；
+   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND` 也不重试（重试同一目标不会改变结果）；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
    - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
 

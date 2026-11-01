@@ -1,4 +1,6 @@
 import type { SchemaNode } from '../schema.ts'
+import { approachBlock } from '../approach.ts'
+import type { ClientPort, Vec3 } from '../../port/index.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
 
@@ -22,7 +24,7 @@ export function createCraftDriver(): Driver {
     id: CRAFT_DRIVER_ID,
     schema: CRAFT_SCHEMA,
     defaults: {
-      budget: { maxTicks: 600, maxWallMs: 30_000 },
+      budget: { maxTicks: 600, maxWallMs: 45_000 },
       interrupt: 'constant-only',
       suspendable: false,
     },
@@ -44,14 +46,42 @@ export function createCraftDriver(): Driver {
 async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult> {
   const count = params.count ?? 1
   const before = countItem(ctx.port.inventory(), params.item)
-  const result = await ctx.port.craft(params.item, count)
-  if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'CRAFT_FAILED' }
+  let result = await ctx.port.craft(params.item, count)
+  if (result.state === 'failed' && result.code === 'CRAFT_NO_TABLE') {
+    const table = findCraftingTable(ctx.port)
+    if (table === undefined) return { state: 'failed', code: 'CRAFT_NO_TABLE' }
+    const approach = await approachBlock(ctx.port, table, {
+      range: 2,
+      timeoutMs: 12_000,
+      code: 'CRAFT_APPROACH_FAILED',
+    })
+    if (!approach.ok) {
+      return {
+        state: 'failed',
+        code: approach.code,
+        ...(approach.observed === undefined ? {} : { observed: approach.observed }),
+      }
+    }
+    result = await ctx.port.craft(params.item, count)
+  }
+  if (result.state === 'failed') return { state: 'failed', code: result.code ?? 'CRAFT_FAILED' }
+  if (result.state === 'unknown') return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
   const after = countItem(ctx.port.inventory(), params.item)
   if (after < before + count) return { state: 'failed', code: 'CRAFT_READBACK_MISMATCH' }
   return {
     state: 'succeeded',
     observed: { kind: 'craft', item: params.item, count, before, after },
   }
+}
+
+function findCraftingTable(port: ClientPort): Vec3 | undefined {
+  const self = port.self().pos
+  const feet = { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) }
+  const blocks = port.blocksIn({
+    min: { x: feet.x - 16, y: feet.y - 8, z: feet.z - 16 },
+    max: { x: feet.x + 16, y: feet.y + 8, z: feet.z + 16 },
+  }, ['crafting_table'])
+  return blocks.find(block => block.pos !== undefined)?.pos
 }
 
 function countItem(inventory: Array<{ name: string; count: number }>, name: string): number {

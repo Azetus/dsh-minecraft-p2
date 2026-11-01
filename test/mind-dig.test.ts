@@ -38,6 +38,7 @@ function portWith(options: {
   const equips: string[] = []
   let digs = 0
   const port = {
+    self: () => ({ pos: { x: 1.5, y: 64, z: 0.5 } }),
     blockAt: (p: Vec3): BlockInfo | null => {
       const block = blocks.get(key(p))
       if (block !== undefined) return { ...block, pos: p }
@@ -116,11 +117,14 @@ describe('dig driver tool handling', () => {
     expect(fake.digs()).toBe(0)
   })
 
-  it('reports harvest without a drop', async () => {
+  it('reports a zero drop delta as evidence, not a failed dig', async () => {
     const fake = portWith({ inventory: [{ slot: 36, name: 'stone_pickaxe', count: 1 }] })
     const result = await run(fake.port, 'harvest')
 
-    expect(result).toMatchObject({ state: 'failed', code: 'HARVEST_NO_DROP' })
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'dig', purpose: 'harvest', dropDelta: 0 },
+    })
     expect(fake.digs()).toBe(1)
   })
 })

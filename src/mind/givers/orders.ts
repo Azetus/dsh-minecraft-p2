@@ -1,5 +1,7 @@
 import type { JsonValue } from '../../contracts/types.ts'
 import type { Candidate, EvalCtx, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
+import { nearestStandable } from './common.ts'
+import { standability } from '../standing.ts'
 
 type OrderView = {
   order: { id: string; verb: string; params?: Record<string, JsonValue>; policy?: JsonValue }
@@ -26,16 +28,22 @@ function policyHazards(policy: JsonValue | undefined): JsonValue | undefined {
 export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiver {
   return {
     id: 'order.go',
-    find(_ctx: EvalCtx, _world: WorldView): Candidate | null {
+    find(_ctx: EvalCtx, world: WorldView): WorkGiverResult {
       const current = activeOrder(active, 'go')
       if (current === undefined) return null
-      const pos = positionOf(current.order.params)
-      if (pos === undefined) return null
+      const requested = positionOf(current.order.params)
+      if (requested === undefined) return null
+      const exact = current.order.params?.exact === true
+      const checked = standability(world, requested)
+      const pos = exact || checked.state === 'valid' || checked.state === 'unknown'
+        ? requested
+        : nearestStandable(world, requested, 2, requested, 2)
+      if (pos === undefined) return { kind: 'hold', reason: 'GO_NO_STAND', notify: true }
       const hazards = policyHazards(current.order.policy)
       return {
         driverId: 'move',
         target: { kind: 'point', pos },
-        params: { x: pos.x, y: pos.y, z: pos.z, range: 1, timeoutMs: 30_000,
+        params: { x: pos.x, y: pos.y, z: pos.z, range: 1, timeoutMs: 120_000,
           approach: true,
           ...(current.order.params?.exact === undefined ? {} : { exact: current.order.params.exact }),
           ...(current.order.params?.unstickDig === undefined ? {} : { unstickDig: current.order.params.unstickDig }),

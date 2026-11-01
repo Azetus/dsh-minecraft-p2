@@ -46,6 +46,7 @@ function portWith(promise: Promise<ActResult>): {
 }
 
 const world = {} as WorldView
+const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('move driver', () => {
   it('executes one moveTo for the selected point', async () => {
@@ -59,7 +60,7 @@ describe('move driver', () => {
     expect(handle.continuationKey()).toBe('move:1,64,0,2')
 
     pending.resolve({ state: 'ok', observed: { x: 1, y: 64, z: 0 }, elapsedMs: 10 })
-    await Promise.resolve()
+    await flush()
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { x: 1, y: 64, z: 0 } })
     expect(handle.stopStatus()).toBe('stopping')
   })
@@ -69,7 +70,7 @@ describe('move driver', () => {
     const { port } = portWith(pending.promise)
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
     pending.resolve({ state: 'unknown', code: 'CLIENT_TIMEOUT', elapsedMs: 10 })
-    await Promise.resolve()
+    await flush()
     expect(handle.result()).toEqual({ state: 'failed', code: 'CLIENT_TIMEOUT' })
   })
 
@@ -78,7 +79,7 @@ describe('move driver', () => {
     const { port } = portWith(pending.promise)
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
     pending.resolve({ state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 10, observed: { pathStatus: 'noPath' } })
-    await Promise.resolve()
+    await flush()
     expect(handle.result()).toEqual({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
   })
 
@@ -88,7 +89,7 @@ describe('move driver', () => {
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
     handle.requestStop()
     pending.resolve({ state: 'unknown', code: 'STOP_UNCONFIRMED', elapsedMs: 10 })
-    await Promise.resolve()
+    await flush()
     expect(handle.stopStatus()).toBe('unconfirmed')
     const compound = new AsyncDriverHandle('compound', Promise.resolve({ state: 'failed', code: 'STOP_UNCONFIRMED' }))
     compound.requestStop()
@@ -103,7 +104,7 @@ describe('move driver', () => {
     handle.requestStop()
     expect(handle.stopStatus()).toBe('stopping')
     pending.resolve({ state: 'ok', elapsedMs: 10 })
-    await Promise.resolve()
+    await flush()
     expect(handle.result()).toEqual({ state: 'interrupted' })
     expect(handle.stopStatus()).toBe('stopped')
   })
