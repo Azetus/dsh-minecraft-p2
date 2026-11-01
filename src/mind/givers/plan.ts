@@ -100,7 +100,6 @@ export function createPlanGiver(): WorkGiver {
             y: plan.entranceInside.y,
             z: plan.entranceInside.z,
             range: 0,
-            intent: 'interact',
             timeoutMs: 8_000,
           },
           reason: 'enter build interior',
