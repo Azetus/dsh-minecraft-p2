@@ -51,6 +51,9 @@ p2_body    {action: start|stop|restart|status}
 | `APPROACH_NO_STAND` | 目标方块周围没有可站立格；换目标面或先接近/清理 |
 | `PICKUP_UNREACHABLE` | 掉落物不可达；换落点/先整理地形，或明确接受损失 |
 | `PICKUP_NOT_COLLECTED` | 已到掉落物旁仍未拾取；检查背包空间，不要重复同一条 dig |
+| `ATTACK_TARGET_LOST` | 目标离开 32 格/消失；重新获取 entityId 再下令 |
+| `ATTACK_TARGET_PROTECTED` | 玩家/中立目标未授权；换目标，玩家永不攻击 |
+| `ATTACK_NOT_KILLED` | 40s/24 次内未击杀；检查武器与目标，重新下令 |
 | `SITE_NOT_FOUND` | 换区域（`within` 换 anchor/半径）或换模板变体（flat/slope/dig-in） |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位；换模板或换点，不要重复同一条 order |
 | `UNREACHABLE` | 检查 anchor 与路径；必要时先 `go` 到开阔处 |

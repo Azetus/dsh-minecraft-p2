@@ -51,6 +51,9 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(APPROACH_NO_STAND)` | 目标方块周围没有可站立格；换目标面或先清理/接近 |
 | `failed(PICKUP_UNREACHABLE)` | 掉落物不可达；换落点、先整理地形，或接受掉落损失 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
+| `failed(ATTACK_TARGET_LOST)` | 目标已离开 32 格/消失；重新获取 entityId 并确认，不要盲目追击 |
+| `failed(ATTACK_TARGET_PROTECTED)` | 玩家/中立目标未授权；换目标或显式 `allowPassive`（玩家永不允许） |
+| `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |

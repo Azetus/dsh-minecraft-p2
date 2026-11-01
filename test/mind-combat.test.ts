@@ -69,32 +69,82 @@ describe('combat ROE', () => {
     expect(playerGiver.find({ now: 0 }, world([player]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' })
   })
 
-  it('executes one attack and reports success', async () => {
-    const port = { self: () => world([]).self, entities: () => [entity({ id: 'z1', name: 'zombie' })],
-      attack: async () => ({ state: 'ok' as const, elapsedMs: 1 }) } as unknown as ClientPort
+  it('attacks until the locked target is gone', async () => {
+    let alive = true
+    let attacks = 0
+    const port = {
+      self: () => world([]).self,
+      entities: () => (alive ? [entity({ id: 'z1', name: 'zombie' })] : []),
+      attack: async () => { attacks++; alive = false; return { state: 'ok' as const, elapsedMs: 1 } },
+    } as unknown as ClientPort
     const driver = createAttackDriver()
     const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
     const handle = driver.start(job, { port, now: () => 1 })
-    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) {
-      await new Promise(resolve => setTimeout(resolve, 2))
+    for (let index = 0; index < 200 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
     }
-    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { kind: 'attack', entityId: 'z1' } })
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'attack', entityId: 'z1', attacks: 1, killed: true },
+    })
+    expect(attacks).toBe(1)
   })
 
-  it('uses bounded attack reach and rechecks a moving target before attacking', async () => {
-    let attacks = 0
+  it('rechecks a moving target and attacks after one bounded chase', async () => {
+    let self = { x: 0.5, y: 64, z: 0.5 }
+    let alive = true
     const moves: unknown[] = []
+    let attacks = 0
     const port = {
-      self: () => world([]).self,
-      entities: () => [entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 } })],
-      moveTo: async (_target: unknown, opts: unknown) => { moves.push(opts); return { state: 'ok', elapsedMs: 1 } },
-      attack: async () => { attacks++; return { state: 'ok', elapsedMs: 1 } },
+      self: () => ({ ...world([]).self, pos: self }),
+      entities: () => (alive
+        ? [entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 } })]
+        : []),
+      moveTo: async (_target: unknown, opts: unknown) => {
+        moves.push(opts)
+        self = { x: 4.5, y: 64, z: 0.5 }
+        return { state: 'ok' as const, elapsedMs: 1 }
+      },
+      attack: async () => { attacks++; alive = false; return { state: 'ok' as const, elapsedMs: 1 } },
     } as unknown as ClientPort
     const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
     const handle = createAttackDriver().start(job, { port, now: () => 1 })
-    for (let i = 0; i < 5; i++) await Promise.resolve()
-    expect(moves).toEqual([{ range: 2.5, intent: 'attack', timeoutMs: 15_000 }])
-    expect(attacks).toBe(0)
-    expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_MOVED' })
+    for (let index = 0; index < 200 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(moves).toEqual([{ range: 2.5, intent: 'attack', timeoutMs: 5_000 }])
+    expect(attacks).toBe(1)
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { attacks: 1, killed: true } })
+  })
+
+  it('stops after a bounded chase when the target cannot be reached', async () => {
+    const port = {
+      self: () => world([]).self,
+      entities: () => [entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 } })],
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      attack: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
+    const handle = createAttackDriver().start(job, { port, now: () => 1 })
+    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT' })
+  })
+
+  it('reports a target lost during the chase', async () => {
+    let alive = true
+    const port = {
+      self: () => world([]).self,
+      entities: () => (alive ? [entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 } })] : []),
+      moveTo: async () => { alive = false; return { state: 'ok' as const, elapsedMs: 1 } },
+      attack: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    const job = { driverId: 'attack', params: { entityId: 'z1', targetName: 'zombie' } } as unknown as Job
+    const handle = createAttackDriver().start(job, { port, now: () => 1 })
+    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_LOST' })
   })
 })

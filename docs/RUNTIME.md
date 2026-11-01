@@ -85,6 +85,7 @@
    - `equip / traverse / check` 是一次性，首次失败即终态；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
    - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED` 也不重试（重试同一目标不会改变结果）；
+   - `ATTACK_TARGET_LOST / ATTACK_TARGET_PROTECTED / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
    - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
 
@@ -243,7 +244,7 @@ order 可带 `policy.conflict`：
   - `dig`：破坏指定方块；
   - `equip`：切换手持物品/工具；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
-  - `attack`：攻击 Agent 明确指定的 entityId，单次；
+  - `attack`：攻击 Agent 明确指定的 entityId，锁定目标做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
   - `check`：打开容器/熔炉做三态观测；
   - `container`：容器存取，`withdraw/deposit/load-input/load-fuel/take-*`；
   - `craft`：按配方合成；
