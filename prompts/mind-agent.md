@@ -33,8 +33,9 @@ p2_body    {action: start|stop|restart|status}
 ## 巡检纪律
 
 - **不轮询**。正常执行期间不要看状态；只在被唤醒时行动。
-- 唤醒来源：`[p2 completion]`（order 终态、plan.blocked、job.terminal failed/blocked）、
+- 唤醒来源：`[p2 completion]`（order 终态、plan.blocked、job.terminal blocked / 终态）、
   `[p2 perception]`（critical 立即 / 其余 digest）、`[p2 chat]`、tracker fault。
+- 原始 order 在 P2 内自动重试；中间失败不会唤醒你。只有 blocked/终态才需要决策，不要因一次失败重下同一 order。
 - completion wake 每条都带 `orderId / state / observed / reason`（如适用）；
   要看完整记录再用 `p2_report`，不需要 `p2_events`。
 - 怀疑卡死时，间隔 ≥60s 看一次 `p2_status`，不要连续看。

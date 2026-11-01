@@ -170,7 +170,7 @@ interface JobTracker {
 1. 续做：`candidate.keys === current.continuationKey()` → 只续期。
 2. 切换：`seq++`（旧令牌失效）→ `requestStop()` → 等 `stopped` → 起新 job。
 3. 迟到：`runId` 不匹配的结果只记 `stale-result`。
-4. 失败：按 `(orderId|workItemId|driverId)` 计数；超限上报 `blocked`。
+4. 失败：按 `(orderId|workItemId|driverId)` 计数；超限上报 `blocked`。原始 order 的 retry/one-shot 见 RUNTIME §5；中间 retry 的 `job.terminal` 带 `retry: true`，不产生 completion wake。
 
 ## 7. 树与谓词注册表
 

@@ -54,6 +54,7 @@ import type { WorldView } from '../mind/types.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
+import type { TrackerEvent } from '../mind/tracker.ts'
 import { evaluateTree, loadTrees } from '../mind/tree.ts'
 import { TREE_DEFINITIONS } from '../mind/trees.ts'
 import { contentVersion } from '../mind/content-version.ts'
@@ -202,7 +203,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
     },
     onEvent: event => {
-      const data = event as unknown as JsonValue
+      const active = orders.active()
+      const retry = shouldRetryOrderJob(event, active?.order.verb)
+      const data = (retry ? { ...event, retry: true } : event) as unknown as JsonValue
       events.push(event.kind, event.at, data)
       if (event.kind === 'job.terminal' && isRecord(event)
         && typeof event.runId === 'string') {
@@ -213,7 +216,6 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         )
       }
       if (event.kind === 'job.terminal' && event.driverId === 'check') {
-        const active = orders.active()
         const observed = event.observed
         if (active !== undefined && active.order.verb === 'check') {
           const ok = isRecord(observed) && observed.state === 'ok'
@@ -224,21 +226,24 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           })
         }
       }
-      if (event.kind === 'job.terminal') {
-        const active = orders.active()
-        if (active !== undefined
-          && (active.order.verb === 'go' || active.order.verb === 'attack'
-            || active.order.verb === 'dig' || active.order.verb === 'traverse'
-            || active.order.verb === 'place' || active.order.verb === 'equip'
-            || active.order.verb === 'use' || active.order.verb === 'craft'
-            || active.order.verb === 'container')) {
-          orders.complete(active.order.id, event.state === 'succeeded' ? 'succeeded' : 'failed')
-          events.push('order.result', now(), {
-            orderId: active.order.id,
-            state: event.state,
-            ...(event.code === undefined ? {} : { code: event.code }),
-            ...(event.observed === undefined ? {} : { observed: event.observed }),
-          })
+      if (event.kind === 'job.terminal' && event.state !== 'interrupted') {
+        if (active !== undefined && PRIMITIVE_ORDER_VERBS.has(active.order.verb)) {
+          if (retry) {
+            // The order stays active; the same giver is offered again on the
+            // next tick. Intermediate failures do not wake the Agent.
+            loopRef?.invalidate()
+          } else {
+            const terminal = event.state === 'succeeded'
+              ? 'succeeded'
+              : event.blocked === true ? 'blocked' : 'failed'
+            orders.complete(active.order.id, terminal)
+            events.push('order.result', now(), {
+              orderId: active.order.id,
+              state: terminal,
+              ...(event.code === undefined ? {} : { code: event.code }),
+              ...(event.observed === undefined ? {} : { observed: event.observed }),
+            })
+          }
         }
       }
       if (event.kind === 'job.preempted' && isRecord(event) && typeof event.runId === 'string') {
@@ -714,6 +719,27 @@ export function createMind(options: CreateMindOptions): MindRuntime {
 
 function viewOf(record: { order: { id: string; verb: string }; state: string }): MindOrderView {
   return { id: record.order.id, verb: record.order.verb, state: record.state }
+}
+
+const PRIMITIVE_ORDER_VERBS = new Set([
+  'go', 'attack', 'dig', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
+])
+
+/** Verbs that may be retried inside the same order before it becomes blocked. */
+const RETRYABLE_ORDER_VERBS = new Set([
+  'go', 'attack', 'dig', 'place', 'use', 'craft', 'container',
+])
+
+/** Failures that retrying the same target cannot fix. */
+const NON_RETRYABLE_CODES = new Set([
+  'BUDGET_EXCEEDED', 'BAD_ARGS', 'STALE_WRITE', 'CAPABILITY_MISSING', 'DEFINITION_ERROR',
+])
+
+function shouldRetryOrderJob(event: TrackerEvent, verb: string | undefined): boolean {
+  if (event.kind !== 'job.terminal') return false
+  if (event.state !== 'failed' || event.blocked === true) return false
+  if (verb === undefined || !RETRYABLE_ORDER_VERBS.has(verb)) return false
+  return !(event.code !== undefined && NON_RETRYABLE_CODES.has(event.code))
 }
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {

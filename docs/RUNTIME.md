@@ -80,6 +80,12 @@
    - ≤2 次：同一工作项换站位/换面/换材料重试；
    - 3 次：标记该工作项 `blocked`，WorkGiver 换下一个可执行项；
    - 全部 `blocked`：order `blocked`，唤醒 agent 并附 digest。
+5. 原始 order 的 retry 策略：
+   - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
+   - `equip / traverse / check` 是一次性，首次失败即终态；
+   - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
+   - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
+   - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
 
 ## 6. 恢复
 

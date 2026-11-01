@@ -41,6 +41,22 @@ function event(seq: number, kind: string, data: JsonValue): MindEvent {
 
 function createCompletionFeedTest(): void {
   describe('completion feed', () => {
+    it('ignores an intermediate retry job terminal', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const items = feed.accept([
+        event(1, 'job.terminal', {
+          kind: 'job.terminal',
+          driverId: 'move',
+          state: 'failed',
+          code: 'NO_PATH',
+          blocked: false,
+          retry: true,
+        }),
+      ])
+      expect(items).toHaveLength(0)
+    })
+
     it('wakes on a critical hold but not on a deliberate silent hold', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')

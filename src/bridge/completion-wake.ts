@@ -81,6 +81,9 @@ export class CompletionFeed {
           break
         }
         case 'job.terminal': {
+          // An intermediate retry is visible in p2_events but is not a wake;
+          // only the terminal attempt or the order-blocked result wakes.
+          if (data.retry === true) break
           const state = text(data.state)
           const blocked = data.blocked === true
           // A check job reports execution success and carries the three-state
