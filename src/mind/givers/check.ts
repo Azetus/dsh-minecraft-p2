@@ -31,6 +31,7 @@ export function createCheckGiver(active: () => CheckOrderView | undefined): Work
         target: { kind: 'point', pos },
         params: { x: pos.x, y: pos.y, z: pos.z, orderId: order.order.id },
         keys: `check:${order.order.id}`,
+        orderId: order.order.id,
       }
     },
   }

@@ -22,6 +22,8 @@ export type Candidate = {
   params: Record<string, JsonValue>
   /** Continuation key: the same key means "continue", not "restart". */
   keys: string
+  /** Owning order, when the candidate serves a task; absent for reflexes. */
+  orderId?: string
 }
 
 /** Prerequisite work a giver asks for; the caller re-runs `find` afterwards. */
@@ -30,6 +32,7 @@ export type Handoff = {
   target: Target
   params: Record<string, JsonValue>
   reason: string
+  orderId?: string
 }
 
 /**

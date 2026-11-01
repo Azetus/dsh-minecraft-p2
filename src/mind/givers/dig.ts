@@ -26,6 +26,7 @@ export function createDigOrderGiver(active: () => OrderView | undefined): WorkGi
         target: { kind: 'point', pos },
         params: pos,
         keys: `order.dig:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }

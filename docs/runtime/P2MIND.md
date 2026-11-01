@@ -171,8 +171,8 @@ interface WorkGiver {
   score?(ctx: EvalCtx, world: WorldView): number
   find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | Hold | null
 }
-type Candidate = { driverId: string; target: Target; params: object; keys: string }
-type Handoff   = { driverId: string; target: Target; params: object; reason: string }
+type Candidate = { driverId: string; target: Target; params: object; keys: string; orderId?: string }
+type Handoff   = { driverId: string; target: Target; params: object; reason: string; orderId?: string }
 type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 ```
 

@@ -41,6 +41,28 @@ function event(seq: number, kind: string, data: JsonValue): MindEvent {
 
 function createCompletionFeedTest(): void {
   describe('completion feed', () => {
+    it('uses the job orderId instead of the currently active order', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const items = feed.accept([
+        event(1, 'order.accepted', { kind: 'order.accepted', orderId: 'ord-A' }),
+        event(2, 'job.terminal', {
+          kind: 'job.terminal',
+          orderId: 'ord-B',
+          driverId: 'move',
+          state: 'failed',
+          code: 'NO_PATH',
+          blocked: false,
+        }),
+        event(3, 'order.terminal', { kind: 'order.terminal', orderId: 'ord-B', state: 'failed' }),
+      ])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.payload).toMatchObject({
+        orderId: 'ord-B',
+        cause: { orderId: 'ord-B', reason: 'NO_PATH' },
+      })
+    })
+
     it('ignores an intermediate retry job terminal', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')

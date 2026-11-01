@@ -42,6 +42,7 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
           ...(hazards === undefined ? {} : { hazards }),
         },
         keys: `order.go:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }
@@ -85,6 +86,7 @@ export function createTraverseGiver(active: () => OrderView | undefined): WorkGi
           ...(maxBlocks === undefined ? {} : { maxBlocks }),
         },
         keys: `order.traverse:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }

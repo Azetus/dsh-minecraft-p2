@@ -18,9 +18,9 @@ export type TrackerFault = {
 }
 
 export type TrackerEvent =
-  | { kind: 'job.started'; at: number; runId: string; driverId: string; keys: string }
+  | { kind: 'job.started'; at: number; runId: string; driverId: string; keys: string; orderId?: string }
   | { kind: 'job.renewed'; at: number; runId: string; keys: string }
-  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed'] }
+  | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed']; orderId?: string }
   | { kind: 'job.preempted'; at: number; runId: string }
   | { kind: 'job.stale-result'; at: number; runId: string; state: DriverResult['state'] }
   | { kind: 'tracker.fault'; at: number; code: string }
@@ -255,6 +255,7 @@ export class JobTracker {
       driverId: candidate.driverId,
       target: candidate.target,
       params: candidate.params,
+      ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
       runId,
       issuedAt: now,
       budget: driver.defaults.budget,
@@ -300,7 +301,8 @@ export class JobTracker {
     }
     this.lastRenewedKeys = undefined
     this.stateValue = 'running'
-    this.emit({ kind: 'job.started', at: now, runId, driverId: job.driverId, keys: candidate.keys })
+    this.emit({ kind: 'job.started', at: now, runId, driverId: job.driverId, keys: candidate.keys,
+      ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }) })
   }
 
   private beginStop(now: number, final: DriverResult | undefined): void {
@@ -337,6 +339,7 @@ export class JobTracker {
       driverId: candidate.driverId,
       target: candidate.target,
       params: candidate.params,
+      ...(candidate.orderId === undefined ? {} : { orderId: candidate.orderId }),
       runId: `rejected-${this.rejectedSeq}`,
       issuedAt: now,
       budget: { maxTicks: 0, maxWallMs: 0 },
@@ -359,6 +362,7 @@ export class JobTracker {
       state: result.state,
       ...(result.code === undefined ? {} : { code: result.code }),
       ...(result.observed === undefined ? {} : { observed: result.observed }),
+      ...(job.orderId === undefined ? {} : { orderId: job.orderId }),
       blocked,
     })
     if (blocked) this.blocked.add(keys)

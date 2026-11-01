@@ -35,6 +35,7 @@ export function createPlanGiver(): WorkGiver {
             target: { kind: 'point', pos: position },
             params: { x: position.x, y: position.y, z: position.z },
             reason: `clear conflict ${item.id}`,
+            orderId: plan.orderId,
           }
           const key = `handoff:clear:${position.x},${position.y},${position.z}`
           if (ctx.isBlocked?.(key) === true) continue
@@ -57,6 +58,7 @@ export function createPlanGiver(): WorkGiver {
           target: { kind: 'point', pos: stand },
           params: { x: stand.x, y: stand.y, z: stand.z, range: 0, exact: true, timeoutMs: 8_000 },
           reason: `step aside ${item.id}`,
+          orderId: plan.orderId,
         }
         const key = `handoff:move:${stand.x},${stand.y},${stand.z}`
         if (ctx.isBlocked?.(key) !== true) return handoff
@@ -82,6 +84,7 @@ export function createPlanGiver(): WorkGiver {
           target: { kind: 'point', pos: position },
           params: { x: position.x, y: position.y, z: position.z, range: 4, intent: 'interact', timeoutMs: 10_000 },
           reason: `approach ${unknown.id}`,
+          orderId: plan.orderId,
         }
         const key = `handoff:${handoff.driverId}:${position.x},${position.y},${position.z}`
         if (ctx.isBlocked?.(key) !== true) return handoff
@@ -100,6 +103,7 @@ export function createPlanGiver(): WorkGiver {
           target: { kind: 'point', pos: target },
           params: { x: target.x, y: target.y, z: target.z, range: 4, intent: 'interact', timeoutMs: 8_000 },
           reason: `reach ${item.id}`,
+          orderId: plan.orderId,
         }
         const handoffKey = `handoff:${handoff.driverId}:${target.x},${target.y},${target.z}`
         if (ctx.isBlocked?.(handoffKey) === true) continue
@@ -124,5 +128,6 @@ function candidateFor(plan: PlanInstance, item: WorkItem, driverId: string): Can
     target: { kind: 'point', pos: position },
     params,
     keys: `plan:${plan.planId}:${item.id}`,
+    orderId: plan.orderId,
   }
 }

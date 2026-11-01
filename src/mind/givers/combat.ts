@@ -46,6 +46,7 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
           ...(allowPassive ? { allowPassive: true } : {}),
         },
         keys: `order.attack:${current.order.id}:${entity.id}`,
+        orderId: current.order.id,
       }
     },
   }

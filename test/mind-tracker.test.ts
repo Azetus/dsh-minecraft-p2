@@ -238,6 +238,27 @@ describe('job tracker', () => {
     expect(events.at(-1)).toMatchObject({ kind: 'job.terminal', state: 'succeeded', blocked: false })
   })
 
+  it('carries the owning orderId from the candidate into job events', () => {
+    const { tracker, driver, events } = harness()
+    tracker.offer({ ...candidate(1), orderId: 'ord-1' })
+    tracker.tick()
+    const handle = driver.handles[0] as FakeHandle
+    handle.value = { state: 'succeeded' }
+    handle.stopState = 'stopped'
+    tracker.tick()
+
+    expect(driver.starts[0]?.orderId).toBe('ord-1')
+    expect(events.find(event => event.kind === 'job.started')).toMatchObject({
+      kind: 'job.started',
+      orderId: 'ord-1',
+    })
+    expect(events.at(-1)).toMatchObject({
+      kind: 'job.terminal',
+      orderId: 'ord-1',
+      state: 'succeeded',
+    })
+  })
+
   it('blocks a work key after three failures and ignores it afterwards', () => {
     const { tracker, driver } = harness()
     for (let attempt = 0; attempt < 3; attempt += 1) {

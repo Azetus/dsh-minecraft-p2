@@ -92,7 +92,8 @@ export class CompletionFeed {
           const observed = isRecord(data.observed) ? text(data.observed.state) : undefined
           const checkFailure = data.driverId === 'check' && observed !== undefined && observed !== 'ok'
           if (state !== 'failed' && !blocked && !checkFailure) break
-          pending.push({ item: jobFailureItem(data, this.activeOrderId, blocked), cause: true })
+          const orderId = text(data.orderId) ?? this.activeOrderId
+          pending.push({ item: jobFailureItem(data, orderId, blocked), cause: true })
           break
         }
         case 'plan.blocked': {

@@ -182,6 +182,7 @@ function handoffCandidate(handoff: Handoff): Candidate {
     target: handoff.target,
     params: handoff.params,
     keys: `handoff:${handoff.driverId}:${x},${y},${z}`,
+    ...(handoff.orderId === undefined ? {} : { orderId: handoff.orderId }),
   }
 }
 

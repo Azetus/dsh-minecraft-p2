@@ -185,13 +185,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     now,
     beforeStart: (candidate, job) => {
       if (candidate.driverId !== 'clear' && candidate.driverId !== 'place') return
-      const active = orders.active()
       const parsed = parseActionKeys(candidate.keys)
+      const orderId = candidate.orderId ?? orders.active()?.order.id
       orders.recordActionPending({
         runId: job.runId,
         driverId: candidate.driverId,
         keys: candidate.keys,
-        ...(active === undefined ? {} : { orderId: active.order.id }),
+        ...(orderId === undefined ? {} : { orderId }),
         ...(parsed === undefined ? {} : parsed),
       })
       if (crashOnce && !crashedOnce) {
@@ -203,8 +203,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
     },
     onEvent: event => {
-      const active = orders.active()
-      const retry = shouldRetryOrderJob(event, active?.order.verb)
+      const order = event.kind === 'job.terminal' && event.orderId !== undefined
+        ? orders.get(event.orderId)
+        : undefined
+      const retry = shouldRetryOrderJob(event, order?.order.verb)
       const data = (retry ? { ...event, retry: true } : event) as unknown as JsonValue
       events.push(event.kind, event.at, data)
       if (event.kind === 'job.terminal' && isRecord(event)
@@ -217,17 +219,17 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       if (event.kind === 'job.terminal' && event.driverId === 'check') {
         const observed = event.observed
-        if (active !== undefined && active.order.verb === 'check') {
+        if (order !== undefined && order.order.verb === 'check') {
           const ok = isRecord(observed) && observed.state === 'ok'
-          orders.complete(active.order.id, ok ? 'succeeded' : 'failed')
+          orders.complete(order.order.id, ok ? 'succeeded' : 'failed')
           events.push('check.result', now(), {
-            orderId: active.order.id,
+            orderId: order.order.id,
             observed: observed ?? null,
           })
         }
       }
       if (event.kind === 'job.terminal' && event.state !== 'interrupted') {
-        if (active !== undefined && PRIMITIVE_ORDER_VERBS.has(active.order.verb)) {
+        if (order !== undefined && PRIMITIVE_ORDER_VERBS.has(order.order.verb)) {
           if (retry) {
             // The order stays active; the same giver is offered again on the
             // next tick. Intermediate failures do not wake the Agent.
@@ -236,9 +238,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
             const terminal = event.state === 'succeeded'
               ? 'succeeded'
               : event.blocked === true ? 'blocked' : 'failed'
-            orders.complete(active.order.id, terminal)
+            orders.complete(order.order.id, terminal)
             events.push('order.result', now(), {
-              orderId: active.order.id,
+              orderId: order.order.id,
               state: terminal,
               ...(event.code === undefined ? {} : { code: event.code }),
               ...(event.observed === undefined ? {} : { observed: event.observed }),

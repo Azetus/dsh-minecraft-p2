@@ -42,6 +42,7 @@ export function createPlaceOrderGiver(activeOrder: () => OrderView | undefined):
           ...(params?.expectedState === undefined ? {} : { expectedState: params.expectedState }),
         },
         keys: `order.place:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }
@@ -61,6 +62,7 @@ export function createEquipOrderGiver(activeOrder: () => OrderView | undefined):
         target: { kind: 'point', pos: world.self.pos },
         params: { item },
         keys: `order.equip:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }
@@ -86,6 +88,7 @@ export function createUseOrderGiver(activeOrder: () => OrderView | undefined): W
           ...(params?.durationMs === undefined ? {} : { durationMs: params.durationMs }),
         },
         keys: `order.use:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }
@@ -106,6 +109,7 @@ export function createCraftOrderGiver(activeOrder: () => OrderView | undefined):
         target: { kind: 'point', pos: world.self.pos },
         params: { item, ...(count === undefined ? {} : { count }) },
         keys: `order.craft:${current.order.id}`,
+        orderId: current.order.id,
       }
     },
   }

@@ -54,6 +54,7 @@ export function createMaterialGiver(): WorkGiver {
             target: { kind: 'point', pos: best.pos },
             params: { x: best.pos.x, y: best.pos.y, z: best.pos.z, range: 4, intent: 'interact', timeoutMs: 8_000 },
             reason: `gather ${item}`,
+            orderId: plan.orderId,
           }
           const handoffKey = `handoff:move:${best.pos.x},${best.pos.y},${best.pos.z}`
           if (ctx.isBlocked?.(handoffKey) === true) continue
@@ -64,6 +65,7 @@ export function createMaterialGiver(): WorkGiver {
           target: { kind: 'point', pos: best.pos },
           params: { x: best.pos.x, y: best.pos.y, z: best.pos.z },
           keys: `gather:${item}:${best.pos.x},${best.pos.y},${best.pos.z}`,
+          orderId: plan.orderId,
         }
         if (ctx.isBlocked?.(candidate.keys) === true) continue
         return candidate
