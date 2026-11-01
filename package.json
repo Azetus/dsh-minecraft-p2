@@ -1,6 +1,6 @@
 {
   "name": "dsh-minecraft-p2",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Single-package DSH Minecraft P2 runtime: bridge, body, P2Mind and built-in provider.",
   "license": "MIT",
