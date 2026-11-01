@@ -107,6 +107,19 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type DutyStatusView = {
+  id: string
+  kind: string
+  item: string
+  quota: number
+  collected: number
+  jobs: number
+  state: 'active' | 'completed' | 'blocked' | 'stopped'
+  startedAt: number
+  deadline?: number
+  lastError?: string
+}
+
 export type MindMetricsView = {
   orders: { accepted: number; succeeded: number; failed: number; blocked: number; cancelled: number }
   jobs: { started: number; succeeded: number; failed: number; interrupted: number; retried: number; preempted: number }
@@ -127,6 +140,7 @@ export type MindStatusView = {
   queuedOrders: number
   eventsSeq: number
   plan?: { id: string; template: string; satisfied: boolean; blocked: boolean } | null
+  duty?: DutyStatusView | null
   metrics?: MindMetricsView
 }
 

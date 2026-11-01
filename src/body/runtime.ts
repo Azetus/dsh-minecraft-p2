@@ -163,6 +163,7 @@ export class BodyRuntime {
       case 'chat.say': return this.chatSay(params) as unknown as JsonValue
       case 'perception.poll': return this.perceptionPoll(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
+      case 'mind.duty': return this.mindDuty(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
       case 'mind.report': return this.mindReport() as unknown as JsonValue
@@ -253,6 +254,17 @@ export class BodyRuntime {
   private mindOrder(params: Record<string, JsonValue>): MindOrderResult {
     this.requireOwner()
     return this.requireMind().enqueueOrder(params)
+  }
+
+  private mindDuty(params: Record<string, JsonValue>): JsonValue {
+    this.requireOwner()
+    const mind = this.requireMind()
+    if (params.action === 'stop') return mind.stopDuty() as unknown as JsonValue
+    if (params.action === 'start') {
+      const input = isRecord(params.duty) ? params.duty : params
+      return mind.startDuty(input) as unknown as JsonValue
+    }
+    throw new Error('mind.duty action must be start or stop')
   }
 
   private worldObserve(params: Record<string, JsonValue>): WorldObserveResult {

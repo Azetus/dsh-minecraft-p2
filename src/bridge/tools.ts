@@ -179,6 +179,30 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
       },
     }),
     tools.register({
+      name: 'p2_duty',
+      description: 'Start or stop a standing duty. D1 supports {kind:"gather", item, quota, radius?, maxJobs?, maxWallMs?}. A duty only runs when no explicit order/plan is active; an explicit order preempts it. Read the duty state from p2_status.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['start', 'stop'] },
+          duty: {
+            type: 'object',
+            description: 'Required for start: {kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        if (args.action !== 'start' && args.action !== 'stop') throw new Error('p2_duty action must be start or stop')
+        if (args.action === 'stop') return await manager.mindDuty({ action: 'stop' })
+        if (args.duty === undefined) throw new Error('p2_duty start requires duty')
+        return await manager.mindDuty({ action: 'start', duty: args.duty as JsonValue })
+      },
+    }),
+    tools.register({
       name: 'p2_orders',
       description: 'Active and queued orders. Read-only.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },

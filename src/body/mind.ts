@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { MindStatusView } from '../contracts/protocol.ts'
+import type { DutyStatusView } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
@@ -24,6 +25,8 @@ import { MindMetrics } from '../mind/metrics.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
 import { AreaResourceIndex } from '../mind/area.ts'
+import { DutyController } from '../mind/duty.ts'
+import { createDutyGiver } from '../mind/givers/duty.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
@@ -75,6 +78,8 @@ export type MindRuntime = {
   report(): JsonValue | null
   enqueueOrder(input: unknown): { id: string; state: string }
   cancelOrder(id: string): { id: string; state: string }
+  startDuty(input: unknown): DutyStatusView
+  stopDuty(): DutyStatusView | null
   listOrders(): { active: MindOrderView | null; queued: MindOrderView[] }
   sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number }
   /** Expected block name at a watched plan position, if any. */
@@ -123,6 +128,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     chunkBudget: 2,
   })
   options.port.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
+  const duty = new DutyController()
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
@@ -136,6 +142,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.hold', factory: () => createHoldOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
+  registry.registerGiver({ id: 'duty.work', factory: () => createDutyGiver(duty, areaResources) })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver(areaResources) })
 
   const loaded = loadTrees(TREE_DEFINITIONS, registry)
@@ -195,6 +202,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     world: () => sensors.read(),
     now,
     beforeStart: (candidate, job) => {
+      if (candidate.keys.startsWith('duty:gather:')) duty.recordJobStart(now())
       if (candidate.driverId !== 'clear' && candidate.driverId !== 'place') return
       const parsed = parseActionKeys(candidate.keys)
       const orderId = candidate.orderId ?? orders.active()?.order.id
@@ -692,6 +700,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         queuedOrders: orders.queued().length,
         eventsSeq: events.lastSeq(),
         plan: planView,
+        duty: duty.view() ?? null,
         metrics: metrics.view(),
       }
     },
@@ -716,6 +725,20 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         planInsufficientReported = false
       }
       return { id: record.order.id, state: record.state }
+    },
+    startDuty(input: unknown): DutyStatusView {
+      const view = duty.start(input, now())
+      events.push('duty.started', now(), view as unknown as JsonValue)
+      loopRef?.invalidate()
+      return view
+    },
+    stopDuty(): DutyStatusView | null {
+      const view = duty.stop(now())
+      if (view !== undefined) {
+        events.push('duty.stopped', now(), view as unknown as JsonValue)
+        loopRef?.invalidate()
+      }
+      return view ?? null
     },
     listOrders(): { active: MindOrderView | null; queued: MindOrderView[] } {
       const active = orders.active()

@@ -113,6 +113,7 @@ describe('mind operator tools', () => {
       'p2_preview_blueprint',
       'p2_say',
       'p2_order',
+      'p2_duty',
       'p2_orders',
       'p2_cancel',
       'p2_report',

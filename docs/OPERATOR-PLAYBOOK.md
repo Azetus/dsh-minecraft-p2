@@ -20,6 +20,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ```
 
 - 有限词表：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
+- 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - 可带 `blueprint` 表达非标结构；可达性与冲突由 Planner 处理。

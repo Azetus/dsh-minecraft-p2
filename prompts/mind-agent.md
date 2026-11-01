@@ -28,6 +28,7 @@ p2_body    {action: start|stop|restart|status}
 - 词表受限：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - `dig` 默认 `purpose:"harvest"`；P2 会自己从背包选工具并装备。只想清掉方块、不要求产物时显式用 `purpose:"clear"`。
+- 常驻采集用 `p2_duty`（如 `{action:"start",duty:{kind:"gather",item:"dirt",quota:8}}`），不要用循环 order 代替。显式 order/plan 会暂停 duty；`p2_duty {action:"stop"}` 停止。
 - 目标必须可验证：终态由 Verifier 判定，你不需要在 order 里写验证步骤。
 - 可选 `blueprint`：只给蓝图/模板，选址与可达性由 Planner 处理。
 

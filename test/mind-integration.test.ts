@@ -185,6 +185,11 @@ describe('mind integration', () => {
         report: () => null,
         enqueueOrder: () => ({ id: 'ord-1', state: 'active' }),
         cancelOrder: id => ({ id, state: 'cancelled' }),
+        startDuty: () => ({
+          id: 'duty-1', kind: 'gather', item: 'dirt', quota: 1, collected: 0, jobs: 0,
+          state: 'active', startedAt: 0,
+        }),
+        stopDuty: () => null,
         listOrders: () => ({ active: null, queued: [] }),
         sinceEvents: () => ({ events: [], seq: 0 }),
         watchedBlock: () => undefined,
