@@ -169,6 +169,9 @@ export class MindLoop {
   /** Mark the main tree for re-evaluation on the next idle tick. */
   invalidate(): void {
     this.mainDirty = true
+    // A new order/terminal is a new task context; a hold for it should be
+    // reported even if the same reason was emitted within the window.
+    this.lastHoldKey = undefined
   }
 
   /** Emit one hold per reason per window; a persistent hold is not silent. */
