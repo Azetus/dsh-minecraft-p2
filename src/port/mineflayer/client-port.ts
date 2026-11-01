@@ -73,6 +73,8 @@ type EntityLike = {
   type?: string
   kind?: string
   position?: { x: number; y: number; z: number }
+  width?: number
+  height?: number
   metadata?: Record<number, unknown>
 }
 
@@ -116,6 +118,8 @@ export class MineflayerClientPort implements ClientPort {
       onGround?: boolean
       isInWater?: boolean
       isInLava?: boolean
+      width?: number
+      height?: number
     } | undefined
     const position = entity?.position
     if (entity === undefined || position === undefined) throw unavailable('bot position is not available')
@@ -129,6 +133,8 @@ export class MineflayerClientPort implements ClientPort {
       onGround: entity.onGround === true,
       inWater: entity.isInWater === true,
       inLava: entity.isInLava === true,
+      ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
+      ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
     }
   }
 
@@ -260,6 +266,8 @@ export class MineflayerClientPort implements ClientPort {
         id: String(entity.id ?? -1),
         name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
         position: { x: position.x, y: position.y, z: position.z },
+        ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
+        ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
         ...(entity.type === undefined ? {} : { type: entity.type }),
         ...(entity.kind === undefined ? {} : { kind: entity.kind }),
         ...(entity.username === undefined ? {} : { username: entity.username }),

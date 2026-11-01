@@ -32,6 +32,9 @@ export type EntityInfo = {
   id: string
   name: string
   position: Vec3
+  /** Entity AABB width/height from the adapter; item fallback is 0.25x0.25. */
+  width?: number
+  height?: number
   /** Adapter-provided entity category: player/animal/hostile/other/... */
   type?: string
   /** Human-readable category, when the adapter has one. */
@@ -76,6 +79,9 @@ export type SelfInfo = {
   onGround: boolean
   inWater: boolean
   inLava: boolean
+  /** Player AABB width/height; adapter fallback is 0.6x1.8. */
+  width?: number
+  height?: number
 }
 
 export const PortErrorCodes = {

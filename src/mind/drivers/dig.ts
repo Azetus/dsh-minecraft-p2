@@ -101,7 +101,9 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     return { state: 'failed', code: 'DIG_READBACK_UNSTABLE' }
   }
 
-  const pickup = purpose === 'harvest' ? await pickupNearby(ctx.port, target) : undefined
+  const pickup = purpose === 'harvest'
+    ? await pickupNearby(ctx.port, target, { delayTicks: 12 })
+    : undefined
   await sleep(300)
   const inventoryAfter = ctx.port.inventory()
   const afterCount = totalCount(inventoryAfter)
@@ -117,11 +119,14 @@ async function dig(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
   }
   if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0 && afterCount <= beforeCount) {
-    return {
-      state: 'failed',
-      code: pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED',
-      observed,
-    }
+    const code = pickup.merged > 0
+      ? 'PICKUP_MERGED'
+      : pickup.gone > 0
+        ? 'PICKUP_ENTITY_GONE'
+        : pickup.full > 0
+          ? 'PICKUP_INVENTORY_FULL'
+          : pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED'
+    return { state: 'failed', code, observed }
   }
   return { state: 'succeeded', observed }
 }
