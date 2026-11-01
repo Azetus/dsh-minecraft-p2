@@ -44,6 +44,8 @@ export type Hold = {
   kind: 'hold'
   reason: string
   notify?: boolean
+  /** Structured diagnostics for the Agent; absent for a plain wait. */
+  data?: JsonValue
 }
 
 export type WorkGiverResult = Candidate | Handoff | Hold | null

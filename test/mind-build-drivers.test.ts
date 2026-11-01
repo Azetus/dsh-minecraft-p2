@@ -142,6 +142,24 @@ describe('place driver', () => {
     await wait(30)
     expect(handle.result()).toEqual({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
   })
+
+  it('approaches a distant work face before placing', async () => {
+    const fake = fakePort()
+    const target = { x: 10, y: 64, z: 0 }
+    fake.world.set('10,63,0', block('stone', { x: 10, y: 63, z: 0 }))
+    fake.world.get('10,63,0')!.solid = true
+    fake.world.set('10,64,0', block('air', target))
+    fake.world.set('10,65,0', block('air', { x: 10, y: 65, z: 0 }))
+    fake.world.set('9,63,0', block('stone', { x: 9, y: 63, z: 0 }))
+    fake.world.get('9,63,0')!.solid = true
+    fake.world.set('9,64,0', block('air', { x: 9, y: 64, z: 0 }))
+    fake.world.set('9,65,0', block('air', { x: 9, y: 65, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 10, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    await wait(30)
+    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(fake.moves).toHaveLength(1)
+    expect(fake.places.length).toBeGreaterThanOrEqual(1)
+  })
 })
 
 describe('clear driver', () => {

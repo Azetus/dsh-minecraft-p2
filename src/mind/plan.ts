@@ -23,11 +23,19 @@ export type WorkItem = {
   after?: string[]
 }
 
-export type VerifySpec = {
-  kind: 'sealed-room'
-  min: [number, number, number]
-  max: [number, number, number]
-}
+export type VerifySpec =
+  | {
+      kind: 'sealed-room'
+      min: [number, number, number]
+      max: [number, number, number]
+    }
+  | {
+      kind: 'usable-room'
+      min: [number, number, number]
+      max: [number, number, number]
+      door?: [number, number, number]
+      bed?: [number, number, number]
+    }
 
 export type MaterialPolicy = Record<string, { auto: boolean; maxBudgetTicks?: number }>
 
@@ -50,6 +58,10 @@ export type PlanInstance = {
   materialPolicy: MaterialPolicy
   workItems: WorkItem[]
   verify?: VerifySpec
+  /** Frozen by the body when the plan is created; never recomputed per tick. */
+  deferredWorkItems?: string[]
+  /** Interior cell just inside the temporary entrance. */
+  entranceInside?: Vec3
 }
 
 export type BlockReason = 'NO_SUPPORT' | 'NO_STAND' | 'NO_MATERIAL' | 'UNREACHABLE' | 'CONFLICT'
@@ -332,8 +344,15 @@ function parseTemplate(value: unknown, name: string): ParseResult {
   let verify: VerifySpec | undefined
   if (value.verify !== undefined) {
     if (!isRecord(value.verify)) return fail(`${name}.verify`, 'must be an object')
-    onlyKeys(value.verify, ['kind', 'min', 'max'], `${name}.verify`)
-    if (value.verify.kind !== 'sealed-room') return fail(`${name}.verify.kind`, 'only sealed-room is supported')
+    if (value.verify.kind !== 'sealed-room' && value.verify.kind !== 'usable-room') {
+      return fail(`${name}.verify.kind`, 'only sealed-room or usable-room is supported')
+    }
+    const verifyKind = value.verify.kind
+    onlyKeys(
+      value.verify,
+      verifyKind === 'usable-room' ? ['kind', 'min', 'max', 'door', 'bed'] : ['kind', 'min', 'max'],
+      `${name}.verify`,
+    )
     if (!isTriple(value.verify.min) || !isTriple(value.verify.max)) {
       return fail(`${name}.verify`, 'min/max must be three integers')
     }
@@ -342,10 +361,24 @@ function parseTemplate(value: unknown, name: string): ParseResult {
         return fail(`${name}.verify`, 'min must not exceed max')
       }
     }
-    verify = {
-      kind: 'sealed-room',
-      min: [...value.verify.min] as [number, number, number],
-      max: [...value.verify.max] as [number, number, number],
+    const min = [...value.verify.min] as [number, number, number]
+    const max = [...value.verify.max] as [number, number, number]
+    if (verifyKind === 'sealed-room') {
+      verify = { kind: 'sealed-room', min, max }
+    } else {
+      if (value.verify.door !== undefined && !isTriple(value.verify.door)) {
+        return fail(`${name}.verify.door`, 'door must be three integers')
+      }
+      if (value.verify.bed !== undefined && !isTriple(value.verify.bed)) {
+        return fail(`${name}.verify.bed`, 'bed must be three integers')
+      }
+      verify = {
+        kind: 'usable-room',
+        min,
+        max,
+        ...(value.verify.door === undefined ? {} : { door: [...value.verify.door] as [number, number, number] }),
+        ...(value.verify.bed === undefined ? {} : { bed: [...value.verify.bed] as [number, number, number] }),
+      }
     }
   }
 

@@ -229,6 +229,15 @@ type PlanInstance = {
   verify: VerifySpec
 }
 
+type VerifySpec =
+  | { kind: 'sealed-room'; min: Triple; max: Triple }
+  | {
+      kind: 'usable-room'
+      min: Triple; max: Triple
+      door?: Triple   // 门下半格，相对 origin
+      bed?: Triple    // 床格，相对 origin
+    }
+
 type WorkItem = {
   id: string
   kind: 'clear' | 'prepare' | 'place' | 'enter' | 'hold'

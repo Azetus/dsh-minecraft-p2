@@ -51,6 +51,41 @@ describe('blueprint parser', () => {
     expect(bad.ok).toBe(false)
   })
 
+  it('validates a usable-room verifier and translates door/bed offsets', () => {
+    const parsed = parseBlueprint({
+      blocks: [
+        { x: 5, y: 64, z: -2, name: 'dirt' },
+        { x: 6, y: 64, z: -2, name: 'dirt' },
+        { x: 7, y: 64, z: -2, name: 'red_bed' },
+        { x: 5, y: 64, z: -1, name: 'oak_door' },
+      ],
+      verify: {
+        kind: 'usable-room',
+        min: { x: 5, y: 64, z: -2 },
+        max: { x: 7, y: 65, z: -1 },
+        door: { x: 5, y: 64, z: -1 },
+        bed: { x: 7, y: 64, z: -2 },
+      },
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const plan = blueprintPlan(parsed.blueprint, 'ord-usable')
+    expect(plan.verify).toMatchObject({
+      kind: 'usable-room',
+      min: [0, 0, 0],
+      max: [2, 1, 1],
+      door: [0, 0, 1],
+      bed: [2, 0, 0],
+    })
+  })
+
+  it('rejects a usable-room verifier without proper triples', () => {
+    expect(parseBlueprint({
+      blocks: valid.blocks,
+      verify: { kind: 'usable-room', min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 }, door: [0, 0] },
+    }).ok).toBe(false)
+  })
+
   it('rejects an unknown blueprint version', () => {
     const parsed = parseBlueprint({ version: 2, blocks: valid.blocks })
     expect(parsed.ok).toBe(false)

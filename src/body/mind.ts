@@ -43,6 +43,7 @@ import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
 import { planShortage, materialSources } from '../mind/materials.ts'
 import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
+import { planBuildAccess } from '../mind/build-access.ts'
 import {
   evaluatePlan,
   instantiatePlan,
@@ -51,7 +52,7 @@ import {
   loadPlanTemplates,
   matchesExpected,
 } from '../mind/plan.ts'
-import type { PlanInstance } from '../mind/plan.ts'
+import type { PlanInstance, VerifySpec } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
 import { parseHazardPolicy } from '../port/terrain.ts'
@@ -66,6 +67,7 @@ import { TREE_DEFINITIONS } from '../mind/trees.ts'
 import { contentVersion } from '../mind/content-version.ts'
 import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
+import { verifyUsableRoom } from '../mind/verify/usable-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
@@ -367,6 +369,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         return
       }
       activePlan = blueprintPlan(parsed.blueprint, active.order.id)
+      const planWorld = sensors.read()
+      const access = planBuildAccess(activePlan, planWorld, planWorld.self.pos)
+      activePlan = {
+        ...activePlan,
+        deferredWorkItems: [...access.deferred],
+        ...(access.entrance === undefined ? {} : { entranceInside: access.entrance.inside }),
+      }
       planOrderId = active.order.id
       planBlockedReported = false
       planInsufficientReported = false
@@ -378,6 +387,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         templateVersion: parsed.blueprint.version,
         origin: activePlan.origin,
         blocks: parsed.blueprint.blocks.length,
+        deferredWorkItems: [...access.deferred],
+        ...(activePlan.verify === undefined ? {} : { verify: activePlan.verify }),
+        ...(access.entrance === undefined ? {} : { entrance: access.entrance }),
+        ...(access.blocked === undefined ? {} : { accessBlocked: access.blocked }),
       })
       return
     }
@@ -643,10 +656,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         // refuted here instead of being accepted as a permanent success.
         verify = verifyBlueprint(activePlan, world)
         if (verify.state === 'confirmed' && activePlan.verify !== undefined) {
-          verify = verifySealedRoom(activePlan, activePlan.verify, world)
+          verify = verifyRoom(activePlan, activePlan.verify, world)
         }
       } else if (activePlan.verify !== undefined) {
-        verify = verifySealedRoom(activePlan, activePlan.verify, world)
+        verify = verifyRoom(activePlan, activePlan.verify, world)
       }
       if (verify !== undefined) {
         if (verify.state === 'confirmed') {
@@ -850,4 +863,10 @@ function readPlanDefinitions(dir: string): Record<string, unknown> {
     }
   }
   return definitions
+}
+
+function verifyRoom(plan: PlanInstance, spec: VerifySpec, world: WorldView): VerifyResult {
+  return spec.kind === 'usable-room'
+    ? verifyUsableRoom(plan, spec, world)
+    : verifySealedRoom(plan, spec, world)
 }

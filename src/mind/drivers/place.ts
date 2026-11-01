@@ -1,4 +1,5 @@
 import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
+import { approachBlock } from '../approach.ts'
 import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
@@ -84,10 +85,17 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
 
   const self = port.self().pos
   if (Math.hypot(self.x - target.x, self.y - target.y, self.z - target.z) > 4.5) {
-    const moved = await port.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000 })
-    if (moved.state !== 'ok') {
-      return { state: 'failed', code: moved.code ?? 'PLACE_APPROACH_FAILED',
-        ...(moved.observed === undefined ? {} : { observed: moved.observed }) }
+    const approach = await approachBlock(port, target, {
+      range: 3,
+      timeoutMs: 20_000,
+      code: 'PLACE_APPROACH_FAILED',
+    })
+    if (!approach.ok) {
+      return {
+        state: 'failed',
+        code: approach.code,
+        ...(approach.observed === undefined ? {} : { observed: approach.observed }),
+      }
     }
   }
 

@@ -183,7 +183,7 @@ export class MindLoop {
   /** Emit one hold per reason per window; a persistent hold is not silent. */
   private emitHold(
     tree: 'constant' | 'main',
-    hold: { reason: string; notify?: boolean },
+    hold: { reason: string; notify?: boolean; data?: JsonValue },
     now: number,
   ): void {
     const key = `${tree}:${hold.reason}`
@@ -194,6 +194,7 @@ export class MindLoop {
       tree,
       reason: hold.reason,
       notify: hold.notify !== false,
+      ...(hold.data === undefined ? {} : { data: hold.data }),
     })
   }
 

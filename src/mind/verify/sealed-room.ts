@@ -10,6 +10,8 @@ export type VerifyResult = {
   /** First cell that decided the result, when there is one. */
   at?: Vec3
   detail?: string
+  /** Work item whose expected block is at `at`, when one exists. */
+  workItemId?: string
 }
 
 /**

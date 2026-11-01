@@ -13,11 +13,19 @@ export type BlueprintBlock = {
   state?: Record<string, string>
 }
 
-export type BlueprintVerify = {
-  kind: 'sealed-room'
-  min: Vec3
-  max: Vec3
-}
+export type BlueprintVerify =
+  | {
+      kind: 'sealed-room'
+      min: Vec3
+      max: Vec3
+    }
+  | {
+      kind: 'usable-room'
+      min: Vec3
+      max: Vec3
+      door?: Vec3
+      bed?: Vec3
+    }
 
 export type Blueprint = {
   /** Final-geometry schema version; only 1 is accepted now. */
@@ -75,21 +83,47 @@ export function parseBlueprint(value: unknown): BlueprintParse {
     if (!isRecord(value.verify)) {
       errors.push('blueprint.verify must be an object')
     } else {
-      for (const key of Object.keys(value.verify)) {
-        if (key !== 'kind' && key !== 'min' && key !== 'max') {
-          errors.push(`blueprint.verify.${key}: unknown field`)
+      const kind = value.verify.kind
+      if (kind !== 'sealed-room' && kind !== 'usable-room') {
+        errors.push('blueprint.verify.kind must be sealed-room or usable-room')
+      } else {
+        const allowed = kind === 'usable-room'
+          ? ['kind', 'min', 'max', 'door', 'bed']
+          : ['kind', 'min', 'max']
+        for (const key of Object.keys(value.verify)) {
+          if (!allowed.includes(key)) errors.push(`blueprint.verify.${key}: unknown field`)
         }
-      }
-      if (value.verify.kind !== 'sealed-room') {
-        errors.push('blueprint.verify.kind must be sealed-room')
-      }
-      const min = parseVec(value.verify.min, 'blueprint.verify.min', errors)
-      const max = parseVec(value.verify.max, 'blueprint.verify.max', errors)
-      if (min !== undefined && max !== undefined) {
-        if (min.x > max.x || min.y > max.y || min.z > max.z) {
-          errors.push('blueprint.verify min must not exceed max')
-        } else if (value.verify.kind === 'sealed-room') {
-          verify = { kind: 'sealed-room', min, max }
+        const min = parseVec(value.verify.min, 'blueprint.verify.min', errors)
+        const max = parseVec(value.verify.max, 'blueprint.verify.max', errors)
+        if (min !== undefined && max !== undefined) {
+          if (min.x > max.x || min.y > max.y || min.z > max.z) {
+            errors.push('blueprint.verify min must not exceed max')
+          } else if (kind === 'sealed-room') {
+            verify = { kind: 'sealed-room', min, max }
+          } else {
+            const door = value.verify.door === undefined
+              ? undefined
+              : parseVec(value.verify.door, 'blueprint.verify.door', errors)
+            const bed = value.verify.bed === undefined
+              ? undefined
+              : parseVec(value.verify.bed, 'blueprint.verify.bed', errors)
+            if (value.verify.door !== undefined && door === undefined) {
+              errors.push('blueprint.verify.door must be [x,y,z]')
+            }
+            if (value.verify.bed !== undefined && bed === undefined) {
+              errors.push('blueprint.verify.bed must be [x,y,z]')
+            }
+            if ((value.verify.door === undefined || door !== undefined)
+              && (value.verify.bed === undefined || bed !== undefined)) {
+              verify = {
+                kind: 'usable-room',
+                min,
+                max,
+                ...(door === undefined ? {} : { door }),
+                ...(bed === undefined ? {} : { bed }),
+              }
+            }
+          }
         }
       }
     }
@@ -124,21 +158,29 @@ export function blueprintTemplate(blueprint: Blueprint): PlanTemplate {
     ...(blueprint.verify === undefined
       ? {}
       : {
-          verify: {
-            kind: 'sealed-room' as const,
-            min: [
-              blueprint.verify.min.x - min.x,
-              blueprint.verify.min.y - min.y,
-              blueprint.verify.min.z - min.z,
-            ] as [number, number, number],
-            max: [
-              blueprint.verify.max.x - min.x,
-              blueprint.verify.max.y - min.y,
-              blueprint.verify.max.z - min.z,
-            ] as [number, number, number],
-          },
+          verify: blueprint.verify.kind === 'sealed-room'
+            ? {
+                kind: 'sealed-room' as const,
+                min: relative(blueprint.verify.min, min),
+                max: relative(blueprint.verify.max, min),
+              }
+            : {
+                kind: 'usable-room' as const,
+                min: relative(blueprint.verify.min, min),
+                max: relative(blueprint.verify.max, min),
+                ...(blueprint.verify.door === undefined
+                  ? {}
+                  : { door: relative(blueprint.verify.door, min) }),
+                ...(blueprint.verify.bed === undefined
+                  ? {}
+                  : { bed: relative(blueprint.verify.bed, min) }),
+              },
         }),
   }
+}
+
+function relative(point: Vec3, origin: Vec3): [number, number, number] {
+  return [point.x - origin.x, point.y - origin.y, point.z - origin.z]
 }
 
 export function blueprintPlan(blueprint: Blueprint, orderId: string): PlanInstance {

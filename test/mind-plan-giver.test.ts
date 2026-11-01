@@ -103,7 +103,7 @@ describe('plan giver', () => {
     expect(result.driverId).toBe('move')
     expect(result.reason).toContain('reach far')
     expect(Math.hypot(result.target.pos.x - 20, result.target.pos.z - 0)).toBeLessThanOrEqual(3)
-    expect(result.params).toMatchObject({ range: 4, intent: 'interact' })
+    expect(result.params).toMatchObject({ range: 0, intent: 'interact' })
   })
 
   it('hands off an approach move when the work item is outside the snapshot', () => {
