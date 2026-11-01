@@ -100,13 +100,22 @@ export class MindLoop {
 
     try {
       const constant = this.evaluate('constant', ctx, world)
-      if (constant.kind === 'job') this.tracker.offer(constant.candidate)
-      else if (constant.kind === 'definition-error') {
+      // A constant-tree decision wins this tick. The main tree is not asked
+      // for a competing candidate, and cannot clear the pending one with a
+      // `nowork` offer. This gate is what makes the emergency reaction real.
+      let constantHandled = false
+      if (constant.kind === 'job') {
+        constantHandled = true
+        this.tracker.offer(constant.candidate)
+      } else if (constant.kind === 'need-observation') {
+        constantHandled = true
+      } else if (constant.kind === 'definition-error') {
+        constantHandled = true
         this.emit('mind.definition-error', now, { tree: 'constant', message: constant.error.message })
       }
       // need-observation: keep the current job, just do not offer this tick.
 
-      if (this.tracker.state() === 'idle') {
+      if (!constantHandled && this.tracker.state() === 'idle') {
         const hasPlan = ctx.plan !== undefined
         const forced = this.mainDirty
         const due = hasPlan || forced || now - this.lastMainEvalAt >= this.mainFallbackMs

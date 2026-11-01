@@ -249,13 +249,16 @@ toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → re
 ```
 每 tick (50ms):
   obs = sensors.tick(budget ≤ 2ms)                    // 缓存维护，不做网络查询
-  if (cheapDanger || 10Hz 到期) tracker.offer(constantTree.evaluate(obs))
-  if (mainTreeDirty || 3s 兜底) { mainTreeDirty = false; tracker.offer(mainTree.evaluate(obs, orders, plan)) }
+  constant = constantTree.evaluate(obs)
+  if (constant 是 job) tracker.offer(constant)        // 本轮不再求值主树
+  else if (constant 是 need-observation / definition-error) 本轮不再求值主树
+  else if (mainTreeDirty || 3s 兜底) { mainTreeDirty = false; tracker.offer(mainTree.evaluate(obs, orders, plan)) }
   tracker.tick()
   if (tracker.idle() && 无候选) idleFallback()         // 站立/游荡
 ```
 
 - 观测由常驻传感器维护；昂贵判断分批推进，**禁止在 tick 内同步扫世界**。
+- 常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`；紧急解除后主树恢复。
 - 主树求值只是“标记待评估 + 在 tracker 里按中断政策处理”，不保证换 job。
 
 ## 6. 证据与持久化

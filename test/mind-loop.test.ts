@@ -80,6 +80,40 @@ describe('mind loop', () => {
     expect(tracker.ticks).toBe(2)
   })
 
+  it('does not evaluate the main tree when the constant tree has a candidate', () => {
+    const tracker = fakeTracker()
+    let mainCalls = 0
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => {
+        if (tree === 'constant') return { kind: 'job', candidate: candidate('escape:lava') }
+        mainCalls += 1
+        return { kind: 'nowork' }
+      },
+      tracker: tracker as unknown as JobTracker,
+    })
+    loop.tick()
+    expect(mainCalls).toBe(0)
+    expect(tracker.offers.map(entry => entry?.keys)).toEqual(['escape:lava'])
+  })
+
+  it('does not evaluate the main tree when the constant tree needs observation', () => {
+    const tracker = fakeTracker()
+    let mainCalls = 0
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => {
+        if (tree === 'constant') return { kind: 'need-observation', reason: 'stale-snapshot' }
+        mainCalls += 1
+        return { kind: 'job', candidate: candidate('probe:1,64,0') }
+      },
+      tracker: tracker as unknown as JobTracker,
+    })
+    loop.tick()
+    expect(mainCalls).toBe(0)
+    expect(tracker.offers).toHaveLength(0)
+  })
+
   it('offers the main tree only while idle and past the idle delay', () => {
     const tracker = fakeTracker()
     let now = 0

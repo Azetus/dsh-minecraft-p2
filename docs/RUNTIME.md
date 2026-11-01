@@ -13,9 +13,11 @@
 ```text
 每 tick (50ms):
   obs = sensors.tick(budget ≤ 2ms)                     // 观测缓存，不做网络查询
-  if (cheapDanger || 10Hz 到期)
-      tracker.offer(constantTree.evaluate(obs))
-  if (mainTreeDirty || 3s 兜底) {
+  constant = constantTree.evaluate(obs)
+  if (constant 是 job) tracker.offer(constant)         // 本轮不再求值主树
+  else if (constant 是 need-observation / definition-error)
+      本轮不再求值主树                                  // 保留当前 job，不猜
+  else if (mainTreeDirty || 3s 兜底) {
       mainTreeDirty = false
       tracker.offer(mainTree.evaluate(obs, orders, plan))
   }
@@ -23,7 +25,7 @@
   if (tracker.state() === 'idle' && 无候选) idleFallback()
 ```
 
-`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
+**常驻树优先级**：常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`。这个门只决定本轮谁来 offer，不改变 order/duty 状态；紧急解除后主树恢复。`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
 
 ### 2.1 mineflayer 导航（当前实现）
 
