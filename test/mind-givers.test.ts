@@ -1,10 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
 import { createGoOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
+import { MAIN_TREE } from '../src/mind/trees.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
 import type { EntityInfo, SelfInfo } from '../src/port/index.ts'
@@ -95,10 +93,10 @@ describe('escape giver', () => {
 
 describe('main tree wiring', () => {
   it('references order.traverse so the giver can actually run', () => {
-    const tree = JSON.parse(readFileSync(join(process.cwd(), 'content', 'trees', 'main.json'), 'utf8')) as {
-      children: Array<{ ref?: string }>
-    }
-    expect(tree.children.map(child => child.ref)).toContain('order.traverse')
+    const refs = MAIN_TREE.type === 'priority'
+      ? MAIN_TREE.children.map(child => child.type === 'giver' ? child.ref : undefined)
+      : []
+    expect(refs).toContain('order.traverse')
   })
 })
 

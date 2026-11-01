@@ -14,7 +14,7 @@
 | 允许笨 | 单个动作失败是正常状态；失败 1–2 次后重试，超限才上报 |
 | 可恢复 | 被打断/重启后从“世界可重建的进度”继续，不从头再来 |
 | 可验收 | 每个 order 有独立可复核的终态证据；证据不足不算成功 |
-| 可扩展 | 新结构 = 新 JSON 计划；新策略 = 新 JSON 节点；只有新原语才写代码 |
+| 可扩展 | 新结构 = 新计划模板；新策略 = 代码树节点；新原语才写 driver/giver |
 | 可对话 | 能接收游戏内对话并作出符合身份的回应，且不阻塞身体执行 |
 | 解耦接入 | 同一套 AI 可跑在 mineflayer（现在）与自研客户端 mod（将来）上 |
 
@@ -58,8 +58,8 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 | Planner | order → PlanInstance（选址、材料账、work item），可分片、可取消 | 模板 JSON + 代码 | 无状态 |
 | PlanInstance | 冻结布局/区域/材料政策/版本/工作项 | 数据 | 持久化 |
 | Registry | predicate / giver / driver 三类注册项 | 代码 + Schema | 启动加载 |
-| 常驻树 | 每 tick 的紧急候选 | JSON + 求值器 | 无状态 |
-| 主树 | 事件点 + 兜底的常规候选 | JSON + 求值器 | 无状态 |
+| 常驻树 | 每 tick 的紧急候选 | 代码树 + 求值器 | 无状态 |
+| 主树 | 事件点 + 兜底的常规候选 | 代码树 + 求值器 | 无状态 |
 | 对话管线 | chat → 意图 → order/replace/cancel/query/say | 代码 | 无状态 |
 | WorkGiver | 扫描并选出一个目标；可返回前置工作或无工作 | 代码 | 无状态 |
 | Job | 数据：driverId + target + params + 归属 + runId | 对象 | 一次尝试 |
@@ -147,15 +147,15 @@ agent 下达的目标，不是动作。
 
 主树触发事件：新 order / order 取消 / job 终态 / plan 一步完成 / 进入夜晚 / 饥饿跨阈值 / 目标失效 / 冷却到期 / 对话产生 order。
 
-节点类型（6 种）：
+节点类型（6 种，定义在 `src/mind/trees.ts`）：
 
-```jsonc
-{ "type": "priority", "children": [...] }                       // 顺序求值，首个有效候选胜出
-{ "type": "sorter",   "children": [...] }                       // 各自给分，取最高
-{ "type": "when",     "predicate": "isNight", "onUnknown": "skip", "then": {...}, "else": {...} }
-{ "type": "subtree",  "ref": "NightGuard" }
-{ "type": "sequence", "children": [...] }                       // 显式顺序执行
-{ "type": "giver",    "ref": "plan.work" }                      // 叶子：引用注册的 WorkGiver
+```ts
+{ type: 'priority', children: [] }                       // 顺序求值，首个有效候选胜出
+{ type: 'sorter',   children: [] }                       // 各自给分，取最高
+{ type: 'when',     predicate: 'isNight', onUnknown: 'skip', then: {}, else: {} }
+{ type: 'subtree',  ref: 'NightGuard' }
+{ type: 'sequence', children: [] }                       // 显式顺序执行
+{ type: 'giver',    ref: 'plan.work' }                   // 叶子：引用注册的 WorkGiver
 ```
 
 - 谓词三态；`unknown` **不得**进入 `else`（节点必须声明 `onUnknown: skip | noCandidate`）。
@@ -305,15 +305,15 @@ ClientPort（纯数据，版本化，能力协商）
 | 要加什么 | 改哪里 | 谁写 |
 |---|---|---|
 | 新建筑/结构 | plan 模板 JSON | 模型 |
-| 新选择策略 | 树 JSON 节点 | 模型 |
+| 新选择策略 | 代码树节点（`src/mind/trees.ts`） | 模型/开发 |
 | 新目标选择方式 | 新 WorkGiver（代码 + 注册） | 模型写、平台校验 |
 | 新动作机制（mod 方块） | 新 Driver（代码 + schema） | 模型写、平台校验 |
 
-红线：树 JSON 不能写循环/赋值/任意表达式；谓词与 giver 是**注册表**，树只能引用已注册项。
+红线：树节点只描述选择结构，不写坐标、目标或执行动作；谓词与 giver 是**注册表**，树只能引用已注册项。
 
 ## 10. 当前验收
 
-- ClientPort 一致性场景、树/模板加载校验、核心单元测试全部通过。
+- ClientPort 一致性场景、树/模板校验、核心单元测试全部通过。
 - 实机验证：有限 order、建造/放置、熔炉与容器、羊毛/床/门/火把、completion wake、body 重启恢复。
 - 长跑验收以安全环境下的 CP 组合与暂停点为准，不把单测或类型检查称作游戏验收。
 

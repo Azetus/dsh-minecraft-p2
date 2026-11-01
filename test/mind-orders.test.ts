@@ -236,7 +236,7 @@ describe('order journal', () => {
 
   it('writes an identity header and refuses a different world/character/def', () => {
     const journal = tempJournal()
-    const identity = { worldId: 'world-a', characterId: 'char-a', defVersion: 'def-a' }
+    const identity = { worldId: 'world-a', characterId: 'char-a', defVersion: 'def-a', defScope: 'plans' as const }
     const store = new OrderStore({ journalPath: journal, identity })
     store.enqueue(order('ord-1'))
 

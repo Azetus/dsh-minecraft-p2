@@ -90,7 +90,6 @@ describe('plan runtime', () => {
     const mind = createMind({
       port,
       home: { x: 1, y: 64, z: 0 },
-      contentDir: join(process.cwd(), 'content', 'trees'),
       plansDir,
       journalPath: join(tempDir(), 'journal.jsonl'),
     })

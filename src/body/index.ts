@@ -51,7 +51,6 @@ async function main(): Promise<void> {
         ...(home === undefined ? {} : { home }),
         ...(identity === undefined ? {} : { identity }),
         crashAfterPending: provider.config.crashAfterPending,
-        contentDir: fileURLToPath(new URL('../../content/trees', import.meta.url)),
         plansDir: fileURLToPath(new URL('../../content/plans', import.meta.url)),
         journalPath: process.env.P2_JOURNAL_PATH ?? join(process.cwd(), '.p2', 'journal.jsonl'),
       })

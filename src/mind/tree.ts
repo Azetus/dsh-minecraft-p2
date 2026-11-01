@@ -34,9 +34,10 @@ const MAX_NODES = 500
 const MAX_DEPTH = 8
 
 /**
- * Parse and validate a named tree set. Unknown node types, predicates, givers
- * or subtrees, cycles, depth > 8 and more than 500 expanded nodes are all
- * load-time errors; the previous valid content stays active.
+ * Validate a named tree set supplied by code (or a test fixture). Unknown node
+ * types, predicates, givers or subtrees, cycles, depth > 8 and more than 500
+ * expanded nodes are all definition errors; the runtime refuses to start with
+ * a broken set rather than half-loading it.
  */
 export function loadTrees(definitions: Record<string, unknown>, registry: Registry): LoadTreesResult {
   const names = new Set(Object.keys(definitions))

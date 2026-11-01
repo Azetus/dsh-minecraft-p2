@@ -112,7 +112,7 @@
 | 材料不足且不可自动补给 | `NO_MATERIAL` | order blocked，唤醒 agent |
 | 服务器拒绝放置 | `PLACE_REFUSED` / `PLACE_READBACK_MISMATCH` | 该 work item 记失败；policy 决定跳过/清障/重试 |
 | 放置被接受但方块后来消失 | `BLUEPRINT_REFUTED` | 终态验证不通过；order failed，agent 决定补建/换址 |
-| 定义错误（树/模板/注册表） | `DEFINITION_ERROR` | 拒绝加载，保持上一版有效内容 |
+| 定义错误（树/模板/注册表） | `DEFINITION_ERROR` | 拒绝加载并上报；body 启动期失败，不半加载 |
 
 ## 10. 放置是“尝试”，不是永久承诺
 
@@ -185,9 +185,10 @@ order 可带 `policy.conflict`：
 - journal 头写入 `journal.identity`：
   - `worldId`：provider 配置 `worldId`（默认 `host:port`）+ dimension；
   - `characterId`：provider 的玩家 UUID/username；
-  - `defVersion`：trees/plans 内容摘要。
-- 三个字段任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报；
-  legacy（无 identity 头）journal 仍可读，下一次写入会补头。
+  - `defVersion`：plan 模板内容摘要（`defScope: "plans"`）；树定义已代码化，不参与身份。
+- `worldId` / `characterId` / plan `defVersion` 任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报。
+  旧版 journal（identity 无 `defScope`）按 world/character 接受一次，下一次写入补写 plan-only 头；
+  无 identity 头的 legacy journal 仍可读，下一次写入会补头。
 - 身份来自 provider，不需要 Agent 每次传；未来 client-mod 可提供更稳定的 world/character ID。
 - 开发测试专用：`.p2/config.json` 的 `crashAfterPending: true` 会在首个
   `action.pending` 写入后让 body 真实退出一次（标记 `.p2/crash-after-pending.done`），

@@ -1,5 +1,4 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
@@ -54,6 +53,8 @@ import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
 import { JobTracker } from '../mind/tracker.ts'
 import { evaluateTree, loadTrees } from '../mind/tree.ts'
+import { TREE_DEFINITIONS } from '../mind/trees.ts'
+import { contentVersion } from '../mind/content-version.ts'
 import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
@@ -79,9 +80,8 @@ export type MindRuntime = {
 export type CreateMindOptions = {
   port: ClientPort
   home?: Vec3
-  /** Recovery identity from the provider; defVersion is computed from content. */
+  /** Recovery identity from the provider; defVersion is computed from plans. */
   identity?: { worldId: string; characterId: string; defVersion?: string }
-  contentDir: string
   plansDir: string
   journalPath: string
   /** Development-only crash injection after the first action.pending write. */
@@ -125,19 +125,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver() })
 
-  const definitions = readJsonDefinitions(options.contentDir, 'tree')
-  if (definitions.constant === undefined || definitions.main === undefined) {
-    throw p2Error(
-      ErrorCodes.DEFINITION_ERROR,
-      'validation',
-      'content/trees must define both "constant" and "main"',
-      { module: 'body.mind' },
-    )
-  }
-  const loaded = loadTrees(definitions, registry)
+  const loaded = loadTrees(TREE_DEFINITIONS, registry)
   if (!loaded.ok) throw loaded.error
 
-  const planDefinitions = readJsonDefinitions(options.plansDir, 'plan')
+  const planDefinitions = readPlanDefinitions(options.plansDir)
   const loadedPlans = loadPlanTemplates(planDefinitions)
   if (!loadedPlans.ok) throw loadedPlans.error
   const templates = loadedPlans.templates
@@ -157,8 +148,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
           identity: {
             worldId: options.identity.worldId,
             characterId: options.identity.characterId,
-            defVersion: options.identity.defVersion
-              ?? definitionVersion(definitions, planDefinitions),
+            defVersion: options.identity.defVersion ?? contentVersion(planDefinitions),
+            defScope: 'plans' as const,
           },
         }),
     now,
@@ -728,15 +719,6 @@ function isTerminalState(state: string | undefined): boolean {
     || state === 'cancelled' || state === 'abandoned'
 }
 
-function definitionVersion(
-  trees: Record<string, unknown>,
-  plans: Record<string, unknown>,
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ schema: 1, trees, plans }))
-    .digest('hex')
-}
-
 function readOrigin(value: unknown): Vec3 | undefined {
   if (!isRecord(value)) return undefined
   const { x, y, z } = value
@@ -745,7 +727,7 @@ function readOrigin(value: unknown): Vec3 | undefined {
   return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
 }
 
-function readJsonDefinitions(dir: string, kind: 'tree' | 'plan'): Record<string, unknown> {
+function readPlanDefinitions(dir: string): Record<string, unknown> {
   const definitions: Record<string, unknown> = {}
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.json')) continue
@@ -756,7 +738,7 @@ function readJsonDefinitions(dir: string, kind: 'tree' | 'plan'): Record<string,
       throw p2Error(
         ErrorCodes.DEFINITION_ERROR,
         'validation',
-        `${kind} ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        `plan template ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
         { module: 'body.mind' },
       )
     }

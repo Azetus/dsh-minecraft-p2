@@ -8,7 +8,7 @@
 |---|---|---|
 | bridge ↔ body | JSON-lines stdio | `RequestEnvelope / ResponseEnvelope`（`src/contracts/protocol.ts`） |
 | body ↔ 游戏 | `ClientPort` | 纯数据；不传库对象 |
-| content ↔ 运行时 | 注册表 + JSON | `content/trees/*.json`、`content/plans/*.json` |
+| content ↔ 运行时 | 注册表 + JSON | `content/plans/*.json`；树定义在 `src/mind/trees.ts` |
 
 **不变量**
 
@@ -172,13 +172,15 @@ interface JobTracker {
 
 ## 7. 树与谓词注册表
 
-```jsonc
-{ "type": "priority", "children": [] }
-{ "type": "sorter",   "children": [] }
-{ "type": "when", "predicate": "isNight", "onUnknown": "skip", "then": {}, "else": {} }
-{ "type": "subtree", "ref": "NightGuard" }
-{ "type": "sequence", "children": [] }
-{ "type": "giver", "ref": "plan.work" }
+树定义在代码中（`src/mind/trees.ts`），节点形状如下；加载/启动期仍校验注册项、深度和环：
+
+```ts
+{ type: 'priority', children: [] }
+{ type: 'sorter',   children: [] }
+{ type: 'when', predicate: 'isNight', onUnknown: 'skip', then: {}, else: {} }
+{ type: 'subtree', ref: 'NightGuard' }
+{ type: 'sequence', children: [] }
+{ type: 'giver',    ref: 'plan.work' }
 ```
 
 - 谓词注册项：`{ id, schema, fn(ctx, world): true | false | 'unknown' }`。

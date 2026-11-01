@@ -54,6 +54,7 @@ export type OrderRecord = {
 export type OrderEvent =
   | { kind: 'order.accepted'; at: number; orderId: string }
   | { kind: 'order.terminal'; at: number; orderId: string; state: OrderState }
+  | { kind: 'journal.legacy-accepted'; at: number; defVersion: string }
 
 /** A driver action written before it starts; it is reconciled, never replayed. */
 export type PendingAction = {
@@ -69,6 +70,8 @@ export type RecoveryIdentity = {
   worldId: string
   characterId: string
   defVersion: string
+  /** `plans` means defVersion hashes plan templates only; absent is legacy. */
+  defScope?: 'plans'
 }
 
 export const JOURNAL_VERSION = 1
@@ -111,6 +114,7 @@ export class OrderStore {
   private readonly acceptedOrder: string[] = []
   private readonly pending = new Map<string, PendingAction>()
   private headerSeen = false
+  private rewriteHeader = false
   private activeId: string | undefined
 
   constructor(options: OrderStoreOptions = {}) {
@@ -157,10 +161,13 @@ export class OrderStore {
     }
 
     // Validate identity before applying any entry, so a mismatched journal
-    // cannot partially mutate the in-memory store.
-    const header = entries.find(
-      (entry): entry is Extract<JournalEntry, { kind: 'journal.identity' }> => entry.kind === 'journal.identity',
-    )
+    // cannot partially mutate the in-memory store. The last identity entry
+    // wins: a legacy header is accepted once by world/character and the next
+    // append writes the plan-only header.
+    let header: Extract<JournalEntry, { kind: 'journal.identity' }> | undefined
+    for (const entry of entries) {
+      if (entry.kind === 'journal.identity') header = entry
+    }
     if (header !== undefined) {
       if (this.identity !== undefined && !sameIdentity(header.identity, this.identity)) {
         throw identityError(
@@ -168,6 +175,10 @@ export class OrderStore {
         )
       }
       this.headerSeen = true
+      if (header.identity.defScope === undefined && this.identity?.defScope === 'plans') {
+        this.rewriteHeader = true
+        this.onEvent?.({ kind: 'journal.legacy-accepted', at: this.now(), defVersion: header.identity.defVersion })
+      }
     }
 
     for (const entry of entries) {
@@ -299,7 +310,7 @@ export class OrderStore {
     mkdirSync(dirname(path), { recursive: true })
     const fd = openSync(path, 'a')
     try {
-      if (this.identity !== undefined && !this.headerSeen) {
+      if (this.identity !== undefined && (!this.headerSeen || this.rewriteHeader)) {
         writeSync(fd, `${JSON.stringify({
           v: JOURNAL_VERSION,
           at: this.now(),
@@ -307,6 +318,7 @@ export class OrderStore {
           identity: this.identity,
         })}\n`)
         this.headerSeen = true
+        this.rewriteHeader = false
       }
       writeSync(fd, `${JSON.stringify({ ...entry, v: JOURNAL_VERSION })}\n`)
       fsyncSync(fd)
@@ -465,12 +477,19 @@ function isRecoveryIdentity(value: unknown): value is RecoveryIdentity {
     && typeof value.worldId === 'string'
     && typeof value.characterId === 'string'
     && typeof value.defVersion === 'string'
+    && (value.defScope === undefined || value.defScope === 'plans')
 }
 
 function sameIdentity(left: RecoveryIdentity, right: RecoveryIdentity): boolean {
-  return left.worldId === right.worldId
-    && left.characterId === right.characterId
-    && left.defVersion === right.defVersion
+  if (left.worldId !== right.worldId || left.characterId !== right.characterId) return false
+  if (left.defScope === 'plans' && right.defScope === 'plans') {
+    return left.defVersion === right.defVersion
+  }
+  // A header written before plan-only identity (no defScope) is accepted once;
+  // the next append writes the new header. A plan-scoped header never falls
+  // back to the legacy world/character-only check.
+  if (left.defScope === undefined && right.defScope === 'plans') return true
+  return left.defScope === right.defScope
 }
 
 function identityError(message: string): P2Error {

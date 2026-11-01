@@ -59,12 +59,11 @@ src/
   body/            body 运行时（RPC、生命周期、装配）
   port/            ClientPort 契约 + 能力 + 一致性测试
   port/mineflayer/ mineflayer 适配器
-  mind/            P2Mind：tree / giver / job / tracker / driver / plan / order
+  mind/            P2Mind：tree / trees / giver / job / tracker / driver / plan / order
   mind/verify/     验证器
   mind/journal/    意图日志与恢复
   contracts/       协议、framing、通用类型
 content/
-  trees/           常驻树 / 主树 JSON
   plans/           结构模板 JSON
 ```
 
