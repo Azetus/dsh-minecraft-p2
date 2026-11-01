@@ -53,3 +53,8 @@ const SOURCES: Record<string, string[]> = {
 export function materialSources(item: string): string[] {
   return SOURCES[item.replace(/^minecraft:/u, '')] ?? []
 }
+
+/** Every block name the area index needs to retain. */
+export function sourceNames(): string[] {
+  return [...new Set(Object.values(SOURCES).flat())]
+}

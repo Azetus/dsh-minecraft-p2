@@ -69,7 +69,8 @@
 - `blocked`：`hold` + 明确 reason + 上报；不自动换任务。
 - `cancel`：终态，不自动恢复。
 
-常驻树的 `hold` 会停止当前 job（`CONSTANT_HOLD`）并 critical 上报；同一原因 10s 内不重复，持续 hold 会再次上报，不静默。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
+常驻树的 `hold` 会停止当前 job（`CONSTANT_HOLD`）并 critical 上报；同一原因 10s 内不重复，持续 hold 会再次上报，不静默。
+`material.gather` 用 32 格区域索引找最近来源；索引按 16×16 列分块、每 tick 最多 2 块，`blockUpdated` 直接增删，中心移动/超时重建并标记 stale；不会每 tick 全量扫 32 格。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
 
 ## 5. 工作选择与重试
 

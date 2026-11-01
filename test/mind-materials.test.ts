@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { AreaResourceIndex } from '../src/mind/area.ts'
 import { createMaterialGiver } from '../src/mind/givers/material.ts'
 import { materialSources, planShortage } from '../src/mind/materials.ts'
 import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate } from '../src/mind/plan.ts'
 import type { EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, Item, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, Box, ClientPort, Item, SelfInfo, Vec3 } from '../src/port/index.ts'
 
 /**
  * Category: cross-module contract (M3-03 material policy).
@@ -116,4 +117,29 @@ describe('material giver', () => {
     }))
     expect(result).toBeNull()
   })
+
+  it('finds a source beyond the 6-block snapshot through the area index', () => {
+    const source = { name: 'grass_block', loaded: true, pos: { x: 20, y: 64, z: 0 } }
+    const port = {
+      blocksIn: (box: Box) => [source, { name: 'stone', loaded: true, pos: { x: 30, y: 64, z: 0 } }]
+        .filter(block => inside(block.pos, box)) as BlockInfo[],
+    } as unknown as ClientPort
+    const area = new AreaResourceIndex(port, { radius: 32, vertical: 8, chunkBudget: 4 })
+    const giver = createMaterialGiver(area)
+    let result: unknown = null
+    for (let now = 0; now < 20 && result === null; now += 1) {
+      result = giver.find({ now, plan, materialPolicy: { mode: 'auto-gather' } }, world())
+    }
+    expect(result).toMatchObject({
+      driverId: 'move',
+      reason: 'gather dirt',
+      target: { kind: 'point', pos: source.pos },
+    })
+  })
 })
+
+function inside(point: Vec3, box: Box): boolean {
+  return point.x >= box.min.x && point.x <= box.max.x
+    && point.y >= box.min.y && point.y <= box.max.y
+    && point.z >= box.min.z && point.z <= box.max.z
+}

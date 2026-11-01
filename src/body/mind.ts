@@ -21,6 +21,7 @@ import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
+import { AreaResourceIndex } from '../mind/area.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
@@ -114,6 +115,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: TRAVERSE_DRIVER_ID, driver: createTraverseDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
+  const areaResources = new AreaResourceIndex(options.port, {
+    radius: 32,
+    vertical: 16,
+    chunkBudget: 2,
+  })
+  options.port.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
@@ -127,7 +134,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.traverse', factory: () => createTraverseGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.hold', factory: () => createHoldOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver() })
-  registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver() })
+  registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver(areaResources) })
 
   const loaded = loadTrees(TREE_DEFINITIONS, registry)
   if (!loaded.ok) throw loaded.error

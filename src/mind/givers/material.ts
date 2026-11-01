@@ -1,4 +1,5 @@
 import type { Vec3 } from '../../port/index.ts'
+import type { AreaResourceIndex } from '../area.ts'
 import { materialSources, planShortage } from '../materials.ts'
 import { itemPosition } from '../plan.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorldView } from '../types.ts'
@@ -11,7 +12,7 @@ const REACH = 4.5
  * clear driver digs it and normal pickup/material accounting takes over.
  * Crafting and non-source items (doors, etc.) intentionally have no candidate.
  */
-export function createMaterialGiver(): WorkGiver {
+export function createMaterialGiver(area?: AreaResourceIndex): WorkGiver {
   return {
     id: 'material.gather',
     find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | null {
@@ -26,27 +27,16 @@ export function createMaterialGiver(): WorkGiver {
         .filter(item => item.expected !== undefined)
         .map(item => key(itemPosition(plan, item))))
       const self = world.self.pos
-      const box = {
-        min: { x: Math.floor(self.x) - SEARCH_RADIUS, y: Math.floor(self.y) - SEARCH_RADIUS, z: Math.floor(self.z) - SEARCH_RADIUS },
-        max: { x: Math.floor(self.x) + SEARCH_RADIUS, y: Math.floor(self.y) + SEARCH_RADIUS, z: Math.floor(self.z) + SEARCH_RADIUS },
-      }
-      const blocks = world.blocksIn(box).filter(block => block.loaded && block.pos !== undefined)
+      area?.update(self, ctx.now)
+      const nearby = area === undefined ? scanSnapshot(world) : undefined
 
       for (const [item, amount] of Object.entries(shortage.missing)) {
         if (amount <= 0) continue
         const sources = new Set(materialSources(item))
         if (sources.size === 0) continue
-        let best: { pos: Vec3; distance: number } | undefined
-        for (const block of blocks) {
-          if (!sources.has(block.name) || block.pos === undefined) continue
-          if (planPositions.has(key(block.pos))) continue
-          const distance = Math.hypot(
-            block.pos.x + 0.5 - self.x,
-            block.pos.y + 0.5 - (self.y + 1.5),
-            block.pos.z + 0.5 - self.z,
-          )
-          if (best === undefined || distance < best.distance) best = { pos: block.pos, distance }
-        }
+        const best = area === undefined
+          ? nearestInSnapshot(nearby!, sources, planPositions, self)
+          : nearestInArea(area, item, planPositions, self)
         if (best === undefined) continue
         if (best.distance > REACH) {
           const handoff: Handoff = {
@@ -73,6 +63,45 @@ export function createMaterialGiver(): WorkGiver {
       return null
     },
   }
+}
+
+function scanSnapshot(world: WorldView): ReturnType<WorldView['blocksIn']> {
+  const self = world.self.pos
+  const box = {
+    min: { x: Math.floor(self.x) - SEARCH_RADIUS, y: Math.floor(self.y) - SEARCH_RADIUS, z: Math.floor(self.z) - SEARCH_RADIUS },
+    max: { x: Math.floor(self.x) + SEARCH_RADIUS, y: Math.floor(self.y) + SEARCH_RADIUS, z: Math.floor(self.z) + SEARCH_RADIUS },
+  }
+  return world.blocksIn(box).filter(block => block.loaded && block.pos !== undefined)
+}
+
+function nearestInSnapshot(
+  blocks: ReturnType<WorldView['blocksIn']>,
+  sources: Set<string>,
+  planPositions: Set<string>,
+  self: Vec3,
+): { pos: Vec3; distance: number } | undefined {
+  let best: { pos: Vec3; distance: number } | undefined
+  for (const block of blocks) {
+    if (block.pos === undefined || !sources.has(block.name) || planPositions.has(key(block.pos))) continue
+    const distance = Math.hypot(
+      block.pos.x + 0.5 - self.x,
+      block.pos.y + 0.5 - (self.y + 1.5),
+      block.pos.z + 0.5 - self.z,
+    )
+    if (best === undefined || distance < best.distance) best = { pos: block.pos, distance }
+  }
+  return best
+}
+
+function nearestInArea(
+  area: AreaResourceIndex,
+  item: string,
+  planPositions: Set<string>,
+  self: Vec3,
+): { pos: Vec3; distance: number } | undefined {
+  const found = area.nearest(item, self)
+  if (found === undefined || planPositions.has(key(found.pos))) return undefined
+  return found
 }
 
 function key(position: Vec3): string {
