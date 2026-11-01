@@ -71,6 +71,7 @@ function fakePort(options: PortOptions = {}): {
     },
     beginWrite: () => {},
     endWrite: () => {},
+    inventory: () => [],
   } as unknown as ClientPort
   return {
     port,
@@ -149,7 +150,10 @@ describe('clear driver', () => {
     fake.world.set('1,64,0', block('stone', { x: 1, y: 64, z: 0 }))
     const handle = createClearDriver().start(job({ x: 1, y: 64, z: 0 }), { port: fake.port, now: () => 0 })
     await wait(260)
-    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'clear', block: 'stone', tool: null },
+    })
     expect(fake.digs).toHaveLength(1)
     expect(fake.world.get('1,64,0')?.name).toBe('air')
   })

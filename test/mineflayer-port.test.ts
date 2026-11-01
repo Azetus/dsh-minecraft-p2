@@ -94,6 +94,24 @@ describe('mineflayer port actions', () => {
     expect(source.calls.length).toBe(before)
   })
 
+  it('exposes adapter harvest metadata for tool selection', () => {
+    const { port, bot } = createPort()
+    bot.blocks.set('1,64,1', {
+      name: 'stone',
+      material: 'mineable/pickaxe',
+      diggable: true,
+      hardness: 1.5,
+      harvestTools: { '820': true, '825': true },
+    })
+    expect(port.blockAt({ x: 1, y: 64, z: 1 })).toMatchObject({
+      name: 'stone',
+      material: 'mineable/pickaxe',
+      diggable: true,
+      hardness: 1.5,
+      harvestTools: ['wooden_pickaxe', 'stone_pickaxe'],
+    })
+  })
+
   it('returns failed with the provider code when an act fails', async () => {
     const { port, source } = createPort()
     source.mode = 'fail'

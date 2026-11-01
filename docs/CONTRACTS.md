@@ -21,7 +21,16 @@
 
 ```ts
 type Vec3 = { x: number; y: number; z: number }
-type BlockInfo = { name: string; state?: Record<string, string>; loaded: boolean; collision?: number[][] }
+type BlockInfo = {
+  name: string
+  state?: Record<string, string>
+  loaded: boolean
+  collision?: number[][]
+  material?: string
+  diggable?: boolean
+  hardness?: number
+  harvestTools?: string[]
+}
 type Item = { slot: number; name: string; count: number }
 
 interface ClientPort {
@@ -61,6 +70,11 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 **语义**
 
 - `blockAt` 返回 `null` 表示未加载，**不等于空气**。
+- `BlockInfo.harvestTools` 是适配器给出的“可掉落工具”名称列表；`[]` 表示手即可。缺省表示适配器不知道，不能当作“需要任何工具”。
+- `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
+  - `harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；
+  - `clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
+  - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 还要读回背包增量，没有增量返回 `HARVEST_NO_DROP`。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 
@@ -247,3 +261,7 @@ type WorkState =
 | `STOP_UNCONFIRMED` | 停止无法确认 → tracker fault |
 | `DEFINITION_ERROR` | 树/模板/注册表定义错误 |
 | `INSUFFICIENT_EVIDENCE` | 验证证据不足（不等于失败） |
+| `TOOL_INSUFFICIENT` | `harvest` 没有可用工具 |
+| `BLOCK_UNBREAKABLE` | 方块不可破坏 |
+| `DIG_NO_BLOCK` | 目标是空气/没有方块 |
+| `HARVEST_NO_DROP` | 方块已移除但背包没有增加 |

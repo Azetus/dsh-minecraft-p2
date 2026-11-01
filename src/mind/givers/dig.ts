@@ -21,10 +21,14 @@ export function createDigOrderGiver(active: () => OrderView | undefined): WorkGi
       if (current === undefined || current.order.verb !== 'dig') return null
       const pos = position(current.order.params)
       if (pos === undefined) return null
+      const purpose = current.order.params?.purpose
       return {
         driverId: 'dig',
         target: { kind: 'point', pos },
-        params: pos,
+        params: {
+          ...pos,
+          ...(purpose === 'clear' || purpose === 'harvest' ? { purpose } : {}),
+        },
         keys: `order.dig:${current.order.id}`,
         orderId: current.order.id,
       }

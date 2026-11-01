@@ -340,6 +340,7 @@ function validateOrder(value: unknown): Order {
     throw orderError('INVALID_ORDER', 'order params must be an object')
   }
   if (value.verb === 'traverse') validateTraverseParams(value.params)
+  if (value.verb === 'dig') validateDigParams(value.params)
   if (value.verb === 'place') validatePlaceParams(value.params)
   if (value.verb === 'equip') validateEquipParams(value.params)
   if (value.verb === 'use') validateUseParams(value.params)
@@ -395,6 +396,14 @@ function requirePosition(params: Record<string, JsonValue>, verb: string): void 
     if (typeof params[axis] !== 'number' || !Number.isFinite(params[axis])) {
       throw orderError('INVALID_ORDER', `${verb}.${axis} must be a finite number`)
     }
+  }
+}
+
+function validateDigParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'dig requires params {x,y,z,purpose?}')
+  requirePosition(params, 'dig')
+  if (params.purpose !== undefined && params.purpose !== 'clear' && params.purpose !== 'harvest') {
+    throw orderError('INVALID_ORDER', 'dig.purpose must be clear or harvest')
   }
 }
 

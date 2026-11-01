@@ -59,6 +59,10 @@ type BlockLike = {
   name: string
   boundingBox?: string
   shapes?: number[][]
+  material?: string
+  diggable?: boolean
+  hardness?: number
+  harvestTools?: Record<string, boolean>
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -130,7 +134,7 @@ export class MineflayerClientPort implements ClientPort {
 
   blockAt(p: Vec3): BlockInfo | null {
     const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
-    return block === null ? null : blockInfo(block)
+    return block === null ? null : blockInfo(block, this.bot.registry)
   }
 
   identity(): { worldId: string; characterId: string } {
@@ -144,7 +148,7 @@ export class MineflayerClientPort implements ClientPort {
 
   async containerAt(p: Vec3): Promise<ContainerCheckResult> {    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
     if (block === null) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
-    const info = blockInfo(block)
+    const info = blockInfo(block, this.bot.registry)
     if (!info.loaded) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
     type ContainerWindow = {
       containerItems?: () => Array<{ slot?: number; name: string; count: number }>
@@ -228,7 +232,7 @@ export class MineflayerClientPort implements ClientPort {
             continue
           }
           if (filter !== undefined && !filter.includes(block.name)) continue
-          result.push({ ...blockInfo(block), pos: { x, y, z } })
+          result.push({ ...blockInfo(block, this.bot.registry), pos: { x, y, z } })
         }
       }
     }
@@ -586,18 +590,30 @@ export function portCapabilities(providerCapabilities: readonly string[]): Capab
   return capabilities
 }
 
-function blockInfo(block: BlockLike): BlockInfo {
+function blockInfo(block: BlockLike, registry?: unknown): BlockInfo {
   const properties = typeof block.getProperties === 'function' ? block.getProperties() : {}
   const state: Record<string, string> = {}
   for (const [key, value] of Object.entries(properties)) state[key] = String(value)
   const solid = typeof block.boundingBox === 'string' ? block.boundingBox !== 'empty' : undefined
+  const harvestTools = block.harvestTools === undefined
+    ? undefined
+    : Object.keys(block.harvestTools).map(id => itemName(registry, id))
   const base = {
     name: block.name,
     loaded: true as const,
     ...(solid === undefined ? {} : { solid }),
     ...(block.shapes === undefined ? {} : { collision: block.shapes.map(shape => [...shape]) }),
+    ...(block.material === undefined ? {} : { material: block.material }),
+    ...(block.diggable === undefined ? {} : { diggable: block.diggable }),
+    ...(block.hardness === undefined ? {} : { hardness: block.hardness }),
+    ...(harvestTools === undefined ? {} : { harvestTools }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
+}
+
+function itemName(registry: unknown, id: string): string {
+  const items = (registry as { items?: Record<string, { name?: string }> } | undefined)?.items
+  return (items?.[String(id)]?.name ?? `item_${id}`).replace(/^minecraft:/u, '')
 }
 
 function resolveDroppedItem(

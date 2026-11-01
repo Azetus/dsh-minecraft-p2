@@ -14,6 +14,10 @@ import type { WriteToken } from '../../src/port/index.ts'
 
 export type FakeBlock = {
   name: string
+  material?: string
+  diggable?: boolean
+  hardness?: number
+  harvestTools?: Record<string, boolean>
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -38,6 +42,12 @@ export class FakeBot extends EventEmitter {
 
   health = 20
   food = 18
+  registry = {
+    items: {
+      '820': { name: 'wooden_pickaxe' },
+      '825': { name: 'stone_pickaxe' },
+    } as Record<string, { name: string }>,
+  }
   heldItem: { name: string; count: number } | null = { name: 'stone', count: 1 }
   time: { timeOfDay: number | bigint; age: number | bigint } = { timeOfDay: 6000n, age: 1234n }
   entities: Record<number, { id: number; name?: string; position?: { x: number; y: number; z: number } }> = {

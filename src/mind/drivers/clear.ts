@@ -1,5 +1,6 @@
 import type { BlockInfo, ClientPort } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
+import { chooseTool } from '../tools.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle, sleep } from './handle.ts'
 
@@ -53,6 +54,13 @@ async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverR
   }
   if (isAir(before.name)) return { state: 'succeeded' }
 
+  const choice = chooseTool(before, port.inventory(), 'clear')
+  if (choice.error !== undefined) return { state: 'failed', code: choice.error }
+  if (choice.item !== undefined) {
+    const equipped = await port.equip(choice.item)
+    if (equipped.state !== 'ok') return { state: 'failed', code: equipped.code ?? 'EQUIP_FAILED' }
+  }
+
   const result = await port.dig(target)
   if (result.state === 'failed') return { state: 'failed', code: result.code ?? 'DIG_FAILED' }
   if (result.state === 'unknown') return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
@@ -60,7 +68,12 @@ async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverR
   const first = port.blockAt(target)
   await sleep(200)
   const second = port.blockAt(target)
-  if (isAirBlock(first) && isAirBlock(second)) return { state: 'succeeded' }
+  if (isAirBlock(first) && isAirBlock(second)) {
+    return {
+      state: 'succeeded',
+      observed: { kind: 'clear', ...target, block: before.name, tool: choice.item ?? null },
+    }
+  }
   return { state: 'failed', code: 'READBACK_UNSTABLE' }
 }
 

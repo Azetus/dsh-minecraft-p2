@@ -18,6 +18,12 @@ export type BlockInfo = {
   collision?: number[][]
   /** Set by `blocksIn` entries; `blockAt` already knows the position. */
   pos?: Vec3
+  /** Adapter-provided harvest metadata; omitted when the adapter cannot tell. */
+  material?: string
+  diggable?: boolean
+  hardness?: number
+  /** Item names that can harvest this block; [] means hand is sufficient. */
+  harvestTools?: string[]
 }
 
 export type Item = { slot: number; name: string; count: number }

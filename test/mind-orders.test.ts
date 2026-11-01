@@ -81,6 +81,12 @@ describe('order store', () => {
       .toBe('INVALID_ORDER')
     expect(errorCode(() => store.enqueue({ id: 'bad-container', verb: 'container',
       params: { x: 0, y: 64, z: 0, action: 'nope', item: 'coal' } }))).toBe('INVALID_ORDER')
+    expect(store.enqueue({ id: 'dig-good', verb: 'dig', params: { x: 0, y: 64, z: 0, purpose: 'harvest' } }).state)
+      .toBe('queued')
+    expect(errorCode(() => store.enqueue({ id: 'dig-bad-purpose', verb: 'dig',
+      params: { x: 0, y: 64, z: 0, purpose: 'mine' } }))).toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'dig-bad-pos', verb: 'dig', params: { x: 0, y: 64 } })))
+      .toBe('INVALID_ORDER')
   })
 
   it('validates per-order hazard permissions and the traverse verb', () => {

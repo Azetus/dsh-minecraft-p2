@@ -27,6 +27,7 @@ p2_body    {action: start|stop|restart|status}
 - **一次只推进一条活动 order**；后续 order 排队。
 - 词表受限：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
+- `dig` 默认 `purpose:"harvest"`；P2 会自己从背包选工具并装备。只想清掉方块、不要求产物时显式用 `purpose:"clear"`。
 - 目标必须可验证：终态由 Verifier 判定，你不需要在 order 里写验证步骤。
 - 可选 `blueprint`：只给蓝图/模板，选址与可达性由 Planner 处理。
 
@@ -45,6 +46,8 @@ p2_body    {action: start|stop|restart|status}
 | 报告里的 code | 决策 |
 |---|---|
 | `NO_MATERIAL` | 补材料 order，或调整 `materialPolicy`（仅声明过的材料可自动补给） |
+| `TOOL_INSUFFICIENT` | 先装备/合成合适工具；或确认是否应该用 `purpose:"clear"` |
+| `HARVEST_NO_DROP` | 检查工具类型/等级与背包空间；不要用同一条命令重复挖 |
 | `SITE_NOT_FOUND` | 换区域（`within` 换 anchor/半径）或换模板变体（flat/slope/dig-in） |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位；换模板或换点，不要重复同一条 order |
 | `UNREACHABLE` | 检查 anchor 与路径；必要时先 `go` 到开阔处 |

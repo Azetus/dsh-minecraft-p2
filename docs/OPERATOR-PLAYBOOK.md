@@ -46,6 +46,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | 现象 | 处理 |
 |---|---|
 | `blocked(NO_MATERIAL)` | 补材料 order，或改 `materialPolicy` 允许自动补给 |
+| `failed(TOOL_INSUFFICIENT)` | 先装备/合成合适工具；只想清掉方块时用 `dig purpose:"clear"` |
+| `failed(HARVEST_NO_DROP)` | 工具类型/等级不对或背包已满；读回背包后换工具/清空间 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
 import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
+import { createDigOrderGiver } from '../src/mind/givers/dig.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
 import { MAIN_TREE } from '../src/mind/trees.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
@@ -173,6 +174,16 @@ describe('order and traverse givers', () => {
       order: { id: 'a-1', verb: 'attack', params: { entityId: 'zombie-1' } },
     }))
     expect(attack.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+  })
+
+  it('passes the dig purpose through to the driver', () => {
+    const dig = createDigOrderGiver(() => ({
+      order: { id: 'd-1', verb: 'dig', params: { x: 2, y: 64, z: 0, purpose: 'clear' } },
+    }))
+    expect(dig.find(ctx, flatWorld())).toMatchObject({
+      driverId: 'dig',
+      params: { x: 2, y: 64, z: 0, purpose: 'clear' },
+    })
   })
 
 })
