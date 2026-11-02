@@ -27,6 +27,11 @@ const MOVE_SCHEMA: SchemaNode = {
     allowDiagonal: { type: 'boolean' },
     allowPlace: { type: 'boolean' },
     material: { type: 'string' },
+    /**
+     * Unvalidated vanilla-style path: best effort only. It never grants
+     * break/place, and the result is marked `unvalidated`.
+     */
+    risky: { type: 'boolean' },
     unstickDig: { type: 'array', items: { type: 'object', properties: {
       x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
     }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
@@ -47,6 +52,7 @@ type MoveParams = {
   allowDiagonal?: boolean
   allowPlace?: boolean
   material?: string
+  risky?: boolean
   unstickDig?: MoveOptions['unstickDig']
   intent?: MoveOptions['intent']
 }
@@ -114,6 +120,7 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       ...(params.allowDiagonal === undefined ? {} : { allowDiagonal: params.allowDiagonal }),
       ...(params.allowPlace === undefined ? {} : { allowPlace: params.allowPlace }),
       ...(params.material === undefined ? {} : { material: params.material }),
+      ...(params.risky === true ? { planner: 'vanilla' as const } : {}),
     })
     last = result
     if (result.state === 'ok') {

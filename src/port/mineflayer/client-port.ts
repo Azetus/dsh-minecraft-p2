@@ -362,6 +362,7 @@ export class MineflayerClientPort implements ClientPort {
       ...(opts.allowDiagonal === undefined ? {} : { allowDiagonal: opts.allowDiagonal }),
       ...(opts.allowPlace === undefined ? {} : { allowPlace: opts.allowPlace }),
       ...(opts.material === undefined ? {} : { material: opts.material }),
+      ...(opts.planner === undefined ? {} : { planner: opts.planner }),
     }, timeoutMs)
   }
 

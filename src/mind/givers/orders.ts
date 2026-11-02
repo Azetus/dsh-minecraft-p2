@@ -72,10 +72,17 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
       }
       const exact = current.order.params?.exact === true
       const allowPlace = current.order.params?.allowPlace === true
-      const checked = standability(world, requested)
-      const pos = exact || allowPlace || checked.state === 'valid' || checked.state === 'unknown'
+      const risky = current.order.params?.risky === true
+      // Risky mode produces its own goal (vanilla snapping + accuracy 0), so the
+      // safe standability check must not pre-empt it.
+      const pos = risky || exact || allowPlace
         ? requested
-        : nearestStandable(world, requested, 2, requested, 2)
+        : (() => {
+            const checked = standability(world, requested)
+            return checked.state === 'valid' || checked.state === 'unknown'
+              ? requested
+              : nearestStandable(world, requested, 2, requested, 2)
+          })()
       if (pos === undefined) return { kind: 'hold', reason: 'GO_NO_STAND', notify: true }
       return {
         driverId: 'move',
@@ -88,6 +95,7 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
           ...(current.order.params?.allowDiagonal === true ? { allowDiagonal: true } : {}),
           ...(current.order.params?.allowPlace === true ? { allowPlace: true } : {}),
           ...(typeof current.order.params?.material === 'string' ? { material: current.order.params.material } : {}),
+          ...(risky ? { risky: true } : {}),
         },
         keys: `order.go:${current.order.id}`,
         orderId: current.order.id,

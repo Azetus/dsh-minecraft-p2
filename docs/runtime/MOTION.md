@@ -227,7 +227,25 @@ interface Move {
 - **支撑面的已知 over-approximation**：footprint 取最大支撑面会把薄片也算成可站（竹子、墙头、花盆/蛋糕、可可、水晶、推头等 18px 级薄面），全量 26,684 个方块状态里有 15 类非楼梯方块因此从"不可站"变"可站"。这是有意的保守方向（宁可多算可站，也不误杀楼梯与 farmland），执行器对因此失败的边有 STUCK 边界；不使用方块名表收窄。
 - **楼梯高度近似**：站立高度仍是一格一个值，楼梯每级按 1.0 台阶处理（不做 0.5 平滑上台阶）；这是双高度 cell 之外的显式取舍。
 
-### 4.1 桥与垫脚的策略边界
+### 4.2 未校验路径（vanilla 式，显式 opt-in）
+
+安全规划器保证“不产生假路”，代价是它不支持的边只能整体拒绝。为保留“像人类玩家一样行动、允许犯错”的灵活性，另有一条**未校验**通道：复刻原版 `WalkNodeEvaluator` + `PathFinder` + `MoveControl` 的思路（1 格节点、无逐边前置、贪心跟随）。它的语义是“尽力而为”，不是“保证可达”。
+
+- 接口：`go { risky: true }`（默认 false）；port `MoveOptions.planner: 'astar' | 'vanilla'`。`risky` 不授予 break/place/parkour/diagonal。
+- 目标：按原版 `createPath` 吸附（空气格→其正下方第一块地面之上；实心格→其上一格；其余原样），再做**精度 0** 的精确搜索；未命中时与原版一致，沿“最接近路径”走完并如实报告。
+- 结果：`planner`、`unvalidated: true`、`waypoints`、`reachedPlan`、`closest`、`goalAdjustedTo`、`reachedExact`、固定 `note`。
+- 失败码：`VANILLA_NO_PATH`（含“走到最近点仍未到达”）、`VANILLA_STUCK`、`VANILLA_TIMEOUT`；均不重试。
+- 备选：安全规划器以 `GOTO_NO_PATH` / `GOTO_SEARCH_TIMEOUT` 失败时，附 `observed.alternative = { planner:'vanilla', unvalidated:true, available, waypoints, closest }`；只报告、不执行。
+- 排除仍用 tag：`hazard` / `lava` → 不是节点；不新增危险方块表，不做风险检测或评分。
+- 节点桶：`walkable / water（仅水面格）/ climbable / door`；深水内部没有节点（即不潜水）；`door` 只对可开的门/栅栏门成立，锁门仍是“不是节点”。
+- 落预算 **3**：原版 `Mob.getMaxFallDistance()` = `floor(0 + 3)`（追击时按血量/难度放宽，不建模）。
+- 跟随：推进容差 0.45 水平 / 1.0 垂直（原版 `PathNavigation.followThePath`）；卡住窗口 5 s（100 ticks），只上报不重规划。
+- 搜索预算：区域 32 格、1024 节点、250 ms（原版是 `floor(followRange * 16)` 节点、`followRange + 8` 区域）。
+- 参考边界：原版对岩浆/栅栏/闭门/冰面等由 `PathType` malus 排除，对火/甜浆果等是“可通行但有代价”；我们只保留“危险 → 不是节点”，其余不建模。
+- 另一种目标选择（未实现，仅记录）：先对节点图做 BFS 找一个可站目标，再以精度 0 寻路；本实现直接采用原版的“建目标 + 精度 0”。
+- 非目标：风险检测/评分、每方块危险枚举、break/place/parkour/diagonal、潜水/waterline/氧气、第二套 Rules、跟随中重规划、路径质量指标。
+
+### 4.3 桥与垫脚的策略边界
 
 - 默认 `allowPlace=false`：高处不可达就 `item blocked` / `unreachable`，不自动改变世界。
 - 只有 order/policy 显式授权时才允许 `Bridge`/`Pillar`，并把放置的材料、预算、失败原因写进结果。
@@ -338,6 +356,7 @@ interface Move {
 - **同 build 回归**：P1/P2、P3、capabilities（unstick / safe fall）全部通过。
 - **26.1 复跑（2026-11-02，ping 报 protocol 775）**：`motion-boundary-accept` 28/28、P1/P2、P3、capabilities、`motion-query-accept` 7/7、P4、`traverse`（bridge/scaffold）、`lethal_fall`（`died=true`）全部通过。证据 `accept-boundary-water-2026-11-02T10-06-23-229Z.json`、`accept-p1-2026-11-02T10-09-01-054Z.json`、`accept-p3-2026-11-02T10-09-32-632Z.json`、`accept-capabilities-2026-11-02T10-10-00-217Z.json`、`accept-query-2026-11-02T10-13-02-055Z.json`、`accept-p4-2026-11-02T10-12-10-333Z.json`、`accept-traverse-2026-11-02T10-15-26-947Z.json`、`accept-lethal-2026-11-02T10-15-42-428Z.json`（均在 `.m5-runs/` 下）。
 - 26.1 与 1.21.1 的差异只体现在数据面（协议 775、方块/状态集合），本轮阈值与几何判据不依赖版本。
+- **risky 模式实机（1.21.1，2026-11-02）**：`motion-risky-accept` 8/8 —— 2 深河水面横渡、安全拒绝附 `observed.alternative`（body 不动）、3 格落差通过、4 格落差拒绝、沿岩浆岸绕行、岩浆目标拒绝并按原版走完最接近路径、梯子上平台、risky 端到端过河；同轮 `motion-boundary-accept`（water 阶段）28/28 回归通过，默认路径零变化。证据 `report-2026-11-02T11-49-14-755Z.json`、`accept-boundary-water-2026-11-02T11-45-12-085Z.json`（均在 `.m5-runs/` 下）。
 
 ## 10. 阶段与删除
 

@@ -1073,6 +1073,9 @@ const NON_RETRYABLE_CODES = new Set([
   'CRAFT_NO_TABLE', 'CRAFT_NO_INGREDIENTS', 'CRAFT_UNKNOWN_RECIPE',
   'ATTACK_TARGET_LOST', 'ATTACK_TARGET_PROTECTED', 'ATTACK_TARGET_CHANGED',
   'ATTACK_CHASE_LIMIT', 'ATTACK_NO_HIT', 'ATTACK_NOT_KILLED',
+  // Risky motion is explicitly opt-in: retrying an unvalidated path is the
+  // Agent's call, not the order loop's.
+  'VANILLA_NO_PATH', 'VANILLA_STUCK', 'VANILLA_TIMEOUT',
 ])
 
 function shouldRetryOrderJob(event: TrackerEvent, verb: string | undefined): boolean {

@@ -48,6 +48,12 @@ export type MoveOptions = {
   allowDiagonal?: boolean
   allowPlace?: boolean
   material?: string
+  /**
+   * `astar` (default) is the validated planner: it refuses edges it cannot
+   * prove. `vanilla` is the unvalidated, best-effort mode (`go { risky: true }`):
+   * it never promises safety and may drown or fall.
+   */
+  planner?: 'astar' | 'vanilla'
 }
 
 /**

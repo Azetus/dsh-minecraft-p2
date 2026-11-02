@@ -2,7 +2,13 @@ import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
 import { Vec3 } from 'vec3'
 import { MotionRun } from '../motion/mineflayer/run.ts'
+import { VanillaRun } from '../motion/mineflayer/vanilla-run.ts'
+import { MineflayerMotionWorld } from '../motion/mineflayer/world.ts'
+import { cellOf } from '../motion/model/block.ts'
 import { defaultConstraints } from '../motion/model/types.ts'
+import type { Cell } from '../motion/model/types.ts'
+import { VanillaNodeReader } from '../motion/vanilla/classify.ts'
+import { planVanillaPath } from '../motion/vanilla/search.ts'
 import { attachBlockTags } from '../port/mineflayer/block-tags.ts'
 import { parseUnstickBlocks } from '../port/policy.ts'
 
@@ -1056,6 +1062,8 @@ class MineflayerActHandle implements ActHandle {
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly startedAt = Date.now()
   private motionRun: MotionRun | undefined
+  private vanillaRun: VanillaRun | undefined
+  private motionTarget: Cell | undefined
   private failureDetails: JsonValue | undefined
 
   constructor(
@@ -1084,6 +1092,19 @@ class MineflayerActHandle implements ActHandle {
       } else if (result.state === 'failed') {
         this.failed = new Error(result.code ?? 'GOTO_ERROR')
         this.failedCode = result.code ?? 'GOTO_ERROR'
+        this.failureDetails = this.withVanillaAlternative(result.code, result.observed)
+      } else if (result.state === 'canceled') {
+        this.cancelled = true
+      }
+    }
+    if (!this.completed && this.failed === undefined && this.vanillaRun !== undefined) {
+      const result = this.vanillaRun.tick(Date.now())
+      if (result.state === 'succeeded') {
+        this.result = result.observed ?? this.position()
+        this.completed = true
+      } else if (result.state === 'failed') {
+        this.failed = new Error(result.code ?? 'VANILLA_ERROR')
+        this.failedCode = result.code ?? 'VANILLA_ERROR'
         this.failureDetails = result.observed
       } else if (result.state === 'canceled') {
         this.cancelled = true
@@ -1108,6 +1129,9 @@ class MineflayerActHandle implements ActHandle {
     if (this.motionRun !== undefined) {
       return { status: 'running', progress: this.motionRun.report() }
     }
+    if (this.vanillaRun !== undefined) {
+      return { status: 'running', progress: this.vanillaRun.report() }
+    }
     return { status: 'running' }
   }
 
@@ -1130,6 +1154,9 @@ class MineflayerActHandle implements ActHandle {
       if (this.motionRun !== undefined) {
         if (!this.motionRun.stop()) unknown = true
       }
+      if (this.vanillaRun !== undefined) {
+        if (!this.vanillaRun.stop()) unknown = true
+      }
     }
     if (this.name === 'fish') attempt(() => this.bot.deactivateItem())
     if (this.name === 'sleep') {
@@ -1141,6 +1168,40 @@ class MineflayerActHandle implements ActHandle {
     // A cancel flag alone never proves the effect is gone: confirm only what
     // the provider can still observe (pathfinder path, dig target, craft loop).
     this.refreshRelease()
+  }
+
+  /**
+   * Attach a vanilla-mode alternative to a safe-planner refusal. The alternative
+   * is *evidence only*: it says an unvalidated path exists (and how far it gets),
+   * never that the target is safely reachable, and it is not executed.
+   */
+  private withVanillaAlternative(code: string | undefined, observed: JsonValue | undefined): JsonValue | undefined {
+    if (code !== 'GOTO_NO_PATH' && code !== 'GOTO_SEARCH_TIMEOUT') return observed
+    const target = this.motionTarget
+    if (target === undefined) return observed
+    try {
+      const world = new MineflayerMotionWorld(this.bot)
+      const reader = new VanillaNodeReader(world)
+      const plan = planVanillaPath(reader, cellOf(world.self().pos), target, {
+        maxNodes: 1024,
+        maxDistance: 32,
+        timeoutMs: 250,
+      })
+      const alternative: JsonValue = {
+        planner: 'vanilla',
+        unvalidated: true,
+        available: plan.reached,
+        waypoints: plan.waypoints.length,
+        closest: Number.isFinite(plan.closest) ? plan.closest : null,
+        ...(plan.goalAdjustedTo === undefined ? {} : { goalAdjustedTo: { ...plan.goalAdjustedTo } }),
+      }
+      const base: Record<string, JsonValue> = observed !== null && typeof observed === 'object' && !Array.isArray(observed)
+        ? observed as Record<string, JsonValue>
+        : { run: observed ?? null }
+      return { ...base, alternative }
+    } catch {
+      return observed
+    }
   }
 
   /**
@@ -1268,6 +1329,12 @@ class MineflayerActHandle implements ActHandle {
             typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000,
             this.options.actionTimeoutMs,
           )
+          if (this.args.planner === 'vanilla') {
+            this.motionTarget = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
+            this.vanillaRun = new VanillaRun(this.bot, this.motionTarget, {}, timeout)
+            this.vanillaRun.start()
+            return
+          }
           const constraints = defaultConstraints('walk')
           if (this.args.allowParkour === true) constraints.allowParkour = true
           if (this.args.allowDiagonal === true) constraints.allowDiagonal = true
@@ -1282,9 +1349,10 @@ class MineflayerActHandle implements ActHandle {
             : this.args.intent === 'interact' && range <= 1.5
               ? { kind: 'adjacent' as const }
               : { kind: 'near' as const, range }
+          this.motionTarget = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
           this.motionRun = new MotionRun(
             this.bot,
-            { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) },
+            this.motionTarget,
             range,
             timeout,
             { constraints, arrival },
