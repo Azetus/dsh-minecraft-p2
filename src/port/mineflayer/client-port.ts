@@ -340,7 +340,11 @@ export class MineflayerClientPort implements ClientPort {
     if (![target.x, target.y, target.z, range, opts.timeoutMs ?? 1].every(Number.isFinite)
       || range < 0 || range > 8 || (opts.timeoutMs ?? 1) <= 0) return actFailed('INVALID_TARGET', 0)
     const timeoutMs = Math.min(opts.timeoutMs ?? this.timeouts.moveTo, this.timeouts.moveTo)
-    return await this.run('goto', {
+    const motion = opts.motion === true
+      && this.acts.capabilities.includes('motion')
+      && opts.hazards === undefined
+      && opts.unstickDig === undefined
+    return await this.run(motion ? 'motion-goto' : 'goto', {
       x: target.x,
       y: target.y,
       z: target.z,
@@ -351,6 +355,10 @@ export class MineflayerClientPort implements ClientPort {
       ...(opts.unstickDig === undefined ? {} : { unstickDig: opts.unstickDig }),
       ...(opts.intent === undefined ? {} : { intent: opts.intent }),
       ...(opts.hazards === undefined ? {} : { hazards: opts.hazards }),
+      ...(opts.allowParkour === undefined ? {} : { allowParkour: opts.allowParkour }),
+      ...(opts.allowDiagonal === undefined ? {} : { allowDiagonal: opts.allowDiagonal }),
+      ...(opts.allowPlace === undefined ? {} : { allowPlace: opts.allowPlace }),
+      ...(opts.material === undefined ? {} : { material: opts.material }),
     }, timeoutMs)
   }
 
@@ -438,6 +446,43 @@ export class MineflayerClientPort implements ClientPort {
     this.bot.chat(text)
   }
 
+  canSee(entityId: string): boolean {
+    const entity = this.bot.entities[Number(entityId)] as unknown as {
+      position?: { x: number; y: number; z: number }
+      height?: number
+    } | undefined
+    const self = this.bot.entity as unknown as { position?: { x: number; y: number; z: number } } | undefined
+    if (entity?.position === undefined || self?.position === undefined) return false
+    const eye = new Vec3Class(self.position.x, self.position.y + 1.62, self.position.z)
+    const target = new Vec3Class(
+      entity.position.x,
+      entity.position.y + (entity.height ?? 1.8) / 2,
+      entity.position.z,
+    )
+    const direction = target.minus(eye)
+    const distance = direction.norm()
+    if (distance <= 0.1) return true
+    const hit = this.bot.world.raycast(eye, direction.normalize(), distance)
+    return hit === null || hit.intersect.distanceTo(eye) >= distance - 0.4
+  }
+
+  attackSpeed(): number {
+    const attributes = (this.bot.entity as unknown as {
+      attributes?: Record<string, { value?: number } | number>
+    } | undefined)?.attributes
+    if (attributes !== undefined) {
+      for (const key of ['generic.attack_speed', 'minecraft:generic.attack_speed', 'attack_speed', 'generic.attackSpeed']) {
+        const entry = attributes[key]
+        if (typeof entry === 'number' && Number.isFinite(entry) && entry > 0) return entry
+        if (entry !== undefined && typeof entry === 'object'
+          && typeof entry.value === 'number' && Number.isFinite(entry.value) && entry.value > 0) {
+          return entry.value
+        }
+      }
+    }
+    return 4
+  }
+
   on(event: ClientEvent, cb: (payload: JsonValue) => void): void {
     let listeners = this.listeners.get(event)
     if (listeners === undefined) {
@@ -445,6 +490,10 @@ export class MineflayerClientPort implements ClientPort {
       this.listeners.set(event, listeners)
     }
     listeners.add(cb)
+  }
+
+  off(event: ClientEvent, cb: (payload: JsonValue) => void): void {
+    this.listeners.get(event)?.delete(cb)
   }
 
   capabilities(): Capability[] {
@@ -486,6 +535,7 @@ export class MineflayerClientPort implements ClientPort {
     const startedAt = this.now()
     const epoch = this.gate.currentEpoch()
     if (epoch === undefined) return staleWriteResult(0)
+    const isMove = name === 'goto' || name === 'motion-goto'
 
     let handle: ActHandle
     try {
@@ -497,14 +547,14 @@ export class MineflayerClientPort implements ClientPort {
     const entry = { handle, epoch }
     this.running.add(entry)
     try {
-      if (name === 'goto') this.emit('move.started', { target: args, from: this.self().pos, epoch })
-      const waited = await this.poll(handle, timeoutMs, name === 'goto' ? epoch : undefined)
+      if (isMove) this.emit('move.started', { target: args, from: this.self().pos, epoch })
+      const waited = await this.poll(handle, timeoutMs, isMove ? epoch : undefined)
       // Release uncertainty must survive revocation; otherwise the next driver
       // would see an ordinary stale result and assume it is safe to dispatch.
       if ((waited.kind === 'timeout' && !waited.released)
         || (waited.kind === 'done' && waited.poll.status === 'failed' && waited.poll.error.code === 'STOP_UNCONFIRMED')) {
         const observed = waited.kind === 'timeout' ? waited.observed : waited.poll.status === 'failed' ? waited.poll.error.details : undefined
-        if (name === 'goto' && this.gate.isCurrent(epoch)) {
+        if (isMove && this.gate.isCurrent(epoch)) {
           this.emit('move.finished', { epoch, state: 'unknown', code: 'STOP_UNCONFIRMED', observed: observed ?? null })
         }
         return actUnknown('STOP_UNCONFIRMED', this.now() - startedAt, observed)
@@ -512,24 +562,24 @@ export class MineflayerClientPort implements ClientPort {
       // A result produced after the authority moved on is stale, not success.
       if (!this.gate.isCurrent(epoch)) return actFailed(PortErrorCodes.STALE_WRITE, this.now() - startedAt)
       if (waited.kind === 'timeout') {
-        if (name === 'goto') this.emit('move.finished', { epoch, state: 'unknown', code: 'CLIENT_TIMEOUT', observed: waited.observed ?? null })
+        if (isMove) this.emit('move.finished', { epoch, state: 'unknown', code: 'CLIENT_TIMEOUT', observed: waited.observed ?? null })
         return actUnknown(PortErrorCodes.CLIENT_TIMEOUT, this.now() - startedAt, waited.observed)
       }
 
       const poll = waited.poll
       if (poll.status === 'succeeded') {
-        if (name === 'goto') this.emit('move.finished', { epoch, state: 'ok', observed: poll.result ?? null })
+        if (isMove) this.emit('move.finished', { epoch, state: 'ok', observed: poll.result ?? null })
         return actOk(this.now() - startedAt, poll.result)
       }
       if (poll.status === 'failed') {
-        if (name === 'goto') {
+        if (isMove) {
           const unknown = /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)
           const data = { epoch, state: unknown ? 'unknown' : 'failed', code: poll.error.code, observed: poll.error.details ?? null }
           if (poll.error.code === 'GOTO_STUCK') this.emit('move.stuck', data)
           if (['GOTO_NO_PATH', 'GOTO_INVALID_TARGET', 'GOTO_TARGET_UNLOADED'].includes(poll.error.code)) this.emit('move.no_path', data)
           this.emit('move.finished', data)
         }
-        if (name === 'goto' && /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)) {
+        if (isMove && /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)) {
           return actUnknown(poll.error.code, this.now() - startedAt, poll.error.details)
         }
         return actFailed(poll.error.code, this.now() - startedAt, poll.error.details)
@@ -602,6 +652,14 @@ export class MineflayerClientPort implements ClientPort {
     })
     this.bot.on('health', () => this.emit('damaged', { health: this.bot.health }))
     this.bot.on('death', () => this.emit('died', {}))
+    this.bot.on('entityHurt', entity => {
+      const id = (entity as unknown as { id?: number }).id
+      if (typeof id === 'number') this.emit('entityHurt', { entityId: String(id) })
+    })
+    this.bot.on('entityDead', entity => {
+      const id = (entity as unknown as { id?: number }).id
+      if (typeof id === 'number') this.emit('entityDead', { entityId: String(id) })
+    })
     this.bot.on('playerCollect', collector => {
       if (collector === this.bot.entity) this.emit('inventoryChanged', {})
     })

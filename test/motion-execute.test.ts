@@ -1,0 +1,237 @@
+/**
+ * Non-acceptance / 非验收: move state machines, build filtering and executor
+ * recovery. These use controlled input and a scripted feet position; they do
+ * not simulate Minecraft physics. Live acceptance runs on the real server.
+ */
+import { describe, expect, it } from 'vitest'
+
+import {
+  buildMoves,
+  PathExecutor,
+  PillarMove,
+  TraverseMove,
+  AscendMove,
+  FallMove,
+} from '../src/motion/execute/index.ts'
+import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
+import { defaultConstraints, resolveConstraints, type Cell, type MotionConstraints } from '../src/motion/model/index.ts'
+import { matrixFields } from '../src/motion/matrix/index.ts'
+import { buildFixture, FixtureWorld, FULL_CUBE, rawBlock } from './helpers/motion-world.ts'
+
+function contextFor(world: FixtureWorld, patch: Partial<MotionConstraints> = {}) {
+  return new MotionContextSource(world, resolveConstraints(defaultConstraints(), patch))
+}
+
+function movePos(world: FixtureWorld, cell: Cell): void {
+  world.selfView = { ...world.selfView, pos: { x: cell.x + 0.5, y: cell.y, z: cell.z + 0.5 } }
+}
+
+function flatWorld(): FixtureWorld {
+  const world = new FixtureWorld()
+  for (let z = -1; z <= 4; z += 1) {
+    for (let x = -1; x <= 1; x += 1) {
+      world.blocks.set(`${x},63,${z}`, rawBlock('stone', FULL_CUBE))
+      for (let y = 64; y <= 66; y += 1) world.blocks.set(`${x},${y},${z}`, rawBlock('air', []))
+    }
+  }
+  movePos(world, { x: 0, y: 64, z: 0 })
+  return world
+}
+
+describe('buildMoves: only implemented edges become a path', () => {
+  it('accepts cardinal traverse, ascend and fall edges', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,3', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,65,3', rawBlock('air', []))
+    const source = contextFor(world)
+    const ctx = source.next()
+    const traverse = buildMoves([{ x: 0, y: 64, z: 1 }], { x: 0, y: 64, z: 0 }, ctx)
+    expect(traverse.ok).toBe(true)
+    if (traverse.ok) expect(traverse.moves[0]?.kind).toBe('traverse')
+
+    const ascend = buildMoves([{ x: 0, y: 65, z: 3 }], { x: 0, y: 64, z: 2 }, ctx)
+    expect(ascend.ok).toBe(true)
+    if (ascend.ok) expect(ascend.moves[0]?.kind).toBe('ascend')
+
+    const fall = buildMoves([{ x: 0, y: 62, z: 2 }], { x: 0, y: 64, z: 2 }, ctx)
+    expect(fall.ok).toBe(false)
+    if (!fall.ok) expect(['UNSUPPORTED_EDGE', 'EDGE_INFEASIBLE']).toContain(fall.code)
+  })
+
+  it('rejects a parkour edge until the constraint allows it', () => {
+    const gap = matrixFields({ x: 0, y: 100, z: 0 }).find(field => field.id === 'gap-1')
+    expect(gap).toBeDefined()
+    if (gap === undefined) return
+    const world = buildFixture(gap)
+    const source = contextFor(world)
+    const start = { x: gap.origin.x, y: gap.origin.y + 1, z: gap.origin.z + 2 }
+    const dest = { x: gap.origin.x, y: gap.origin.y + 1, z: gap.origin.z + 4 }
+    const blocked = buildMoves([dest], start, source.next())
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) expect(blocked.code).toBe('EDGE_INFEASIBLE')
+
+    const allowed = contextFor(world, { allowParkour: true })
+    const accepted = buildMoves([dest], start, allowed.next())
+    expect(accepted.ok).toBe(true)
+    if (accepted.ok) expect(accepted.moves[0]?.kind).toBe('parkour')
+  })
+
+  it('rejects a diagonal edge unless explicitly allowed', () => {
+    const world = flatWorld()
+    const source = contextFor(world)
+    const dest = { x: 1, y: 64, z: 1 }
+    const blocked = buildMoves([dest], { x: 0, y: 64, z: 0 }, source.next())
+    expect(blocked.ok).toBe(false)
+    const allowed = contextFor(world, { allowDiagonal: true })
+    const accepted = buildMoves([dest], { x: 0, y: 64, z: 0 }, allowed.next())
+    expect(accepted.ok).toBe(true)
+    if (accepted.ok) expect(accepted.moves[0]?.kind).toBe('diagonal')
+  })
+})
+
+describe('move state machines', () => {
+  it('traverses by looking and holding forward, then releases on arrival', () => {
+    const world = flatWorld()
+    const source = contextFor(world)
+    const move = new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 })
+    const ctx = source.next()
+    expect(move.cost(ctx)).toBe(1)
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    expect(move.update(state, ctx)).toBe('running')
+    expect(world.inputs.get('forward')).toBe(true)
+    movePos(world, { x: 0, y: 64, z: 1 })
+    expect(move.update(state, source.next())).toBe('success')
+    expect(world.inputs.get('forward')).toBe(false)
+  })
+
+  it('opens a closed door before walking into its cell', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,1', rawBlock('oak_door', FULL_CUBE, { half: 'lower', open: 'false' }))
+    world.blocks.set('0,65,1', rawBlock('oak_door', FULL_CUBE, { half: 'upper', open: 'false' }))
+    const source = contextFor(world)
+    const move = new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    expect(move.cost(source.next())).toBe(1.2)
+    move.update(state, source.next())
+    expect(world.actions).toContain('use:0,64,1')
+    expect(world.inputs.get('forward')).toBe(false)
+
+    world.blocks.set('0,64,1', rawBlock('oak_door', [], { half: 'lower', open: 'true' }))
+    world.blocks.set('0,65,1', rawBlock('oak_door', [], { half: 'upper', open: 'true' }))
+    move.update(state, source.next())
+    expect(world.inputs.get('forward')).toBe(true)
+    movePos(world, { x: 0, y: 64, z: 1 })
+    expect(move.update(state, source.next())).toBe('success')
+  })
+
+  it('approaches and jumps for a one-block step', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,2', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,65,2', rawBlock('air', []))
+    const source = contextFor(world)
+    const move = new AscendMove({ x: 0, y: 64, z: 1 }, { x: 0, y: 65, z: 2 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+    move.update(state, source.next())
+    expect(world.inputs.get('forward')).toBe(true)
+    expect(world.inputs.get('jump')).not.toBe(true)
+    movePos(world, { x: 0, y: 64, z: 1.7 })
+    move.update(state, source.next())
+    move.update(state, source.next())
+    expect(world.inputs.get('jump')).toBe(true)
+    movePos(world, { x: 0, y: 65, z: 2 })
+    expect(move.update(state, source.next())).toBe('success')
+  })
+
+  it('prices a two-block fall and rejects it when maxFall is lower', () => {
+    const drop = matrixFields({ x: 0, y: 100, z: 0 }).find(field => field.id === 'drop-2')
+    expect(drop).toBeDefined()
+    if (drop === undefined) return
+    const world = buildFixture(drop)
+    const src = { x: drop.start.x, y: drop.start.y, z: drop.start.z + 2 }
+    const dest = { x: drop.start.x, y: drop.start.y - 2, z: drop.start.z + 3 }
+    const move = new FallMove(src, dest)
+    expect(move.cost(contextFor(world).next())).toBeCloseTo(3.5)
+    const shallow = contextFor(world, { maxFall: 1 })
+    expect(move.cost(shallow.next())).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('keeps a pillar edge feasible after its first block is placed', () => {
+    const world = new FixtureWorld()
+    world.blocks.set('0,99,0', rawBlock('stone', FULL_CUBE))
+    for (let y = 100; y <= 104; y += 1) world.blocks.set(`0,${y},0`, rawBlock('air', []))
+    movePos(world, { x: 0, y: 100, z: 0 })
+    const source = contextFor(world, { allowPlace: true, material: 'dirt' })
+    const move = new PillarMove({ x: 0, y: 100, z: 0 }, { x: 0, y: 102, z: 0 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+
+    move.update(state, source.next()) // jump
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101.02, z: 0.5 }, onGround: false }
+    move.update(state, source.next()) // place at y=100
+    expect(world.actions.some(action => action.startsWith('place:0,100,0'))).toBe(true)
+
+    world.blocks.set('0,100,0', rawBlock('dirt', FULL_CUBE))
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101.1, z: 0.5 }, onGround: false }
+    move.update(state, source.next()) // readback -> land
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101, z: 0.5 }, onGround: true }
+    move.update(state, source.next()) // advance to level 1 and jump
+
+    // The placed y=100 block must not make the move's own cost infeasible.
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+  })
+})
+
+describe('PathExecutor', () => {
+  function twoStep() {
+    const world = flatWorld()
+    const source = contextFor(world)
+    const moves = [
+      new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 }),
+      new TraverseMove({ x: 0, y: 64, z: 1 }, { x: 0, y: 64, z: 2 }),
+    ]
+    return { world, source, moves }
+  }
+
+  it('advances through the move list and reports success', () => {
+    const { world, source, moves } = twoStep()
+    const executor = new PathExecutor(moves, () => source.next())
+    expect(executor.tick(0).state).toBe('running')
+    movePos(world, { x: 0, y: 64, z: 1 })
+    expect(executor.tick(100).state).toBe('running')
+    movePos(world, { x: 0, y: 64, z: 2 })
+    expect(executor.tick(200).state).toBe('succeeded')
+    expect(world.inputs.get('forward') ?? false).toBe(false)
+    expect(executor.report().index).toBe(2)
+  })
+
+  it('recovers forward when the body is already on a later valid cell', () => {
+    const { world, source, moves } = twoStep()
+    const executor = new PathExecutor(moves, () => source.next())
+    executor.tick(0)
+    movePos(world, { x: 0, y: 64, z: 2 })
+    executor.tick(100)
+    expect(executor.report().recoveries).toBe(1)
+    expect(executor.tick(200).state).toBe('succeeded')
+  })
+
+  it('aborts when the current edge stops being feasible', () => {
+    const { world, source, moves } = twoStep()
+    const executor = new PathExecutor(moves, () => source.next())
+    executor.tick(0)
+    world.blocks.set('0,63,1', rawBlock('air', []))
+    world.blocks.set('0,64,1', rawBlock('air', []))
+    const result = executor.tick(100)
+    expect(result.state).toBe('failed')
+    expect(result.code).toBe('UNREACHABLE')
+  })
+
+  it('releases every input on cancel', () => {
+    const { world, source, moves } = twoStep()
+    const executor = new PathExecutor(moves, () => source.next())
+    executor.tick(0)
+    executor.cancel()
+    expect(executor.report().status).toBe('canceled')
+    expect(world.inputs.size).toBe(0)
+  })
+})

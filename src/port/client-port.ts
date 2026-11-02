@@ -34,6 +34,8 @@ export type ClientEvent =
   | 'move.finished'
   | 'move.door'
   | 'move.unstick-dig'
+  | 'entityHurt'
+  | 'entityDead'
 
 export type MoveOptions = {
   range?: number
@@ -44,6 +46,17 @@ export type MoveOptions = {
   intent?: 'interact' | 'attack'
   /** Explicit danger permissions for this call; default is empty. */
   hazards?: HazardPolicy
+  /**
+   * Ask the adapter to route through the motion executor when it advertises
+   * one. Plain moves use this; explicit hazards/unstick remain on the legacy
+   * navigation path until the motion move set covers them.
+   */
+  motion?: boolean
+  /** Extra motion capabilities; all default false and require explicit order authorization. */
+  allowParkour?: boolean
+  allowDiagonal?: boolean
+  allowPlace?: boolean
+  material?: string
 }
 
 /**
@@ -113,6 +126,16 @@ export interface ClientPort {
 
   say(text: string): void
 
+  /**
+   * Line of sight to an entity, when the adapter can raycast. Absent means the
+   * adapter cannot tell; callers must not treat that as "visible".
+   */
+  canSee?(entityId: string): boolean
+  /** Current attacks per second from the player/item attributes. */
+  attackSpeed?(): number
+
   on(event: ClientEvent, cb: (payload: JsonValue) => void): void
+  /** Remove a listener registered with `on`; optional for simple adapters. */
+  off?(event: ClientEvent, cb: (payload: JsonValue) => void): void
   capabilities(): Capability[]
 }

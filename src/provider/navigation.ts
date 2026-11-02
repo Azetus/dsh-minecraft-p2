@@ -29,6 +29,12 @@ const doorModes = new WeakMap<Movements, { enabled: boolean }>()
 /** Per-run danger permission; the default is always false. */
 const dropModes = new WeakMap<Movements, { lethalFall: boolean; safeFall: number }>()
 const MAX_HAZARD_DROP = 64
+
+/** Let the planner treat hand-openable doors as passable; the executor opens them. */
+export function setNavigationDoorMode(movements: Movements, enabled: boolean): void {
+  const mode = doorModes.get(movements)
+  if (mode !== undefined) mode.enabled = enabled
+}
 function manualDoor(block: { name?: string }): boolean {
   return block.name !== undefined && (block.name.endsWith('_door') || block.name.endsWith('_fence_gate'))
     && block.name !== 'iron_door' && !block.name.startsWith('copper') && !/copper_door$/u.test(block.name)

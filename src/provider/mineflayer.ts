@@ -3,7 +3,9 @@ import mineflayer from 'mineflayer'
 import type { Movements } from 'mineflayer-pathfinder'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
-import { configureNavigation, NavigationRun } from './navigation.ts'
+import { configureNavigation, NavigationRun, setNavigationDoorMode } from './navigation.ts'
+import { MotionRun } from '../motion/mineflayer/run.ts'
+import { defaultConstraints } from '../motion/model/types.ts'
 import { parseHazardPolicy, parseUnstickBlocks } from '../port/terrain.ts'
 
 /**
@@ -119,6 +121,7 @@ export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
   'trade',
   'respawn',
   'pathfind',
+  'motion',
 ])
 
 /** Runtime shape of the pathfinder package (published as CommonJS). */
@@ -1119,6 +1122,7 @@ class MineflayerActHandle implements ActHandle {
   private lastLookAt = 0
   private lastJumpAt = 0
   private navigationRun: NavigationRun | undefined
+  private motionRun: MotionRun | undefined
   private failureDetails: JsonValue | undefined
 
   constructor(
@@ -1150,7 +1154,21 @@ class MineflayerActHandle implements ActHandle {
     if (!this.completed && this.failed === undefined && this.name === 'moveTo') {
       this.pollMoveTo()
     }
-    if (!this.completed && this.name !== 'goto' && Date.now() - this.startedAt > this.options.actionTimeoutMs) {
+    if (!this.completed && this.failed === undefined && this.motionRun !== undefined) {
+      const result = this.motionRun.tick(Date.now())
+      if (result.state === 'succeeded') {
+        this.result = result.observed ?? this.position()
+        this.completed = true
+      } else if (result.state === 'failed') {
+        this.failed = new Error(result.code ?? 'GOTO_ERROR')
+        this.failedCode = result.code ?? 'GOTO_ERROR'
+        this.failureDetails = result.observed
+      } else if (result.state === 'canceled') {
+        this.cancelled = true
+      }
+    }
+    if (!this.completed && this.name !== 'goto' && this.name !== 'motion-goto'
+      && Date.now() - this.startedAt > this.options.actionTimeoutMs) {
       this.failed = new Error(`act ${this.name} timed out`)
       this.failedCode = 'ACT_TIMEOUT'
     }
@@ -1162,8 +1180,11 @@ class MineflayerActHandle implements ActHandle {
     if (this.failed !== undefined) {
       return {
         status: 'failed',
-        error: p2Error(this.failedCode, actErrorCategory(this.failedCode), this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }),
+        error: p2Error(this.failedCode, actErrorCategory(this.failedCode), this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }, this.failureDetails),
       }
+    }
+    if (this.motionRun !== undefined) {
+      return { status: 'running', progress: this.motionRun.report() }
     }
     return this.navigationRun === undefined ? { status: 'running' } : { status: 'running', progress: this.navigationRun.report() }
   }
@@ -1186,6 +1207,11 @@ class MineflayerActHandle implements ActHandle {
     if (this.name === 'goto' || this.name === 'follow') {
       if (this.navigationRun !== undefined) {
         if (!this.navigationRun.stop()) unknown = true
+      } else attempt(() => this.stopNavigation())
+    }
+    if (this.name === 'motion-goto') {
+      if (this.motionRun !== undefined) {
+        if (!this.motionRun.stop()) unknown = true
       } else attempt(() => this.stopNavigation())
     }
     if (this.name === 'drive') attempt(() => this.bot.moveVehicle(0, 0))
@@ -1234,7 +1260,7 @@ class MineflayerActHandle implements ActHandle {
   }
 
   private releaseObserved(): boolean {
-    if (this.name === 'goto' || this.name === 'follow') {
+    if (this.name === 'goto' || this.name === 'follow' || this.name === 'motion-goto') {
       const pathfinder = (this.bot as unknown as { pathfinder?: { isMoving?: () => boolean } }).pathfinder
       // `stop()` only sets a flag; the path is cleared on the next physics tick.
       if (typeof pathfinder?.isMoving === 'function' && pathfinder.isMoving() === true) return false
@@ -1290,6 +1316,7 @@ class MineflayerActHandle implements ActHandle {
     this.failed = error
     this.failedCode = code
     if (this.navigationRun !== undefined && !this.navigationRun.stop()) this.releaseUnknown = true
+    if (this.motionRun !== undefined && !this.motionRun.stop()) this.releaseUnknown = true
     if (this.timer !== undefined) clearTimeout(this.timer)
     if (this.name === 'use') {
       try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
@@ -1468,6 +1495,41 @@ class MineflayerActHandle implements ActHandle {
               ...(this.args.intent === 'interact' || this.args.intent === 'attack' ? { intent: this.args.intent } : {}),
               ...(hazards === undefined ? {} : { hazards }) })
           this.navigationRun.start()
+          return
+        }
+        case 'motion-goto': {
+          const nav = this.navigation()
+          const { x, y, z } = this.args
+          if (nav === undefined || this.movements === undefined) {
+            this.failed = new Error('pathfinding is not available in this provider')
+            this.failedCode = 'GOTO_UNAVAILABLE'
+            return
+          }
+          if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+            this.failed = new Error('motion-goto requires numeric x, y and z')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
+          const range = this.args.exact === true ? 0 : typeof this.args.range === 'number' ? this.args.range : 1
+          const timeout = Math.min(
+            typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000,
+            this.options.actionTimeoutMs,
+          )
+          const movements = this.movements
+          const constraints = defaultConstraints('walk')
+          if (this.args.allowParkour === true) constraints.allowParkour = true
+          if (this.args.allowDiagonal === true) constraints.allowDiagonal = true
+          if (this.args.allowPlace === true) constraints.allowPlace = true
+          if (typeof this.args.material === 'string') constraints.material = this.args.material
+          this.motionRun = new MotionRun(
+            this.bot,
+            movements,
+            { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) },
+            range,
+            timeout,
+            { constraints, setDoorMode: enabled => setNavigationDoorMode(movements, enabled) },
+          )
+          this.motionRun.start()
           return
         }
         case 'follow': {
@@ -2058,6 +2120,11 @@ class MineflayerActHandle implements ActHandle {
         this.failedCode = this.navigationRun.stop() ? 'GOTO_ERROR' : 'STOP_UNCONFIRMED'
         this.releaseUnknown = this.failedCode === 'STOP_UNCONFIRMED'
         this.failureDetails = this.navigationRun.report()
+      }
+      if (this.motionRun !== undefined) {
+        this.failedCode = this.motionRun.stop() ? 'GOTO_ERROR' : 'STOP_UNCONFIRMED'
+        this.releaseUnknown = this.failedCode === 'STOP_UNCONFIRMED'
+        this.failureDetails = this.motionRun.report()
       }
     }
   }

@@ -61,11 +61,15 @@ interface ClientPort {
   // 事件
   on(event: 'blockUpdated' | 'inventoryChanged' | 'screenOpened' | 'damaged' | 'died' | 'chat'
     | 'provider.suspended' | 'provider.resumed' | 'move.started' | 'move.progress' | 'move.no_path'
-    | 'move.stuck' | 'move.finished', cb: (payload: unknown) => void): void
+    | 'move.stuck' | 'move.finished' | 'entityHurt' | 'entityDead', cb: (payload: unknown) => void): void
 
   capabilities(): Capability[]                // 'navigate' | 'interact' | 'observe.screen' | 'combat'
   /** 暂停是挂起，不是失败；缺省表示适配器不报告。 */
   suspension?(): SuspensionState
+  /** 视线/遮挡；缺省表示适配器不能判断，调用方不得当作可见。 */
+  canSee?(entityId: string): boolean
+  /** 当前攻击速度（次/秒，来自玩家/物品属性）。 */
+  attackSpeed?(): number
 }
 
 type WriteToken = { runId: string; jobId: string; seq: number }
@@ -83,7 +87,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
-- `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失、受保护或名字变化立即失败，绝不换目标。目标消失视为完成，并回读 `attacks/killed`。
+- `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失、受保护或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
 - **Duty（D1/D2）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan 时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；`p2_duty stop` → stopped。只支持单物品 gather 配额，不自行选新目标。
@@ -97,6 +101,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
 - `moveTo` 目标为脚下路径格坐标，按格取整；`range` 默认 1、范围 0–8，使用三维格距离。容差内只接受已加载、有安全支撑及身体净空的格；半砖按真实支撑高度完成读回。
+- `moveTo` 可带 `motion` 与显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。`hazards / unstickDig` 仍走现有导航，直到运动模块覆盖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。

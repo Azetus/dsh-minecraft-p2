@@ -25,6 +25,10 @@ const MOVE_SCHEMA: SchemaNode = {
     exact: { type: 'boolean' },
     approach: { type: 'boolean' },
     intent: { type: 'string', enum: ['interact', 'attack'] },
+    allowParkour: { type: 'boolean' },
+    allowDiagonal: { type: 'boolean' },
+    allowPlace: { type: 'boolean' },
+    material: { type: 'string' },
     unstickDig: { type: 'array', items: { type: 'object', properties: {
       x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
     }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
@@ -50,6 +54,10 @@ type MoveParams = {
   timeoutMs?: number
   exact?: boolean
   approach?: boolean
+  allowParkour?: boolean
+  allowDiagonal?: boolean
+  allowPlace?: boolean
+  material?: string
   unstickDig?: MoveOptions['unstickDig']
   intent?: MoveOptions['intent']
   hazards?: MoveOptions['hazards']
@@ -109,7 +117,8 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
           goal = prefix
           goalIsFinal = false
         }
-      } else if (standingAt(point => ctx.port.blockAt(point), goal).state !== 'valid') {
+      } else if (params.allowPlace !== true
+        && standingAt(point => ctx.port.blockAt(point), goal).state !== 'valid') {
         const stand = nearestStandable(ctx.port, goal)
         if (stand !== undefined) goal = stand
       }
@@ -125,11 +134,16 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     const result = await ctx.port.moveTo(goal, {
       range: goalIsFinal ? range : 1,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
+      motion: true,
       ...(goalIsFinal && params.exact !== undefined ? { exact: params.exact } : {}),
       ...(goalIsFinal && params.approach !== undefined ? { approach: params.approach } : {}),
       ...(goalIsFinal && params.unstickDig !== undefined ? { unstickDig: params.unstickDig } : {}),
       ...(params.intent === undefined ? {} : { intent: params.intent }),
       ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
+      ...(params.allowParkour === undefined ? {} : { allowParkour: params.allowParkour }),
+      ...(params.allowDiagonal === undefined ? {} : { allowDiagonal: params.allowDiagonal }),
+      ...(params.allowPlace === undefined ? {} : { allowPlace: params.allowPlace }),
+      ...(params.material === undefined ? {} : { material: params.material }),
     })
     last = result
     if (result.state === 'ok') {

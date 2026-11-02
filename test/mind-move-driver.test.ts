@@ -55,7 +55,7 @@ describe('move driver', () => {
     const driver = createMoveDriver()
     const handle = driver.start(job(), { port, now: () => 0 })
 
-    expect(calls).toEqual([{ target: { x: 1, y: 64, z: 0 }, opts: { range: 2, timeoutMs: 1_000 } }])
+    expect(calls).toEqual([{ target: { x: 1, y: 64, z: 0 }, opts: { range: 2, timeoutMs: 1_000, motion: true } }])
     expect(handle.result()).toEqual({ state: 'running' })
     expect(handle.continuationKey()).toBe('move:1,64,0,2')
 

@@ -34,8 +34,9 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
       const requested = positionOf(current.order.params)
       if (requested === undefined) return null
       const exact = current.order.params?.exact === true
+      const allowPlace = current.order.params?.allowPlace === true
       const checked = standability(world, requested)
-      const pos = exact || checked.state === 'valid' || checked.state === 'unknown'
+      const pos = exact || allowPlace || checked.state === 'valid' || checked.state === 'unknown'
         ? requested
         : nearestStandable(world, requested, 2, requested, 2)
       if (pos === undefined) return { kind: 'hold', reason: 'GO_NO_STAND', notify: true }
@@ -47,6 +48,10 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
           approach: true,
           ...(current.order.params?.exact === undefined ? {} : { exact: current.order.params.exact }),
           ...(current.order.params?.unstickDig === undefined ? {} : { unstickDig: current.order.params.unstickDig }),
+          ...(current.order.params?.allowParkour === true ? { allowParkour: true } : {}),
+          ...(current.order.params?.allowDiagonal === true ? { allowDiagonal: true } : {}),
+          ...(current.order.params?.allowPlace === true ? { allowPlace: true } : {}),
+          ...(typeof current.order.params?.material === 'string' ? { material: current.order.params.material } : {}),
           ...(hazards === undefined ? {} : { hazards }),
         },
         keys: `order.go:${current.order.id}`,
