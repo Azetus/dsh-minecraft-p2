@@ -19,7 +19,7 @@ export type BoundaryStage = 'guards' | 'climb' | 'water'
 
 export type BoundaryExpectation =
   | { state: 'succeeded' }
-  | { state: 'blocked'; code: 'GOTO_NO_PATH' | '*' }
+  | { state: 'blocked'; code: 'GOTO_NO_PATH' | 'GOTO_STUCK' | '*' }
 
 export type BoundaryField = FieldGeometry & {
   id: string
@@ -42,6 +42,12 @@ export type BoundaryField = FieldGeometry & {
     allowPlace?: boolean
     material?: string
   }
+  /**
+   * Pre-fix behaviour known from analysis, not replayed: the live script only
+   * prints it, so `GOTO_STUCK` vs `GOTO_NO_PATH` stays visible as a documented
+   * baseline without checking out the old commit.
+   */
+  baseline?: BoundaryExpectation
   expect: Readonly<Record<BoundaryStage, BoundaryExpectation>>
 }
 
@@ -425,6 +431,8 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, 0),
     goal: at(origin, 0, 2, 3),
     probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3)],
+    // Pre-fix analysis: the stair cell was not standable, so no edge reached it.
+    baseline: NO_PATH,
     expect: { guards: SUCCESS, climb: SUCCESS, water: SUCCESS },
   })
 
@@ -456,6 +464,8 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, 0),
     goal: at(origin, 1, 3, 3),
     probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 1, 2, 3), at(origin, 1, 3, 3)],
+    // Pre-fix analysis: planned, then the 1.5 jump failed -> GOTO_STUCK.
+    baseline: { state: 'blocked', code: 'GOTO_STUCK' },
     expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
   })
 
@@ -498,6 +508,8 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     probes: [at(origin, 0, 1, 0), at(origin, 0, 2, 0), at(origin, 0, 3, 0), at(origin, 0, 4, 0)],
     placementProbes: [at(origin, 0, 2, 0)],
     authorization: { allowPlace: true, material: 'dirt' },
+    // Pre-fix analysis: planned, then the placement height was never reached.
+    baseline: { state: 'blocked', code: 'GOTO_STUCK' },
     expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
   })
 
@@ -512,6 +524,8 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 4, 0),
     goal: at(origin, 0, 2, 2),
     probes: [at(origin, 0, 3, 1), at(origin, 0, 1, 2), at(origin, 0, 2, 2)],
+    // Pre-fix analysis: a half-height landing was allowed, the drop landed at 0.5.
+    baseline: { state: 'succeeded' },
     expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
   })
 
@@ -533,6 +547,57 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
   })
 
+  // ------------------------------------------- partial-support physics ---
+  fields.push({
+    id: 'farmland-step',
+    title: '从 farmland 上台（真实 1.0625）',
+    proves: 'a 1.0625 rise (farmland -> full block) is inside the jump budget; the old 1.05 threshold rejected it',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [
+      spec(origin, 0, 1, 3, 'farmland'),
+      // Adjacent full block at y=102: the goal cell is 103, so the rise from
+      // the farmland cell (feet 101.9375) is exactly 1.0625.
+      spec(origin, 1, 2, 3, 'stone'),
+    ],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 1, 3, 3),
+    probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 1, 2, 3), at(origin, 1, 3, 3)],
+    expect: same(SUCCESS),
+  })
+
+  fields.push({
+    id: 'farmland-pillar',
+    title: '从 farmland 垫脚',
+    proves: 'the jump peak from farmland (0.9375) clears the placement clearance, so pillar is possible',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [spec(origin, 0, 1, 0, 'farmland')],
+    start: at(origin, 0, 2, 0),
+    goal: at(origin, 0, 4, 0),
+    probes: [at(origin, 0, 1, 0), at(origin, 0, 2, 0), at(origin, 0, 3, 0), at(origin, 0, 4, 0)],
+    placementProbes: [at(origin, 0, 2, 0), at(origin, 0, 3, 0)],
+    authorization: { allowPlace: true, material: 'dirt' },
+    expect: same(SUCCESS),
+  })
+
+  fields.push({
+    id: 'stair-pillar',
+    title: '站在楼梯上垫脚',
+    proves: 'standing on a stair top (feetY = cell.y) and placing through the pillar path works',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [spec(origin, 0, 1, 3, 'stone_stairs', { ...STAIRS })],
+    start: at(origin, 0, 2, 3),
+    goal: at(origin, 0, 4, 3),
+    probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 0, 3, 3), at(origin, 0, 4, 3)],
+    placementProbes: [at(origin, 0, 2, 3), at(origin, 0, 3, 3)],
+    authorization: { allowPlace: true, material: 'dirt' },
+    expect: same(SUCCESS),
+  })
   // ---------------------------------------------------------------- lava ---
   fields.push({
     id: 'lava-beside-slab',

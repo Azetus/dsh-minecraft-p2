@@ -11,13 +11,16 @@ import type {
 } from '../model/types.ts'
 import { COST_INF } from '../model/types.ts'
 
-const EPSILON = 0.001
 /**
- * Highest feet rise a vanilla jump can still land on. A full block step is
- * 1.0; a bottom slab source makes a nominal +1 step a 1.5 rise, which cannot be
- * jumped and must not be offered as an edge.
+ * Vanilla jump kinematics: v0 = 0.42, gravity 0.08, drag 0.98 per tick, which
+ * peaks at 1.2522 blocks. A rise at or below `JUMP_PEAK - JUMP_MARGIN` is
+ * reliably landable; the margin absorbs tick quantisation and the fact that the
+ * executor launches from up to 0.9 blocks away instead of standing still.
  */
-const MAX_STEP_UP = 1.05
+export const JUMP_PEAK = 1.2522
+export const JUMP_MARGIN = 0.15
+/** The body must clear the placement cell's top by this much before placing. */
+export const PLACE_CLEARANCE = 1.01
 
 /**
  * Does the body occupy `cell` at its derived feet height? Uses the same rules
@@ -253,15 +256,19 @@ export class AscendMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (this.dest.y !== this.src.y + 1 || !adjacent(this.src, this.dest)) return COST_INF
-    const srcSupport = ctx.rules.supportFeet(this.src)
-    if (srcSupport.state !== 'yes') return COST_INF
+    // The source must hold the body; its real feet height is what decides
+    // whether the nominal +1 step is jumpable.
+    const srcInfo = ctx.rules.standInfo(this.src)
+    if (srcInfo.state !== 'yes') return COST_INF
     const cells = bodyCells(this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
-    // The source may be a partial support (bottom slab, stair tread): the real
-    // jump is then larger than the nominal +1 step.
-    if (stand.feetY - srcSupport.feetY > MAX_STEP_UP) return COST_INF
+    // A partial support (bottom slab, farmland, chest) lifts the feet, so the
+    // nominal +1 step can be a taller jump. Compare real heights against the
+    // vanilla peak, not "is the support a full block": farmland (0.9375 -> a
+    // 1.0625 rise) is jumpable, a bottom slab (1.5) is not.
+    if (stand.feetY - srcInfo.feetY > JUMP_PEAK - JUMP_MARGIN) return COST_INF
     return 1.5 + breakCostOf(ctx, cells)
   }
 
@@ -596,12 +603,13 @@ export class PillarMove extends BaseMove {
     const levels = this.levels()
     if (levels < 1 || levels > 8) return COST_INF
     if (this.dest.x !== this.src.x || this.dest.z !== this.src.z) return COST_INF
-    // The placement happens above the feet cell this move leaves. From a
-    // partial support (bottom slab) the jump peak never clears that height, so
-    // the edge is physically impossible and must not be planned.
+    // The placement happens in the cell this move leaves, so the jump peak must
+    // clear that cell's top by PLACE_CLEARANCE. A bottom slab (feet 0.5 over the
+    // base) can never reach it; farmland (0.9375) still can. `update` uses the
+    // same constant, so the planned edge and the placement threshold cannot drift.
     const srcSupport = ctx.rules.supportFeet(this.src)
     if (srcSupport.state !== 'yes') return COST_INF
-    if (srcSupport.feetY < this.src.y - 0.01) return COST_INF
+    if (srcSupport.feetY + JUMP_PEAK - JUMP_MARGIN <= this.src.y + PLACE_CLEARANCE) return COST_INF
     // While a block for this level is in flight the observed world can still be
     // the pre-placement state; `update` owns the readback. Do not reject the
     // edge from a transient snapshot between place and block-update.
@@ -683,7 +691,7 @@ export class PillarMove extends BaseMove {
       // The block goes into the cell the feet just left. Wait until the feet
       // are above that cell's top, otherwise the server refuses the placement
       // because the player AABB still overlaps it.
-      if (ctx.self.pos.y > this.currentY() + 1.01) {
+      if (ctx.self.pos.y > this.currentY() + PLACE_CLEARANCE) {
         ctx.world.place(this.columnCell(this.currentY()), material)
         this.placed += 1
         this.phase = 'place'

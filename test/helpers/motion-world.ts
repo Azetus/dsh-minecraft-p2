@@ -68,6 +68,12 @@ function collisionFor(name: string, state: Readonly<Record<string, string>> | un
     return state?.facing === 'south' ? LADDER_SOUTH : LADDER_NORTH
   }
   if (name === 'scaffolding') return SCAFFOLDING_SHAPE
+  // Vanilla 1.21.1 partial supports used by the physics-threshold rows.
+  if (name === 'farmland' || name === 'dirt_path') return [[0, 0, 0, 1, 0.9375, 1] as const]
+  if (name === 'soul_sand') return [[0, 0, 0, 1, 0.875, 1] as const]
+  if (name === 'chest' || name === 'ender_chest' || name === 'trapped_chest') {
+    return [[0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375] as const]
+  }
   return FULL_CUBE
 }
 

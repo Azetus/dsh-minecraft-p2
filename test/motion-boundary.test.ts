@@ -70,6 +70,7 @@ describe('boundary matrix shape', () => {
       'slab-bottom-step', 'slab-top-step', 'stair-up', 'stair-down',
       'slab-ascend-impossible', 'slab-ascend-bottom-to-bottom', 'slab-pillar',
       'slab-fall-onto', 'slab-parkour-from',
+      'farmland-step', 'farmland-pillar', 'stair-pillar',
       'lava-beside-slab', 'lava-step-into',
     ])
   })

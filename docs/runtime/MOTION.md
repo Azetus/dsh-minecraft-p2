@@ -221,6 +221,11 @@ interface Move {
 - **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`；从梯顶再上 1 格不做（Ascend 不从 climbable 起，参考边界）。
 - **脚手架**：只作为支撑/放置方块；不做攀爬（scaffold 的身体不可通过，`Climb` 不认它），横穿=no path。
 - **半砖/楼梯**：collision + footprint 支撑；从下半砖起跳整方块、从下半砖垫脚、落半砖默认拒绝（物理不可行或落点高度歧义）；下半砖→下半砖允许。
+- **跳跃预算**：两条"物理不可能"用真实脚高与 1.2522 的跳跃峰值比较，而不是"支撑是不是整方块"——
+  - `Ascend`：`destFeet − srcFeet > 1.2522 − 0.15` 才拒绝。所以 farmland/dirt_path（0.9375 → 抬升 1.0625）允许，箱子/灵魂沙（1.125）按余量拒绝，下半砖（1.5）拒绝。
+  - `Pillar`：`srcFeet + 1.2522 − 0.15 > src.y + 1.01` 才允许。所以 farmland 起垫脚允许，下半砖/灵魂沙拒绝；放置门限与规划共用同一个 `PLACE_CLEARANCE`。
+- **支撑面的已知 over-approximation**：footprint 取最大支撑面会把薄片也算成可站（竹子、墙头、花盆/蛋糕、可可、水晶、推头等 18px 级薄面），全量 26,684 个方块状态里有 15 类非楼梯方块因此从"不可站"变"可站"。这是有意的保守方向（宁可多算可站，也不误杀楼梯与 farmland），执行器对因此失败的边有 STUCK 边界；不使用方块名表收窄。
+- **楼梯高度近似**：站立高度仍是一格一个值，楼梯每级按 1.0 台阶处理（不做 0.5 平滑上台阶）；这是双高度 cell 之外的显式取舍。
 
 ### 4.1 桥与垫脚的策略边界
 
@@ -331,7 +336,8 @@ interface Move {
 - **任务 A 实机（1.21.1）**：`motion-query-accept` 7/7 —— 目标块不可站、门后目标（门被打开）、跨 3 格缺口 `APPROACH_NO_PATH`、同层/半砖/坑内拾取全部收集、柱顶掉落物保留且移动 `GOTO_NO_PATH`。证据 `.m5-runs/motion-query/`。
 - **任务 B 实机（1.21.1）**：`motion-boundary-accept`（`BOUNDARY_STAGE=water`）25/25 —— 1 深水穿行与 2 格落水成功、2 深水与水+梯子 no path、waterlogged 半砖可走、梯子上下成功且旁边普通移动不受影响、梯顶 +1 no path、脚手架站立/放置成功且横穿 no path、叠放 GOTO_STUCK、半砖/楼梯上下成功、从下半砖跳整方块/垫脚/落半砖/起跳 no path、下半砖→下半砖成功、岩浆旁半砖可走/踏入岩浆 no path。证据 `.m5-runs/motion-boundary/`。
 - **同 build 回归**：P1/P2、P3、capabilities（unstick / safe fall）全部通过。
-- 26.1：本轮只有 1.21.1 服务端，未复跑。
+- **26.1 复跑（2026-11-02，ping 报 protocol 775）**：`motion-boundary-accept` 28/28、P1/P2、P3、capabilities、`motion-query-accept` 7/7、P4、`traverse`（bridge/scaffold）、`lethal_fall`（`died=true`）全部通过。证据 `accept-boundary-water-2026-11-02T10-06-23-229Z.json`、`accept-p1-2026-11-02T10-09-01-054Z.json`、`accept-p3-2026-11-02T10-09-32-632Z.json`、`accept-capabilities-2026-11-02T10-10-00-217Z.json`、`accept-query-2026-11-02T10-13-02-055Z.json`、`accept-p4-2026-11-02T10-12-10-333Z.json`、`accept-traverse-2026-11-02T10-15-26-947Z.json`、`accept-lethal-2026-11-02T10-15-42-428Z.json`（均在 `.m5-runs/` 下）。
+- 26.1 与 1.21.1 的差异只体现在数据面（协议 775、方块/状态集合），本轮阈值与几何判据不依赖版本。
 
 ## 10. 阶段与删除
 

@@ -12,6 +12,8 @@ import {
   TraverseMove,
   AscendMove,
   FallMove,
+  JUMP_MARGIN,
+  JUMP_PEAK,
 } from '../src/motion/execute/index.ts'
 import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
 import { defaultConstraints, resolveConstraints, type Cell, type MotionConstraints } from '../src/motion/model/index.ts'
@@ -289,5 +291,73 @@ describe('PathExecutor', () => {
     executor.cancel()
     expect(executor.report().status).toBe('canceled')
     expect(world.inputs.size).toBe(0)
+  })
+})
+
+/**
+ * The two physical thresholds use real feet heights against the vanilla jump
+ * peak, not "is the support a full block": farmland -> a 1.0625 rise is
+ * possible, a bottom slab / chest is not. These are the rows the reference
+ * behaviour distinguishes, and the pure fixture is where both sides are pinned.
+ */
+describe('partial-support physics thresholds', () => {
+  const FARMLAND = [[0, 0, 0, 1, 0.9375, 1] as const]
+  const SOUL_SAND = [[0, 0, 0, 1, 0.875, 1] as const]
+  const CHEST = [[0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375] as const]
+  const BOTTOM_SLAB = [[0, 0, 0, 1, 0.5, 1] as const]
+
+  /** Feet cell (0,64,0) on `support`; the ascend target is (1,65,0). */
+  function stepWorld(name: string, collision: readonly (readonly number[])[]): FixtureWorld {
+    const world = flatWorld()
+    world.blocks.set('0,63,0', rawBlock(name, collision as never))
+    world.blocks.set('1,64,0', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('1,65,0', rawBlock('air', []))
+    world.blocks.set('1,66,0', rawBlock('air', []))
+    // Headroom for the two-level pillar (body cells up to y+1).
+    world.blocks.set('0,66,0', rawBlock('air', []))
+    world.blocks.set('0,67,0', rawBlock('air', []))
+    world.blocks.set('0,68,0', rawBlock('air', []))
+    movePos(world, { x: 0, y: 64, z: 0 })
+    return world
+  }
+
+  function ascendCost(name: string, collision: readonly (readonly number[])[]): number {
+    const source = contextFor(stepWorld(name, collision))
+    return new AscendMove({ x: 0, y: 64, z: 0 }, { x: 1, y: 65, z: 0 }).cost(source.next())
+  }
+
+  function pillarCost(name: string, collision: readonly (readonly number[])[]): number {
+    const world = stepWorld(name, collision)
+    world.blocks.set('1,64,0', rawBlock('air', []))
+    const source = contextFor(world, { allowPlace: true, material: 'dirt' })
+    return new PillarMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 66, z: 0 }).cost(source.next())
+  }
+
+  it('exposes the jump budget as peak minus margin', () => {
+    expect(JUMP_PEAK - JUMP_MARGIN).toBeCloseTo(1.1022, 4)
+  })
+
+  it('allows a 1.0625 rise from farmland onto a full block', () => {
+    expect(Number.isFinite(ascendCost('farmland', FARMLAND))).toBe(true)
+  })
+
+  it('still allows a plain 1.0 rise from a full block', () => {
+    expect(Number.isFinite(ascendCost('stone', FULL_CUBE))).toBe(true)
+  })
+
+  it('refuses the 1.5 rise from a bottom slab', () => {
+    expect(ascendCost('stone_slab', BOTTOM_SLAB)).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('refuses the 1.125 rise from a chest (margin), not just the impossible band', () => {
+    expect(ascendCost('chest', CHEST)).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('allows pillar from farmland and refuses it from a bottom slab or soul sand', () => {
+    expect(Number.isFinite(pillarCost('farmland', FARMLAND))).toBe(true)
+    expect(pillarCost('stone_slab', BOTTOM_SLAB)).toBe(Number.POSITIVE_INFINITY)
+    // 0.875 sits just under the 0.9078 threshold: the peak clears the cell top
+    // by only 0.033, which tick quantisation makes unreliable.
+    expect(pillarCost('soul_sand', SOUL_SAND)).toBe(Number.POSITIVE_INFINITY)
   })
 })
