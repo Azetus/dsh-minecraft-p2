@@ -170,10 +170,16 @@ describe('move state machines', () => {
     world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101.02, z: 0.5 }, onGround: false }
     move.update(state, source.next()) // place at y=100
     expect(world.actions.some(action => action.startsWith('place:0,100,0'))).toBe(true)
+    // The block update may lag one tick: cost must stay feasible while the
+    // move's own readback is still in progress.
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
 
     world.blocks.set('0,100,0', rawBlock('dirt', FULL_CUBE))
     world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101.1, z: 0.5 }, onGround: false }
     move.update(state, source.next()) // readback -> land
+    // The first block is placed while the body is still airborne: the edge must
+    // remain feasible against the cell above the new support.
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
     world.selfView = { ...world.selfView, pos: { x: 0.5, y: 101, z: 0.5 }, onGround: true }
     move.update(state, source.next()) // advance to level 1 and jump
 

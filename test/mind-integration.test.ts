@@ -41,13 +41,11 @@ type FakePort = {
   port: ClientPort
   moves: Array<{ x: number; y: number; z: number }>
   pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void>
-  pillarUps: Array<{ item: string; levels: number }>
 }
 
 function fakePort(items: Item[] = []): FakePort {
   const moves: Array<{ x: number; y: number; z: number }> = []
   const pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void> = []
-  const pillarUps: Array<{ item: string; levels: number }> = []
   const blocksIn = (box: Box): Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> => {
     const blocks = []
     for (let x = box.min.x; x <= box.max.x; x += 1) {
@@ -72,13 +70,8 @@ function fakePort(items: Item[] = []): FakePort {
       moves.push({ x: target.x, y: target.y, z: target.z })
       return new Promise<{ state: 'ok'; elapsedMs: number }>(resolve => { pending.push(resolve) })
     },
-    pillarUp: async (item: string, levels: number) => {
-      pillarUps.push({ item, levels })
-      self.pos.y += levels
-      return { state: 'ok' as const, elapsedMs: 1 }
-    },
   } as unknown as ClientPort
-  return { port, moves, pending, pillarUps }
+  return { port, moves, pending }
 }
 
 describe('mind integration', () => {
@@ -119,8 +112,8 @@ describe('mind integration', () => {
     expect(mind.status().job).toBeNull()
   })
 
-  it('completes a traverse order after the pillar job', async () => {
-    const { port, pillarUps } = fakePort([{ slot: 36, name: 'dirt', count: 2 }])
+  it('completes a traverse order through the motion move job', async () => {
+    const { port, moves, pending } = fakePort([{ slot: 36, name: 'dirt', count: 2 }])
     const mind = createMind({
       port,
       home: { x: 0, y: 64, z: 0 },
@@ -131,11 +124,12 @@ describe('mind integration', () => {
     mind.enqueueOrder({ verb: 'traverse', params: { mode: 'scaffold', x: 0, y: 66, z: 0, item: 'dirt' } })
     mind.tick()
     expect(mind.status().job?.driverId).toBe('traverse')
-    await Promise.resolve()
-    mind.tick()
-    await Promise.resolve()
-    mind.tick()
-    expect(pillarUps).toEqual([{ item: 'dirt', levels: 2 }])
+    expect(moves).toEqual([{ x: 0, y: 66, z: 0 }])
+    pending.at(-1)?.({ state: 'ok', elapsedMs: 1 })
+    for (let index = 0; index < 20 && mind.status().activeOrder !== null; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      mind.tick()
+    }
     expect(mind.status().activeOrder).toBeNull()
   })
 

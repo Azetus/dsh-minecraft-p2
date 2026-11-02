@@ -1,4 +1,4 @@
-import type { ClientPort, Face, Item, Vec3 } from '../../port/index.ts'
+import type { ClientPort, Item, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -66,6 +66,7 @@ async function traverse(port: ClientPort, params: TraverseParams): Promise<Drive
   const dz = target.z - start.z
   const dy = target.y - start.y
   const maxBlocks = Math.min(64, Math.max(1, params.maxBlocks ?? 32))
+  const material = count(port.inventory(), params.item)
 
   if (params.mode === 'bridge') {
     if (dy !== 0) return { state: 'failed', code: 'TRAVERSE_LEVEL_MISMATCH' }
@@ -73,90 +74,54 @@ async function traverse(port: ClientPort, params: TraverseParams): Promise<Drive
     const steps = Math.abs(dx) + Math.abs(dz)
     if (steps === 0) return { state: 'succeeded', observed: { kind: 'traverse', mode: params.mode, blocks: 0 } }
     if (steps > maxBlocks) return { state: 'failed', code: 'TRAVERSE_BLOCK_BUDGET' }
-    const dir = { x: Math.sign(dx), z: Math.sign(dz) }
-    for (let i = 1; i <= steps; i++) {
-      const support = { x: start.x + dir.x * i, y: start.y - 1, z: start.z + dir.z * i }
-      const stand = { x: support.x, y: start.y, z: support.z }
-      const previous = { x: support.x - dir.x, y: support.y, z: support.z - dir.z }
-      const placed = await placeBlock(port, support, previous, params.item)
-      if (placed !== undefined) return placed
-      const moved = await moveStand(port, stand)
-      if (moved !== undefined) return moved
-    }
-    return {
-      state: 'succeeded',
-      observed: { kind: 'traverse', mode: params.mode, from: start, to: target, blocks: steps, temporary: true },
-    }
+    if (material < 1) return { state: 'failed', code: 'NO_MATERIAL' }
+    return moveWithPlacement(port, params, start, target, steps, false)
   }
 
   if (dy === 0) return { state: 'succeeded', observed: { kind: 'traverse', mode: params.mode, blocks: 0, pillar: true } }
   if (dy < 0) return { state: 'failed', code: 'TRAVERSE_DOWN_UNSUPPORTED' }
   if (start.x !== target.x || start.z !== target.z) return { state: 'failed', code: 'TRAVERSE_PILLAR_VERTICAL' }
   if (dy > 8) return { state: 'failed', code: 'TRAVERSE_BLOCK_BUDGET' }
-  if (count(port.inventory(), params.item) < dy) return { state: 'failed', code: 'NO_MATERIAL' }
-  // Scaffold is a pillar: jump, place one held block in the feet cell, land on
-  // it, repeat. The provider owns the jump/place timing; the driver only
-  // validates the column and material count.
-  const result = await port.pillarUp(params.item, dy)
-  if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'TRAVERSE_PILLAR_FAILED' }
+  if (material < dy) return { state: 'failed', code: 'NO_MATERIAL' }
+  return moveWithPlacement(port, params, start, target, dy, true)
+}
+
+async function moveWithPlacement(
+  port: ClientPort,
+  params: TraverseParams,
+  start: Vec3,
+  target: Vec3,
+  blocks: number,
+  pillar: boolean,
+): Promise<DriverResult> {
+  const moved = await port.moveTo(target, {
+    range: 0,
+    exact: true,
+    timeoutMs: 60_000,
+    motion: true,
+    allowPlace: true,
+    material: params.item,
+  })
+  if (moved.state !== 'ok') {
+    return {
+      state: 'failed',
+      code: moved.code ?? 'TRAVERSE_MOVE_FAILED',
+      ...(moved.observed === undefined ? {} : { observed: moved.observed }),
+    }
+  }
   return {
     state: 'succeeded',
     observed: {
-      kind: 'traverse', mode: params.mode, from: start, to: target,
-      blocks: dy, pillar: true, temporary: true,
-      ...(result.observed === undefined ? {} : { result: result.observed }),
+      kind: 'traverse',
+      mode: params.mode,
+      from: start,
+      to: target,
+      blocks,
+      temporary: true,
+      ...(pillar ? { pillar: true } : {}),
+      ...(moved.observed === undefined ? {} : { result: moved.observed }),
     },
   }
-}
-
-async function placeBlock(
-  port: ClientPort,
-  cell: Vec3,
-  reference: Vec3,
-  item: string,
-): Promise<DriverResult | undefined> {
-  const existing = port.blockAt(cell)
-  if (existing === null || !existing.loaded) return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
-  // Terrain can already provide the base/top block; only air needs a placement.
-  // Water/lava and non-solid plants are not safe traversal material.
-  if (isSolid(existing)) return undefined
-  if (!isAir(existing.name)) return { state: 'failed', code: 'TRAVERSE_CELL_OCCUPIED' }
-  const face = faceToward(reference, cell)
-  if (face === undefined) return { state: 'failed', code: 'TRAVERSE_NO_SUPPORT' }
-  if (count(port.inventory(), item) < 1) return { state: 'failed', code: 'NO_MATERIAL' }
-  const placed = await port.place(cell, face, item)
-  if (placed.state === 'unknown') return { state: 'failed', code: placed.code ?? 'CLIENT_TIMEOUT' }
-  if (placed.state === 'failed') return { state: 'failed', code: placed.code ?? 'TRAVERSE_PLACE_FAILED' }
-  const readback = port.blockAt(cell)
-  if (readback === null || !readback.loaded || readback.name !== item) {
-    return { state: 'failed', code: 'TRAVERSE_READBACK_MISMATCH' }
-  }
-  return undefined
-}
-
-function isSolid(block: { name: string; solid?: boolean }): boolean {
-  if (block.solid === true) return true
-  return block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air'
-    && block.name !== 'water' && block.name !== 'lava'
-}
-
-async function moveStand(port: ClientPort, stand: Vec3): Promise<DriverResult | undefined> {
-  const foot = port.blockAt(stand)
-  if (foot === null || !foot.loaded) return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
-  if (!isAir(foot.name)) return { state: 'failed', code: 'TRAVERSE_STAND_OCCUPIED' }
-  const moved = await port.moveTo(stand, { range: 0, exact: true, timeoutMs: 10_000, motion: true })
-  if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'TRAVERSE_MOVE_FAILED' }
-  return undefined
-}
-
-function faceToward(reference: Vec3, target: Vec3): Face | undefined {
-  if (reference.x < target.x) return 'east'
-  if (reference.x > target.x) return 'west'
-  if (reference.z < target.z) return 'south'
-  if (reference.z > target.z) return 'north'
-  if (reference.y < target.y) return 'up'
-  if (reference.y > target.y) return 'down'
-  return undefined
 }
 
 function count(items: Item[], name: string): number {

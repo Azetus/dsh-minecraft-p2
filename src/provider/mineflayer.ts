@@ -1223,7 +1223,6 @@ class MineflayerActHandle implements ActHandle {
       // Documented way out of a bed; stop() must not leave the bot asleep.
       attempt(() => { void this.bot.wake() })
     }
-    if (this.name === 'pillar') attempt(() => this.bot.setControlState('jump', false))
     attempt(() => this.bot.clearControlStates())
     this.releaseUnknown = unknown
     // A cancel flag alone never proves the effect is gone: confirm only what
@@ -1368,76 +1367,6 @@ class MineflayerActHandle implements ActHandle {
           this.timer = setTimeout(() => {
             this.bot.setControlState('jump', false)
           }, 150)
-          return
-        }
-        case 'pillar': {
-          const count = typeof this.args.count === 'number' ? Math.min(8, Math.max(1, Math.floor(this.args.count))) : 1
-          void (async () => {
-            let placed = 0
-            for (let index = 0; index < count; index += 1) {
-              this.ensureNotStopped()
-              await this.syncInventoryWindow()
-              const feet = this.bot.entity.position
-              const x = Math.floor(feet.x)
-              const z = Math.floor(feet.z)
-              const startY = Math.floor(feet.y)
-              const support = this.bot.blockAt(new Vec3(x, startY - 1, z))
-              if (support === null || isAirName(support.name)) {
-                throw Object.assign(new Error(`no support block under ${x},${startY - 1},${z}`), { code: 'PILLAR_NO_SUPPORT' })
-              }
-              const held = this.bot.heldItem
-              if (held === null || held === undefined) {
-                throw Object.assign(new Error('pillar requires a held block'), { code: 'PILLAR_NO_ITEM' })
-              }
-              let lifted = false
-              let lastError: unknown
-              for (let attempt = 0; attempt < 3 && !lifted; attempt += 1) {
-                this.ensureNotStopped()
-                // Place only once the feet are a full block above the start: below
-                // that the target cell intersects the player box and the server
-                // refuses the placement.
-                try {
-                  await this.bot.lookAt(new Vec3(x + 0.5, startY - 0.5, z + 0.5), true)
-                } catch {
-                  // Best effort; placeBehind still forces the aim.
-                }
-                this.bot.setControlState('jump', true)
-                try {
-                  const deadline = Date.now() + 1200
-                  while (!this.stopRequested && this.bot.entity.position.y < startY + 1.05 && Date.now() < deadline) await delay(10)
-                } finally {
-                  this.bot.setControlState('jump', false)
-                }
-                this.ensureNotStopped()
-                if (this.bot.entity.position.y < startY + 1.0) {
-                  await this.waitUntilGrounded()
-                  continue
-                }
-                try {
-                  await this.placeBehind(support)
-                } catch (error) {
-                  lastError = error
-                }
-                const targetBlock = this.bot.blockAt(new Vec3(x, startY, z))
-                if (targetBlock !== null && !isAirName(targetBlock.name)) lifted = true
-                await this.waitUntilGrounded()
-              }
-              if (!lifted) {
-                const message = lastError === undefined ? 'pillar failed to place a block' : errorMessage(lastError)
-                throw Object.assign(new Error(message), { code: 'PILLAR_FAILED' })
-              }
-              placed += 1
-            }
-            return { placed }
-          })().then(result => {
-            this.result = result
-            this.completed = true
-          }).catch((error: unknown) => {
-            this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
-              ? (error as { code: string }).code
-              : 'PILLAR_FAILED'
-          })
           return
         }
         case 'moveTo': {
@@ -2171,27 +2100,8 @@ class MineflayerActHandle implements ActHandle {
   }
 
   /**
-   * Place on the top face of `support`. The internal options let the placement
-   * skip the smooth head turn; a pillar jump only lasts a few ticks.
+   * Abortable delay so a stopped craft chain stops between recipes.
    */
-  private async placeBehind(support: unknown): Promise<void> {
-    const bot = this.bot as unknown as {
-      _placeBlockWithOptions?: (reference: unknown, face: unknown, options: { forceLook: boolean; swingArm: string }) => Promise<void>
-    }
-    const face = new Vec3(0, 1, 0)
-    if (typeof bot._placeBlockWithOptions === 'function') {
-      await bot._placeBlockWithOptions(support, face, { forceLook: true, swingArm: 'right' })
-      return
-    }
-    await this.bot.placeBlock(support as Parameters<Bot['placeBlock']>[0], face)
-  }
-
-  private async waitUntilGrounded(timeoutMs = 2000): Promise<void> {
-    const deadline = Date.now() + timeoutMs
-    while (!this.stopRequested && this.bot.entity.onGround !== true && Date.now() < deadline) await delay(10)
-  }
-
-  /** Abortable delay so a stopped craft/pillar chain stops between recipes. */
   private async waitAbortable(ms: number): Promise<void> {
     const deadline = Date.now() + ms
     while (!this.stopRequested && Date.now() < deadline) {

@@ -392,15 +392,6 @@ export class MineflayerClientPort implements ClientPort {
     return await this.run('place', { x: p.x, y: p.y, z: p.z, face, item }, this.timeouts.place)
   }
 
-  async pillarUp(item: string, levels: number): Promise<ActResult> {
-    const denied = this.deny('place')
-    if (denied !== undefined) return denied
-    if (!Number.isInteger(levels) || levels < 1 || levels > 8) return actFailed('INVALID_TARGET', 0)
-    const equipped = await this.ensureHeld(item)
-    if (equipped !== undefined) return equipped
-    return await this.run('pillar', { count: levels }, this.timeouts.place + levels * 3_000)
-  }
-
   async useItem(opts: { durationMs?: number } = {}): Promise<ActResult> {
     return await this.action(
       'useItem',

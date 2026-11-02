@@ -484,7 +484,11 @@ export class PillarMove extends BaseMove {
     const levels = this.levels()
     if (levels < 1 || levels > 8) return COST_INF
     if (this.dest.x !== this.src.x || this.dest.z !== this.src.z) return COST_INF
-    if (ctx.rules.standInfo(this.columnCell(this.currentY())).state !== 'yes') return COST_INF
+    // While a block for this level is in flight the observed world can still be
+    // the pre-placement state; `update` owns the readback. Do not reject the
+    // edge from a transient snapshot between place and block-update.
+    if (this.placed <= this.level
+      && ctx.rules.standInfo(this.columnCell(this.currentY())).state !== 'yes') return COST_INF
     if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
     if (ctx.rules.canPlaceAgainst(this.columnCell(this.src.y - 1)) !== 'yes') return COST_INF
     // Skip the blocks this move already placed; a mid-pillar revalidation must

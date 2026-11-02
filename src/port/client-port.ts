@@ -115,8 +115,6 @@ export interface ClientPort {
   lookYaw?(yaw: number): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
-  /** Jump and place the held material under the feet, once per level. */
-  pillarUp(item: string, levels: number): Promise<ActResult>
   useItem(opts?: { durationMs?: number }): Promise<ActResult>
   equip(item: string): Promise<ActResult>
   craft(item: string, count?: number): Promise<ActResult>

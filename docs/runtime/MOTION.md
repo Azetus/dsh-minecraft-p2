@@ -189,8 +189,8 @@ interface Move {
 | `Descend` | P1 已实现 | 目标低 1、落点可站 | 走出边缘/走落 | 到达低层 | 落点变化、被推下 |
 | `Fall` | P1 已实现 | 落差 ≤ maxFall、落点安全 | 走出边缘、落地 | onGround + 目标脚位 | 落点危险、超深、掉液体 |
 | `Downward` | P1 已实现（保守） | 正下方可站、脚下支撑已消失 | 走落/下降 | 到达 | 落点变化 |
-| `Bridge` | P3 待实现 | 同层、缺支撑、allowPlace、材料 | 潜行接近边缘、放置、读回、前进 | 支撑块读回可站 | 放置失败、读回不符、被推下 |
-| `Pillar` | P3 待实现 | 原地、allowPlace、材料 | 跳起、脚下放置、读回、落上 | 到达高度 | 放置被拒、读回不符 |
+| `Bridge` | P3 已实现 | 同层、缺支撑、allowPlace、材料 | 潜行接近边缘、放置、读回、前进 | 支撑块读回可站 | 放置失败、读回不符、被推下 |
+| `Pillar` | P3 已实现 | 原地、allowPlace、材料 | 跳起、脚下放置、读回、落上 | 到达高度 | 放置被拒、读回不符 |
 | `Diagonal` | P3 已实现，默认关闭 | 两相邻角都可走/可站 | 斜向移动 | 到达 | 角落卡住、支撑不足 |
 | `Parkour` | P3 已实现，默认关闭 | 冲刺跳 2 格、起跳/落点检查 | 起跳、空中、落地 | 到达对岸 | 起跳点偏、落点变化、撞头 |
 
@@ -281,6 +281,7 @@ interface Move {
 - `move`/`attack` driver 只做：目标/约束/取消/结果。
 - giver 可调用只读的 `isReachable` / `pathTo` 做站位筛选；它不执行、不产生 job。
 - `moveTo` 在适配器声明 motion 能力且没有显式 hazards/unstick 时走运动执行器；否则保留现有导航路径（hazards/unstick 迁移后删除）。
+- `traverse` order 已委托 motion 的 `moveTo { allowPlace, material }`；provider `pillarUp`/`pillar` 已删除。`hazards`（void/lethal_fall/lava）与 `unstickDig` 仍由 legacy `goto` 执行，迁移前不删除。
 - 所有对外结果包含：`state`、`reason`、`position`、`bestReachable`（如有）、`attempts`（如有）、`elapsedMs`。
 - `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / hazards / healthBefore / healthAfter / elapsedMs`；新增 `planner` 标识本次规划器。
 - 失败码保持可分类：`NO_PATH` / `UNREACHABLE` / `STUCK` / `TIMEOUT` / `CANCELED` / `STOP_UNCONFIRMED` / `PLACE_FAILED` / `OBSERVATION_UNAVAILABLE`。

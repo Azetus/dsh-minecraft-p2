@@ -111,12 +111,12 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
 - 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。
 - 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。
-- **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，第二遍按 `health - 6 + 3` 允许安全下落（3 格摔落伤害约 0–1，保留至少 3 颗心）。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。
-- **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。`lethal_fall` 在安全预算之外再开一遍搜索；`void/lava` 只接受 6 格内的致命目标，执行受控 step-off，死亡后 order 以 `DIED_IN_ALLOWED_HAZARD` 终止，不伪装成功、不重试。`unloaded` 永不允许。
+- **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，第二遍按 `health - 6 + 3` 允许安全下落（3 格摔落伤害约 0–1，保留至少 3 颗心）。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。**当前这条仍由 legacy `goto` 执行，尚未迁入 motion。**
+- **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。`lethal_fall` 在安全预算之外再开一遍搜索；`void/lava` 只接受 6 格内的致命目标，执行受控 step-off，死亡后 order 以 `DIED_IN_ALLOWED_HAZARD` 终止，不伪装成功、不重试。`unloaded` 永不允许。**当前仍由 legacy `goto` 执行。**
 - 终态 `observed` 包含 `hazards / hazardPass / safeFallPass / safeFall / healthBefore / healthAfter`；致命边以真实 `died` 事件为准。
 - **`traverse` order**：Agent 显式下发的临时通行辅助，不是 `build` 最终几何：
-  - `mode:"bridge"`：同高、正方向、1 格宽直线，逐块 `place → readback → move`；
-  - `mode:"scaffold"`：垂直垫脚柱——必须同 x/z 列，向上 `dy` 级；每级跳起、在脚底放 1 个 `item` 方块、落上去，最多 8 级；由 provider 的 `pillarUp` 执行，driver 不做 1:1 楼梯；
+  - `mode:"bridge"`：同高、正方向、1 格宽直线；driver 校验几何/材料后委托 `moveTo { motion, allowPlace, material }`，由 motion `Bridge` 执行；
+  - `mode:"scaffold"`：垂直垫脚柱——必须同 x/z 列，向上 `dy` 级，最多 8 级；driver 校验列/材料后委托 motion `Pillar`；provider `pillarUp`/`pillar` 已删除;
   - 需要 `item`、材料计数、`maxBlocks`；占用/无支撑/材料不足/对角 bridge/水平或向下 scaffold 均失败；
   - 只由 Agent 下单，P2 不自主搭桥/垫脚；不自动清理，`observed.temporary=true`，清理是后续 Agent order。
 
