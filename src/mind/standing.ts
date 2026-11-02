@@ -53,7 +53,7 @@ function rawBlock(block: BlockInfo): RawBlock {
   }
 }
 
-function readOnlyWorld(read: (p: Vec3) => BlockInfo | null): MotionWorld {
+export function createReadOnlyMotionWorld(read: (p: Vec3) => BlockInfo | null): MotionWorld {
   return {
     self: () => SELF,
     blockAt: (p: Cell) => {
@@ -88,7 +88,7 @@ function mapStandInfo(cell: Cell, info: StandInfo): Standability {
  */
 export function standingAt(read: (p: Vec3) => BlockInfo | null, cell: Vec3): Standability {
   const at = { x: Math.floor(cell.x), y: Math.floor(cell.y), z: Math.floor(cell.z) }
-  const rules = createRules(readOnlyWorld(read), defaultConstraints())
+  const rules = createRules(createReadOnlyMotionWorld(read), defaultConstraints())
   return mapStandInfo(at, rules.standInfo(at))
 }
 

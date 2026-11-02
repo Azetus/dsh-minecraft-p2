@@ -12,7 +12,7 @@ import {
   type MotionConstraints,
 } from '../src/motion/model/index.ts'
 import { matrixFields } from '../src/motion/matrix/index.ts'
-import { MinHeap, MotionSearch, type SearchOptions, type SearchResult } from '../src/motion/search/index.ts'
+import { MinHeap, MotionSearch, reachableCells, type SearchOptions, type SearchResult } from '../src/motion/search/index.ts'
 import { buildFixture, FixtureWorld, FULL_CUBE, rawBlock } from './helpers/motion-world.ts'
 
 function contextFor(world: FixtureWorld, patch: Partial<MotionConstraints> = {}) {
@@ -111,6 +111,23 @@ describe('MotionSearch', () => {
     const { result } = solve('flat', {}, { maxNodes: 1, timeoutMs: 10 })
     expect(result.status).toBe('timeout')
     expect(result.best).not.toEqual({ x: 0, y: 101, z: 6 })
+  })
+
+  it('exposes a bounded core reachability hint for placement', () => {
+    const door = matrixFields({ x: 0, y: 100, z: 0 }).find(entry => entry.id === 'door')
+    expect(door).toBeDefined()
+    if (door === undefined) return
+    const world = buildFixture(door)
+    const reachable = reachableCells(world, door.start, { maxNodes: 96 })
+    expect([...reachable]).toContain('0,101,3')
+    const gap = matrixFields({ x: 0, y: 100, z: 0 }).find(entry => entry.id === 'gap-1')
+    expect(gap).toBeDefined()
+    if (gap === undefined) return
+    const gapWorld = buildFixture(gap)
+    const gapReachable = reachableCells(gapWorld, gap.start, { maxNodes: 96 })
+    expect([...gapReachable]).toContain('0,101,2')
+    expect([...gapReachable]).not.toContain('0,101,4')
+    expect([...gapReachable]).not.toContain('0,101,6')
   })
 
   it('honours cancellation', () => {

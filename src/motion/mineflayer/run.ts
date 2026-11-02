@@ -49,7 +49,10 @@ export class MotionRun {
   private readonly classifier: BlockClassifier | undefined
   private readonly avoidance: { coefficient: number; radius: number }
   private readonly from: Cell
-  private readonly motionGoal: MotionGoal
+  private motionGoal: MotionGoal
+  private readonly finalGoal: MotionGoal
+  private activeTarget: Cell
+  private readonly finalArrival: ArrivalPolicy
   private readonly searchTimeoutMs: number
   private readonly maxNodes: number
   private readonly maxReplans: number
@@ -85,10 +88,13 @@ export class MotionRun {
       this.classifier,
     )
     this.from = cellOf(this.world.self().pos)
-    this.motionGoal = createGoal(target, options.arrival ?? { kind: 'near', range })
+    this.activeTarget = target
+    this.finalArrival = options.arrival ?? { kind: 'near', range }
+    this.motionGoal = createGoal(target, this.finalArrival)
+    this.finalGoal = this.motionGoal
     this.searchTimeoutMs = options.searchTimeoutMs ?? 2_000
     this.maxNodes = options.maxNodes ?? 12_000
-    this.maxReplans = options.maxReplans ?? 4
+    this.maxReplans = options.maxReplans ?? 64
     this.startedAt = Date.now()
     this.healthBefore = this.world.self().health
   }
@@ -164,6 +170,7 @@ export class MotionRun {
     return {
       from: this.from,
       target: this.target,
+      activeTarget: this.activeTarget,
       at: position,
       range: this.range,
       phase: this.phase,
@@ -196,6 +203,12 @@ export class MotionRun {
     if (!this.active) return
     this.phase = 'planning'
     this.pathStatus = 'pending'
+    this.activeTarget = this.resolveTarget()
+    this.motionGoal = this.activeTarget.x === this.target.x
+      && this.activeTarget.y === this.target.y
+      && this.activeTarget.z === this.target.z
+      ? createGoal(this.target, this.finalArrival)
+      : createGoal(this.activeTarget, { kind: 'near', range: 1 })
     const ctx = this.context.next()
     this.search = new MotionSearch(cellOf(ctx.position), this.motionGoal, () => this.context.next(), {
       sliceMs: 5,
@@ -204,6 +217,45 @@ export class MotionRun {
       isCanceled: () => !this.active,
       avoidance: this.avoidance,
     })
+  }
+
+  /**
+   * A target outside the loaded world cannot be searched directly. Advance
+   * along the straight line to the nearest standable loaded prefix; after that
+   * prefix is reached, the next plan resolves again (and eventually the real
+   * target once its chunk is loaded). This is core policy, not a driver hack.
+   */
+  private resolveTarget(): Cell {
+    if (this.world.blockAt(this.target) !== null) return this.target
+    const self = cellOf(this.world.self().pos)
+    const dx = this.target.x - self.x
+    const dz = this.target.z - self.z
+    const distance = Math.hypot(dx, dz)
+    if (distance <= 1) return this.target
+    const advance = Math.min(16, distance - 1)
+    const projected = {
+      x: Math.floor(self.x + dx / distance * advance),
+      y: self.y,
+      z: Math.floor(self.z + dz / distance * advance),
+    }
+    const rules = this.context.next().rules
+    let best: Cell | undefined
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (let ox = -2; ox <= 2; ox += 1) {
+      for (let oz = -2; oz <= 2; oz += 1) {
+        for (let oy = -3; oy <= 3; oy += 1) {
+          const candidate = { x: projected.x + ox, y: projected.y + oy, z: projected.z + oz }
+          if (candidate.x === self.x && candidate.y === self.y && candidate.z === self.z) continue
+          if (rules.standInfo(candidate).state !== 'yes') continue
+          const d = Math.hypot(candidate.x - projected.x, candidate.y - projected.y, candidate.z - projected.z)
+          if (d < bestDistance) {
+            best = candidate
+            bestDistance = d
+          }
+        }
+      }
+    }
+    return best ?? projected
   }
 
   private planStep(): void {
@@ -270,7 +322,7 @@ export class MotionRun {
   private arrived(): boolean {
     const self = this.world.self()
     const cell = cellOf(self.pos)
-    if (!this.motionGoal.isEnd(cell)) return false
+    if (!this.finalGoal.isEnd(cell)) return false
     if (self.onGround) return true
     // Landing lag: the move already proved a standing position, but the physics
     // flag can trail one tick. Accept only at the exact requested cell.

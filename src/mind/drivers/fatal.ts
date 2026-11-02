@@ -54,6 +54,9 @@ async function fatal(ctx: DriverCtx, params: FatalParams): Promise<DriverResult>
   ctx.port.on('died', onDied)
   try {
     const stepped = await ctx.port.fatalStep(target)
+    if (died || stepped.code === 'DEATH' || stepped.code === 'DIED_IN_ALLOWED_HAZARD') {
+      return { state: 'succeeded', observed: { kind: 'fatal', target, died: true } }
+    }
     if (stepped.state === 'unknown') {
       return {
         state: 'failed',
@@ -68,7 +71,7 @@ async function fatal(ctx: DriverCtx, params: FatalParams): Promise<DriverResult>
         ...(stepped.observed === undefined ? {} : { observed: stepped.observed }),
       }
     }
-    const waitMs = Math.max(0, params.waitMs ?? 2_500)
+    const waitMs = Math.max(0, params.waitMs ?? 5_000)
     if (!died && waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs))
     const self = ctx.port.self()
     if (!died && self.health > 0) {

@@ -1,6 +1,4 @@
-import { isRecord } from '../../contracts/protocol.ts'
-import { standingAt } from '../standing.ts'
-import type { ActResult, ClientPort, MoveOptions, Vec3 } from '../../port/index.ts'
+import type { ActResult, MoveOptions, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
   Driver,
@@ -89,30 +87,14 @@ export function createMoveDriver(): Driver {
 }
 
 async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<DriverResult> {
-  const finalGoal: Vec3 = { x: params.x, y: params.y, z: params.z }
+  const goal: Vec3 = { x: params.x, y: params.y, z: params.z }
   const range = params.range ?? 1
   const totalMs = params.timeoutMs ?? job.budget.maxWallMs
   const startedAt = ctx.now()
-  let goal: Vec3 = finalGoal
-  let goalIsFinal = true
   let last: ActResult | undefined
-  const visited = new Set<string>()
+  let timeoutRetries = 0
 
   for (let segment = 0; segment < MAX_SEGMENTS; segment += 1) {
-    if (goalIsFinal && typeof ctx.port.blockAt === 'function') {
-      const targetBlock = ctx.port.blockAt(goal)
-      if (targetBlock === null) {
-        const prefix = forwardPrefix(ctx.port, ctx.port.self().pos, finalGoal)
-        if (prefix !== undefined && !samePoint(prefix, goal)) {
-          goal = prefix
-          goalIsFinal = false
-        }
-      } else if (params.allowPlace !== true
-        && standingAt(point => ctx.port.blockAt(point), goal).state !== 'valid') {
-        const stand = nearestStandable(ctx.port, goal)
-        if (stand !== undefined) goal = stand
-      }
-    }
     const remaining = totalMs - (ctx.now() - startedAt)
     if (remaining <= 0) {
       return {
@@ -122,11 +104,11 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       }
     }
     const result = await ctx.port.moveTo(goal, {
-      range: goalIsFinal ? range : 1,
+      range,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
-      ...(goalIsFinal && params.exact !== undefined ? { exact: params.exact } : {}),
-      ...(goalIsFinal && params.approach !== undefined ? { approach: params.approach } : {}),
-      ...(goalIsFinal && params.unstickDig !== undefined ? { unstickDig: params.unstickDig } : {}),
+      ...(params.exact === undefined ? {} : { exact: params.exact }),
+      ...(params.approach === undefined ? {} : { approach: params.approach }),
+      ...(params.unstickDig === undefined ? {} : { unstickDig: params.unstickDig }),
       ...(params.intent === undefined ? {} : { intent: params.intent }),
       ...(params.allowParkour === undefined ? {} : { allowParkour: params.allowParkour }),
       ...(params.allowDiagonal === undefined ? {} : { allowDiagonal: params.allowDiagonal }),
@@ -135,36 +117,22 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     })
     last = result
     if (result.state === 'ok') {
-      if (goalIsFinal) {
-        return result.observed === undefined
-          ? { state: 'succeeded' }
-          : { state: 'succeeded', observed: result.observed }
-      }
-      // Reached the prefix; continue to the original goal.
-      goal = finalGoal
-      goalIsFinal = true
+      return result.observed === undefined
+        ? { state: 'succeeded' }
+        : { state: 'succeeded', observed: result.observed }
+    }
+    // A bounded action can time out while core is still advancing a prefix or
+    // waiting for a slow server tick. Retry a few segments; never treat an
+    // unknown/stop-unconfirmed result as success.
+    if ((result.code === 'CLIENT_TIMEOUT' || result.code === 'GOTO_TIMEOUT') && timeoutRetries < 3) {
+      timeoutRetries += 1
       continue
     }
-
-    const next = bestReachable(result.observed)
-    if (next === undefined || samePoint(next, goal)) {
-      return {
-        state: 'failed',
-        code: result.code ?? (result.state === 'unknown' ? 'CLIENT_TIMEOUT' : 'GOTO_NO_PATH'),
-        ...(result.observed === undefined ? {} : { observed: result.observed }),
-      }
+    return {
+      state: 'failed',
+      code: result.code ?? (result.state === 'unknown' ? 'CLIENT_TIMEOUT' : 'GOTO_NO_PATH'),
+      ...(result.observed === undefined ? {} : { observed: result.observed }),
     }
-    const key = pointKey(next)
-    if (visited.has(key)) {
-      return {
-        state: 'failed',
-        code: result.code ?? 'GOTO_NO_PATH',
-        ...(result.observed === undefined ? {} : { observed: result.observed }),
-      }
-    }
-    visited.add(key)
-    goal = next
-    goalIsFinal = false
   }
 
   return {
@@ -172,59 +140,4 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     code: 'GOTO_SEGMENTS_EXCEEDED',
     ...(last?.observed === undefined ? {} : { observed: last.observed }),
   }
-}
-
-function bestReachable(observed: unknown): Vec3 | undefined {
-  if (!isRecord(observed)) return undefined
-  const best = observed.bestReachable
-  if (!isRecord(best)) return undefined
-  const { x, y, z } = best
-  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return undefined
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined
-  return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
-}
-
-function samePoint(left: Vec3, right: Vec3): boolean {
-  return left.x === right.x && left.y === right.y && left.z === right.z
-}
-
-/** An unloaded final target is advanced by a near, same-level prefix. */
-function forwardPrefix(port: ClientPort, self: Vec3, target: Vec3, step = 16): Vec3 | undefined {
-  const dx = target.x - self.x
-  const dz = target.z - self.z
-  const distance = Math.hypot(dx, dz)
-  if (distance <= 1) return undefined
-  const advance = Math.min(step, distance - 1)
-  const projected = {
-    x: Math.floor(self.x + dx / distance * advance),
-    y: Math.floor(self.y),
-    z: Math.floor(self.z + dz / distance * advance),
-  }
-  if (samePoint(projected, { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) })) {
-    return undefined
-  }
-  return nearestStandable(port, projected) ?? projected
-}
-
-function nearestStandable(port: ClientPort, center: Vec3): Vec3 | undefined {
-  let best: Vec3 | undefined
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (let dx = -2; dx <= 2; dx += 1) {
-    for (let dz = -2; dz <= 2; dz += 1) {
-      for (let dy = -3; dy <= 3; dy += 1) {
-        const candidate = { x: center.x + dx, y: center.y + dy, z: center.z + dz }
-        if (standingAt(point => port.blockAt(point), candidate).state !== 'valid') continue
-        const value = Math.hypot(candidate.x - center.x, candidate.y - center.y, candidate.z - center.z)
-        if (value < bestDistance) {
-          best = candidate
-          bestDistance = value
-        }
-      }
-    }
-  }
-  return best
-}
-
-function pointKey(point: Vec3): string {
-  return `${point.x},${point.y},${point.z}`
 }

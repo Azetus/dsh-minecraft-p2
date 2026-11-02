@@ -1,9 +1,10 @@
 import type { Vec3 } from '../port/index.ts'
+import { reachableCells as coreReachableCells } from '../motion/search/index.ts'
 import { interiorBounds } from './build-access.ts'
 import { itemCells } from './plan.ts'
 import type { BlockReason, PlanInstance, WorkItem } from './plan.ts'
 import { isSolidBlock } from './plan.ts'
-import { isStandable } from './standing.ts'
+import { createReadOnlyMotionWorld, isStandable } from './standing.ts'
 import type { WorldView } from './types.ts'
 
 export type ItemBlockReason =
@@ -203,7 +204,10 @@ export function placementStances(
   const anchor = targets[0]!.pos
   const interior = interiorBounds(plan)
   const excluded = new Set(targets.map(cell => cellKey(cell.pos)))
-  const reachable = reachableCells(world, world.self.pos)
+  const reachable = coreReachableCells(
+    createReadOnlyMotionWorld(point => world.blockAt(point)),
+    world.self.pos,
+  )
   const choices: StanceChoice[] = []
   for (let dx = -5; dx <= 5; dx += 1) {
     for (let dz = -5; dz <= 5; dz += 1) {
@@ -314,31 +318,6 @@ function lineClear(world: WorldView, from: Vec3, to: Vec3, allowed: Set<string>)
 }
 
 /** Bounded walkability preference; never a hard filter (doors/jumps are unknown here). */
-function reachableCells(world: WorldView, from: Vec3): Set<string> {
-  const start = {
-    x: Math.floor(from.x),
-    y: Math.floor(from.y),
-    z: Math.floor(from.z),
-  }
-  const seen = new Set<string>()
-  const queue: Vec3[] = [start]
-  seen.add(cellKey(start))
-  while (queue.length > 0 && seen.size < 96) {
-    const cell = queue.shift()!
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      for (const dy of [0, 1, -1]) {
-        const next = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }
-        const key = cellKey(next)
-        if (seen.has(key)) continue
-        if (!isStandable(world, next)) continue
-        seen.add(key)
-        queue.push(next)
-      }
-    }
-  }
-  return seen
-}
-
 function fingerprint(plan: PlanInstance, item: WorkItem, world: WorldView): string {
   const cells = itemCells(plan, item)
   const parts: string[] = []

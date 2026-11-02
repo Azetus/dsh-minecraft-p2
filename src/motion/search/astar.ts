@@ -174,7 +174,7 @@ export class MotionSearch {
   private expand(cell: Cell, ctx: MoveContext): void {
     const key = cellKey(cell)
     const base = this.g.get(key) ?? Number.POSITIVE_INFINITY
-    for (const move of neighbors(cell, ctx)) {
+    for (const move of motionNeighbors(cell, ctx)) {
       const next = move.dest
       const cost = move.cost(ctx) * this.avoidanceMultiplier(next)
       if (cost === COST_INF) continue
@@ -220,7 +220,7 @@ export class MotionSearch {
   }
 }
 
-function neighbors(cell: Cell, ctx: MoveContext): Move[] {
+export function motionNeighbors(cell: Cell, ctx: MoveContext): Move[] {
   const moves: Move[] = []
   const directions: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
   for (const [dx, dz] of directions) {

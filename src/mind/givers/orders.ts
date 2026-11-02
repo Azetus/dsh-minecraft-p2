@@ -65,7 +65,7 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
         return {
           driverId: 'fatal',
           target: { kind: 'point', pos: requested },
-          params: { x: requested.x, y: requested.y, z: requested.z },
+          params: { x: requested.x, y: requested.y, z: requested.z, waitMs: 6_000 },
           keys: `order.fatal:${current.order.id}`,
           orderId: current.order.id,
         }

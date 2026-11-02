@@ -36,20 +36,14 @@ async function run(port: ClientPort): Promise<{ state: string; [key: string]: un
 }
 
 describe('segmented move driver', () => {
-  it('advances to the reachable prefix and then to the final goal', async () => {
+  it('does not consume a failed bestReachable in the driver', async () => {
     const fake = source([
       { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1, observed: { bestReachable: { x: 10, y: 64, z: 0 } } },
-      { state: 'ok', elapsedMs: 1 },
-      { state: 'ok', elapsedMs: 1 },
     ])
     const result = await run(fake.port)
 
-    expect(result.state).toBe('succeeded')
-    expect(fake.calls.map(call => call.target)).toEqual([
-      { x: 30, y: 64, z: 0 },
-      { x: 10, y: 64, z: 0 },
-      { x: 30, y: 64, z: 0 },
-    ])
+    expect(result).toMatchObject({ state: 'failed', code: 'GOTO_NO_PATH' })
+    expect(fake.calls.map(call => call.target)).toEqual([{ x: 30, y: 64, z: 0 }])
   })
 
   it('does not loop when the reachable prefix is the current goal', async () => {
@@ -83,9 +77,6 @@ describe('segmented move driver', () => {
     const result = await run(port)
 
     expect(result.state).toBe('succeeded')
-    expect(targets).toEqual([
-      { x: 16, y: 64, z: 0 },
-      { x: 30, y: 64, z: 0 },
-    ])
+    expect(targets).toEqual([{ x: 30, y: 64, z: 0 }])
   })
 })
