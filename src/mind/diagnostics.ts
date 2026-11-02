@@ -15,7 +15,8 @@ export type FailureDiagnostic = {
 
 const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> = [
   { match: /TOOL_INSUFFICIENT|BLOCK_UNBREAKABLE/, category: 'tool', hint: 'check the tool/block type or use clear instead of harvest' },
-  { match: /APPROACH_NO_STAND|GOTO_INVALID_TARGET|NO_STAND|NO_SUPPORT/, category: 'reachability', hint: 'target has no safe standing cell; change the target or clear space' },
+  { match: /APPROACH_NO_STAND|APPROACH_NO_PATH|GOTO_INVALID_TARGET|NO_STAND|NO_SUPPORT/, category: 'reachability', hint: 'target has no reachable standing cell; change the target or clear space' },
+  { match: /APPROACH_UNKNOWN/, category: 'world', hint: 'the stand query could not decide (unloaded window); re-observe before retrying' },
   { match: /GOTO_NO_PATH|GOTO_TIMEOUT|^UNREACHABLE$/, category: 'reachability', hint: 'path is blocked or too long; choose a closer/standable target' },
   { match: /PICKUP_UNREACHABLE|PICKUP_NOT_COLLECTED|PICKUP_ENTITY_GONE|PICKUP_MERGED/, category: 'world', hint: 'drop is unreachable or not collected; adjust the landing/space' },
   { match: /PICKUP_INVENTORY_FULL/, category: 'precondition', hint: 'inventory has no storage space; free a slot before harvesting' },

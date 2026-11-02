@@ -9,6 +9,7 @@ export {
 export {
   AscendMove,
   BridgeMove,
+  ClimbMove,
   DescendMove,
   DiagonalMove,
   DownwardMove,
@@ -19,6 +20,7 @@ export {
   aim,
   cellOf,
   holdForward,
+  onClimb,
   reached,
   releaseInputs,
   yawTo,

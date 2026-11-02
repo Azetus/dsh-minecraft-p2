@@ -1,9 +1,13 @@
 import type { BlockInfo, EntityInfo, Vec3 } from '../../port/index.ts'
+import { nearestStandCell, standCells } from '../../motion/search/index.ts'
 import { boxAround } from '../sensors.ts'
-import { isStandable } from '../standing.ts'
+import { createReadOnlyMotionWorld, isStandable } from '../standing.ts'
 import type { Candidate, WorldView } from '../types.ts'
 
-export { isStandable } from '../standing.ts'
+export { isStandable, standability } from '../standing.ts'
+
+/** Reflex queries run per tick; keep the reachability walk small. */
+const REFLEX_REACH_NODES = 128
 
 /** Lower-level entity names the escape giver treats as immediate danger. */
 export const HOSTILE_NAMES: ReadonlySet<string> = new Set([
@@ -50,7 +54,11 @@ export function hostilesNear(world: WorldView, center: Vec3, radius: number): En
     .filter(entity => HOSTILE_NAMES.has(entity.name))
 }
 
-/** Nearest standable cell to `desired`, searching a radius around `center`. */
+/**
+ * Nearest standable cell to `desired`, searching a radius around `center`.
+ * The window, the standability check and the reachability walk all come from
+ * the core stand query; this wrapper only picks the ordering.
+ */
 export function nearestStandable(
   world: WorldView,
   center: Vec3,
@@ -59,28 +67,19 @@ export function nearestStandable(
   vertical = 2,
   exclude?: Vec3,
 ): Vec3 | undefined {
-  let best: Vec3 | undefined
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      for (let dy = -vertical; dy <= vertical; dy += 1) {
-        const candidate = { x: center.x + dx, y: center.y + dy, z: center.z + dz }
-        if (exclude !== undefined
-          && candidate.x === exclude.x && candidate.y === exclude.y && candidate.z === exclude.z) continue
-        if (!isStandable(world, candidate)) continue
-        const distance = Math.hypot(
-          candidate.x - desired.x,
-          candidate.y - desired.y,
-          candidate.z - desired.z,
-        )
-        if (distance < bestDistance) {
-          best = candidate
-          bestDistance = distance
-        }
-      }
-    }
-  }
-  return best
+  const query = nearestStandCell(
+    createReadOnlyMotionWorld(point => world.blockAt(point)),
+    {
+      near: center,
+      desired,
+      reach: { horizontal: radius, vertical },
+      ...(exclude === undefined
+        ? {}
+        : { accept: (cell: Vec3) => cell.x !== exclude.x || cell.y !== exclude.y || cell.z !== exclude.z }),
+    },
+    { from: feetOf(world.self.pos), reachability: { maxNodes: REFLEX_REACH_NODES } },
+  )
+  return query.best?.cell
 }
 
 /** Farthest standable cell from `threat`, for when no explicit retreat exists. */
@@ -91,19 +90,20 @@ export function farthestStandable(
   threat: Vec3,
   vertical = 2,
 ): Vec3 | undefined {
+  const result = standCells(
+    createReadOnlyMotionWorld(point => world.blockAt(point)),
+    { near: center, desired: threat, reach: { horizontal: radius, vertical } },
+    { from: feetOf(world.self.pos), reachability: { maxNodes: REFLEX_REACH_NODES } },
+  )
+  const proven = result.cells.filter(candidate => candidate.reachable !== 'no')
+  const pool = proven.length > 0 ? proven : result.cells
   let best: Vec3 | undefined
   let bestDistance = -1
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      for (let dy = -vertical; dy <= vertical; dy += 1) {
-        const candidate = { x: center.x + dx, y: center.y + dy, z: center.z + dz }
-        if (!isStandable(world, candidate)) continue
-        const distance = Math.hypot(candidate.x - threat.x, candidate.z - threat.z)
-        if (distance > bestDistance) {
-          best = candidate
-          bestDistance = distance
-        }
-      }
+  for (const candidate of pool) {
+    const distance = Math.hypot(candidate.cell.x - threat.x, candidate.cell.z - threat.z)
+    if (distance > bestDistance) {
+      best = candidate.cell
+      bestDistance = distance
     }
   }
   return best

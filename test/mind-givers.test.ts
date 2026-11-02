@@ -78,6 +78,41 @@ describe('escape giver', () => {
     expect(result?.keys).toBe('escape:water')
   })
 
+  it('does not flee while wading in one block of water', () => {
+    const wading = new SnapshotWorld({
+      self: self({ inWater: true, onGround: false }),
+      time: { timeOfDay: 1000, worldAge: 100 },
+      entities: [],
+      blocks: [
+        { name: 'stone', loaded: true, pos: { x: 0, y: 63, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 64, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 0, y: 65, z: 0 } },
+      ],
+      inventory: [],
+    })
+    expect(createEscapeGiver().find(ctx, wading)).toBeNull()
+  })
+
+  it('still flees when the water column covers the head', () => {
+    const deep = new SnapshotWorld({
+      self: self({ inWater: true, onGround: false }),
+      time: { timeOfDay: 1000, worldAge: 100 },
+      entities: [],
+      blocks: [
+        { name: 'stone', loaded: true, pos: { x: 0, y: 62, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 63, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 64, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 65, z: 0 } },
+        { name: 'stone', loaded: true, pos: { x: 1, y: 63, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 1, y: 64, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 1, y: 65, z: 0 } },
+      ],
+      inventory: [],
+    })
+    const result = asCandidate(createEscapeGiver().find(ctx, deep))
+    expect(result.keys).toBe('escape:water')
+  })
+
   it('retreats from a hostile within six blocks', () => {
     const threat: EntityInfo = { id: 'c1', name: 'creeper', position: { x: 2, y: 64, z: 0 } }
     const result = asCandidate(createEscapeGiver().find(ctx, flatWorld({ entities: [threat] })))

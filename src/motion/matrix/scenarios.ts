@@ -25,13 +25,17 @@ export type MatrixBlockSpec = {
   state?: Readonly<Record<string, string>>
 }
 
-export type MatrixField = {
-  id: MatrixFieldId
-  title: string
-  origin: Cell
+/** Pure geometry shared by the phase matrix and the boundary matrix. */
+export type FieldGeometry = {
   clear: { min: Cell; max: Cell }
   fills: readonly MatrixFill[]
   blocks: readonly MatrixBlockSpec[]
+}
+
+export type MatrixField = FieldGeometry & {
+  id: MatrixFieldId
+  title: string
+  origin: Cell
   /** Feet cell where the body is teleported before the run. */
   start: Cell
   /** Feet cell the move must reach. */
@@ -268,7 +272,7 @@ export function fillCommand(min: Cell, max: Cell, block: string): string {
 }
 
 /** Commands that (re)build this field; clear first, then floors, then blocks. */
-export function matrixCommands(field: MatrixField): string[] {
+export function matrixCommands(field: FieldGeometry): string[] {
   const commands = [fillCommand(field.clear.min, field.clear.max, 'air')]
   for (const fill of field.fills) commands.push(fillCommand(fill.min, fill.max, fill.block))
   for (const spec of field.blocks) {
@@ -278,7 +282,7 @@ export function matrixCommands(field: MatrixField): string[] {
 }
 
 /** Final block map after clear + fills + blocks; used by pure fixtures. */
-export function matrixBlockMap(field: MatrixField): Map<string, MatrixBlockSpec> {
+export function matrixBlockMap(field: FieldGeometry): Map<string, MatrixBlockSpec> {
   const map = new Map<string, MatrixBlockSpec>()
   for (let x = field.clear.min.x; x <= field.clear.max.x; x += 1) {
     for (let y = field.clear.min.y; y <= field.clear.max.y; y += 1) {

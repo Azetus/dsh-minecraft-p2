@@ -6,6 +6,7 @@ export {
   matrixFields,
 } from './scenarios.ts'
 export type {
+  FieldGeometry,
   MatrixBlockSpec,
   MatrixExpectation,
   MatrixField,
@@ -13,3 +14,5 @@ export type {
   MatrixFill,
   MatrixPhase,
 } from './scenarios.ts'
+export { boundaryFieldIds, boundaryFields } from './boundary.ts'
+export type { BoundaryExpectation, BoundaryField, BoundaryStage } from './boundary.ts'

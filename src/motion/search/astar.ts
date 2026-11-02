@@ -1,6 +1,7 @@
 import {
   AscendMove,
   BridgeMove,
+  ClimbMove,
   DescendMove,
   DiagonalMove,
   DownwardMove,
@@ -228,10 +229,15 @@ export function motionNeighbors(cell: Cell, ctx: MoveContext): Move[] {
     moves.push(new TraverseMove(cell, flat))
     moves.push(new AscendMove(cell, { x: flat.x, y: cell.y + 1, z: flat.z }))
     moves.push(new DescendMove(cell, { x: flat.x, y: cell.y - 1, z: flat.z }))
+    // Sideways entry into a ladder/vine column; `cost` rejects non-climbable
+    // destinations, so this stays a no-op on ordinary ground.
+    moves.push(new ClimbMove(cell, flat))
     for (let drop = 2; drop <= Math.max(ctx.constraints.maxFall, ctx.constraints.safeFallBudget ?? 0); drop += 1) {
       moves.push(new FallMove(cell, { x: flat.x, y: cell.y - drop, z: flat.z }))
     }
   }
+  moves.push(new ClimbMove(cell, { x: cell.x, y: cell.y + 1, z: cell.z }))
+  moves.push(new ClimbMove(cell, { x: cell.x, y: cell.y - 1, z: cell.z }))
   for (let drop = 1; drop <= ctx.constraints.maxFall; drop += 1) {
     moves.push(new DownwardMove(cell, { x: cell.x, y: cell.y - drop, z: cell.z }))
   }

@@ -22,6 +22,15 @@ export function floorCell(p: { x: number; y: number; z: number }): Cell {
   return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
 }
 
+/**
+ * Feet cell for a continuous position. Path cells are "support + 1"; a bottom
+ * slab puts the real feet at y-0.5, so the slab-aware rounding is `floor(y+0.5)`
+ * rather than a plain floor.
+ */
+export function cellOf(pos: { x: number; y: number; z: number }): Cell {
+  return { x: Math.floor(pos.x), y: Math.floor(pos.y + 0.5), z: Math.floor(pos.z) }
+}
+
 export function cellCenter(cell: Cell): { x: number; y: number; z: number } {
   return { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 }
 }
@@ -57,6 +66,37 @@ export function topSurfaceAt(
     if (centerX <= box[0] || centerX >= box[3]) continue
     if (centerZ <= box[2] || centerZ >= box[5]) continue
     if (box[4] > top) top = box[4]
+  }
+  return top
+}
+
+/**
+ * Sample points across the player's 0.6-wide footprint, in local block units.
+ * A single centre sample misses shapes whose collision boxes split exactly at
+ * the centre (stairs are `[0,0,0,1,0.5,1]` + `[0,0.5,0,1,1,0.5]`), so the
+ * support height must be taken over the whole footprint the body occupies.
+ */
+export const FOOTPRINT_SAMPLES = [0.2, 0.5, 0.8] as const
+
+/**
+ * Highest surface the body can actually stand on within the footprint, or
+ * `undefined` when the geometry is unknown. This is the support height used by
+ * `Rules.standInfo`: a stair returns 1 (its riser), a bottom slab 0.5, a ladder
+ * 0 (the thin plate is outside the footprint), a fence above 1 (rejected as too
+ * high support).
+ */
+export function supportTopAt(block: ClassifiedBlock): number | undefined {
+  const boxes = collisionOf(block)
+  if (boxes === undefined) return undefined
+  let top = 0
+  for (const centerX of FOOTPRINT_SAMPLES) {
+    for (const centerZ of FOOTPRINT_SAMPLES) {
+      for (const box of boxes) {
+        if (centerX <= box[0] || centerX >= box[3]) continue
+        if (centerZ <= box[2] || centerZ >= box[5]) continue
+        if (box[4] > top) top = box[4]
+      }
+    }
   }
   return top
 }

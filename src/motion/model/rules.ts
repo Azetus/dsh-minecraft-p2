@@ -4,7 +4,7 @@ import {
   hasTag,
   isPlaceReference,
   offset,
-  topSurfaceAt,
+  supportTopAt,
   PLAYER_HEIGHT,
 } from './block.ts'
 import { vanillaClassifier } from './semantics/vanilla.ts'
@@ -110,7 +110,8 @@ export class RuleSet implements Rules {
     const block = this.read(cell)
     if (block === null || !block.loaded) return 'unknown'
     if (this.isHazard(cell) !== 'no') return 'no'
-    if (hasTag(block, 'water') || hasTag(block, 'lava')) return 'no'
+    if (hasTag(block, 'lava')) return 'no'
+    if (hasTag(block, 'water') && this.wadeCell(cell) !== 'yes') return 'no'
     const body = this.bodyCheck(cell, cell.y)
     return body.state === 'yes' ? 'yes' : body.state === 'unknown' ? 'unknown' : 'no'
   }
@@ -120,7 +121,8 @@ export class RuleSet implements Rules {
     const block = this.read(cell)
     if (block === null || !block.loaded) return 'unknown'
     if (this.isHazard(cell) !== 'no') return 'no'
-    if (hasTag(block, 'water') || hasTag(block, 'lava')) return 'no'
+    if (hasTag(block, 'lava')) return 'no'
+    if (hasTag(block, 'water')) return this.wadeCell(cell) === 'yes' ? 'yes' : 'no'
     if (block.collision === undefined) return 'unknown'
     return block.collision.length === 0 ? 'yes' : 'no'
   }
@@ -132,7 +134,7 @@ export class RuleSet implements Rules {
     if (this.isHazard(cell) === 'yes') return 'no'
     if (hasTag(block, 'lava')) return 'no'
     if (hasTag(block, 'water') && !this.constraints.assumeWalkOnWater) return 'no'
-    const top = hasTag(block, 'water') ? 1 : topSurfaceAt(block, 0.5, 0.5)
+    const top = hasTag(block, 'water') ? 1 : supportTopAt(block)
     if (top === undefined) return 'unknown'
     return top > 0 && top <= 1 ? 'yes' : 'no'
   }
@@ -234,6 +236,12 @@ export class RuleSet implements Rules {
   }
 
   standInfo(cell: Cell, ignoreBody: readonly Cell[] = []): StandInfo {
+    const support = this.supportFeet(cell)
+    if (support.state !== 'yes') return support
+    return this.bodyCheck(cell, support.feetY, ignoreBody)
+  }
+
+  supportFeet(cell: Cell): StandInfo {
     if (!this.withinBounds(cell)) return { state: 'no', reason: 'outside-bounds' }
     const supportCell = offset(cell, 0, -1, 0)
     const support = this.read(supportCell)
@@ -244,13 +252,39 @@ export class RuleSet implements Rules {
       return { state: 'no', reason: 'water-support' }
     }
     if (hasTag(support, 'water') && this.constraints.assumeWalkOnWater) {
-      return this.bodyCheck(cell, cell.y, ignoreBody)
+      return { state: 'yes', feetY: cell.y }
     }
-    const top = topSurfaceAt(support, 0.5, 0.5)
+    const top = supportTopAt(support)
     if (top === undefined) return { state: 'unknown', reason: 'collision-unknown' }
     if (top <= 0) return { state: 'no', reason: 'no-support' }
     if (top > 1) return { state: 'no', reason: 'support-too-high' }
-    return this.bodyCheck(cell, cell.y - 1 + top, ignoreBody)
+    return { state: 'yes', feetY: cell.y - 1 + top }
+  }
+
+  /**
+   * Is this a water cell the body may enter under the current profile? `wade`
+   * accepts exactly one block of water over a full-height, dry, walkable floor:
+   * the feet get wet, the head stays in air. Anything deeper, over a partial
+   * support, or with water above the head needs a swim/waterline controller.
+   */
+  private wadeCell(cell: Cell): Tri {
+    if (this.constraints.waterProfile === 'none') return 'no'
+    const block = this.read(cell)
+    if (block === null || !block.loaded) return 'unknown'
+    if (!hasTag(block, 'water')) return 'no'
+    const above = this.read(offset(cell, 0, 1, 0))
+    if (above === null || !above.loaded) return 'unknown'
+    if (hasTag(above, 'water') || hasTag(above, 'lava')) return 'no'
+    const supportCell = offset(cell, 0, -1, 0)
+    const below = this.read(supportCell)
+    if (below === null || !below.loaded) return 'unknown'
+    if (this.isHazard(supportCell) === 'yes') return 'no'
+    if (hasTag(below, 'water') || hasTag(below, 'lava')) return 'no'
+    const top = supportTopAt(below)
+    if (top === undefined) return 'unknown'
+    // A partial support under water would put the feet below the cell base.
+    if (top < 1 - EPSILON) return 'no'
+    return this.bodyCheck(cell, cell.y).state
   }
 
   /**
@@ -268,12 +302,28 @@ export class RuleSet implements Rules {
       const block = this.read(at)
       if (block === null || !block.loaded) return { state: 'unknown', reason: 'body-unloaded' }
       if (this.isHazard(at) === 'yes') return { state: 'no', reason: 'hazard-body' }
-      if (hasTag(block, 'water') || hasTag(block, 'lava')) return { state: 'no', reason: 'fluid-body' }
+      if (hasTag(block, 'lava')) return { state: 'no', reason: 'lava-body' }
+      if (hasTag(block, 'water')) {
+        if (!this.wadeBodyCell(cell, y)) return { state: 'no', reason: 'fluid-body' }
+        continue
+      }
       const overlap = bodyOverlap(block, at, feetY)
       if (overlap === undefined) return { state: 'unknown', reason: 'collision-unknown' }
       if (overlap) return { state: 'no', reason: 'body-collision' }
     }
     return { state: 'yes', feetY }
+  }
+
+  /**
+   * A wadeable water cell may occupy only the feet cell of the body: the block
+   * above it must be dry, otherwise the head would be underwater.
+   */
+  private wadeBodyCell(cell: Cell, bodyY: number): boolean {
+    if (this.constraints.waterProfile === 'none') return false
+    if (bodyY !== cell.y) return false
+    const above = this.read(offset(cell, 0, 1, 0))
+    if (above === null || !above.loaded) return false
+    return !hasTag(above, 'water') && !hasTag(above, 'lava')
   }
 }
 

@@ -9,11 +9,34 @@ import type {
   RawBlock,
   SelfView,
 } from '../../src/motion/model/types.ts'
-import type { MatrixField } from '../../src/motion/matrix/scenarios.ts'
+import type { FieldGeometry } from '../../src/motion/matrix/scenarios.ts'
 import { matrixBlockMap } from '../../src/motion/matrix/scenarios.ts'
 
 export const FULL_CUBE: readonly CollisionBox[] = [[0, 0, 0, 1, 1, 1] as const]
 export const HALF_CUBE: readonly CollisionBox[] = [[0, 0, 0, 1, 0.5, 1] as const]
+export const TOP_HALF_CUBE: readonly CollisionBox[] = [[0, 0.5, 0, 1, 1, 1] as const]
+
+/** Vanilla 1.21.1 shapes for the boundary matrix blocks (minecraft-data). */
+export const SCAFFOLDING_SHAPE: readonly CollisionBox[] = [
+  [0, 0, 0, 0.125, 1, 0.125],
+  [0, 0, 0.875, 0.125, 1, 1],
+  [0.875, 0, 0, 1, 1, 0.125],
+  [0.875, 0, 0.875, 1, 1, 1],
+  [0, 0.875, 0.125, 1, 1, 0.875],
+  [0.125, 0.875, 0, 0.875, 1, 0.125],
+  [0.125, 0.875, 0.875, 0.875, 1, 1],
+] as const
+/** Straight bottom stairs: the two boxes split exactly at the cell centre. */
+export const STAIRS_NORTH: readonly CollisionBox[] = [
+  [0, 0, 0, 1, 0.5, 1],
+  [0, 0.5, 0, 1, 1, 0.5],
+] as const
+export const STAIRS_SOUTH: readonly CollisionBox[] = [
+  [0, 0, 0, 1, 0.5, 1],
+  [0, 0.5, 0.5, 1, 1, 1],
+] as const
+export const LADDER_NORTH: readonly CollisionBox[] = [[0, 0, 0.8125, 1, 1, 1] as const]
+export const LADDER_SOUTH: readonly CollisionBox[] = [[0, 0, 0, 1, 1, 0.1875] as const]
 
 export function rawBlock(
   name: string,
@@ -31,7 +54,20 @@ export function rawBlock(
 
 function collisionFor(name: string, state: Readonly<Record<string, string>> | undefined): readonly CollisionBox[] {
   if (name === 'air' || name === 'cave_air' || name === 'void_air') return []
+  if (name === 'water' || name === 'lava' || name === 'bubble_column') return []
   if (name.endsWith('_door')) return state?.open === 'true' ? [] : FULL_CUBE
+  if (name.endsWith('_slab')) {
+    if (state?.type === 'top') return TOP_HALF_CUBE
+    if (state?.type === 'double') return FULL_CUBE
+    return HALF_CUBE
+  }
+  if (name.endsWith('_stairs')) {
+    return state?.facing === 'south' ? STAIRS_SOUTH : STAIRS_NORTH
+  }
+  if (name === 'ladder' || name.endsWith('_vine') || name.includes('vines')) {
+    return state?.facing === 'south' ? LADDER_SOUTH : LADDER_NORTH
+  }
+  if (name === 'scaffolding') return SCAFFOLDING_SHAPE
   return FULL_CUBE
 }
 
@@ -112,7 +148,7 @@ export class FixtureWorld implements MotionWorld {
   }
 }
 
-export function buildFixture(field: MatrixField): FixtureWorld {
+export function buildFixture(field: FieldGeometry & { start: Cell }): FixtureWorld {
   const world = new FixtureWorld()
   for (const [key, spec] of matrixBlockMap(field)) {
     world.blocks.set(key, rawBlock(spec.name, collisionFor(spec.name, spec.state), spec.state ?? {}))

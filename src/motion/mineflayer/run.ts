@@ -322,12 +322,24 @@ export class MotionRun {
   private arrived(): boolean {
     const self = this.world.self()
     const cell = cellOf(self.pos)
-    if (!this.finalGoal.isEnd(cell)) return false
-    if (self.onGround) return true
-    // Landing lag: the move already proved a standing position, but the physics
-    // flag can trail one tick. Accept only at the exact requested cell.
-    return self.pos.x > this.target.x && self.pos.x < this.target.x + 1
-      && self.pos.z > this.target.z && self.pos.z < this.target.z + 1
+    if (this.finalGoal.isEnd(cell)) {
+      if (self.onGround) return true
+      // Landing lag: the move already proved a standing position, but the physics
+      // flag can trail one tick. Accept only at the exact requested column.
+      return this.insideTarget(self.pos)
+    }
+    // A wading body floats around the half-cell boundary, so the feet cell can
+    // flip to the cell above while the body is still in the target column.
+    // Accept that column within one cell of the goal height instead of
+    // re-planning between two cells forever.
+    if (!this.insideTarget(self.pos)) return false
+    if (self.pos.y < this.target.y - 0.05 || self.pos.y > this.target.y + 1.05) return false
+    return this.finalGoal.isEnd({ x: this.target.x, y: this.target.y, z: this.target.z })
+  }
+
+  private insideTarget(pos: { x: number; z: number }): boolean {
+    return pos.x > this.target.x && pos.x < this.target.x + 1
+      && pos.z > this.target.z && pos.z < this.target.z + 1
   }
 
   private succeed(observed?: JsonValue): void {

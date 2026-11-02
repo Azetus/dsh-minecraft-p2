@@ -1,5 +1,6 @@
 import {
   AscendMove,
+  ClimbMove,
   DescendMove,
   DiagonalMove,
   DownwardMove,
@@ -59,6 +60,11 @@ function makeMove(
   ctx: MoveContext,
 ): Move | undefined {
   const horizontal = Math.abs(dx) + Math.abs(dz)
+  // Climbable destinations need the climb state machine even when the geometry
+  // looks like a traverse/ascend: a ladder cell has no support of its own.
+  if (ctx.rules.isClimbable(dest) === 'yes' && horizontal <= 1 && Math.abs(dy) <= 1) {
+    return new ClimbMove(src, dest)
+  }
   if (horizontal === 1) {
     if (dy === 0) return new TraverseMove(src, dest)
     if (dy === 1) return new AscendMove(src, dest)

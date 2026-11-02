@@ -1,4 +1,5 @@
 import { distance2d } from './geometry.ts'
+import { cellOf } from '../model/block.ts'
 import type {
   Cell,
   Move,
@@ -10,6 +11,14 @@ import type {
 } from '../model/types.ts'
 import { COST_INF } from '../model/types.ts'
 
+const EPSILON = 0.001
+/**
+ * Highest feet rise a vanilla jump can still land on. A full block step is
+ * 1.0; a bottom slab source makes a nominal +1 step a 1.5 rise, which cannot be
+ * jumped and must not be offered as an edge.
+ */
+const MAX_STEP_UP = 1.05
+
 /**
  * Does the body occupy `cell` at its derived feet height? Uses the same rules
  * as the planner, including slab/carpet feet offsets.
@@ -20,11 +29,18 @@ export function reached(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.5
   return distance2d(pos, cell) <= tolerance && Math.abs(pos.y - info.feetY) <= 0.45
 }
 
-export function cellOf(pos: Vec3): Cell {
-  // Path cells are "support + 1"; a slab puts the continuous feet at y-0.5,
-  // so round the feet height instead of flooring it directly.
-  return { x: Math.floor(pos.x), y: Math.floor(pos.y + 0.5), z: Math.floor(pos.z) }
+/**
+ * Ladder/vine arrival. A climbable cell has no support of its own, so the
+ * generic `reached` cannot be used; the body is "on" it while its feet are in
+ * that cell and horizontally centred on the column.
+ */
+export function onClimb(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.55): boolean {
+  if (ctx.rules.isClimbable(cell) !== 'yes') return false
+  const distance = Math.hypot(pos.x - (cell.x + 0.5), pos.z - (cell.z + 0.5))
+  return distance <= tolerance && pos.y >= cell.y - 0.05 && pos.y <= cell.y + 0.95
 }
+
+export { cellOf }
 
 export function aim(ctx: MoveContext, cell: Cell): void {
   ctx.world.look(yawTo(ctx.position, cell), 0)
@@ -159,7 +175,10 @@ export class TraverseMove extends BaseMove {
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
-    return 1 + breakCostOf(ctx, cells)
+    // Wading is slower than dry ground; the planner should prefer a dry route
+    // when one exists, but water is not a wall.
+    const wet = ctx.rules.isWater(this.dest) === 'yes' || ctx.rules.isWater(this.src) === 'yes'
+    return (wet ? 2 : 1) + breakCostOf(ctx, cells)
   }
 
   toBreak(ctx: MoveContext): readonly Cell[] {
@@ -234,11 +253,15 @@ export class AscendMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (this.dest.y !== this.src.y + 1 || !adjacent(this.src, this.dest)) return COST_INF
-    if (ctx.rules.standInfo(this.src).state !== 'yes') return COST_INF
+    const srcSupport = ctx.rules.supportFeet(this.src)
+    if (srcSupport.state !== 'yes') return COST_INF
     const cells = bodyCells(this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
+    // The source may be a partial support (bottom slab, stair tread): the real
+    // jump is then larger than the nominal +1 step.
+    if (stand.feetY - srcSupport.feetY > MAX_STEP_UP) return COST_INF
     return 1.5 + breakCostOf(ctx, cells)
   }
 
@@ -267,11 +290,15 @@ export class AscendMove extends BaseMove {
       releaseInputs(ctx)
       return 'success'
     }
+    // A wade source is a floor under water: vanilla replaces the normal jump
+    // with the slower swim-up, so the body must hold jump long enough to clear
+    // the rim instead of pulsing it like a dry jump.
+    const wetSource = ctx.rules.isWater(this.src) === 'yes'
     const distance = distance2d(ctx.position, this.dest)
     if (this.phase === 'approach') {
       aim(ctx, this.dest)
       holdForward(ctx)
-      if (distance <= 0.9 && ctx.self.onGround) {
+      if (distance <= 0.9 && (ctx.self.onGround || wetSource)) {
         this.phase = 'jump'
         this.jumpTicks = 0
       }
@@ -280,9 +307,12 @@ export class AscendMove extends BaseMove {
     this.jumpTicks += 1
     aim(ctx, this.dest)
     holdForward(ctx)
-    ctx.world.setInput('jump', this.jumpTicks <= 2)
-    if (this.jumpTicks > 3) ctx.world.setInput('jump', false)
-    if (ctx.self.onGround && this.jumpTicks > 4) {
+    const hold = wetSource ? 24 : 2
+    ctx.world.setInput('jump', this.jumpTicks <= hold)
+    if (this.jumpTicks > hold + 1) ctx.world.setInput('jump', false)
+    // Swimming up never reports onGround, so the dry-jump retry cannot judge it;
+    // the move timeout bounds the attempt instead.
+    if (!wetSource && ctx.self.onGround && this.jumpTicks > 4) {
       this.retries += 1
       if (this.retries > 2) {
         releaseInputs(ctx)
@@ -351,12 +381,25 @@ export class FallMove extends BaseMove {
   }
 
   private landingSafe(ctx: MoveContext): boolean {
-    if (ctx.rules.standInfo(this.dest).state !== 'yes') return false
-    // A planned fall must pass through loaded, clear, non-hazard cells.
+    const stand = ctx.rules.standInfo(this.dest)
+    if (stand.state !== 'yes') return false
+    const support = ctx.rules.supportFeet(this.dest)
+    if (support.state !== 'yes') return false
+    // Landing on a half-height support (bottom slab, carpet) has an ambiguous
+    // landing height; the reference behaviour refuses it unless explicitly
+    // allowed. Wading water keeps the pool floor as the support, so it is a
+    // full-height landing and unaffected.
+    if (ctx.constraints.allowFallOntoHalfSupport !== true && support.feetY < this.dest.y - 0.01) {
+      return false
+    }
+    // A planned fall must pass through loaded, clear, non-hazard cells. The
+    // landing cell itself may be wadeable water (the water absorbs the fall).
     for (let y = this.dest.y; y <= this.src.y; y += 1) {
       const cell = { x: this.dest.x, y, z: this.dest.z }
       if (ctx.rules.isHazard(cell) === 'yes') return false
-      if (ctx.rules.isWater(cell) === 'yes' || ctx.rules.isLava(cell) === 'yes') return false
+      if (y !== this.dest.y && (ctx.rules.isWater(cell) === 'yes' || ctx.rules.isLava(cell) === 'yes')) {
+        return false
+      }
       if (y === this.src.y) continue
       if (y === this.dest.y) continue
       if (ctx.rules.canWalkThrough(cell) !== 'yes') return false
@@ -553,6 +596,12 @@ export class PillarMove extends BaseMove {
     const levels = this.levels()
     if (levels < 1 || levels > 8) return COST_INF
     if (this.dest.x !== this.src.x || this.dest.z !== this.src.z) return COST_INF
+    // The placement happens above the feet cell this move leaves. From a
+    // partial support (bottom slab) the jump peak never clears that height, so
+    // the edge is physically impossible and must not be planned.
+    const srcSupport = ctx.rules.supportFeet(this.src)
+    if (srcSupport.state !== 'yes') return COST_INF
+    if (srcSupport.feetY < this.src.y - 0.01) return COST_INF
     // While a block for this level is in flight the observed world can still be
     // the pre-placement state; `update` owns the readback. Do not reject the
     // edge from a transient snapshot between place and block-update.
@@ -739,6 +788,15 @@ export class ParkourMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (!ctx.constraints.allowParkour || !jumpGap(this.src, this.dest)) return COST_INF
+    const srcSupport = ctx.rules.supportFeet(this.src)
+    if (srcSupport.state !== 'yes') return COST_INF
+    // Sprint-jumping out of a half step (bottom slab, stair tread) or off a
+    // ladder has unreliable timing; the reference behaviour refuses those
+    // starts, and it keeps "jump from a bottom slab" from becoming a coin flip.
+    if (ctx.constraints.allowParkourFromHalfSupport !== true && srcSupport.feetY < this.src.y - 0.01) {
+      return COST_INF
+    }
+    if (ctx.rules.isClimbable(this.src) === 'yes') return COST_INF
     const cells = bodyCells(this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
@@ -778,6 +836,72 @@ export class ParkourMove extends BaseMove {
     } else if (this.jumped) {
       ctx.world.setInput('jump', false)
     }
+    return 'running'
+  }
+}
+
+/**
+ * Climb one cell up or down a ladder/vine column, or step sideways into one.
+ * The destination must be climbable and body-passable: a ladder plate is thin,
+ * so the real body check admits it while `canPass` (any collision at all) does
+ * not. A climbable cell has no support of its own, so arrival is `onClimb`, not
+ * the generic stand check.
+ */
+export class ClimbMove extends BaseMove {
+  readonly kind = 'climb' as const
+
+  constructor(readonly src: Cell, readonly dest: Cell) {
+    super()
+  }
+
+  cost(ctx: MoveContext): number {
+    if (ctx.constraints.allowClimb === false) return COST_INF
+    if (ctx.rules.isClimbable(this.dest) !== 'yes') return COST_INF
+    const dy = this.dest.y - this.src.y
+    if (dy === 0) {
+      if (!adjacent(this.src, this.dest)) return COST_INF
+    } else if (Math.abs(dy) !== 1 || !sameColumn(this.src, this.dest)) {
+      return COST_INF
+    }
+    if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
+    if (ctx.rules.isClimbable(this.src) !== 'yes') {
+      // Entering from a normal cell: the source must hold the body.
+      if (ctx.rules.standInfo(this.src).state !== 'yes') return COST_INF
+    }
+    return dy > 0 ? 3 : dy < 0 ? 2 : 1.6
+  }
+
+  validPositions(): readonly Cell[] {
+    return [this.src, this.dest]
+  }
+
+  safeToCancel(state: MoveState): boolean {
+    return state.ticks < 3
+  }
+
+  update(state: MoveState, ctx: MoveContext): MoveStatus {
+    state.ticks += 1
+    state.elapsedMs = ctx.now - state.startedAt
+    if (onClimb(ctx.position, this.dest, ctx)) {
+      releaseInputs(ctx)
+      return 'success'
+    }
+    const dy = this.dest.y - this.src.y
+    const off = Math.hypot(this.dest.x + 0.5 - ctx.position.x, this.dest.z + 0.5 - ctx.position.z)
+    if (dy === 0 || off > 0.25) {
+      // Re-centre on the column (or walk sideways into it); jump only upwards.
+      aim(ctx, this.dest)
+      ctx.world.setInput('forward', true)
+      ctx.world.setInput('sneak', false)
+      ctx.world.setInput('jump', dy > 0)
+      state.detail = dy === 0 ? 'entering' : 'centering'
+      return 'running'
+    }
+    // Centred on the column: jump climbs, sneak descends, nothing holds.
+    ctx.world.setInput('forward', false)
+    ctx.world.setInput('jump', dy > 0)
+    ctx.world.setInput('sneak', dy < 0)
+    state.detail = dy > 0 ? 'climbing-up' : 'climbing-down'
     return 'running'
   }
 }

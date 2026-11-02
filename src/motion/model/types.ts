@@ -131,6 +131,14 @@ export type MotionWorld = {
 export type MotionProfile = 'walk' | 'sprint' | 'parkour' | 'descend' | 'ascend'
 
 /**
+ * How this pass treats water. `none` keeps every fluid cell impassable (the
+ * conservative legacy rule). `wade` allows a single-block water column whose
+ * floor still supports the body: the feet get wet, the head stays above the
+ * waterline. Deeper water needs a swim/waterline controller and stays closed.
+ */
+export type WaterProfile = 'none' | 'wade'
+
+/**
  * What one planning/execution pass is allowed to do. Defaults deny every
  * world-changing action; bridge/pillar must be authorized explicitly.
  */
@@ -149,6 +157,25 @@ export type MotionConstraints = {
   allowFallIntoLava: boolean
   assumeWalkOnWater: boolean
   allowWalkOnMagma: boolean
+  /** Fluid policy for this pass; see `WaterProfile`. */
+  waterProfile: WaterProfile
+  /**
+   * Ladder/vine use. On by default; a caller may refuse climbing without
+   * touching any other rule (boundary matrix stage gating, pure checks).
+   */
+  allowClimb?: boolean
+  /**
+   * Planning a fall whose only landing surface is lower than a full block (a
+   * bottom slab, a carpet) is rejected by default: the landing height is
+   * ambiguous and the reference behaviour avoids it. Turning this on restores
+   * the older "land on whatever collision top" behaviour.
+   */
+  allowFallOntoHalfSupport?: boolean
+  /**
+   * Sprinting out of a non-full support (bottom slab, stair) is rejected by
+   * default; the sprint-jump timing is unreliable from a raised half step.
+   */
+  allowParkourFromHalfSupport?: boolean
   /** Explicit break whitelist. `allowBreak` alone never authorizes a cell. */
   breakTargets?: readonly BreakTarget[]
   /** Additional cost added to an edge that removes one authorized block. */
@@ -174,6 +201,9 @@ export function defaultConstraints(profile: MotionProfile = 'walk'): MotionConst
     allowFallIntoLava: false,
     assumeWalkOnWater: false,
     allowWalkOnMagma: false,
+    // Wading is the default: one block of water over a walkable floor is
+    // ordinary movement. Deeper water still needs a swim controller.
+    waterProfile: 'wade',
   }
 }
 
@@ -266,6 +296,13 @@ export interface Rules {
   breakCost(cell: Cell): number | undefined
   standable(cell: Cell): Tri
   /**
+   * Support surface under `cell`, without evaluating the body: the height the
+   * feet would rest at. Used where the body check is not meaningful yet (the
+   * block a pillar just placed sits in the cell above the feet, a bottom-slab
+   * source, a fall landing). Same three-state contract as `standInfo`.
+   */
+  supportFeet(cell: Cell): StandInfo
+  /**
    * `ignoreBody` lets a break edge evaluate the support as if its authorized
    * body cells were already removed.
    */
@@ -292,6 +329,7 @@ export type MoveKind =
   | 'pillar'
   | 'diagonal'
   | 'parkour'
+  | 'climb'
 
 export type MoveState = {
   status: MoveStatus

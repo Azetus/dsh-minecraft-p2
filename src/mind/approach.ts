@@ -1,5 +1,7 @@
 import type { JsonValue } from '../contracts/types.ts'
-import { standingAt } from './standing.ts'
+import { cellOf } from '../motion/model/index.ts'
+import { nearestStandCell, type StandCell, type StandResult } from '../motion/search/index.ts'
+import { createReadOnlyMotionWorld } from './standing.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
 export type ApproachResult =
@@ -7,11 +9,21 @@ export type ApproachResult =
   | { ok: false; code: string; observed?: JsonValue }
 
 /**
+ * Reach envelope for "a cell from which this block can be used". It is the
+ * core query's input; the query owns the candidate window and the standability
+ * check, so nothing here repeats a `-3..3` loop.
+ */
+const STAND_REACH = { horizontal: 3, vertical: 2 } as const
+
+/**
  * Close the distance to an already-selected block before interacting. The
  * target stays the giver's; this only chooses a standing cell near it.
  *
  * The block itself is often solid, so the move goal is a standable neighbour,
- * never the block coordinate.
+ * never the block coordinate. The neighbour is chosen through the same Rules
+ * and move edges as the executor: reachable cells come first, and when the
+ * reachability walk proves the neighbourhood unreachable the caller gets
+ * `APPROACH_NO_PATH` instead of a generic move failure.
  */
 export async function approachBlock(
   port: ClientPort,
@@ -25,9 +37,29 @@ export async function approachBlock(
     target.z + 0.5 - self.z,
   )
   if (distance <= 4) return { ok: true }
-  const stand = nearestStandableCell(port, target)
-  if (stand === undefined) return { ok: false, code: 'APPROACH_NO_STAND' }
-  const moved = await port.moveTo(stand, {
+  const stand = nearestStandCell(
+    createReadOnlyMotionWorld(point => port.blockAt(point)),
+    {
+      near: target,
+      reach: STAND_REACH,
+      // Standing inside the target cell cannot use or place into it.
+      accept: cell => cell.x !== target.x || cell.y !== target.y || cell.z !== target.z,
+    },
+    { from: cellOf(self) },
+  )
+  const observed = summarize(stand)
+  if (stand.best === undefined) {
+    return {
+      ok: false,
+      code: stand.reason === 'unloaded-window' ? 'APPROACH_UNKNOWN' : 'APPROACH_NO_STAND',
+      observed,
+    }
+  }
+  if (stand.best.reachable === 'no') {
+    // Proof, not a budget guess: the BFS drained the reachable component.
+    return { ok: false, code: 'APPROACH_NO_PATH', observed }
+  }
+  const moved = await port.moveTo(stand.best.cell, {
     range: options.range ?? 1,
     intent: 'interact',
     timeoutMs: options.timeoutMs ?? 15_000,
@@ -36,31 +68,28 @@ export async function approachBlock(
   return {
     ok: false,
     code: moved.code ?? options.code ?? 'APPROACH_FAILED',
-    ...(moved.observed === undefined ? {} : { observed: moved.observed }),
+    observed: {
+      query: observed,
+      ...(moved.observed === undefined ? {} : { move: moved.observed }),
+    },
   }
 }
 
-export function nearestStandableCell(port: ClientPort, target: Vec3): Vec3 | undefined {
-  const read = (point: Vec3) => port.blockAt(point)
-  let best: Vec3 | undefined
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (let dx = -3; dx <= 3; dx += 1) {
-    for (let dz = -3; dz <= 3; dz += 1) {
-      for (let dy = -2; dy <= 2; dy += 1) {
-        const candidate = { x: target.x + dx, y: target.y + dy, z: target.z + dz }
-        if (standingAt(read, candidate).state !== 'valid') continue
-        const distance = Math.hypot(
-          candidate.x - target.x,
-          candidate.y - target.y,
-          candidate.z - target.z,
-        )
-        if (distance < bestDistance) {
-          best = candidate
-          bestDistance = distance
-        }
-      }
-    }
+function summarize(result: StandResult & { best?: StandCell }): JsonValue {
+  return {
+    kind: 'approach',
+    reason: result.reason ?? null,
+    coverage: result.coverage,
+    scanned: result.scanned,
+    unknown: result.unknown,
+    candidates: result.cells.length,
+    best: result.best === undefined
+      ? null
+      : {
+          cell: { ...result.best.cell },
+          feetY: result.best.feetY,
+          reachable: result.best.reachable,
+          steps: result.best.steps ?? null,
+        },
   }
-  return best
 }
-

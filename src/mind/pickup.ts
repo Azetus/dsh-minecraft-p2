@@ -1,4 +1,6 @@
-import { standingAt } from './standing.ts'
+import { cellOf } from '../motion/model/index.ts'
+import { standCells, type StandCell, type StandResult } from '../motion/search/index.ts'
+import { createReadOnlyMotionWorld } from './standing.ts'
 import type { Box, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
 import {
   boxDistance,
@@ -59,6 +61,14 @@ export type PickupResult = {
     inventory: { before: number; after: number; freeSlotsBefore?: number; freeSlotsAfter?: number }
     moves: PickupMoveView[]
     items: PickupItemView[]
+    /** Last core stand query that chose pickup cells, when one ran. */
+    standQuery?: {
+      reason: string | null
+      coverage: string
+      scanned: number
+      unknown: number
+      candidates: number
+    }
   }
 }
 
@@ -100,6 +110,7 @@ export async function pickupNearby(
   let full = 0
   let merged = 0
   let partial = 0
+  let pickupQuery: StandResult | undefined
 
   for (let index = 0; index < initial.length; index += 1) {
     const drop = initial[index]!
@@ -129,8 +140,9 @@ export async function pickupNearby(
         reached = true
       }
       if (!reached) {
-        const cells = findPickupCells(port, drop, port.self())
-        for (const cell of cells) {
+        const found = findPickupCells(port, drop, port.self())
+        pickupQuery = found.query
+        for (const cell of found.cells) {
           const moved = await port.moveTo(cell, {
             range: 1,
             intent: 'interact',
@@ -245,6 +257,17 @@ export async function pickupNearby(
       },
       moves,
       items,
+      ...(pickupQuery === undefined
+        ? {}
+        : {
+            standQuery: {
+              reason: pickupQuery.reason ?? null,
+              coverage: pickupQuery.coverage,
+              scanned: pickupQuery.scanned,
+              unknown: pickupQuery.unknown,
+              candidates: pickupQuery.cells.length,
+            },
+          }),
     },
   }
 }
@@ -277,32 +300,40 @@ async function requeryItem(
   }
 }
 
-function findPickupCells(port: ClientPort, item: EntityInfo, self: SelfInfo): Vec3[] {
+function findPickupCells(
+  port: ClientPort,
+  item: EntityInfo,
+  self: SelfInfo,
+): { cells: Vec3[]; query: StandResult } {
   const base = {
     x: Math.floor(item.position.x),
     y: Math.floor(item.position.y),
     z: Math.floor(item.position.z),
   }
-  const candidates: Array<{ cell: Vec3; distance: number }> = []
-  for (let dx = -3; dx <= 3; dx += 1) {
-    for (let dz = -3; dz <= 3; dz += 1) {
-      for (let dy = -2; dy <= 2; dy += 1) {
-        const cell = { x: base.x + dx, y: base.y + dy, z: base.z + dz }
-        if (standingAt(point => port.blockAt(point), cell).state !== 'valid') continue
-        if (!canPickupAt(cell, self, item)) continue
-        const distance = Math.hypot(
-          cell.x + 0.5 - self.pos.x,
-          cell.y + 0.5 - self.pos.y,
-          cell.z + 0.5 - self.pos.z,
-        )
-        candidates.push({ cell, distance })
-      }
-    }
-  }
-  return candidates
-    .sort((left, right) => left.distance - right.distance)
+  // The AABB stays here: the core query only supplies standable cells and their
+  // real feet height (a drop on a bottom slab sits at y-0.5, not y).
+  const query = standCells(
+    createReadOnlyMotionWorld(point => port.blockAt(point)),
+    {
+      near: base,
+      reach: { horizontal: 3, vertical: 2 },
+      accept: (cell, feetY) => canPickupAt({ ...cell, y: feetY }, self, item),
+    },
+    { from: cellOf(self.pos) },
+  )
+  const rank = (candidate: StandCell): number => candidate.reachable === 'yes'
+    ? 0
+    : candidate.reachable === 'unknown' ? 1 : 2
+  const cells = [...query.cells]
+    .sort((left, right) => rank(left) - rank(right)
+      || (left.steps ?? Number.MAX_SAFE_INTEGER) - (right.steps ?? Number.MAX_SAFE_INTEGER)
+      || left.distance - right.distance
+      || left.cell.y - right.cell.y
+      || left.cell.x - right.cell.x
+      || left.cell.z - right.cell.z)
     .slice(0, 8)
     .map(candidate => candidate.cell)
+  return { cells, query }
 }
 
 function itemView(port: ClientPort, entity: EntityInfo, self: SelfInfo): PickupItemView {

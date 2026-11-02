@@ -338,8 +338,9 @@ export class PathExecutor {
 
 function defaultTimeout(move: Move, cost: number): number {
   const base = move.kind === 'bridge' || move.kind === 'pillar' ? 5_000
-    : move.kind === 'fall' ? 3_000
-      : move.kind === 'ascend' ? 2_000
-        : 1_500
+    : move.kind === 'climb' ? 4_000
+      : move.kind === 'fall' ? 3_000
+        : move.kind === 'ascend' ? 2_000
+          : 1_500
   return Math.max(base, Math.min(8_000, base + Math.floor(cost * 150)))
 }
