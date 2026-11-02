@@ -6,13 +6,14 @@ import { describe, expect, it } from 'vitest'
 
 import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
 import {
+  createGoal,
   defaultConstraints,
   resolveConstraints,
   type MotionConstraints,
 } from '../src/motion/model/index.ts'
 import { matrixFields } from '../src/motion/matrix/index.ts'
 import { MinHeap, MotionSearch, type SearchOptions, type SearchResult } from '../src/motion/search/index.ts'
-import { buildFixture, FixtureWorld } from './helpers/motion-world.ts'
+import { buildFixture, FixtureWorld, FULL_CUBE, rawBlock } from './helpers/motion-world.ts'
 
 function contextFor(world: FixtureWorld, patch: Partial<MotionConstraints> = {}) {
   return new MotionContextSource(world, resolveConstraints(defaultConstraints(), patch))
@@ -115,6 +116,48 @@ describe('MotionSearch', () => {
   it('honours cancellation', () => {
     const { result } = solve('flat', {}, { isCanceled: () => true })
     expect(result.status).toBe('canceled')
+  })
+
+  it('supports exact, near and adjacent arrival goals', () => {
+    const target = { x: 2, y: 64, z: 2 }
+    expect(createGoal(target, { kind: 'exact' }).isEnd(target)).toBe(true)
+    expect(createGoal(target, { kind: 'exact' }).isEnd({ x: 2, y: 64, z: 3 })).toBe(false)
+    expect(createGoal(target, { kind: 'near', range: 1 }).isEnd({ x: 2, y: 64, z: 3 })).toBe(true)
+    expect(createGoal(target, { kind: 'adjacent' }).isEnd({ x: 2, y: 64, z: 3 })).toBe(true)
+    expect(createGoal(target, { kind: 'adjacent' }).isEnd({ x: 2, y: 64, z: 4 })).toBe(false)
+  })
+
+  it('uses hostile avoidance as a soft cost instead of a hard wall', () => {
+    class HostileWorld extends FixtureWorld {
+      override entities(): readonly {
+        id: string; name: string; position: { x: number; y: number; z: number }; hostile: boolean
+      }[] {
+        return [{ id: 'zombie-1', name: 'zombie', position: { x: 0, y: 64, z: 2 }, hostile: true }]
+      }
+    }
+    const world = new HostileWorld()
+    for (let x = -2; x <= 2; x += 1) {
+      for (let z = 0; z <= 4; z += 1) {
+        world.blocks.set(`${x},63,${z}`, rawBlock('stone', FULL_CUBE))
+        for (let y = 64; y <= 65; y += 1) world.blocks.set(`${x},${y},${z}`, rawBlock('air', []))
+      }
+    }
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+    const source = contextFor(world)
+    const search = (avoidance?: { coefficient: number; radius: number }) => {
+      const instance = new MotionSearch({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 4 }, () => source.next(), {
+        sliceMs: 50,
+        timeoutMs: 2_000,
+        ...(avoidance === undefined ? {} : { avoidance }),
+      })
+      let result = instance.step(Date.now())
+      while (result.status === 'running') result = instance.step(Date.now())
+      return result
+    }
+    expect(search().status).toBe('success')
+    const avoided = search({ coefficient: 8, radius: 1 })
+    expect(avoided.status).toBe('success')
+    expect(avoided.path).not.toContainEqual({ x: 0, y: 64, z: 2 })
   })
 })
 

@@ -1,7 +1,6 @@
 export {
   MineflayerProvider,
   connectMineflayer,
-  loadPathfinderRuntime,
   mineflayerModule,
   PROVIDER_CAPABILITIES,
   PROVIDER_ID,
@@ -9,5 +8,4 @@ export {
 export type {
   MineflayerProviderOptions,
   MineflayerConnectionOptions,
-  PathfinderRuntime,
 } from './mineflayer.ts'

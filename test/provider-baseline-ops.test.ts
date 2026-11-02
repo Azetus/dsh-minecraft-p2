@@ -373,31 +373,6 @@ describe('baseline control operations', () => {
     expect(calls[0]).toEqual({ name: 'toss', args: { itemType: 1, count: 2 } })
   })
 
-  it('pulses jump when moveTo makes no progress', async () => {
-    const { bot, controls } = fakeBot()
-    const provider = new MineflayerProvider(bot)
-    const handle = provider.start('moveTo', { x: 10, z: 0, tolerance: 0.5, blockedMs: 5000 })
-    expect(controls.get('forward')).toBe(true)
-    let jumped = false
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await new Promise(resolve => setTimeout(resolve, 80))
-      handle.poll()
-      if (controls.get('jump') === true) jumped = true
-    }
-    expect(jumped).toBe(true)
-    handle.stop()
-  })
-
-  it('walks forward through the direction alias', async () => {
-    const { bot, controls } = fakeBot()
-    const provider = new MineflayerProvider(bot)
-    const handle = provider.start('forward', { durationMs: 10 })
-    expect(controls.get('forward')).toBe(true)
-    await new Promise(resolve => setTimeout(resolve, 30))
-    expect(handle.poll().status).toBe('succeeded')
-    expect(controls.get('forward')).toBe(false)
-  })
-
   it('unequips a slot', async () => {
     const { bot, calls } = fakeBot()
     const provider = new MineflayerProvider(bot)
@@ -405,18 +380,6 @@ describe('baseline control operations', () => {
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(handle.poll().status).toBe('succeeded')
     expect(calls).toContainEqual({ name: 'unequip', args: { destination: 'head' } })
-  })
-
-  it('refuses to drive without a vehicle and drives with one', async () => {
-    const { bot, raw, calls } = fakeBot()
-    const provider = new MineflayerProvider(bot)
-    expect(provider.start('drive', { left: 0, forward: 1 }).poll())
-      .toMatchObject({ status: 'failed', error: { code: 'DRIVE_NOT_MOUNTED' } })
-    ;(raw as unknown as { vehicle: unknown }).vehicle = { id: 5 }
-    const handle = provider.start('drive', { left: 0.5, forward: 1, durationMs: 20 })
-    await new Promise(resolve => setTimeout(resolve, 40))
-    expect(handle.poll()).toMatchObject({ status: 'succeeded' })
-    expect(calls.filter(call => call.name === 'moveVehicle').length).toBeGreaterThanOrEqual(2)
   })
 
   it('places an entity on a support block', async () => {
@@ -448,13 +411,6 @@ describe('baseline control operations', () => {
     const handle = new MineflayerProvider(fed.bot).start('consume', {})
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(handle.poll()).toMatchObject({ status: 'succeeded', result: { item: 'bread' } })
-  })
-
-  it('reports pathfinding as unavailable without the plugin', () => {
-    const { bot } = fakeBot()
-    const provider = new MineflayerProvider(bot)
-    expect(provider.start('goto', { x: 4, y: 64, z: 4 }).poll())
-      .toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
   })
 
   it('finds a crafting table by block id, not item id', async () => {

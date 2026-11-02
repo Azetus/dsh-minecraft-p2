@@ -20,6 +20,7 @@ import { createCraftDriver, CRAFT_DRIVER_ID } from '../mind/drivers/craft.ts'
 import { createUseDriver, USE_DRIVER_ID } from '../mind/drivers/use.ts'
 import { createTraverseDriver, TRAVERSE_DRIVER_ID } from '../mind/drivers/traverse.ts'
 import { createStepDriver } from '../mind/drivers/step.ts'
+import { createFatalDriver, FATAL_DRIVER_ID } from '../mind/drivers/fatal.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { classifyFailure } from '../mind/diagnostics.ts'
@@ -60,8 +61,8 @@ import {
 import type { PlanInstance, VerifySpec } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
-import { parseHazardPolicy } from '../port/terrain.ts'
-import type { HazardPolicy } from '../port/terrain.ts'
+import { parseHazardPolicy } from '../port/policy.ts'
+import type { HazardPolicy } from '../port/policy.ts'
 import type { WorldView } from '../mind/types.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
@@ -131,6 +132,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: TRAVERSE_DRIVER_ID, driver: createTraverseDriver() })
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
+  registry.registerDriver({ id: FATAL_DRIVER_ID, driver: createFatalDriver() })
   const areaResources = new AreaResourceIndex(options.port, {
     radius: 32,
     vertical: 16,

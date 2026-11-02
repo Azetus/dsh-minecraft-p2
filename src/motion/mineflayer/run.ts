@@ -1,13 +1,16 @@
 import type { Bot } from 'mineflayer'
-import type { ComputedPath, Movements } from 'mineflayer-pathfinder'
 
 import type { JsonValue } from '../../contracts/types.ts'
-import { PathExecutor, buildMoves, cellOf, reached } from '../execute/index.ts'
+import { PathExecutor, cellOf } from '../execute/index.ts'
 import {
   defaultConstraints,
+  createGoal,
+  fallBudgetForHealth,
+  type ArrivalPolicy,
   type BlockClassifier,
   type Cell,
   type MotionConstraints,
+  type MotionGoal,
   type Move,
 } from '../model/types.ts'
 import { MotionSearch } from '../search/astar.ts'
@@ -29,44 +32,33 @@ export type MotionRunOptions = {
   searchTimeoutMs?: number
   maxNodes?: number
   maxReplans?: number
-  /** P2 default is the motion A*; the existing search is a one-run fallback. */
-  planner?: 'astar' | 'existing'
-  /** Adapter hook so the existing search lets hand-openable doors through. */
-  setDoorMode?: (enabled: boolean) => void
-}
-
-type PathfinderLike = {
-  getPathFromTo(
-    movements: Movements,
-    startPos: { x: number; y: number; z: number } | null,
-    goal: unknown,
-    options: { timeout: number; tickTimeout: number; searchRadius: number; optimizePath: boolean },
-  ): IterableIterator<{ result: ComputedPath }>
-  setGoal(goal: null): void
-  isMoving?: () => boolean
+  /** Core-owned arrival policy; defaults to a near goal of `range`. */
+  arrival?: ArrivalPolicy
+  /** Soft hostile avoidance; defaults to Baritone-like 1.5x within 8 blocks. */
+  avoidance?: { coefficient: number; radius: number }
 }
 
 /**
- * P1 planner bridge: the existing search produces path nodes, this run turns
- * them into typed moves and executes them itself. It never calls setGoal, so
- * upstream cannot drive the body behind the executor's back.
+ * One A* run: plan with the motion search, execute typed moves, then re-plan
+ * from the reached prefix. It never asks another planner to drive the body.
  */
 export class MotionRun {
   private readonly world: MineflayerMotionWorld
-  private readonly context: MotionContextSource
+  private context: MotionContextSource
+  private readonly baseConstraints: MotionConstraints
+  private readonly classifier: BlockClassifier | undefined
+  private readonly avoidance: { coefficient: number; radius: number }
   private readonly from: Cell
-  private readonly pathfinder: PathfinderLike | undefined
+  private readonly motionGoal: MotionGoal
   private readonly searchTimeoutMs: number
   private readonly maxNodes: number
   private readonly maxReplans: number
-  private readonly setDoorMode: (enabled: boolean) => void
   private active = true
   private result: MotionRunResult = { state: 'running' }
   private phase: 'planning' | 'moving' | 'done' = 'planning'
-  private planner: IterableIterator<{ result: ComputedPath }> | undefined
   private search: MotionSearch | undefined
-  private plannerMode: 'astar' | 'existing'
-  private searchedFallback = false
+  private searchedSafeFall = false
+  private safeFallPass = false
   private executor: PathExecutor | undefined
   private pathStatus = 'pending'
   private path: Cell[] = []
@@ -78,28 +70,27 @@ export class MotionRun {
 
   constructor(
     private readonly bot: Bot,
-    private readonly movements: Movements,
     private readonly target: Cell,
     private readonly range: number,
     private readonly timeoutMs: number,
     options: MotionRunOptions = {},
   ) {
     this.world = new MineflayerMotionWorld(bot)
+    this.baseConstraints = options.constraints ?? defaultConstraints()
+    this.classifier = options.classifier
+    this.avoidance = options.avoidance ?? { coefficient: 1.5, radius: 8 }
     this.context = new MotionContextSource(
       this.world,
-      options.constraints ?? defaultConstraints(),
-      options.classifier,
+      this.baseConstraints,
+      this.classifier,
     )
     this.from = cellOf(this.world.self().pos)
-    this.pathfinder = (bot as unknown as { pathfinder?: PathfinderLike }).pathfinder
+    this.motionGoal = createGoal(target, options.arrival ?? { kind: 'near', range })
     this.searchTimeoutMs = options.searchTimeoutMs ?? 2_000
     this.maxNodes = options.maxNodes ?? 12_000
     this.maxReplans = options.maxReplans ?? 4
-    this.plannerMode = options.planner ?? 'astar'
-    this.setDoorMode = options.setDoorMode ?? (() => {})
     this.startedAt = Date.now()
     this.healthBefore = this.world.self().health
-    this.setDoorMode(true)
   }
 
   start(): void {
@@ -134,7 +125,6 @@ export class MotionRun {
         return this.result
       }
       this.executor = undefined
-      this.planner = undefined
       this.phase = 'planning'
       return this.result
     }
@@ -154,14 +144,11 @@ export class MotionRun {
   stop(): boolean {
     this.active = false
     this.phase = 'done'
-    this.planner = undefined
     this.search = undefined
-    this.setDoorMode(false)
     const executor = this.executor
     executor?.cancel()
     const released = executor?.release() ?? true
     try {
-      this.pathfinder?.setGoal(null)
       this.bot.clearControlStates()
     } catch {
       return false
@@ -187,7 +174,8 @@ export class MotionRun {
       actions: [],
       hazards: null,
       hazardPass: false,
-      safeFallPass: false,
+      safeFallPass: this.safeFallPass,
+      ...(this.baseConstraints.safeFallBudget === undefined ? {} : { safeFall: this.baseConstraints.safeFallBudget }),
       healthBefore: this.healthBefore,
       healthAfter: self.health,
       index: observed?.index ?? 0,
@@ -199,7 +187,7 @@ export class MotionRun {
       visitedNodes: this.visitedNodes,
       generatedNodes: this.generatedNodes,
       replans: this.replans,
-      planner: this.plannerMode,
+      planner: 'astar',
       elapsedMs: Date.now() - this.startedAt,
     }
   }
@@ -208,77 +196,22 @@ export class MotionRun {
     if (!this.active) return
     this.phase = 'planning'
     this.pathStatus = 'pending'
-    if (this.plannerMode === 'astar') {
-      const ctx = this.context.next()
-      this.search = new MotionSearch(cellOf(ctx.position), this.target, () => this.context.next(), {
-        sliceMs: 5,
-        maxNodes: this.maxNodes,
-        timeoutMs: this.searchTimeoutMs,
-        isCanceled: () => !this.active,
-      })
-      return
-    }
-    if (this.pathfinder === undefined) {
-      this.fail('GOTO_UNAVAILABLE', 'pathfinder-missing')
-      return
-    }
-    try {
-      this.planner = this.pathfinder.getPathFromTo(
-        this.movements,
-        this.bot.entity.position,
-        this.goal(),
-        { timeout: this.searchTimeoutMs, tickTimeout: 5, searchRadius: 48, optimizePath: false },
-      )
-    } catch {
-      this.fail('GOTO_NO_PATH', 'search-start-failed')
-    }
+    const ctx = this.context.next()
+    this.search = new MotionSearch(cellOf(ctx.position), this.motionGoal, () => this.context.next(), {
+      sliceMs: 5,
+      maxNodes: this.maxNodes,
+      timeoutMs: this.searchTimeoutMs,
+      isCanceled: () => !this.active,
+      avoidance: this.avoidance,
+    })
   }
 
   private planStep(): void {
-    if (this.search !== undefined) {
-      this.searchStep()
-      return
-    }
-    if (this.planner === undefined) {
+    if (this.search === undefined) {
       this.beginPlan()
       return
     }
-    let next: IteratorResult<{ result: ComputedPath }>
-    try {
-      next = this.planner.next()
-    } catch {
-      this.fail('GOTO_NO_PATH', 'search-threw')
-      return
-    }
-    if (next.done) {
-      this.fail('GOTO_NO_PATH', 'search-ended-without-route')
-      return
-    }
-    const result = next.value.result
-    this.pathStatus = result.status
-    this.path = result.path.map(node => ({ x: node.x, y: node.y, z: node.z }))
-    this.visitedNodes = result.visitedNodes
-    this.generatedNodes = result.generatedNodes
-    if (this.generatedNodes > this.maxNodes) {
-      this.fail('GOTO_SEARCH_LIMIT', 'node-budget')
-      return
-    }
-    if (result.status === 'noPath' && this.path.length === 0) {
-      this.fail('GOTO_NO_PATH', 'search-exhausted-within-movement-policy')
-      return
-    }
-    if (this.path.length === 0) {
-      if (this.arrived()) this.succeed(this.report())
-      else this.fail('GOTO_NO_PATH', 'empty-path')
-      return
-    }
-    const ctx = this.context.next()
-    const built = buildMoves(this.path, cellOf(ctx.position), ctx)
-    if (!built.ok) {
-      this.fail('GOTO_NO_PATH', built.code, { reason: built.reason, at: built.at })
-      return
-    }
-    this.startExecutor(built.moves)
+    this.searchStep()
   }
 
   private searchStep(): void {
@@ -310,12 +243,20 @@ export class MotionRun {
       this.startExecutor(result.moves)
       return
     }
-    if (!this.searchedFallback) {
-      this.searchedFallback = true
-      this.plannerMode = 'existing'
-      this.search = undefined
-      this.beginPlan()
-      return
+    if (!this.searchedSafeFall && this.target.y < cellOf(this.world.self().pos).y - 1) {
+      const budget = fallBudgetForHealth(this.world.self().health)
+      if (budget > this.baseConstraints.maxFall) {
+        this.searchedSafeFall = true
+        this.safeFallPass = true
+        this.context = new MotionContextSource(
+          this.world,
+          { ...this.baseConstraints, safeFallBudget: budget },
+          this.classifier,
+        )
+        this.search = undefined
+        this.beginPlan()
+        return
+      }
     }
     this.fail(result.status === 'timeout' ? 'GOTO_SEARCH_TIMEOUT' : 'GOTO_NO_PATH', `astar-${result.status}`)
   }
@@ -324,46 +265,22 @@ export class MotionRun {
     this.executor = new PathExecutor(moves, () => this.context.next())
     this.phase = 'moving'
     this.search = undefined
-    this.planner = undefined
-  }
-
-  private goal(): unknown {
-    const target = this.target
-    const range = this.range
-    return {
-      heuristic: (node: { x: number; y: number; z: number }): number => Math.max(
-        0,
-        Math.hypot(node.x - target.x, node.y - target.y, node.z - target.z) - range,
-      ),
-      isEnd: (node: { x: number; y: number; z: number }): boolean => Math.hypot(
-        node.x - target.x,
-        node.y - target.y,
-        node.z - target.z,
-      ) <= range + 0.001,
-      hasChanged: (): boolean => false,
-      isValid: (): boolean => this.active,
-    }
   }
 
   private arrived(): boolean {
     const self = this.world.self()
     const cell = cellOf(self.pos)
-    const distance = Math.hypot(
-      cell.x - this.target.x,
-      cell.y - this.target.y,
-      cell.z - this.target.z,
-    )
-    if (distance > this.range + 0.001) return false
+    if (!this.motionGoal.isEnd(cell)) return false
     if (self.onGround) return true
     // Landing lag: the move already proved a standing position, but the physics
-    // flag can trail one tick. Accept only when the body is at that feet height.
-    return reached(self.pos, this.target, this.context.next())
+    // flag can trail one tick. Accept only at the exact requested cell.
+    return self.pos.x > this.target.x && self.pos.x < this.target.x + 1
+      && self.pos.z > this.target.z && self.pos.z < this.target.z + 1
   }
 
   private succeed(observed?: JsonValue): void {
     this.active = false
     this.phase = 'done'
-    this.setDoorMode(false)
     this.world.releaseAll()
     this.result = {
       state: 'succeeded',
@@ -377,8 +294,6 @@ export class MotionRun {
   private fail(code: string, detail: string, observed?: JsonValue): void {
     this.active = false
     this.phase = 'done'
-    this.planner = undefined
-    this.setDoorMode(false)
     this.executor?.cancel()
     this.world.releaseAll()
     this.result = {
@@ -406,7 +321,6 @@ export class MotionRun {
     for (const control of ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint'] as const) {
       if (getControl.call(this.bot, control) === true) return false
     }
-    if (this.pathfinder?.isMoving?.() === true) return false
     return true
   }
 }

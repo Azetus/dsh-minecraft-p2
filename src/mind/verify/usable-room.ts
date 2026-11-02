@@ -1,7 +1,7 @@
 import type { BlockInfo, Vec3 } from '../../port/index.ts'
 import { isAirName, itemCells, itemPosition, matchesExpected } from '../plan.ts'
 import type { PlanInstance, VerifySpec, WorkItem } from '../plan.ts'
-import { standingAt } from '../../port/terrain.ts'
+import { standingAt } from '../standing.ts'
 import type { WorldView } from '../types.ts'
 import { absolute } from './sealed-room.ts'
 import type { VerifyResult } from './sealed-room.ts'

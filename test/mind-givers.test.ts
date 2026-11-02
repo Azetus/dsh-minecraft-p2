@@ -153,17 +153,20 @@ describe('order and traverse givers', () => {
       params: { x: 6, y: 64, z: 0, exact: true, unstickDig } } }))
     expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { approach: true, exact: true, unstickDig } })
   })
-  it('passes hazard permission and traverse parameters through the order', () => {
+  it('routes an explicitly allowed lethal fall to the Agent fatal driver', () => {
+    const go = createGoOrderGiver(() => ({ order: { id: 'go-lf', verb: 'go',
+      params: { x: 6, y: 60, z: 0 },
+      policy: { hazards: { allow: ['lethal_fall'], reason: 'fall' } } } }))
+    expect(go.find(ctx, flatWorld())).toMatchObject({ driverId: 'fatal' })
+  })
+
+  it('does not pass fatal hazards into a normal move job', () => {
     const go = createGoOrderGiver(() => ({ order: { id: 'go-h', verb: 'go',
       params: { x: 6, y: 64, z: 0 },
       policy: { hazards: { allow: ['lethal_fall'], reason: 'fall' } } } }))
-    expect(go.find(ctx, flatWorld())).toMatchObject({ params: { hazards: { allow: ['lethal_fall'] } } })
-    const traverse = createTraverseGiver(() => ({ order: { id: 'tr-1', verb: 'traverse',
-      params: { mode: 'bridge', x: 3, y: 64, z: 0, item: 'dirt', maxBlocks: 4 } } }))
-    expect(traverse.find(ctx, flatWorld())).toMatchObject({
-      driverId: 'traverse',
-      params: { mode: 'bridge', x: 3, y: 64, z: 0, item: 'dirt', maxBlocks: 4 },
-    })
+    const result = go.find(ctx, flatWorld())
+    expect(result).toMatchObject({ driverId: 'move' })
+    expect(result).not.toHaveProperty('params.hazards')
   })
 
   it('holds a hold order and a lost attack target without producing a job', () => {

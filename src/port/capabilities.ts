@@ -15,6 +15,7 @@ export type Capability = (typeof CAPABILITIES)[number]
 /** Every port action whose missing capability must fail explicitly. */
 export type ClientAction =
   | 'moveTo'
+  | 'fatalStep'
   | 'lookAt'
   | 'dig'
   | 'place'
@@ -28,6 +29,7 @@ export type ClientAction =
 
 export const ACTION_CAPABILITIES: Record<ClientAction, Capability | null> = {
   moveTo: 'navigate',
+  fatalStep: null,
   lookAt: null,
   dig: 'interact',
   place: 'interact',

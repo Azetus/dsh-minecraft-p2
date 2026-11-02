@@ -1,4 +1,4 @@
-import { standingAt } from '../port/terrain.ts'
+import { standingAt } from './standing.ts'
 import type { Box, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
 import {
   boxDistance,
@@ -112,7 +112,6 @@ export async function pickupNearby(
         range: 1,
         intent: 'interact',
         timeoutMs: MOVE_TIMEOUT_MS,
-        motion: true,
       })
       moves.push({
         target: { ...drop.position },
@@ -136,7 +135,6 @@ export async function pickupNearby(
             range: 1,
             intent: 'interact',
             timeoutMs: MOVE_TIMEOUT_MS,
-            motion: true,
           })
           moves.push({
             target: cell,

@@ -16,8 +16,7 @@ import type {
   Vec3,
 } from './types.ts'
 import type { WriteToken } from './write-token.ts'
-import type { HazardPolicy, UnstickBlock } from './terrain.ts'
-
+import type { HazardPolicy, UnstickBlock } from './policy.ts'
 export type ClientEvent =
   | 'blockUpdated'
   | 'inventoryChanged'
@@ -44,14 +43,6 @@ export type MoveOptions = {
   approach?: boolean
   unstickDig?: UnstickBlock[]
   intent?: 'interact' | 'attack'
-  /** Explicit danger permissions for this call; default is empty. */
-  hazards?: HazardPolicy
-  /**
-   * Ask the adapter to route through the motion executor when it advertises
-   * one. Plain moves use this; explicit hazards/unstick remain on the legacy
-   * navigation path until the motion move set covers them.
-   */
-  motion?: boolean
   /** Extra motion capabilities; all default false and require explicit order authorization. */
   allowParkour?: boolean
   allowDiagonal?: boolean
@@ -94,6 +85,8 @@ export interface ClientPort {
   self(): SelfInfo
   /** Stable recovery identity for this world/character binding. */
   identity(): { worldId: string; characterId: string }
+  /** Start one Agent-authorized fatal step-off; core pathing never calls it. */
+  fatalStep(target: Vec3): Promise<ActResult>
   blockAt(p: Vec3): BlockInfo | null
   biomeAt(p: Vec3): BiomeInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]

@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import { standingAt } from '../port/terrain.ts'
+import { standingAt } from './standing.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
 export type ApproachResult =
@@ -31,7 +31,6 @@ export async function approachBlock(
     range: options.range ?? 1,
     intent: 'interact',
     timeoutMs: options.timeoutMs ?? 15_000,
-    motion: true,
   })
   if (moved.state === 'ok') return { ok: true }
   return {

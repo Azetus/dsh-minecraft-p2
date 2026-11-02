@@ -2,6 +2,7 @@ import { sameCell } from '../model/block.ts'
 import {
   COST_INF,
   initialMoveState,
+  type Cell,
   type Move,
   type MoveContext,
   type MoveState,
@@ -38,10 +39,13 @@ export type PathExecutorOptions = {
   /** Consecutive ticks off every valid position before failing. */
   offPathTicks?: number
   moveTimeoutMs?: (move: Move, cost: number) => number
+  /** Total time allowed to remove one edge's authorized break cells. */
+  breakTimeoutMs?: number
 }
 
 const DEFAULT_STALL_MS = 2_500
 const DEFAULT_OFF_PATH_TICKS = 20
+const DEFAULT_BREAK_TIMEOUT_MS = 6_000
 
 /**
  * Executes a planned move list one tick at a time. It revalidates cost, recovers
@@ -67,6 +71,8 @@ export class PathExecutor {
   private readonly stallMs: number
   private readonly maxOffPathTicks: number
   private readonly timeoutFor: (move: Move, cost: number) => number
+  private readonly breakTimeoutMs: number
+  private breaking: { cells: Cell[]; startedAt: number; lastDigAt: number } | undefined
 
   constructor(
     private readonly moves: readonly Move[],
@@ -81,6 +87,7 @@ export class PathExecutor {
     this.stallMs = options.stallMs ?? DEFAULT_STALL_MS
     this.maxOffPathTicks = options.offPathTicks ?? DEFAULT_OFF_PATH_TICKS
     this.timeoutFor = options.moveTimeoutMs ?? defaultTimeout
+    this.breakTimeoutMs = options.breakTimeoutMs ?? DEFAULT_BREAK_TIMEOUT_MS
     const ctx = this.context()
     this.lastPos = ctx.position
     this.states = moves.map(() => initialMoveState(now))
@@ -105,6 +112,33 @@ export class PathExecutor {
       return this.result
     }
     const move = this.moves[this.index]!
+    if (this.breaking !== undefined) {
+      const remaining = this.breaking.cells.filter(cell => ctx.rules.canPass(cell) !== 'yes')
+      if (remaining.length === 0) {
+        this.breaking = undefined
+        this.moveStartedAt = now
+        this.lastProgressAt = now
+      } else {
+        if (now - this.breaking.startedAt > this.breakTimeoutMs) {
+          this.finish('failed', 'BREAK_TIMEOUT', 'break-not-confirmed', ctx)
+          return this.result
+        }
+        releaseInputs(ctx)
+        this.lastProgressAt = now
+        if (now - this.breaking.lastDigAt >= 300) {
+          this.breaking.lastDigAt = now
+          for (const cell of remaining) ctx.world.dig(cell)
+        }
+        return this.result
+      }
+    }
+    const pending = move.toBreak(ctx).filter(cell => ctx.rules.canPass(cell) !== 'yes')
+    if (pending.length > 0) {
+      releaseInputs(ctx)
+      this.breaking = { cells: [...pending], startedAt: now, lastDigAt: 0 }
+      for (const cell of pending) ctx.world.dig(cell)
+      return this.result
+    }
     const cost = move.cost(ctx)
     if (cost === COST_INF) {
       this.finish('failed', 'UNREACHABLE', 'edge-became-infeasible', ctx)
@@ -158,6 +192,7 @@ export class PathExecutor {
 
   cancel(): void {
     this.cancelRequested = true
+    this.breaking = undefined
     if (this.result.state !== 'running') return
     this.safeRelease()
     this.result = { state: 'canceled' }
@@ -177,6 +212,7 @@ export class PathExecutor {
   private advance(ctx: MoveContext, now: number): void {
     const state = this.states[this.index]!
     state.status = 'success'
+    this.breaking = undefined
     this.index += 1
     if (this.index >= this.moves.length) {
       this.finish('succeeded', undefined, undefined, ctx)
@@ -253,6 +289,7 @@ export class PathExecutor {
       this.states[i] = initialMoveState(now)
     }
     this.index = index
+    this.breaking = undefined
     this.moveStartedAt = now
     this.lastProgressAt = now
     this.lastPos = ctx.position

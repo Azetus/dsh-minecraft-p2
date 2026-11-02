@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { HazardPolicy } from '../port/terrain.ts'
+import type { HazardPolicy } from '../port/policy.ts'
 import type {
   BlockInfo,
   Box,

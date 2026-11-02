@@ -18,6 +18,8 @@ type BlockLike = {
   name: string
   boundingBox?: string
   shapes?: number[][]
+  hardness?: number
+  diggable?: boolean
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -82,6 +84,8 @@ export class MineflayerMotionWorld implements MotionWorld {
       name: block.name,
       state,
       ...(block.shapes === undefined ? {} : { collision: block.shapes as unknown as readonly CollisionBox[] }),
+      ...(typeof block.hardness === 'number' ? { hardness: block.hardness } : {}),
+      ...(typeof block.diggable === 'boolean' ? { diggable: block.diggable } : {}),
       ...(serverTags === undefined ? {} : { serverTags }),
     }
   }
@@ -101,6 +105,7 @@ export class MineflayerMotionWorld implements MotionWorld {
         ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
         ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
         ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+        ...(entity.type === 'mob' || entity.kind === 'hostile' ? { hostile: true } : {}),
       })
     }
     return result

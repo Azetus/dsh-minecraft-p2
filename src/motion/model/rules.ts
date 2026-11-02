@@ -115,6 +115,16 @@ export class RuleSet implements Rules {
     return body.state === 'yes' ? 'yes' : body.state === 'unknown' ? 'unknown' : 'no'
   }
 
+  canPass(cell: Cell): Tri {
+    if (!this.withinBounds(cell)) return 'no'
+    const block = this.read(cell)
+    if (block === null || !block.loaded) return 'unknown'
+    if (this.isHazard(cell) !== 'no') return 'no'
+    if (hasTag(block, 'water') || hasTag(block, 'lava')) return 'no'
+    if (block.collision === undefined) return 'unknown'
+    return block.collision.length === 0 ? 'yes' : 'no'
+  }
+
   canWalkOn(cell: Cell): Tri {
     if (!this.withinBounds(cell)) return 'no'
     const block = this.read(cell)
@@ -140,6 +150,44 @@ export class RuleSet implements Rules {
     if (block === null || !block.loaded) return 'unknown'
     if (hasTag(block, 'hazard') || hasTag(block, 'water') || hasTag(block, 'lava')) return 'no'
     return hasTag(block, 'replaceable') ? 'yes' : 'no'
+  }
+
+  canBreak(cell: Cell): Tri {
+    if (!this.constraints.allowBreak || this.constraints.breakTargets === undefined) return 'no'
+    const target = this.constraints.breakTargets.find(item => cellKey(item) === cellKey(cell))
+    if (target === undefined) return 'no'
+    const block = this.read(cell)
+    if (block === null || !block.loaded) return 'unknown'
+    if (target.name !== undefined && block.name !== target.name) return 'no'
+    if (block.diggable === false) return 'no'
+    if (this.avoidBreaking(cell, block)) return 'no'
+    // Hardness unknown means the adapter cannot price the removal; do not guess.
+    if (block.hardness === undefined) return 'unknown'
+    return 'yes'
+  }
+
+  breakCost(cell: Cell): number | undefined {
+    if (this.canBreak(cell) !== 'yes') return undefined
+    const block = this.read(cell)
+    if (block === null || block.hardness === undefined) return undefined
+    const base = 1 + Math.min(8, Math.max(0, block.hardness) * 0.5)
+    return base + (this.constraints.breakPenalty ?? 0)
+  }
+
+  /**
+   * Reasons not to remove a cell even when it is on the explicit whitelist:
+   * liquids/hazards, ice (turns to water), infested blocks, and blocks touching
+   * a liquid (removing them can start a flow).
+   */
+  private avoidBreaking(cell: Cell, block: ClassifiedBlock): boolean {
+    if (hasTag(block, 'hazard') || hasTag(block, 'water') || hasTag(block, 'lava')) return true
+    if (block.name === 'ice' || block.name === 'frosted_ice' || block.name.startsWith('infested_')) return true
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const) {
+      const neighbour = this.read(offset(cell, dx, dy, dz))
+      if (neighbour === null || !neighbour.loaded) continue
+      if (hasTag(neighbour, 'water') || hasTag(neighbour, 'lava')) return true
+    }
+    return false
   }
 
   doorState(cell: Cell): DoorState {
@@ -185,7 +233,7 @@ export class RuleSet implements Rules {
     return info.state
   }
 
-  standInfo(cell: Cell): StandInfo {
+  standInfo(cell: Cell, ignoreBody: readonly Cell[] = []): StandInfo {
     if (!this.withinBounds(cell)) return { state: 'no', reason: 'outside-bounds' }
     const supportCell = offset(cell, 0, -1, 0)
     const support = this.read(supportCell)
@@ -196,26 +244,27 @@ export class RuleSet implements Rules {
       return { state: 'no', reason: 'water-support' }
     }
     if (hasTag(support, 'water') && this.constraints.assumeWalkOnWater) {
-      return this.bodyCheck(cell, cell.y)
+      return this.bodyCheck(cell, cell.y, ignoreBody)
     }
     const top = topSurfaceAt(support, 0.5, 0.5)
     if (top === undefined) return { state: 'unknown', reason: 'collision-unknown' }
     if (top <= 0) return { state: 'no', reason: 'no-support' }
     if (top > 1) return { state: 'no', reason: 'support-too-high' }
-    return this.bodyCheck(cell, cell.y - 1 + top)
+    return this.bodyCheck(cell, cell.y - 1 + top, ignoreBody)
   }
 
   /**
    * Body clearance above `feetY`. The support cell is excluded by the epsilon
    * on the body's lower bound, so a slab's top does not count as a wall.
    */
-  private bodyCheck(cell: Cell, feetY: number): StandInfo {
+  private bodyCheck(cell: Cell, feetY: number, ignoreBody: readonly Cell[] = []): StandInfo {
     const minY = feetY + EPSILON
     const maxY = feetY + PLAYER_HEIGHT - EPSILON
     const first = Math.floor(minY)
     const last = Math.floor(maxY)
     for (let y = first; y <= last; y += 1) {
       const at = { x: cell.x, y, z: cell.z }
+      if (ignoreBody.some(ignored => cellKey(ignored) === cellKey(at))) continue
       const block = this.read(at)
       if (block === null || !block.loaded) return { state: 'unknown', reason: 'body-unloaded' }
       if (this.isHazard(at) === 'yes') return { state: 'no', reason: 'hazard-body' }

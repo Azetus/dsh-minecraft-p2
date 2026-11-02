@@ -48,6 +48,7 @@ export type MineflayerPortOptions = {
 /** Hard cap per action; the driver's budget can only lower it. */
 const ACTION_TIMEOUTS = {
   moveTo: 30_000,
+  fatalStep: 8_000,
   lookAt: 5_000,
   dig: 15_000,
   place: 10_000,
@@ -347,11 +348,7 @@ export class MineflayerClientPort implements ClientPort {
     if (![target.x, target.y, target.z, range, opts.timeoutMs ?? 1].every(Number.isFinite)
       || range < 0 || range > 8 || (opts.timeoutMs ?? 1) <= 0) return actFailed('INVALID_TARGET', 0)
     const timeoutMs = Math.min(opts.timeoutMs ?? this.timeouts.moveTo, this.timeouts.moveTo)
-    const motion = opts.motion === true
-      && this.acts.capabilities.includes('motion')
-      && opts.hazards === undefined
-      && opts.unstickDig === undefined
-    return await this.run(motion ? 'motion-goto' : 'goto', {
+    return await this.run('motion-goto', {
       x: target.x,
       y: target.y,
       z: target.z,
@@ -361,7 +358,6 @@ export class MineflayerClientPort implements ClientPort {
       ...(opts.approach === undefined ? {} : { approach: opts.approach }),
       ...(opts.unstickDig === undefined ? {} : { unstickDig: opts.unstickDig }),
       ...(opts.intent === undefined ? {} : { intent: opts.intent }),
-      ...(opts.hazards === undefined ? {} : { hazards: opts.hazards }),
       ...(opts.allowParkour === undefined ? {} : { allowParkour: opts.allowParkour }),
       ...(opts.allowDiagonal === undefined ? {} : { allowDiagonal: opts.allowDiagonal }),
       ...(opts.allowPlace === undefined ? {} : { allowPlace: opts.allowPlace }),
@@ -377,6 +373,10 @@ export class MineflayerClientPort implements ClientPort {
   async lookYaw(yaw: number): Promise<ActResult> {
     if (!Number.isFinite(yaw)) return actFailed('INVALID_TARGET', 0)
     return await this.run('look', { yaw, pitch: 0 }, this.timeouts.lookAt)
+  }
+
+  async fatalStep(target: Vec3): Promise<ActResult> {
+    return await this.run('fatal-step', { x: target.x, y: target.y, z: target.z }, this.timeouts.fatalStep)
   }
 
   async dig(p: Vec3): Promise<ActResult> {
@@ -533,7 +533,7 @@ export class MineflayerClientPort implements ClientPort {
     const startedAt = this.now()
     const epoch = this.gate.currentEpoch()
     if (epoch === undefined) return staleWriteResult(0)
-    const isMove = name === 'goto' || name === 'motion-goto'
+    const isMove = name === 'motion-goto'
 
     let handle: ActHandle
     try {
@@ -677,7 +677,7 @@ export class MineflayerClientPort implements ClientPort {
 /** Map the provider's declared operations onto behavioural capabilities. */
 export function portCapabilities(providerCapabilities: readonly string[]): Capability[] {
   const capabilities: Capability[] = []
-  if (providerCapabilities.includes('pathfind')) capabilities.push('navigate')
+  if (providerCapabilities.includes('motion')) capabilities.push('navigate')
   if (providerCapabilities.includes('dig')
     && providerCapabilities.includes('place')
     && providerCapabilities.includes('use')

@@ -38,7 +38,7 @@ describe('ClientPort adapter consistency A', () => {
     const result = await port.moveTo({ x: 5, y: 64, z: 0 }, { range: 1, timeoutMs: 2_000 })
     expect(result.state).toBe('ok')
     expect(source.calls.at(-1)).toEqual({
-      name: 'goto',
+      name: 'motion-goto',
       args: { x: 5, y: 64, z: 0, range: 1, timeoutMs: 2_000 },
     })
   })

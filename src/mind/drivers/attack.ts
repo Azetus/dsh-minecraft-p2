@@ -80,7 +80,7 @@ function combatPort(port: ClientPort): CombatPort {
     canSee: id => port.canSee?.(id) ?? true,
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     attack: id => asAction(port.attack(id)),
-    moveTo: (pos, range, timeoutMs) => asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs, motion: true })),
+    moveTo: (pos, range, timeoutMs) => asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
     onEntityHurt: cb => subscribe(port, 'entityHurt', cb),
     onEntityDead: cb => subscribe(port, 'entityDead', cb),
   }

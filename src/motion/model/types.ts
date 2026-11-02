@@ -55,6 +55,9 @@ export type RawBlock = {
   name: string
   state: Readonly<Record<string, string>>
   collision?: readonly CollisionBox[]
+  /** Adapter-provided mining metadata; undefined means unknown. */
+  hardness?: number
+  diggable?: boolean
   /**
    * Raw vanilla block tags from the server (`minecraft:wooden_doors`,
    * `minecraft:replaceable`, ...). The core never reads these names directly;
@@ -66,6 +69,9 @@ export type RawBlock = {
 
 /** A raw block plus classifier tags; geometry is never rewritten by classification. */
 export type ClassifiedBlock = RawBlock & { tags: readonly BlockTag[] }
+
+/** One explicitly authorized break cell. Omitted `name` means any block. */
+export type BreakTarget = Cell & { name?: string }
 
 /** The single replaceable content seam: names/states in, semantic tags out. */
 export interface BlockClassifier {
@@ -79,6 +85,14 @@ export type EntityView = {
   width?: number
   height?: number
   kind?: string
+  /** Adapter hint used by avoidance; undefined means it cannot tell. */
+  hostile?: boolean
+}
+
+/** Soft A* cost field around hostile entities; never a hard prohibition. */
+export type AvoidancePolicy = {
+  coefficient: number
+  radius: number
 }
 
 export type SelfView = {
@@ -130,9 +144,15 @@ export type MotionConstraints = {
   allowDoor: boolean
   /** Maximum planned, support-to-support drop in blocks. */
   maxFall: number
+  /** Optional health-budgeted second fall pass; undefined means no pass. */
+  safeFallBudget?: number
   allowFallIntoLava: boolean
   assumeWalkOnWater: boolean
   allowWalkOnMagma: boolean
+  /** Explicit break whitelist. `allowBreak` alone never authorizes a cell. */
+  breakTargets?: readonly BreakTarget[]
+  /** Additional cost added to an edge that removes one authorized block. */
+  breakPenalty?: number
   worldBorder?: { min: Cell; max: Cell }
   minY?: number
   maxY?: number
@@ -157,6 +177,11 @@ export function defaultConstraints(profile: MotionProfile = 'walk'): MotionConst
   }
 }
 
+/** Health-budgeted safe-fall pass, mirroring the legacy health rule. */
+export function fallBudgetForHealth(health: number): number {
+  return Math.max(0, Math.min(16, Math.floor(health) - 6 + 3))
+}
+
 /** Apply an explicit patch without inventing values for omitted fields. */
 export function resolveConstraints(
   base: MotionConstraints,
@@ -166,6 +191,49 @@ export function resolveConstraints(
 }
 
 export type Direction = 'north' | 'south' | 'east' | 'west' | 'up' | 'down'
+
+/** How a caller wants to arrive: exact cell, within range, or adjacent. */
+export type ArrivalPolicy =
+  | { kind: 'exact' }
+  | { kind: 'near'; range: number }
+  | { kind: 'adjacent' }
+  | { kind: 'reachable-face'; reach: number }
+
+/** Core-owned target contract; search and executor agree on `isEnd`. */
+export type MotionGoal = {
+  /** Original target cell, used for diagnostics and avoidance bounds. */
+  target?: Cell
+  isEnd(cell: Cell): boolean
+  heuristic(cell: Cell): number
+}
+
+export function createGoal(target: Cell, arrival: ArrivalPolicy = { kind: 'near', range: 1 }): MotionGoal {
+  if (arrival.kind === 'exact') {
+    return {
+      target,
+      isEnd: cell => cell.x === target.x && cell.y === target.y && cell.z === target.z,
+      heuristic: cell => Math.hypot(cell.x - target.x, cell.y - target.y, cell.z - target.z),
+    }
+  }
+  if (arrival.kind === 'adjacent' || arrival.kind === 'reachable-face') {
+    const reach = arrival.kind === 'reachable-face' ? Math.max(1, Math.floor(arrival.reach)) : 1
+    return {
+      target,
+      isEnd: cell => Math.abs(cell.x - target.x)
+        + Math.abs(cell.y < target.y ? cell.y - target.y + 1 : cell.y - target.y)
+        + Math.abs(cell.z - target.z) <= reach,
+      heuristic: cell => Math.max(0, Math.abs(cell.x - target.x)
+        + Math.abs(cell.y - target.y)
+        + Math.abs(cell.z - target.z) - reach),
+    }
+  }
+  const range = Math.max(0, arrival.range)
+  return {
+    target,
+    isEnd: cell => Math.hypot(cell.x - target.x, cell.y - target.y, cell.z - target.z) <= range + 0.001,
+    heuristic: cell => Math.max(0, Math.hypot(cell.x - target.x, cell.y - target.y, cell.z - target.z) - range),
+  }
+}
 
 export type DoorState = 'open' | 'closed' | 'locked' | 'none' | 'unknown'
 
@@ -181,6 +249,8 @@ export type StandInfo =
 /** Shared predicates used by both the planner and the executor. */
 export interface Rules {
   canWalkThrough(cell: Cell): Tri
+  /** Single-cell obstruction check, without evaluating the 1.8-high body. */
+  canPass(cell: Cell): Tri
   canWalkOn(cell: Cell): Tri
   canPlaceAgainst(cell: Cell): Tri
   isReplaceable(cell: Cell): Tri
@@ -190,8 +260,16 @@ export interface Rules {
   isClimbable(cell: Cell): Tri
   isWater(cell: Cell): Tri
   isLava(cell: Cell): Tri
+  /** Explicitly authorized, safe-to-remove cell. */
+  canBreak(cell: Cell): Tri
+  /** Relative cost of removing a cell; undefined when it cannot be broken. */
+  breakCost(cell: Cell): number | undefined
   standable(cell: Cell): Tri
-  standInfo(cell: Cell): StandInfo
+  /**
+   * `ignoreBody` lets a break edge evaluate the support as if its authorized
+   * body cells were already removed.
+   */
+  standInfo(cell: Cell, ignoreBody?: readonly Cell[]): StandInfo
   doorState(cell: Cell): DoorState
 }
 
@@ -255,7 +333,7 @@ export interface Move {
   /** Whether an in-flight switch away from this move is safe. */
   safeToCancel(state: MoveState): boolean
   /** Cells this edge must remove before it can run. */
-  toBreak(): readonly Cell[]
+  toBreak(ctx: MoveContext): readonly Cell[]
   /** Cells this edge must fill before it can run. */
   toPlace(): readonly Cell[]
 }

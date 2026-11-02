@@ -1,5 +1,5 @@
 import { isRecord } from '../../contracts/protocol.ts'
-import { HAZARD_KINDS, standingAt } from '../../port/terrain.ts'
+import { standingAt } from '../standing.ts'
 import type { ActResult, ClientPort, MoveOptions, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
@@ -32,15 +32,6 @@ const MOVE_SCHEMA: SchemaNode = {
     unstickDig: { type: 'array', items: { type: 'object', properties: {
       x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
     }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
-    hazards: {
-      type: 'object',
-      properties: {
-        allow: { type: 'array', items: { type: 'string', enum: [...HAZARD_KINDS] } },
-        reason: { type: 'string' },
-      },
-      required: ['allow'],
-      additionalProperties: false,
-    },
   },
   required: ['x', 'y', 'z'],
   additionalProperties: false,
@@ -60,7 +51,6 @@ type MoveParams = {
   material?: string
   unstickDig?: MoveOptions['unstickDig']
   intent?: MoveOptions['intent']
-  hazards?: MoveOptions['hazards']
 }
 
 /** One port call may not exceed the provider's 30s action cap. */
@@ -134,12 +124,10 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     const result = await ctx.port.moveTo(goal, {
       range: goalIsFinal ? range : 1,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
-      motion: true,
       ...(goalIsFinal && params.exact !== undefined ? { exact: params.exact } : {}),
       ...(goalIsFinal && params.approach !== undefined ? { approach: params.approach } : {}),
       ...(goalIsFinal && params.unstickDig !== undefined ? { unstickDig: params.unstickDig } : {}),
       ...(params.intent === undefined ? {} : { intent: params.intent }),
-      ...(params.hazards === undefined ? {} : { hazards: params.hazards }),
       ...(params.allowParkour === undefined ? {} : { allowParkour: params.allowParkour }),
       ...(params.allowDiagonal === undefined ? {} : { allowDiagonal: params.allowDiagonal }),
       ...(params.allowPlace === undefined ? {} : { allowPlace: params.allowPlace }),

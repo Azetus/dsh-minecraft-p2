@@ -29,17 +29,14 @@
 
 ### 2.1 mineflayer 导航（当前实现）
 
-- `NavigationRun` 拥有一次 `goto` 的搜索、移动、恢复和清理；上层仍只下一个目标，不等待模型微操。A* 继续使用已安装的 `mineflayer-pathfinder`。
-- 先验证容差内的站位，再以 `getPathFromTo` 分片预检路线。每片 5ms、单次搜索 2s、生成节点软上限 12000（每片后检查）；`searchRadius=48` 在上游表示启发式成本余量，不是 48 格的空间球。
-- 预检明确 `noPath` 时不出发。预算内尚未证明全程可达但已有前缀时允许推进；前缀不是完成。执行阶段使用 `path_update` 的 `partial/success/noPath/timeout`，不把 `isMoving=false` 当无路。
-- 路径策略默认禁止挖掘、垫块、搭桥、跑酷和冲刺；普通最大脚部落差 2 格，禁用无限入水落差。岩浆、火、岩浆块、仙人掌等危险不可通行；陆地不主动入水，已在水里时允许尝试游出。
-- 无路且目标更低时先跑“安全下落”第二遍：按 health 预算（每超过 3 格 1 HP，保留至少 3 颗心）允许 3 格以上的安全下落；落点必须可站立、已加载、非液体/危险，下落列无阻挡。只有显式 `policy.hazards.allow` 才允许 `lethal_fall` 越过健康预算，或对 6 格内的 `void/lava` 目标执行致命 step-off；死亡后 order 以 `DIED_IN_ALLOWED_HAZARD` 终止，不重试。
-- `traverse` 是 Agent 显式下发的临时通行原语（`bridge` 同高直线 / `scaffold` 垂直垫脚柱），逐块放置并读回；`scaffold` 由 provider 执行“跳起在脚底放方块”，同 x/z 列、最多 8 级，不是 1:1 楼梯；材料不足/占用/水平或向下不受支持。P2 不自主搭桥/垫脚，清理由 Agent 后续 order 负责。
-- 上游落差参数设为 3（包含支撑格），外层按脚部节点限制实际下降 ≤2 格，并对所有下降动作补落脚格检查，堵住斜向下落绕过危险支撑代价的缺口。
-- 每 100ms 检查实际位移；3s 无至少 0.35 格位移且未在增量搜索时，选择相邻安全 waypoint，先验证其路线再执行，最多尝试两次。无路或恢复耗尽返回结构化失败，不发送盲目的 jump/forward 脉冲。
-- 路径附近方块状态变化（包括同类型门状态）、区块卸载触发重规划；已知敌对实体的近身区域禁止继续接近、周围区域增加代价，每秒更新一次。实体识别不是完整的战斗威胁模型。
-- 完成、取消、超时均执行 `stop → setGoal(null) → clearControlStates`，注销本次监听/定时器。释放未确认不允许另一个 provider act 启动。
-- 当前没有自动开门或 `unstuck-dig`，需要显式交互/清障工作；开门后的通行、梯子、脚手架、游泳的真实物理效果仍需专项游戏验证，不能由静态 A* 通过推定支持。
+- `MotionRun` 拥有一次 motion 搜索、执行、恢复和清理；上层仍只下一个目标，不等待模型微操。A* 使用 P2 自研 `MotionSearch`，pathfinder 已从 provider/port 删除。
+- 先验证容差内的站位，再以分片 A* 预检路线；每片 5ms、单次搜索 2s、生成节点软上限 12000。显式搜索超时/上限返回 unknown，不折成无路。
+- 预检明确 `noPath` 时不出发。预算内尚未证明全程可达但已有前缀时允许推进；前缀不是完成。
+- 路径策略默认禁止挖掘、垫块、搭桥、跑酷和冲刺；普通最大脚部落差 2 格。显式 `unstickDig` 是 core break 白名单；没有白名单的块不可挖。
+- 无路且目标更低时 motion 会跑“安全下落”第二遍：按 health 预算允许 3 格以上的安全下落；落点必须可站立、已加载、非液体/危险，下落列无阻挡。
+- 显式 `policy.hazards.allow` 的 lava/void 目标由 Agent 层 `fatal` driver 执行受控 step-off，只有真实 `died` 才成功；这不是 A* 的普通边。
+- `traverse` 是 Agent 显式下发的临时通行原语（`bridge` 同高直线 / `scaffold` 垂直垫脚柱），已委托 motion `moveTo { allowPlace, material }`；provider `pillarUp` 已删除。
+- 完成、取消、超时均执行 `stop → clearControlStates`，注销本次监听/定时器。释放未确认不允许另一个 provider act 启动。
 - 测试中的地形夹具只检验真实 A*、1.21.1 碰撞数据与本项目策略的组合；不模拟物理，不替代真实 Minecraft/DSH 长跑验收。耗时与重规划指标经移动事件暴露，尚无实机成功率结论。
 
 ## 3. 预算

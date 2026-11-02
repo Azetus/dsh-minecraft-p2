@@ -39,7 +39,7 @@ describe('mineflayer port actions', () => {
 
     expect(await port.moveTo({ x: 1, y: 64, z: 2 }, { range: 2, timeoutMs: 500 }))
       .toMatchObject({ state: 'ok' })
-    expect(source.calls.at(-1)).toEqual({ name: 'goto', args: { x: 1, y: 64, z: 2, range: 2, timeoutMs: 500 } })
+    expect(source.calls.at(-1)).toEqual({ name: 'motion-goto', args: { x: 1, y: 64, z: 2, range: 2, timeoutMs: 500 } })
 
     expect((await port.lookAt({ x: 1, y: 64, z: 2 })).state).toBe('ok')
     expect(source.calls.at(-1)?.name).toBe('lookAt')
@@ -164,7 +164,7 @@ describe('mineflayer port timeout and authority', () => {
 
 describe('mineflayer port capabilities', () => {
   it('derives behavioural capabilities from provider operations', () => {
-    expect(portCapabilities(['pathfind', 'dig', 'place', 'use', 'interact', 'attack']))
+    expect(portCapabilities(['motion', 'dig', 'place', 'use', 'interact', 'attack']))
       .toEqual(['navigate', 'interact', 'combat'])
     expect(portCapabilities(['move'])).toEqual([])
   })

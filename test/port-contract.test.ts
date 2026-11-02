@@ -111,7 +111,8 @@ describe('capabilities', () => {
     expect(actionCapability('attack')).toBe('combat')
     expect(actionCapability('screen')).toBe('observe.screen')
     expect(actionCapability('lookAt')).toBeNull()
-    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(11)
+    expect(actionCapability('fatalStep')).toBeNull()
+    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(12)
   })
 
   it('fails with CAPABILITY_MISSING instead of degrading', () => {

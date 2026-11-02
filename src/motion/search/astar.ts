@@ -10,7 +10,16 @@ import {
   TraverseMove,
 } from '../execute/moves.ts'
 import { cellKey, sameCell } from '../model/block.ts'
-import { COST_INF, type Cell, type Move, type MoveContext } from '../model/types.ts'
+import {
+  COST_INF,
+  createGoal,
+  type AvoidancePolicy,
+  type Cell,
+  type MotionGoal,
+  type Move,
+  type MoveContext,
+  type Vec3,
+} from '../model/types.ts'
 import { MinHeap } from './heap.ts'
 
 export type SearchStatus = 'running' | 'success' | 'noPath' | 'timeout' | 'canceled'
@@ -33,6 +42,7 @@ export type SearchOptions = {
   maxNodes?: number
   timeoutMs?: number
   isCanceled?: () => boolean
+  avoidance?: AvoidancePolicy
 }
 
 const DEFAULT_SLICE_MS = 5
@@ -51,7 +61,7 @@ type Parent = { cell: Cell; move: Move }
  */
 export class MotionSearch {
   private readonly start: Cell
-  private readonly goal: Cell
+  private readonly target: MotionGoal
   private readonly context: () => MoveContext
   private readonly open = new MinHeap()
   private readonly g = new Map<string, number>()
@@ -63,15 +73,16 @@ export class MotionSearch {
   private readonly isCanceled: () => boolean
   private readonly startedAt: number
   private readonly startKey: string
+  private readonly avoidance: { coefficient: number; radiusSq: number; sources: Vec3[] } | undefined
   private best: Cell
   private bestH: number
   private nodes = 0
   private generated = 0
   private terminal: SearchResult | undefined
 
-  constructor(start: Cell, goal: Cell, context: () => MoveContext, options: SearchOptions = {}) {
+  constructor(start: Cell, goal: Cell | MotionGoal, context: () => MoveContext, options: SearchOptions = {}) {
     this.start = start
-    this.goal = goal
+    this.target = isMotionGoal(goal) ? goal : createGoal(goal, { kind: 'exact' })
     this.context = context
     this.sliceMs = options.sliceMs ?? DEFAULT_SLICE_MS
     this.maxNodes = options.maxNodes ?? DEFAULT_MAX_NODES
@@ -79,8 +90,9 @@ export class MotionSearch {
     this.isCanceled = options.isCanceled ?? (() => false)
     this.startedAt = Date.now()
     this.startKey = cellKey(start)
+    this.avoidance = this.buildAvoidance(options.avoidance, this.target)
     this.best = start
-    this.bestH = heuristic(start, goal)
+    this.bestH = this.target.heuristic(start)
     this.g.set(this.startKey, 0)
     this.open.push(start, this.bestH, this.bestH)
   }
@@ -102,8 +114,8 @@ export class MotionSearch {
       if (this.closed.has(key)) continue
       this.closed.add(key)
       this.nodes += 1
-      if (sameCell(item.cell, this.goal)) return this.finish('success', item.cell)
-      const distance = heuristic(item.cell, this.goal)
+      if (this.target.isEnd(item.cell)) return this.finish('success', item.cell)
+      const distance = this.target.heuristic(item.cell)
       if (distance < this.bestH) {
         this.bestH = distance
         this.best = item.cell
@@ -119,13 +131,53 @@ export class MotionSearch {
     return this.terminal ?? { status: 'running', ...this.snapshot(this.best) }
   }
 
+  /** Snapshot hostile entities once per search; cost stays soft. */
+  private buildAvoidance(
+    policy: AvoidancePolicy | undefined,
+    goal: MotionGoal,
+  ): { coefficient: number; radiusSq: number; sources: Vec3[] } | undefined {
+    if (policy === undefined || policy.coefficient <= 1 || policy.radius <= 0) return undefined
+    const ctx = this.context()
+    const target = goal.target ?? this.start
+    const radius = Math.max(1, policy.radius)
+    const box = {
+      min: {
+        x: Math.min(this.start.x, target.x) - radius,
+        y: Math.min(this.start.y, target.y) - radius,
+        z: Math.min(this.start.z, target.z) - radius,
+      },
+      max: {
+        x: Math.max(this.start.x, target.x) + radius,
+        y: Math.max(this.start.y, target.y) + radius,
+        z: Math.max(this.start.z, target.z) + radius,
+      },
+    }
+    const sources = ctx.world.entities(box)
+      .filter(entity => entity.hostile === true)
+      .map(entity => ({ ...entity.position }))
+    if (sources.length === 0) return undefined
+    return { coefficient: policy.coefficient, radiusSq: radius * radius, sources }
+  }
+
+  private avoidanceMultiplier(cell: Cell): number {
+    if (this.avoidance === undefined) return 1
+    let multiplier = 1
+    for (const source of this.avoidance.sources) {
+      const dx = cell.x - source.x
+      const dy = cell.y - source.y
+      const dz = cell.z - source.z
+      if (dx * dx + dy * dy + dz * dz <= this.avoidance.radiusSq) multiplier *= this.avoidance.coefficient
+    }
+    return multiplier
+  }
+
   private expand(cell: Cell, ctx: MoveContext): void {
     const key = cellKey(cell)
     const base = this.g.get(key) ?? Number.POSITIVE_INFINITY
     for (const move of neighbors(cell, ctx)) {
-      const cost = move.cost(ctx)
-      if (cost === COST_INF) continue
       const next = move.dest
+      const cost = move.cost(ctx) * this.avoidanceMultiplier(next)
+      if (cost === COST_INF) continue
       const nextKey = cellKey(next)
       if (this.closed.has(nextKey)) continue
       const candidate = base + cost
@@ -134,7 +186,7 @@ export class MotionSearch {
       this.g.set(nextKey, candidate)
       this.parent.set(nextKey, { cell, move })
       this.generated += 1
-      const h = heuristic(next, this.goal)
+      const h = this.target.heuristic(next)
       this.open.push(next, candidate + h, h)
     }
   }
@@ -176,7 +228,7 @@ function neighbors(cell: Cell, ctx: MoveContext): Move[] {
     moves.push(new TraverseMove(cell, flat))
     moves.push(new AscendMove(cell, { x: flat.x, y: cell.y + 1, z: flat.z }))
     moves.push(new DescendMove(cell, { x: flat.x, y: cell.y - 1, z: flat.z }))
-    for (let drop = 2; drop <= ctx.constraints.maxFall; drop += 1) {
+    for (let drop = 2; drop <= Math.max(ctx.constraints.maxFall, ctx.constraints.safeFallBudget ?? 0); drop += 1) {
       moves.push(new FallMove(cell, { x: flat.x, y: cell.y - drop, z: flat.z }))
     }
   }
@@ -204,6 +256,8 @@ function neighbors(cell: Cell, ctx: MoveContext): Move[] {
   return moves
 }
 
-function heuristic(from: Cell, to: Cell): number {
-  return Math.max(Math.abs(from.x - to.x), Math.abs(from.y - to.y), Math.abs(from.z - to.z))
+function isMotionGoal(value: Cell | MotionGoal): value is MotionGoal {
+  return typeof value === 'object' && value !== null
+    && typeof (value as { isEnd?: unknown }).isEnd === 'function'
+    && typeof (value as { heuristic?: unknown }).heuristic === 'function'
 }

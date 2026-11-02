@@ -1,13 +1,10 @@
 import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
-import type { Movements } from 'mineflayer-pathfinder'
-import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
-import { configureNavigation, NavigationRun, setNavigationDoorMode } from './navigation.ts'
 import { MotionRun } from '../motion/mineflayer/run.ts'
 import { defaultConstraints } from '../motion/model/types.ts'
 import { attachBlockTags } from '../port/mineflayer/block-tags.ts'
-import { parseHazardPolicy, parseUnstickBlocks } from '../port/terrain.ts'
+import { parseUnstickBlocks } from '../port/policy.ts'
 
 /**
  * The mineflayer module itself, re-exported for the body's authored-op bridge.
@@ -30,7 +27,6 @@ import type {
 
 export type MineflayerProviderOptions = {
   actionTimeoutMs?: number
-  moveDurationMs?: number
   /** How long the server age must stay unchanged before the provider treats it as paused. */
   serverIdleMs?: number
   /** Reported provider version; the body passes its own bodyVersion. */
@@ -94,8 +90,6 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
   })
 }
 
-type BotControl = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'sneak'
-
 const PLACE_FACES: Record<string, readonly [number, number, number]> = {
   up: [0, 1, 0],
   down: [0, -1, 0],
@@ -110,7 +104,6 @@ const EQUIP_DESTINATIONS: readonly EquipmentDestination[] = ['hand', 'off-hand',
 /** Capabilities this provider actually implements; the op broker gates on them. */
 export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
   'look',
-  'move',
   'dig',
   'place',
   'attack',
@@ -124,55 +117,8 @@ export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
   'mount',
   'trade',
   'respawn',
-  'pathfind',
   'motion',
 ])
-
-/** Runtime shape of the pathfinder package (published as CommonJS). */
-export type PathfinderRuntime = {
-  pathfinder: (bot: Bot) => void
-  Movements: new (bot: Bot) => Movements
-  goals: {
-    GoalNear: new (x: number, y: number, z: number, range: number) => unknown
-  }
-}
-
-const requireFromHere = createRequire(import.meta.url)
-let pathfinderRuntime: PathfinderRuntime | undefined
-
-/**
- * Load `mineflayer-pathfinder` through `require`.
- *
- * The package is CommonJS; a named ESM import compiles fine but throws
- * "Named export not found" at runtime once the provider is bundled. Loading it
- * lazily also keeps fake-bot unit tests working without the plugin.
- *
- * Exported for authored operations that navigate with the pathfinder directly.
- */
-export function loadPathfinderRuntime(): PathfinderRuntime | undefined {
-  if (pathfinderRuntime !== undefined) return pathfinderRuntime
-  try {
-    pathfinderRuntime = requireFromHere('mineflayer-pathfinder') as PathfinderRuntime
-    return pathfinderRuntime
-  } catch {
-    return undefined
-  }
-}
-
-/** Load the pathfinder plugin and build conservative movement settings. */
-function createMovements(bot: Bot): Movements | undefined {
-  const library = loadPathfinderRuntime()
-  if (library === undefined) return undefined
-  try {
-    const loadable = bot as unknown as { loadPlugin?: (plugin: unknown) => void }
-    loadable.loadPlugin?.(library.pathfinder)
-    const movements = new library.Movements(bot as never)
-    configureNavigation(bot, movements)
-    return movements
-  } catch {
-    return undefined
-  }
-}
 
 /** Provider identity reported in hello/describe/status. */
 export const PROVIDER_ID = 'mineflayer'
@@ -317,7 +263,6 @@ export class MineflayerProvider implements ActPort {
   private lastServerAgeAt = 0
   private readonly pauseTimer: ReturnType<typeof setInterval>
   private readonly options: Required<MineflayerProviderOptions>
-  private readonly movements: Movements | undefined
   private readonly suspensionListeners = new Set<(state: ProviderSuspension) => void>()
   private ageChanges = 0
   private timePackets = 0
@@ -333,12 +278,10 @@ export class MineflayerProvider implements ActPort {
   ) {
     this.options = {
       actionTimeoutMs: options.actionTimeoutMs ?? 600_000,
-      moveDurationMs: options.moveDurationMs ?? 700,
       serverIdleMs: options.serverIdleMs ?? 1500,
       providerVersion: options.providerVersion ?? '0',
     }
     this.providerVersion = this.options.providerVersion
-    this.movements = createMovements(this.bot)
     this.lastTimerAt = Date.now()
     this.pauseTimer = setInterval(() => {
       const now = Date.now()
@@ -1080,7 +1023,7 @@ export class MineflayerProvider implements ActPort {
     if (name !== 'stop' && this.current?.controlState?.() !== undefined && this.current.controlState() !== 'idle') {
       throw p2Error('STOP_UNCONFIRMED', 'runtime', 'previous act has not released control', { module: 'provider.mineflayer' })
     }
-    const handle = new MineflayerActHandle(name, args, this.bot, this.options, this.movements)
+    const handle = new MineflayerActHandle(name, args, this.bot, this.options)
     this.current = handle
     return handle
   }
@@ -1112,19 +1055,6 @@ class MineflayerActHandle implements ActHandle {
   private craftRunning = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly startedAt = Date.now()
-  private wasAirborne = false
-  private moveTarget: {
-    x: number
-    z: number
-    tolerance: number
-    timeoutMs: number
-    blockedMs: number
-  } | undefined
-  private lastDistance = Number.POSITIVE_INFINITY
-  private lastProgressAt = Date.now()
-  private lastLookAt = 0
-  private lastJumpAt = 0
-  private navigationRun: NavigationRun | undefined
   private motionRun: MotionRun | undefined
   private failureDetails: JsonValue | undefined
 
@@ -1133,7 +1063,6 @@ class MineflayerActHandle implements ActHandle {
     private readonly args: Record<string, JsonValue>,
     private readonly bot: Bot,
     private readonly options: Required<MineflayerProviderOptions>,
-    private readonly movements: Movements | undefined,
   ) {
     this.run()
   }
@@ -1146,16 +1075,6 @@ class MineflayerActHandle implements ActHandle {
         status: 'failed',
         error: p2Error(this.failedCode, actErrorCategory(this.failedCode), this.failed.message, { module: 'provider.mineflayer', nodePath: this.name }, this.failureDetails),
       }
-    }
-    if (!this.completed && this.name === 'jump') {
-      if (this.bot.entity?.onGround === false) this.wasAirborne = true
-      if (this.wasAirborne && this.bot.entity?.onGround === true) {
-        this.result = this.position()
-        this.completed = true
-      }
-    }
-    if (!this.completed && this.failed === undefined && this.name === 'moveTo') {
-      this.pollMoveTo()
     }
     if (!this.completed && this.failed === undefined && this.motionRun !== undefined) {
       const result = this.motionRun.tick(Date.now())
@@ -1170,7 +1089,7 @@ class MineflayerActHandle implements ActHandle {
         this.cancelled = true
       }
     }
-    if (!this.completed && this.name !== 'goto' && this.name !== 'motion-goto'
+    if (!this.completed && this.name !== 'motion-goto'
       && Date.now() - this.startedAt > this.options.actionTimeoutMs) {
       this.failed = new Error(`act ${this.name} timed out`)
       this.failedCode = 'ACT_TIMEOUT'
@@ -1189,7 +1108,7 @@ class MineflayerActHandle implements ActHandle {
     if (this.motionRun !== undefined) {
       return { status: 'running', progress: this.motionRun.report() }
     }
-    return this.navigationRun === undefined ? { status: 'running' } : { status: 'running', progress: this.navigationRun.report() }
+    return { status: 'running' }
   }
 
   stop(): void {
@@ -1207,17 +1126,11 @@ class MineflayerActHandle implements ActHandle {
     if (this.timer !== undefined) clearTimeout(this.timer)
     if (this.name === 'dig') attempt(() => this.bot.stopDigging())
     if (this.name === 'use') attempt(() => this.bot.deactivateItem())
-    if (this.name === 'goto') {
-      if (this.navigationRun !== undefined) {
-        if (!this.navigationRun.stop()) unknown = true
-      } else attempt(() => this.stopNavigation())
-    }
     if (this.name === 'motion-goto') {
       if (this.motionRun !== undefined) {
         if (!this.motionRun.stop()) unknown = true
-      } else attempt(() => this.stopNavigation())
+      }
     }
-    if (this.name === 'drive') attempt(() => this.bot.moveVehicle(0, 0))
     if (this.name === 'fish') attempt(() => this.bot.deactivateItem())
     if (this.name === 'sleep') {
       // Documented way out of a bed; stop() must not leave the bot asleep.
@@ -1231,26 +1144,9 @@ class MineflayerActHandle implements ActHandle {
   }
 
   /**
-   * Stop the pathfinder and clear its goal on the spot.
-   *
-   * `pathfinder.stop()` only sets a flag that is consumed when the bot reaches
-   * the next path point, so the old path keeps driving the body until then
-   * (PITFALLS 1.6). `setGoal(null)` clears it immediately; the order matters
-   * because the library's resetPath consults the stop flag.
-   */
-  private stopNavigation(): void {
-    const pathfinder = (this.bot as unknown as {
-      pathfinder?: { stop(): void; setGoal(goal: null): void }
-    }).pathfinder
-    if (pathfinder === undefined) return
-    pathfinder.stop()
-    pathfinder.setGoal(null)
-  }
-
-  /**
    * Fold the observable control state into a release conclusion. Until this
    * succeeds the handle keeps reporting `running`/`active`, which is what makes
-   * a lazy pathfinder stop visible instead of a false "already stopped".
+   * a lazy stop visible instead of a false "already stopped".
    */
   private refreshRelease(): void {
     if (!this.stopRequested || this.cancelled || this.releaseUnknown) return
@@ -1262,11 +1158,6 @@ class MineflayerActHandle implements ActHandle {
   }
 
   private releaseObserved(): boolean {
-    if (this.name === 'goto' || this.name === 'motion-goto') {
-      const pathfinder = (this.bot as unknown as { pathfinder?: { isMoving?: () => boolean } }).pathfinder
-      // `stop()` only sets a flag; the path is cleared on the next physics tick.
-      if (typeof pathfinder?.isMoving === 'function' && pathfinder.isMoving() === true) return false
-    }
     if (this.name === 'dig') {
       const target = (this.bot as unknown as { targetDigBlock?: unknown }).targetDigBlock
       if (target !== null && target !== undefined) return false
@@ -1307,17 +1198,13 @@ class MineflayerActHandle implements ActHandle {
 
   /** Preserve the caller's explicit hazard permission in the terminal code. */
   deathCode(): string {
-    const hazards = parseHazardPolicy(this.args.hazards)
-    return hazards !== null && hazards !== undefined && hazards.allow.length > 0
-      ? 'DIED_IN_ALLOWED_HAZARD'
-      : 'DEATH'
+    return this.name === 'fatal-step' ? 'DIED_IN_ALLOWED_HAZARD' : 'DEATH'
   }
 
   abort(error: Error, code = 'ACT_FAILED'): void {
     if (this.cancelled || this.completed) return
     this.failed = error
     this.failedCode = code
-    if (this.navigationRun !== undefined && !this.navigationRun.stop()) this.releaseUnknown = true
     if (this.motionRun !== undefined && !this.motionRun.stop()) this.releaseUnknown = true
     if (this.timer !== undefined) clearTimeout(this.timer)
     if (this.name === 'use') {
@@ -1340,61 +1227,33 @@ class MineflayerActHandle implements ActHandle {
           })
           return
         }
-        case 'move':
-        case 'forward':
-        case 'back':
-        case 'left':
-        case 'right': {
-          // `move` takes an explicit direction; the four aliases exist so a
-          // behavior can express a plain walk without knowing the enum.
-          const direction = this.name === 'move'
-            ? (typeof this.args.direction === 'string' ? this.args.direction : 'forward')
-            : this.name
-          if (!isControl(direction)) throw new Error(`unsupported move direction: ${direction}`)
-          this.bot.setControlState(direction, true)
-          const duration = typeof this.args.durationMs === 'number'
-            ? this.args.durationMs
-            : this.options.moveDurationMs
-          this.timer = setTimeout(() => {
-            this.bot.setControlState(direction, false)
-            this.result = this.position()
-            this.completed = true
-          }, Math.max(0, duration))
-          return
-        }
-        case 'jump': {
-          this.bot.setControlState('jump', true)
-          this.timer = setTimeout(() => {
-            this.bot.setControlState('jump', false)
-          }, 150)
-          return
-        }
-        case 'moveTo': {
+        case 'fatal-step': {
           const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const y = typeof this.args.y === 'number' ? this.args.y : undefined
           const z = typeof this.args.z === 'number' ? this.args.z : undefined
-          if (x === undefined || z === undefined) throw new Error('moveTo requires numeric x and z')
-          const tolerance = typeof this.args.tolerance === 'number' ? this.args.tolerance : 0.6
-          const timeoutMs = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 10_000
-          const blockedMs = typeof this.args.blockedMs === 'number' ? this.args.blockedMs : 1500
-          if (tolerance < 0 || timeoutMs <= 0 || blockedMs <= 0) throw new Error('moveTo limits must be positive')
-          this.moveTarget = { x, z, tolerance, timeoutMs, blockedMs }
-          const initial = this.bot.entity?.position
-          this.lastDistance = initial === undefined ? Number.POSITIVE_INFINITY : Math.hypot(x - initial.x, z - initial.z)
-          this.lastProgressAt = Date.now()
-          this.faceTarget()
-          this.bot.setControlState('forward', true)
+          if (x === undefined || y === undefined || z === undefined) throw new Error('fatal-step requires numeric x, y and z')
+          void this.bot.lookAt(new Vec3(x + 0.5, y + 0.5, z + 0.5), true).then(() => {
+            if (this.stopRequested) return
+            this.bot.setControlState('forward', true)
+            this.timer = setTimeout(() => {
+              try {
+                this.bot.setControlState('forward', false)
+              } catch {
+                // Connection loss is observed by the lifecycle layer.
+              }
+              this.result = this.position()
+              this.completed = true
+            }, 700)
+          }).catch((error: unknown) => {
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'HAZARD_STEP_FAILED'
+          })
           return
         }
-        case 'goto': {
-          const nav = this.navigation()
+        case 'motion-goto': {
           const { x, y, z } = this.args
-          if (nav === undefined || this.movements === undefined) {
-            this.failed = new Error('pathfinding is not available in this provider')
-            this.failedCode = 'GOTO_UNAVAILABLE'
-            return
-          }
           if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
-            this.failed = new Error('goto requires numeric x, y and z')
+            this.failed = new Error('motion-goto requires numeric x, y and z')
             this.failedCode = 'BAD_ARGS'
             return
           }
@@ -1405,61 +1264,30 @@ class MineflayerActHandle implements ActHandle {
             this.failedCode = 'BAD_ARGS'
             return
           }
-          const hazards = parseHazardPolicy(this.args.hazards)
-          if (hazards === null) {
-            this.failed = new Error('hazards must allow at most void/lethal_fall/lava')
-            this.failedCode = 'BAD_ARGS'
-            return
-          }
-          const timeout = Math.min(typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000, this.options.actionTimeoutMs)
-          this.navigationRun = new NavigationRun(this.bot, this.movements, { x, y, z }, range, timeout,
-            (code, observed, released) => {
-              if (!released) this.releaseUnknown = true
-              if (code === undefined) {
-                this.result = observed
-                this.completed = true
-              } else {
-                this.failedCode = code
-                this.failed = new Error(code)
-                this.failureDetails = observed
-              }
-            }, { exact: this.args.exact === true, approach: this.args.approach === true, unstickDig,
-              ...(this.args.intent === 'interact' || this.args.intent === 'attack' ? { intent: this.args.intent } : {}),
-              ...(hazards === undefined ? {} : { hazards }) })
-          this.navigationRun.start()
-          return
-        }
-        case 'motion-goto': {
-          const nav = this.navigation()
-          const { x, y, z } = this.args
-          if (nav === undefined || this.movements === undefined) {
-            this.failed = new Error('pathfinding is not available in this provider')
-            this.failedCode = 'GOTO_UNAVAILABLE'
-            return
-          }
-          if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
-            this.failed = new Error('motion-goto requires numeric x, y and z')
-            this.failedCode = 'BAD_ARGS'
-            return
-          }
-          const range = this.args.exact === true ? 0 : typeof this.args.range === 'number' ? this.args.range : 1
           const timeout = Math.min(
             typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 30_000,
             this.options.actionTimeoutMs,
           )
-          const movements = this.movements
           const constraints = defaultConstraints('walk')
           if (this.args.allowParkour === true) constraints.allowParkour = true
           if (this.args.allowDiagonal === true) constraints.allowDiagonal = true
           if (this.args.allowPlace === true) constraints.allowPlace = true
           if (typeof this.args.material === 'string') constraints.material = this.args.material
+          if (unstickDig !== undefined && unstickDig.length > 0) {
+            constraints.allowBreak = true
+            constraints.breakTargets = unstickDig
+          }
+          const arrival = this.args.exact === true
+            ? { kind: 'exact' as const }
+            : this.args.intent === 'interact' && range <= 1.5
+              ? { kind: 'adjacent' as const }
+              : { kind: 'near' as const, range }
           this.motionRun = new MotionRun(
             this.bot,
-            movements,
             { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) },
             range,
             timeout,
-            { constraints, setDoorMode: enabled => setNavigationDoorMode(movements, enabled) },
+            { constraints, arrival },
           )
           this.motionRun.start()
           return
@@ -1935,23 +1763,6 @@ class MineflayerActHandle implements ActHandle {
           this.timer = setTimeout(check, 200)
           return
         }
-        case 'drive': {
-          if (this.vehicle() === undefined) {
-            this.failed = new Error('drive requires a mounted vehicle')
-            this.failedCode = 'DRIVE_NOT_MOUNTED'
-            return
-          }
-          const left = typeof this.args.left === 'number' ? Math.max(-1, Math.min(1, this.args.left)) : 0
-          const forward = typeof this.args.forward === 'number' ? Math.max(-1, Math.min(1, this.args.forward)) : 0
-          const duration = typeof this.args.durationMs === 'number' ? Math.max(0, this.args.durationMs) : 1000
-          this.bot.moveVehicle(left, forward)
-          this.timer = setTimeout(() => {
-            this.bot.moveVehicle(0, 0)
-            this.result = { left, forward, durationMs: duration }
-            this.completed = true
-          }, duration)
-          return
-        }
         case 'place-entity': {
           const position = blockPosition(this.args)
           if (position === undefined) {
@@ -2010,11 +1821,6 @@ class MineflayerActHandle implements ActHandle {
       }
     } catch (error) {
       this.failed = error instanceof Error ? error : new Error(String(error))
-      if (this.navigationRun !== undefined) {
-        this.failedCode = this.navigationRun.stop() ? 'GOTO_ERROR' : 'STOP_UNCONFIRMED'
-        this.releaseUnknown = this.failedCode === 'STOP_UNCONFIRMED'
-        this.failureDetails = this.navigationRun.report()
-      }
       if (this.motionRun !== undefined) {
         this.failedCode = this.motionRun.stop() ? 'GOTO_ERROR' : 'STOP_UNCONFIRMED'
         this.releaseUnknown = this.failedCode === 'STOP_UNCONFIRMED'
@@ -2039,26 +1845,6 @@ class MineflayerActHandle implements ActHandle {
     const id = typeof value === 'number' ? Math.floor(value) : Number.NaN
     if (!Number.isFinite(id)) return undefined
     return this.bot.entities[id] as Parameters<Bot['attack']>[0] | undefined
-  }
-
-  private navigation(): {
-    pathfinder: {
-      setGoal(goal: unknown, dynamic?: boolean): void
-      setMovements(movements: unknown): void
-      stop(): void
-      isMoving(): boolean
-    }
-  } | undefined {
-    const pathfinderHandle = (this.bot as unknown as {
-      pathfinder?: {
-        setGoal(goal: unknown, dynamic?: boolean): void
-        setMovements(movements: unknown): void
-        stop(): void
-        isMoving(): boolean
-      }
-    }).pathfinder
-    if (pathfinderHandle === undefined || this.movements === undefined) return undefined
-    return { pathfinder: pathfinderHandle }
   }
 
   private vehicle(): unknown {
@@ -2271,75 +2057,6 @@ class MineflayerActHandle implements ActHandle {
     }
     return { action, kind: block.name, item: name.length === 0 ? null : name, count }
   }
-
-  private faceTarget(): void {
-    const target = this.moveTarget
-    const position = this.bot.entity?.position
-    if (target === undefined || position === undefined) return
-    const yaw = Math.atan2(-(target.x - position.x), -(target.z - position.z))
-    this.lastLookAt = Date.now()
-    void this.bot.look(yaw, 0, true).catch((error: unknown) => {
-      this.failed = error instanceof Error ? error : new Error(String(error))
-      this.bot.clearControlStates()
-    })
-  }
-
-  private pollMoveTo(): void {
-    const target = this.moveTarget
-    const position = this.bot.entity?.position
-    if (target === undefined || position === undefined) return
-    const dx = target.x - position.x
-    const dz = target.z - position.z
-    const distance = Math.hypot(dx, dz)
-    const now = Date.now()
-    if (distance <= target.tolerance) {
-      this.bot.clearControlStates()
-      this.result = {
-        x: position.x,
-        y: position.y,
-        z: position.z,
-        distance,
-        target: { x: target.x, z: target.z },
-      }
-      this.completed = true
-      return
-    }
-    if (now - this.startedAt > target.timeoutMs) {
-      this.failed = new Error(`moveTo timed out after ${target.timeoutMs}ms at distance ${distance.toFixed(2)}`)
-      this.failedCode = 'MOVE_TO_TIMEOUT'
-      this.bot.clearControlStates()
-      return
-    }
-    if (distance <= this.lastDistance - 0.05) {
-      this.lastDistance = distance
-      this.lastProgressAt = now
-    } else if (now - this.lastProgressAt > target.blockedMs) {
-      this.failed = new Error(`moveTo made no progress for ${target.blockedMs}ms at distance ${distance.toFixed(2)}`)
-      this.failedCode = 'MOVE_TO_BLOCKED'
-      this.bot.clearControlStates()
-      return
-    }
-    if (now - this.lastLookAt > 100) this.faceTarget()
-    // A flat walker cannot climb a one-block step. Pulse jump while forward stays
-    // held; the blockedMs watchdog still fires if the step is genuinely too high.
-    if (now - this.lastProgressAt > 300 && now - this.lastJumpAt > 300) {
-      this.lastJumpAt = now
-      this.bot.setControlState('jump', true)
-      setTimeout(() => {
-        try {
-          this.bot.setControlState('jump', false)
-        } catch {
-          // The connection may be gone; clearControlStates runs on end anyway.
-        }
-      }, 120)
-    }
-    this.bot.setControlState('forward', true)
-  }
-}
-
-function isControl(value: string): value is BotControl {
-  return value === 'forward' || value === 'back' || value === 'left' || value === 'right'
-    || value === 'jump' || value === 'sprint' || value === 'sneak'
 }
 
 function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {

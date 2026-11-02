@@ -94,56 +94,6 @@ function fakeBot(options: FakeOptions = {}) {
 }
 
 describe('Mineflayer provider release semantics (M0)', () => {
-  it('clears the pathfinder goal on stop so release is observed immediately', () => {
-    const { bot, state } = fakeBot({ moving: true })
-    const provider = new MineflayerProvider(bot)
-    const handle = provider.start('goto', { x: 4, y: 64, z: 4 })
-    // Without a live registry the provider cannot path-find, but the raw
-    // pathfinder handle is exactly what a real stop has to clear.
-    expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
-
-    handle.stop()
-    // stop() alone only sets a flag in the library; setGoal(null) is what makes
-    // the old path disappear on the spot (PITFALLS 1.6), and the order matters.
-    expect(state.pathfinderCalls).toEqual(['stop', 'setGoal:null'])
-    expect(state.moving).toBe(false)
-    expect(provider.controlState()).toBe('idle')
-    expect(handle.poll()).toMatchObject({ status: 'cancelled' })
-  })
-
-  it('stays active when clearing the goal does not clear the path', () => {
-    const { bot, state } = fakeBot({ moving: true, setGoalClears: false })
-    const provider = new MineflayerProvider(bot)
-    const handle = provider.start('goto', { x: 4, y: 64, z: 4 })
-    expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'GOTO_UNAVAILABLE' } })
-
-    handle.stop()
-    expect(state.pathfinderCalls).toEqual(['stop', 'setGoal:null'])
-    expect(provider.controlState()).toBe('active')
-    expect(handle.poll().status).not.toBe('cancelled')
-
-    state.moving = false
-    expect(provider.controlState()).toBe('idle')
-    expect(handle.poll()).toMatchObject({ status: 'cancelled' })
-  })
-
-  it('does not report idle when clearing control states did not take effect', () => {
-    const { bot, state, controls } = fakeBot()
-    const provider = new MineflayerProvider(bot)
-    const handle = provider.start('move', { direction: 'forward', durationMs: 5000 })
-    expect(controls.get('forward')).toBe(true)
-
-    state.stuckControl = 'forward'
-    handle.stop()
-    expect(provider.controlState()).toBe('active')
-    expect(handle.poll()).toMatchObject({ status: 'running' })
-
-    state.stuckControl = undefined
-    controls.clear()
-    expect(handle.poll()).toMatchObject({ status: 'cancelled' })
-    expect(provider.controlState()).toBe('idle')
-  })
-
   it('stops the craft chain between recipes instead of finishing the batch', async () => {
     const { bot, state } = fakeBot({ craftDelayMs: 20 })
     const provider = new MineflayerProvider(bot)

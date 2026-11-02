@@ -61,7 +61,7 @@ abstract class BaseMove implements Move {
     // Stateless moves override when they keep scratch state.
   }
 
-  toBreak(): readonly Cell[] {
+  toBreak(_ctx: MoveContext): readonly Cell[] {
     return []
   }
 
@@ -86,6 +86,53 @@ function jumpGap(a: Cell, b: Cell): boolean {
   return a.y === b.y && Math.abs(a.x - b.x) + Math.abs(a.z - b.z) === 2
 }
 
+function sameCell(a: Cell, b: Cell): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+/** Feet and head cells of a two-block-high body at `cell`. */
+function bodyCells(cell: Cell): Cell[] {
+  return [cell, { x: cell.x, y: cell.y + 1, z: cell.z }]
+}
+
+function uniqueCells(cells: readonly Cell[]): Cell[] {
+  const result: Cell[] = []
+  for (const cell of cells) {
+    if (!result.some(item => sameCell(item, cell))) result.push(cell)
+  }
+  return result
+}
+
+/**
+ * True when every blocking body cell is either already passable or explicitly
+ * authorized by `Rules.canBreak`. Unknown is never folded into passable.
+ */
+function passableOrBreakable(ctx: MoveContext, cells: readonly Cell[]): boolean {
+  for (const cell of cells) {
+    const through = ctx.rules.canPass(cell)
+    if (through === 'yes') continue
+    if (through === 'unknown') return false
+    if (ctx.rules.canBreak(cell) !== 'yes') return false
+  }
+  return true
+}
+
+function breakableCells(ctx: MoveContext, cells: readonly Cell[]): Cell[] {
+  return uniqueCells(cells).filter(cell => ctx.rules.canPass(cell) !== 'yes' && ctx.rules.canBreak(cell) === 'yes')
+}
+
+function breakCostOf(ctx: MoveContext, cells: readonly Cell[]): number {
+  let cost = 0
+  for (const cell of cells) {
+    cost += ctx.rules.breakCost(cell) ?? 0
+  }
+  return cost
+}
+
+function standInfoWithBreaks(ctx: MoveContext, cell: Cell, cells: readonly Cell[]) {
+  return ctx.rules.standInfo(cell, cells.filter(item => ctx.rules.canBreak(item) === 'yes'))
+}
+
 export class TraverseMove extends BaseMove {
   readonly kind = 'traverse' as const
   private doorUseAt: number | undefined
@@ -103,10 +150,21 @@ export class TraverseMove extends BaseMove {
     if (door === 'closed') return ctx.rules.isDoorPassable(this.dest, directionOf(this.src, this.dest)) === 'yes'
       ? 1.2
       : COST_INF
-    if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
-    const stand = ctx.rules.standInfo(this.dest)
+    if (door === 'open') {
+      // An open door can still report a solid collision shape on some
+      // versions; the door state is authoritative for passing through it.
+      return ctx.rules.isDoorPassable(this.dest, directionOf(this.src, this.dest)) === 'yes' ? 1 : COST_INF
+    }
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
-    return 1
+    return 1 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    if (ctx.rules.doorState(this.dest) !== 'none') return []
+    return breakableCells(ctx, bodyCells(this.dest))
   }
 
   validPositions(): readonly Cell[] {
@@ -177,10 +235,15 @@ export class AscendMove extends BaseMove {
   cost(ctx: MoveContext): number {
     if (this.dest.y !== this.src.y + 1 || !adjacent(this.src, this.dest)) return COST_INF
     if (ctx.rules.standInfo(this.src).state !== 'yes') return COST_INF
-    const stand = ctx.rules.standInfo(this.dest)
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
-    if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
-    return 1.5
+    return 1.5 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    return breakableCells(ctx, bodyCells(this.dest))
   }
 
   validPositions(): readonly Cell[] {
@@ -242,9 +305,14 @@ export class DescendMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (this.dest.y !== this.src.y - 1 || !adjacent(this.src, this.dest)) return COST_INF
-    if (ctx.rules.standInfo(this.dest).state !== 'yes') return COST_INF
-    if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
-    return 1.1
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
+    return 1.1 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    return breakableCells(ctx, bodyCells(this.dest))
   }
 
   validPositions(): readonly Cell[] {
@@ -276,9 +344,10 @@ export class FallMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     const drop = this.src.y - this.dest.y
-    if (drop < 2 || drop > ctx.constraints.maxFall || !adjacent(this.src, this.dest)) return COST_INF
+    const max = Math.max(ctx.constraints.maxFall, ctx.constraints.safeFallBudget ?? 0)
+    if (drop < 2 || drop > max || !adjacent(this.src, this.dest)) return COST_INF
     if (!this.landingSafe(ctx)) return COST_INF
-    return 1.5 + drop
+    return 1.5 + drop + (drop > ctx.constraints.maxFall ? 1 : 0)
   }
 
   private landingSafe(ctx: MoveContext): boolean {
@@ -489,14 +558,15 @@ export class PillarMove extends BaseMove {
     // edge from a transient snapshot between place and block-update.
     if (this.placed <= this.level
       && ctx.rules.standInfo(this.columnCell(this.currentY())).state !== 'yes') return COST_INF
-    if (ctx.rules.canWalkThrough(this.dest) !== 'yes') return COST_INF
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
     if (ctx.rules.canPlaceAgainst(this.columnCell(this.src.y - 1)) !== 'yes') return COST_INF
     // Skip the blocks this move already placed; a mid-pillar revalidation must
     // not mistake its own support column for an obstruction.
     for (let y = this.src.y + this.placed; y < this.dest.y; y += 1) {
       if (ctx.rules.isReplaceable(this.columnCell(y)) !== 'yes') return COST_INF
     }
-    return 4 + levels
+    return 4 + levels + breakCostOf(ctx, cells)
   }
 
   validPositions(): readonly Cell[] {
@@ -509,6 +579,10 @@ export class PillarMove extends BaseMove {
     const cells: Cell[] = []
     for (let y = this.src.y; y < this.dest.y; y += 1) cells.push(this.columnCell(y))
     return cells
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    return breakableCells(ctx, bodyCells(this.dest))
   }
 
   reset(): void {
@@ -621,14 +695,18 @@ export class DiagonalMove extends BaseMove {  readonly kind = 'diagonal' as cons
 
   cost(ctx: MoveContext): number {
     if (!ctx.constraints.allowDiagonal || this.src.y !== this.dest.y || !diagonal(this.src, this.dest)) return COST_INF
-    const through = ctx.rules.canWalkThrough(this.dest)
-    if (through !== 'yes') return COST_INF
-    if (ctx.rules.standInfo(this.dest).state !== 'yes') return COST_INF
-    // Both cardinal side cells must be walkable too; otherwise the corner clips.
     const a = { x: this.dest.x, y: this.src.y, z: this.src.z }
     const b = { x: this.src.x, y: this.src.y, z: this.dest.z }
-    if (ctx.rules.canWalkThrough(a) !== 'yes' || ctx.rules.canWalkThrough(b) !== 'yes') return COST_INF
-    return 1.4
+    const cells = uniqueCells([...bodyCells(this.dest), ...bodyCells(a), ...bodyCells(b)])
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
+    return 1.4 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    const a = { x: this.dest.x, y: this.src.y, z: this.src.z }
+    const b = { x: this.src.x, y: this.src.y, z: this.dest.z }
+    return breakableCells(ctx, uniqueCells([...bodyCells(this.dest), ...bodyCells(a), ...bodyCells(b)]))
   }
 
   validPositions(): readonly Cell[] {
@@ -661,10 +739,16 @@ export class ParkourMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (!ctx.constraints.allowParkour || !jumpGap(this.src, this.dest)) return COST_INF
-    if (ctx.rules.standInfo(this.dest).state !== 'yes') return COST_INF
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
     const gap = { x: Math.floor((this.src.x + this.dest.x) / 2), y: this.src.y, z: Math.floor((this.src.z + this.dest.z) / 2) }
     if (ctx.rules.canWalkThrough(gap) !== 'yes') return COST_INF
-    return 2.5
+    return 2.5 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    return breakableCells(ctx, bodyCells(this.dest))
   }
 
   validPositions(): readonly Cell[] {

@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
-import { parseHazardPolicy } from '../port/terrain.ts'
+import { parseHazardPolicy } from '../port/policy.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from './policy.ts'
 
 /** The finite execution surface: goals, not per-CP scripts. */

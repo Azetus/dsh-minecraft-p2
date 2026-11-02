@@ -23,7 +23,7 @@ describe('built provider bundle', () => {
     }
     expect(typeof module.MineflayerProvider).toBe('function')
     expect(Array.isArray(module.PROVIDER_CAPABILITIES)).toBe(true)
-    expect(module.PROVIDER_CAPABILITIES).toContain('pathfind')
+    expect(module.PROVIDER_CAPABILITIES).toContain('motion')
     expect(typeof module.PROVIDER_ID).toBe('string')
   })
 })

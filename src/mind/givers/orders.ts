@@ -24,6 +24,32 @@ function policyHazards(policy: JsonValue | undefined): JsonValue | undefined {
   return (policy as Record<string, JsonValue>).hazards
 }
 
+function allowedHazards(hazards: JsonValue | undefined): string[] {
+  if (hazards === null || typeof hazards !== 'object' || Array.isArray(hazards)) return []
+  const allow = (hazards as Record<string, JsonValue>).allow
+  return Array.isArray(allow) ? allow.filter((item): item is string => typeof item === 'string') : []
+}
+
+function isAir(name: string): boolean {
+  return name === 'air' || name === 'cave_air' || name === 'void_air'
+}
+
+/**
+ * Fatal exits are Agent policy, not motion edges: only an explicit lava/void
+ * target with matching policy is handed to the dedicated fatal driver.
+ */
+function fatalKind(world: WorldView, target: { x: number; y: number; z: number }, hazards: JsonValue | undefined): 'lava' | 'void' | 'lethal_fall' | undefined {
+  const allow = allowedHazards(hazards)
+  if (allow.length === 0) return undefined
+  const selfY = Math.floor(world.self.pos.y)
+  if (allow.includes('lethal_fall') && target.y < selfY - 2) return 'lethal_fall'
+  const block = world.blockAt(target)
+  if (block === null || !block.loaded) return undefined
+  if (block.name === 'lava' && allow.includes('lava')) return 'lava'
+  if (allow.includes('void') && isAir(block.name) && standability(world, target).state === 'blocked') return 'void'
+  return undefined
+}
+
 /** Explicit `go` order: one move to the Agent-selected coordinate. */
 export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiver {
   return {
@@ -33,6 +59,17 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
       if (current === undefined) return null
       const requested = positionOf(current.order.params)
       if (requested === undefined) return null
+      const hazards = policyHazards(current.order.policy)
+      const fatal = fatalKind(world, requested, hazards)
+      if (fatal !== undefined) {
+        return {
+          driverId: 'fatal',
+          target: { kind: 'point', pos: requested },
+          params: { x: requested.x, y: requested.y, z: requested.z },
+          keys: `order.fatal:${current.order.id}`,
+          orderId: current.order.id,
+        }
+      }
       const exact = current.order.params?.exact === true
       const allowPlace = current.order.params?.allowPlace === true
       const checked = standability(world, requested)
@@ -40,7 +77,6 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
         ? requested
         : nearestStandable(world, requested, 2, requested, 2)
       if (pos === undefined) return { kind: 'hold', reason: 'GO_NO_STAND', notify: true }
-      const hazards = policyHazards(current.order.policy)
       return {
         driverId: 'move',
         target: { kind: 'point', pos },
@@ -52,7 +88,6 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
           ...(current.order.params?.allowDiagonal === true ? { allowDiagonal: true } : {}),
           ...(current.order.params?.allowPlace === true ? { allowPlace: true } : {}),
           ...(typeof current.order.params?.material === 'string' ? { material: current.order.params.material } : {}),
-          ...(hazards === undefined ? {} : { hazards }),
         },
         keys: `order.go:${current.order.id}`,
         orderId: current.order.id,

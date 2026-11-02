@@ -46,7 +46,7 @@ describe('traverse driver', () => {
     expect(result).toMatchObject({ state: 'succeeded', observed: { kind: 'traverse', mode: 'bridge', blocks: 3 } })
     expect(moves).toEqual([{
       target: { x: 3, y: 64, z: 0 },
-      opts: { range: 0, exact: true, timeoutMs: 60_000, motion: true, allowPlace: true, material: 'dirt' },
+      opts: { range: 0, exact: true, timeoutMs: 60_000, allowPlace: true, material: 'dirt' },
     }])
   })
 
@@ -67,7 +67,7 @@ describe('traverse driver', () => {
     expect(result).toMatchObject({ state: 'succeeded', observed: { mode: 'scaffold', blocks: 2, pillar: true } })
     expect(moves).toEqual([{
       target: { x: 0, y: 66, z: 0 },
-      opts: { range: 0, exact: true, timeoutMs: 60_000, motion: true, allowPlace: true, material: 'dirt' },
+      opts: { range: 0, exact: true, timeoutMs: 60_000, allowPlace: true, material: 'dirt' },
     }])
   })
 

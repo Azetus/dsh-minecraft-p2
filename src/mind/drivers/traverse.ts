@@ -98,7 +98,6 @@ async function moveWithPlacement(
     range: 0,
     exact: true,
     timeoutMs: 60_000,
-    motion: true,
     allowPlace: true,
     material: params.item,
   })

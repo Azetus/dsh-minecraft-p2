@@ -63,7 +63,7 @@ export function createContainerDriver(): Driver {
 
 async function transfer(ctx: DriverCtx, params: ContainerParams): Promise<DriverResult> {
   const chest = { x: params.x, y: params.y, z: params.z }
-  const moved = await ctx.port.moveTo(chest, { range: 2, timeoutMs: 20_000, motion: true })
+  const moved = await ctx.port.moveTo(chest, { range: 2, timeoutMs: 20_000 })
   if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'CONTAINER_MOVE_FAILED' }
   const result = await ctx.port.containerTransfer(
     chest,

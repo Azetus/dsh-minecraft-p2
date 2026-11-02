@@ -108,7 +108,7 @@ export class FakeActSource implements MineflayerActSource {
   failCode = 'DIG_NO_BLOCK'
   onStart: ((name: string, args: Record<string, JsonValue>) => void) | undefined
 
-  constructor(readonly capabilities: readonly string[] = ['pathfind', 'dig', 'place', 'use', 'interact', 'attack']) {}
+  constructor(readonly capabilities: readonly string[] = ['motion', 'dig', 'place', 'use', 'interact', 'attack']) {}
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
     if (this.mode === 'disconnected') {

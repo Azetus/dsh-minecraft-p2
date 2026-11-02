@@ -280,10 +280,10 @@ interface Move {
 - `ClientPort.moveTo(target, opts)` 与 `attack(entityId)` 的输入语义不变。
 - `move`/`attack` driver 只做：目标/约束/取消/结果。
 - giver 可调用只读的 `isReachable` / `pathTo` 做站位筛选；它不执行、不产生 job。
-- `moveTo` 在适配器声明 motion 能力且没有显式 hazards/unstick 时走运动执行器；否则保留现有导航路径（hazards/unstick 迁移后删除）。
-- `traverse` order 已委托 motion 的 `moveTo { allowPlace, material }`；provider `pillarUp`/`pillar` 已删除。`hazards`（void/lethal_fall/lava）与 `unstickDig` 仍由 legacy `goto` 执行，迁移前不删除。
+- `moveTo` 始终走运动执行器；显式 `unstickDig` 作为 core break 白名单，不再回落到 legacy `goto`。
+- `traverse` order 已委托 motion 的 `moveTo { allowPlace, material }`；provider `pillarUp`/`pillar` 已删除。**致命退出**（lava/void）由 Agent 层 `fatal` driver 执行，不进入 A*；`lethal_fall` 仍可作为 Agent 策略，但不是 motion 的普通边。
 - 所有对外结果包含：`state`、`reason`、`position`、`bestReachable`（如有）、`attempts`（如有）、`elapsedMs`。
-- `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / hazards / healthBefore / healthAfter / elapsedMs`；新增 `planner` 标识本次规划器。
+- `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / safeFallPass / healthBefore / healthAfter / elapsedMs`；新增 `planner` 标识本次规划器；Agent 层 `fatal` 的结果由 driver 自己记录。
 - 失败码保持可分类：`NO_PATH` / `UNREACHABLE` / `STUCK` / `TIMEOUT` / `CANCELED` / `STOP_UNCONFIRMED` / `PLACE_FAILED` / `OBSERVATION_UNAVAILABLE`。
 
 ## 9. 测试与验收

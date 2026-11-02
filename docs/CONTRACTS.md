@@ -104,16 +104,17 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
 - `serverTags` 是适配器层的服务端 block tags（`ReadonlySet<string>`），不序列化到 bridge；`undefined` 表示 tags 尚未就绪，不是“没有 tag”。
 - `moveTo` 目标为脚下路径格坐标，按格取整；`range` 默认 1、范围 0–8，使用三维格距离。容差内只接受已加载、有安全支撑及身体净空的格；半砖按真实支撑高度完成读回。
-- `moveTo` 可带 `motion` 与显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。当前所有 mind 侧普通移动都带 `motion`；`goto` 仅保留给 `hazards / unstickDig`，`follow` 已删除（无调用方）。
+- `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。所有普通移动和授权 `unstickDig` 都走 motion；不再有 `motion` 开关或 legacy `goto`。
+- `unstickDig` 是显式 break 白名单：只允许列出的坐标/方块名，核心先挖掘并读回，再执行移动；没有列出的块不可挖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
 - 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。
 - 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。
-- **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，第二遍按 `health - 6 + 3` 允许安全下落（3 格摔落伤害约 0–1，保留至少 3 颗心）。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。**当前这条仍由 legacy `goto` 执行，尚未迁入 motion。**
-- **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。`lethal_fall` 在安全预算之外再开一遍搜索；`void/lava` 只接受 6 格内的致命目标，执行受控 step-off，死亡后 order 以 `DIED_IN_ALLOWED_HAZARD` 终止，不伪装成功、不重试。`unloaded` 永不允许。**当前仍由 legacy `goto` 执行。**
-- 终态 `observed` 包含 `hazards / hazardPass / safeFallPass / safeFall / healthBefore / healthAfter`；致命边以真实 `died` 事件为准。
+- **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，motion 第二遍按 `health - 6 + 3` 允许安全下落。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。
+- **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。这部分**不在 motion 核心**：`go` 把显式 lava/void 目标，以及目标低于当前 >2 格且允许 `lethal_fall` 的请求交给 Agent 层 `fatal` driver；driver 做受控 step-off，只有真实 `died` 才成功；`unloaded` 永不允许。
+- 终态 `observed` 包含 `safeFallPass / safeFall / healthBefore / healthAfter`；致命边由 `fatal` driver 的 `died` 证据判断。
 - **`traverse` order**：Agent 显式下发的临时通行辅助，不是 `build` 最终几何：
   - `mode:"bridge"`：同高、正方向、1 格宽直线；driver 校验几何/材料后委托 `moveTo { motion, allowPlace, material }`，由 motion `Bridge` 执行；
   - `mode:"scaffold"`：垂直垫脚柱——必须同 x/z 列，向上 `dy` 级，最多 8 级；driver 校验列/材料后委托 motion `Pillar`；provider `pillarUp`/`pillar` 已删除;

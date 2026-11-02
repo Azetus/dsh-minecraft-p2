@@ -232,6 +232,56 @@ describe('PathExecutor', () => {
     expect(result.code).toBe('UNREACHABLE')
   })
 
+  it('breaks an explicitly authorized body cell before traversing', () => {
+    const world = new class extends FixtureWorld {
+      override dig(p: Cell): void {
+        super.dig(p)
+        this.blocks.set(`${p.x},${p.y},${p.z}`, rawBlock('air', []))
+      }
+    }()
+    for (let z = 0; z <= 1; z += 1) {
+      for (let y = 64; y <= 65; y += 1) world.blocks.set(`0,${y},${z}`, rawBlock('air', []))
+    }
+    world.blocks.set('0,63,0', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,63,1', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,64,1', { ...rawBlock('stone', FULL_CUBE), hardness: 2, diggable: true })
+    movePos(world, { x: 0, y: 64, z: 0 })
+    const source = contextFor(world, {
+      allowBreak: true,
+      breakTargets: [{ x: 0, y: 64, z: 1, name: 'stone' }],
+      allowDoor: true,
+    })
+    const move = new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 })
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+    expect(move.toBreak(source.next())).toEqual([{ x: 0, y: 64, z: 1 }])
+
+    const executor = new PathExecutor([move], () => source.next())
+    expect(executor.tick(0).state).toBe('running')
+    expect(world.actions).toContain('dig:0,64,1')
+    expect(executor.tick(1).state).toBe('running')
+    movePos(world, { x: 0, y: 64, z: 1 })
+    expect(executor.tick(2).state).toBe('succeeded')
+  })
+
+  it('refuses to break a cell without an explicit target', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,1', { ...rawBlock('stone', FULL_CUBE), hardness: 2, diggable: true })
+    const source = contextFor(world, { allowBreak: true })
+    const move = new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 })
+    expect(move.cost(source.next())).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('allows a health-budgeted fall only when the budget is supplied', () => {
+    const world = new FixtureWorld()
+    for (let y = 60; y <= 66; y += 1) world.blocks.set(`1,${y},0`, rawBlock('air', []))
+    world.blocks.set('1,59,0', rawBlock('stone', FULL_CUBE))
+    movePos(world, { x: 0, y: 64, z: 0 })
+    const normal = new FallMove({ x: 0, y: 64, z: 0 }, { x: 1, y: 60, z: 0 })
+    expect(normal.cost(contextFor(world).next())).toBe(Number.POSITIVE_INFINITY)
+    const safe = contextFor(world, { safeFallBudget: 6 })
+    expect(normal.cost(safe.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+  })
+
   it('releases every input on cancel', () => {
     const { world, source, moves } = twoStep()
     const executor = new PathExecutor(moves, () => source.next())
