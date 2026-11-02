@@ -31,6 +31,7 @@ export async function approachBlock(
     range: options.range ?? 1,
     intent: 'interact',
     timeoutMs: options.timeoutMs ?? 15_000,
+    motion: true,
   })
   if (moved.state === 'ok') return { ok: true }
   return {

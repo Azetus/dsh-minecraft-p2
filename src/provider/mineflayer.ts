@@ -6,6 +6,7 @@ import { Vec3 } from 'vec3'
 import { configureNavigation, NavigationRun, setNavigationDoorMode } from './navigation.ts'
 import { MotionRun } from '../motion/mineflayer/run.ts'
 import { defaultConstraints } from '../motion/model/types.ts'
+import { attachBlockTags } from '../port/mineflayer/block-tags.ts'
 import { parseHazardPolicy, parseUnstickBlocks } from '../port/terrain.ts'
 
 /**
@@ -53,6 +54,9 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
     version: options.version ?? '1.21.1',
     hideErrors: false,
   })
+  // The tags packet can arrive before spawn (and before the registry exists),
+  // so attach immediately and let the index map lazily.
+  attachBlockTags(bot)
   const timeout = options.timeoutMs ?? 15_000
   return await new Promise<Bot>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -130,7 +134,6 @@ export type PathfinderRuntime = {
   Movements: new (bot: Bot) => Movements
   goals: {
     GoalNear: new (x: number, y: number, z: number, range: number) => unknown
-    GoalFollow: new (entity: unknown, distance: number) => unknown
   }
 }
 
@@ -1204,7 +1207,7 @@ class MineflayerActHandle implements ActHandle {
     if (this.timer !== undefined) clearTimeout(this.timer)
     if (this.name === 'dig') attempt(() => this.bot.stopDigging())
     if (this.name === 'use') attempt(() => this.bot.deactivateItem())
-    if (this.name === 'goto' || this.name === 'follow') {
+    if (this.name === 'goto') {
       if (this.navigationRun !== undefined) {
         if (!this.navigationRun.stop()) unknown = true
       } else attempt(() => this.stopNavigation())
@@ -1260,7 +1263,7 @@ class MineflayerActHandle implements ActHandle {
   }
 
   private releaseObserved(): boolean {
-    if (this.name === 'goto' || this.name === 'follow' || this.name === 'motion-goto') {
+    if (this.name === 'goto' || this.name === 'motion-goto') {
       const pathfinder = (this.bot as unknown as { pathfinder?: { isMoving?: () => boolean } }).pathfinder
       // `stop()` only sets a flag; the path is cleared on the next physics tick.
       if (typeof pathfinder?.isMoving === 'function' && pathfinder.isMoving() === true) return false
@@ -1530,44 +1533,6 @@ class MineflayerActHandle implements ActHandle {
             { constraints, setDoorMode: enabled => setNavigationDoorMode(movements, enabled) },
           )
           this.motionRun.start()
-          return
-        }
-        case 'follow': {
-          const library = loadPathfinderRuntime()
-          const nav = this.navigation()
-          if (nav === undefined || library === undefined) {
-            this.failed = new Error('pathfinding is not available in this provider')
-            this.failedCode = 'GOTO_UNAVAILABLE'
-            return
-          }
-          const entity = this.entityById(this.args.entityId)
-          if (entity === undefined) {
-            this.failed = new Error(`no entity with id ${String(this.args.entityId)}`)
-            this.failedCode = 'FOLLOW_NO_TARGET'
-            return
-          }
-          const distance = typeof this.args.distance === 'number' ? Math.max(1, this.args.distance) : 3
-          const timeout = typeof this.args.timeoutMs === 'number' ? this.args.timeoutMs : 60_000
-          nav.pathfinder.setMovements(this.movements)
-          nav.pathfinder.setGoal(new library.goals.GoalFollow(entity as never, distance), true)
-          const started = Date.now()
-          const check = (): void => {
-            if (this.cancelled || this.completed || this.failed !== undefined) return
-            if (this.bot.entities[entity.id] === undefined) {
-              this.stopNavigation()
-              this.failed = new Error('follow target is no longer loaded')
-              this.failedCode = 'FOLLOW_TARGET_LOST'
-              return
-            }
-            if (Date.now() - started > timeout) {
-              this.stopNavigation()
-              this.failed = new Error(`follow timed out after ${timeout}ms`)
-              this.failedCode = 'FOLLOW_TIMEOUT'
-              return
-            }
-            this.timer = setTimeout(check, 300)
-          }
-          this.timer = setTimeout(check, 300)
           return
         }
         case 'stop': {

@@ -121,3 +121,16 @@
 
 ### 6.3 消失不等于死亡
 - **规则**：战斗只有 `entityDead` 才报 `killed`；目标离开查询范围报 `targetLost`，并等待短窗口收迟到死亡事件。
+
+## 7. 服务端 block tags（P2Motion，1.21.1 / 26.1 实测）
+
+### 7.1 tags 包的时序与映射
+- **现象**：`tags` 可能在 spawn/registry 就绪之前到达；监听晚了就拿不到。
+- **机理**：`minecraft-protocol` 按包名 emit；mineflayer 不消费 `tags`，`bot.registry` 在连接流程后段才设置。
+- **规则**：`createBot()` 后立即监听；先存 `blockId`，registry 就绪后再映射；`tagsReady=false` 时走名字 fallback，不能把“未就绪”当成“无 tag”。断线重建索引。
+
+### 7.2 tag 的语义边界
+- **规则**：tag entries 是 **block id**（`registry.blocks[id]`），不是 state id。
+- **规则**：`minecraft:replaceable` 只表示“可被放置替换”，不等于“可穿过”；行走仍看 collision。
+- **规则**：`minecraft:doors` 包含铁门；可开用 `mob_interactable_doors`/`wooden_doors`，铁门用 `doors && !openable`。
+- **规则**：没有通用 hazard tag；危险仍需最小名表兜底（lava/cactus/sweet_berry/magma/powder_snow/pointed_dripstone 等）。

@@ -1,6 +1,6 @@
 # 运动模块（Motion）
 
-> 状态：P0/P1/P2 已实现；P1/P2 已用真实服务端 + 当前适配器跑通移动矩阵。P3 移动能力补齐、P4 战斗待做。
+> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵；方块语义优先读服务端 block tags。
 > 范围是**原版兼容环境**：不安装、不依赖任何客户端 mod；P2 通过当前唯一适配器接入，执行基线为原版移动与战斗规则。
 > 本文只描述运动模块自身的契约与实现边界，不记录外部参考项目的名称或代码。
 
@@ -47,6 +47,7 @@ type RawBlock = {
   name: string
   state: Record<string, string>
   collision?: readonly CollisionBox[]   // 来自方块状态；缺失 = 未知
+  serverTags?: ReadonlySet<string>      // 服务端 block tags；undefined = 尚未就绪
 }
 type MotionWorld = {
   self(): { pos; velocity; yaw; pitch; onGround; sneaking; sprinting; health }
@@ -71,6 +72,35 @@ type MotionWorld = {
 - 语义（危险、门、可攀爬、可替换等）来自可替换的 `BlockClassifier`：规则只读标签，不读方块名；原版名称表集中在 `semantics/vanilla.ts`，换内容集不需要改规则或搜索。
 - 液体、危险方块、门/栅栏门等用标签/状态判断；未知一律按不可用处理。
 - 所有查询在一次规划/执行快照内保持一致；执行中重新读取时以新快照为准。
+
+### 2.1.1 服务端 block tags（tag 优先）
+
+`minecraft-data` 没有 block tag 数据，但服务端会下发原版 `tags` 包。适配器在 `createBot()` 后立即监听 `bot._client` 的 `tags`，按连接维护 `BlockTagIndex`：
+
+- 原始数据是 `Map<tagName, Set<blockId>>`；`bot.registry` 可用后再映射为 `blockId -> Set<tagName>`；
+- `tagsReady=false` 时 `serverTags` 为 `undefined`，分类器走名字/后缀 fallback；不能把“没有 tags”当作“没有危险”；
+- 映射后的空集合表示“已就绪且该方块没有 tag”，与“未就绪”区分；
+- 每个 bot 一份索引，断线重建；不引入进程全局版本状态。
+
+分类优先级：
+
+| 语义 | 服务端 tag | fallback |
+|---|---|---|
+| 门 | `minecraft:doors` | `_door` 后缀 |
+| 可开 | `minecraft:mob_interactable_doors` / `minecraft:wooden_doors` | 非 iron 的 `_door` |
+| 栅栏门 | `minecraft:fence_gates` | `_fence_gate` 后缀 |
+| 可攀爬 | `minecraft:climbable` | CLIMBABLE 小表 |
+| 可替换 | `minecraft:replaceable` | REPLACEABLE 小表 + AIR |
+| 火/营火危险 | `minecraft:fire` / `minecraft:campfires` | HAZARD_NAMES 小表 |
+| 其他危险 | 无通用 tag | HAZARD_NAMES（最小表） |
+| 固体 | collision 非空 | `solid` / legacy 名表 |
+
+约束：
+
+- `minecraft:replaceable` 只表示“可被放置替换”，**不等于可穿过**；行走仍以 collision 为准。
+- 上锁门用 `doors && !openable` 判定，未识别的新红石门不会被误开。
+- tag 缺失或未知时，危险结论保持 `unknown`，不得默认安全。
+- `pale_oak_door` 在 26.1 由 `wooden_doors`/`mob_interactable_doors` 自动识别；1.21.1 数据没有该方块。
 
 ### 2.2 共享谓词
 
@@ -266,6 +296,8 @@ interface Move {
 - **当前证据（P1/P2）**：真实服务端 + 当前适配器，平地/台阶/门/2 格落差通过，实际脚位与目标格一致；1 格缺口按 P1/P2 预期返回 `GOTO_NO_PATH`（Parkour 在 P3）。
 - **当前证据（P3）**：真实服务端 + 当前适配器，1 格缺口（Parkour）、2 格搭桥（放置读回）、2 级垫脚、对角移动通过；搭桥/垫脚的放置格读回为授权材料。
 - **当前证据（P4）**：真实服务端 + 当前适配器，锁定目标在 `entityHurt`/`entityDead` 证据后报 `killed`；被移出查询范围的目标报 `targetLost` 且 `killed=false`。
+- **当前证据（tags）**：1.21.1 实机 `tagsReady=true`，184 个 block tag、1003 个方块；26.1 实机 `tagsReady=true`，248 个 tag、1104 个方块。`oak_door`/`pale_oak_door` 带 `doors/mob_interactable_doors/wooden_doors`，`iron_door` 只有 `doors`，`oak_fence_gate` 带 `fence_gates`，`ladder` 带 `climbable`。
+- **26.1 实机**：同一套矩阵在 26.1 服务端通过 P1/P2、P3、P4；`pale_oak_door` 由 tags 自动识别，未使用名字特判。26.1 世界种子不同，但矩阵自建场地，几何结论不依赖原世界生成。
 - **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。
 
 ## 10. 阶段与删除

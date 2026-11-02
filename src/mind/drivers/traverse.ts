@@ -144,7 +144,7 @@ async function moveStand(port: ClientPort, stand: Vec3): Promise<DriverResult | 
   const foot = port.blockAt(stand)
   if (foot === null || !foot.loaded) return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
   if (!isAir(foot.name)) return { state: 'failed', code: 'TRAVERSE_STAND_OCCUPIED' }
-  const moved = await port.moveTo(stand, { range: 0, exact: true, timeoutMs: 10_000 })
+  const moved = await port.moveTo(stand, { range: 0, exact: true, timeoutMs: 10_000, motion: true })
   if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'TRAVERSE_MOVE_FAILED' }
   return undefined
 }

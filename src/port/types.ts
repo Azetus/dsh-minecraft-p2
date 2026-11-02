@@ -16,6 +16,12 @@ export type BlockInfo = {
   solid?: boolean
   /** Local collision AABBs [minX,minY,minZ,maxX,maxY,maxZ]; [] is non-colliding. */
   collision?: number[][]
+  /**
+   * Raw server block tags for this block (`minecraft:wooden_doors`, ...).
+   * Undefined means the adapter has not received/ mapped tags yet, never
+   * "no tags"; the semantic classifier falls back to name rules in that case.
+   */
+  serverTags?: ReadonlySet<string>
   /** Set by `blocksIn` entries; `blockAt` already knows the position. */
   pos?: Vec3
   /** Adapter-provided harvest metadata; omitted when the adapter cannot tell. */

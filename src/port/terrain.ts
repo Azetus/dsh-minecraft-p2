@@ -1,12 +1,9 @@
 import { isRecord } from '../contracts/protocol.ts'
+import { AIR_NAMES, isLegacySolidName, vanillaClassifier } from '../motion/model/semantics/vanilla.ts'
+import type { BlockTag, CollisionBox } from '../motion/model/types.ts'
 import type { BlockInfo, Vec3 } from './types.ts'
 
 /** Shared collision vocabulary; no client objects or pathfinder types. */
-export const WALK_HAZARDS: ReadonlySet<string> = new Set([
-  'lava', 'fire', 'soul_fire', 'magma_block', 'cactus', 'sweet_berry_bush',
-  'campfire', 'soul_campfire', 'powder_snow', 'wither_rose',
-])
-
 export type Standability = {
   state: 'valid' | 'unknown' | 'blocked' | 'unsafe'
   position?: Vec3
@@ -76,26 +73,45 @@ export function unstickObstacle(read: (p: Vec3) => BlockInfo | null, at: Vec3, f
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
     const neighbour = read({ x: at.x + dx, y: at.y + dy, z: at.z + dz })
     if (neighbour === null || !neighbour.loaded) return 'boundary-unloaded'
-    if (neighbour.name === 'water' || WALK_HAZARDS.has(neighbour.name) || neighbour.state?.waterlogged === 'true') return 'fluid-or-hazard-boundary'
+    if (isWaterBlock(neighbour) || isHazardBlock(neighbour) || neighbour.state?.waterlogged === 'true') return 'fluid-or-hazard-boundary'
     if (/torch|rail|ladder|redstone|lever|button|sign|scaffolding/u.test(neighbour.name)) return 'attached-structure'
   }
   return undefined
 }
 
-const AIR = new Set(['air', 'cave_air', 'void_air'])
-const FULL_CUBES = new Set(['stone', 'dirt', 'grass_block', 'cobblestone', 'deepslate', 'sand', 'gravel'])
+const FULL_CUBE_SHAPE = [[0, 0, 0, 1, 1, 1]]
+
+/** Classify once per read; semantic tables are shared with the motion rules. */
+function semanticTags(block: BlockInfo): readonly BlockTag[] {
+  return vanillaClassifier.classify({
+    loaded: block.loaded,
+    name: block.name,
+    state: block.state ?? {},
+    ...(block.collision === undefined ? {} : { collision: block.collision as unknown as readonly CollisionBox[] }),
+    ...(block.serverTags === undefined ? {} : { serverTags: block.serverTags }),
+  })
+}
+
+export function isHazardBlock(block: BlockInfo | null): boolean {
+  if (block === null || !block.loaded) return false
+  const tags = semanticTags(block)
+  return tags.includes('hazard') || tags.includes('lava')
+}
+
+export function isWaterBlock(block: BlockInfo | null): boolean {
+  if (block === null || !block.loaded) return false
+  return semanticTags(block).includes('water')
+}
 
 function shapes(block: BlockInfo): number[][] | undefined {
   if (block.collision !== undefined) return block.collision
-  if (block.solid === false || AIR.has(block.name)) return []
-  if (block.solid === true || FULL_CUBES.has(block.name) || /_(planks|log)$/u.test(block.name)) {
-    return [[0, 0, 0, 1, 1, 1]]
-  }
+  if (block.solid === false || AIR_NAMES.has(block.name)) return []
+  if (block.solid === true || isLegacySolidName(block.name)) return FULL_CUBE_SHAPE
   return undefined
 }
 
 export function clearCell(block: BlockInfo | null): boolean {
-  return block !== null && block.loaded && !WALK_HAZARDS.has(block.name) && block.name !== 'water'
+  return block !== null && block.loaded && !isHazardBlock(block) && !isWaterBlock(block)
     && shapes(block)?.length === 0
 }
 
@@ -133,7 +149,7 @@ export function standingAt(read: (p: Vec3) => BlockInfo | null, cell: Vec3): Sta
   const floor = { ...p, y: p.y - 1 }
   const support = read(floor)
   if (support === null || !support.loaded) return { state: 'unknown', reason: 'support-unloaded' }
-  if (WALK_HAZARDS.has(support.name) || support.name === 'water') {
+  if (isHazardBlock(support) || isWaterBlock(support)) {
     return { state: 'unsafe', reason: 'unsafe-support', block: { position: floor, name: support.name } }
   }
   const supportShapes = shapes(support)
@@ -147,7 +163,7 @@ export function standingAt(read: (p: Vec3) => BlockInfo | null, cell: Vec3): Sta
     const at = { ...p, y }
     const block = read(at)
     if (block === null || !block.loaded) return { state: 'unknown', reason: 'body-unloaded' }
-    if (WALK_HAZARDS.has(block.name) || block.name === 'water') {
+    if (isHazardBlock(block) || isWaterBlock(block)) {
       return { state: 'unsafe', reason: 'unsafe-body', block: { position: at, name: block.name } }
     }
     const collision = shapes(block)

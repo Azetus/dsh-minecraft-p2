@@ -112,6 +112,7 @@ export async function pickupNearby(
         range: 1,
         intent: 'interact',
         timeoutMs: MOVE_TIMEOUT_MS,
+        motion: true,
       })
       moves.push({
         target: { ...drop.position },
@@ -135,6 +136,7 @@ export async function pickupNearby(
             range: 1,
             intent: 'interact',
             timeoutMs: MOVE_TIMEOUT_MS,
+            motion: true,
           })
           moves.push({
             target: cell,

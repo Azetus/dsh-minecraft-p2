@@ -1,6 +1,7 @@
 import type { Bot } from 'mineflayer'
 import { Vec3 as Vec3Class } from 'vec3'
 
+import { blockTagsFor, type BlockTagIndex } from '../../port/mineflayer/block-tags.ts'
 import type {
   Box,
   Cell,
@@ -13,6 +14,7 @@ import type {
 } from '../model/types.ts'
 
 type BlockLike = {
+  type?: number
   name: string
   boundingBox?: string
   shapes?: number[][]
@@ -36,7 +38,11 @@ type EntityLike = {
  * actions are fire-and-forget: the model observes the result on a later tick.
  */
 export class MineflayerMotionWorld implements MotionWorld {
-  constructor(private readonly bot: Bot) {}
+  private readonly tags: BlockTagIndex
+
+  constructor(private readonly bot: Bot) {
+    this.tags = blockTagsFor(bot)
+  }
 
   self(): SelfView {
     const entity = this.bot.entity as unknown as {
@@ -70,11 +76,13 @@ export class MineflayerMotionWorld implements MotionWorld {
     const properties = typeof block.getProperties === 'function' ? block.getProperties() : {}
     const state: Record<string, string> = {}
     for (const [key, value] of Object.entries(properties)) state[key] = String(value)
+    const serverTags = typeof block.type === 'number' ? this.tags.tagsFor(block.type) : undefined
     return {
       loaded: true,
       name: block.name,
       state,
       ...(block.shapes === undefined ? {} : { collision: block.shapes as unknown as readonly CollisionBox[] }),
+      ...(serverTags === undefined ? {} : { serverTags }),
     }
   }
 

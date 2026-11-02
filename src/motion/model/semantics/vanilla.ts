@@ -9,7 +9,7 @@ import type { BlockClassifier, BlockTag, RawBlock } from '../types.ts'
  * the adapter's block state, so a classifier cannot turn a solid block into air.
  */
 
-const HAZARDS: ReadonlySet<string> = new Set([
+export const HAZARD_NAMES: ReadonlySet<string> = new Set([
   'lava',
   'fire',
   'soul_fire',
@@ -25,7 +25,7 @@ const HAZARDS: ReadonlySet<string> = new Set([
   'pointed_dripstone',
 ])
 
-const CLIMBABLE: ReadonlySet<string> = new Set([
+export const CLIMBABLE: ReadonlySet<string> = new Set([
   'ladder',
   'vine',
   'scaffolding',
@@ -37,7 +37,7 @@ const CLIMBABLE: ReadonlySet<string> = new Set([
   'cave_vines_plant',
 ])
 
-const REPLACEABLE: ReadonlySet<string> = new Set([
+export const REPLACEABLE: ReadonlySet<string> = new Set([
   'air',
   'cave_air',
   'void_air',
@@ -65,29 +65,54 @@ const REPLACEABLE: ReadonlySet<string> = new Set([
   'beetroots',
 ])
 
-const LIQUIDS: ReadonlySet<string> = new Set(['water', 'bubble_column'])
+export const LIQUIDS: ReadonlySet<string> = new Set(['water', 'bubble_column'])
+
+export const AIR_NAMES: ReadonlySet<string> = new Set(['air', 'cave_air', 'void_air'])
+
+/** Legacy geometry fallback only for adapters that omit collision shapes. */
+export const LEGACY_SOLID_NAMES: ReadonlySet<string> = new Set([
+  'stone', 'dirt', 'grass_block', 'cobblestone', 'deepslate', 'sand', 'gravel',
+])
+
+export function isLegacySolidName(name: string): boolean {
+  return LEGACY_SOLID_NAMES.has(name) || /_(planks|log)$/u.test(name)
+}
 
 function canonical(name: string): string {
   return name.replace(/^minecraft:/u, '')
 }
 
+/**
+ * Tag-first vanilla semantics. Server block tags are authoritative when
+ * present; the small name tables are the offline / tags-not-ready fallback and
+ * cover categories tags do not express (hazards, iron locks, magma).
+ */
 export const vanillaClassifier: BlockClassifier = {
   classify(block: RawBlock): readonly BlockTag[] {
     const name = canonical(block.name)
     const tags: BlockTag[] = []
-    if (REPLACEABLE.has(name)) tags.push('replaceable')
+    const server = block.serverTags
+    const tagsKnown = server !== undefined
+    const has = (tag: string): boolean => server?.has(`minecraft:${tag}`) === true || server?.has(tag) === true
+
+    if (tagsKnown ? has('replaceable') || AIR_NAMES.has(name) : REPLACEABLE.has(name)) tags.push('replaceable')
     if (LIQUIDS.has(name)) tags.push('water')
     if (name === 'lava') tags.push('lava')
-    if (HAZARDS.has(name) || name.endsWith('_fire')) tags.push('hazard')
+    if (has('fire') || has('campfires') || HAZARD_NAMES.has(name) || name.endsWith('_fire')) tags.push('hazard')
     if (name === 'magma_block') tags.push('magma')
-    if (CLIMBABLE.has(name)) tags.push('climbable')
-    if (name.endsWith('_door')) {
+    if (tagsKnown ? has('climbable') : CLIMBABLE.has(name)) tags.push('climbable')
+
+    const isDoor = tagsKnown ? has('doors') : name.endsWith('_door')
+    if (isDoor) {
       tags.push('door')
-      // Iron doors need redstone; wooden and copper doors open by hand.
-      if (name === 'iron_door') tags.push('locked')
-      else tags.push('openable')
+      const openable = tagsKnown
+        ? has('mob_interactable_doors') || has('wooden_doors')
+        : name !== 'iron_door'
+      tags.push(openable ? 'openable' : 'locked')
     }
-    if (name.endsWith('_fence_gate')) tags.push('gate', 'openable')
+    const isGate = tagsKnown ? has('fence_gates') : name.endsWith('_fence_gate')
+    if (isGate) tags.push('gate', 'openable')
+
     if (block.collision !== undefined && block.collision.length > 0) tags.push('solid')
     return tags
   },

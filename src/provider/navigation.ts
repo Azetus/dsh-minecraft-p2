@@ -6,14 +6,17 @@ import { Vec3 } from 'vec3'
 import type { JsonValue } from '../contracts/types.ts'
 import {
   clearCell,
+  isHazardBlock,
+  isWaterBlock,
   safeFallDistance,
   safeOneGap,
   standingAt,
   unstickObstacle,
-  WALK_HAZARDS,
   type HazardPolicy,
   type UnstickBlock,
 } from '../port/terrain.ts'
+import { HAZARD_NAMES } from '../motion/model/semantics/vanilla.ts'
+import { blockTagsFor } from '../port/mineflayer/block-tags.ts'
 import type { Vec3 as Point, BlockInfo } from '../port/types.ts'
 
 const SLICE_MS = 5
@@ -69,11 +72,15 @@ export function configureNavigation(bot: Bot, movements: Movements): void {
   dropModes.set(movements, dropMode)
   const readCell = (p: Point): BlockInfo | null => {
     const block = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))
-    return block === null ? null : {
+    if (block === null) return null
+    const blockId = (block as unknown as { type?: number }).type
+    const serverTags = typeof blockId === 'number' ? blockTagsFor(bot).tagsFor(blockId) : undefined
+    return {
       name: block.name,
       loaded: true,
       collision: block.shapes,
       state: Object.fromEntries(Object.entries(block.getProperties()).map(([k, v]) => [k, String(v)])),
+      ...(serverTags === undefined ? {} : { serverTags }),
     }
   }
   const getBlock = movements.getBlock.bind(movements)
@@ -84,16 +91,19 @@ export function configureNavigation(bot: Bot, movements: Movements): void {
     if (mode.enabled && manualDoor(block)) { block.safe = true; block.physical = false }
     return block
   }
-  for (const name of WALK_HAZARDS) {
+  for (const name of HAZARD_NAMES) {
     const block = bot.registry.blocksByName[name]
     if (block !== undefined) movements.blocksToAvoid.add(block.id)
   }
   movements.exclusionAreasStep.push(block => {
     if (block.position === undefined) return 100
     const below = bot.blockAt(block.position.offset(0, -1, 0))
-    if (below === null || WALK_HAZARDS.has(below.name)) return 100
+    if (below === null) return 100
+    const belowCell = readCell({ x: below.position.x, y: below.position.y, z: below.position.z })
+    if (isHazardBlock(belowCell)) return 100
     // Do not enter water from land. A bot already in water may swim out.
-    if (block.name === 'water' && !(bot.entity as typeof bot.entity & { isInWater?: boolean }).isInWater) return 100
+    const here = readCell({ x: block.position.x, y: block.position.y, z: block.position.z })
+    if (isWaterBlock(here) && !(bot.entity as typeof bot.entity & { isInWater?: boolean }).isInWater) return 100
     return 0
   })
   const getNeighbors = movements.getNeighbors.bind(movements)
@@ -106,10 +116,7 @@ export function configureNavigation(bot: Bot, movements: Movements): void {
       }
     }
     if (next.parkour) {
-      if (!safeOneGap(p => {
-        const block = bot.blockAt(new Vec3(p.x, p.y, p.z))
-        return block === null ? null : { name: block.name, loaded: true, collision: block.shapes }
-      }, node, next)) return false
+      if (!safeOneGap(readCell, node, next)) return false
       const cost = movements.exclusionStep(movements.getBlock(new Vec3(next.x, next.y, next.z), 0, 0, 0))
       if (cost >= 100) return false
       next.cost += 2 + cost
@@ -126,7 +133,7 @@ export function configureNavigation(bot: Bot, movements: Movements): void {
       const landingCell = { x: next.x, y: next.y, z: next.z }
       if (standingAt(readCell, landingCell).state !== 'valid') return false
       const support = readCell({ x: next.x, y: next.y - 1, z: next.z })
-      if (support === null || !support.loaded || support.name === 'water' || WALK_HAZARDS.has(support.name)) return false
+      if (support === null || !support.loaded || isWaterBlock(support) || isHazardBlock(support)) return false
       for (let y = next.y + 1; y < node.y; y++) {
         const cell = readCell({ x: next.x, y, z: next.z })
         if (cell === null || !clearCell(cell)) return false

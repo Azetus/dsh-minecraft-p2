@@ -24,6 +24,7 @@ import type {
   Vec3,
 } from '../types.ts'
 import { PortErrorCodes, actFailed, actOk, actUnknown } from '../types.ts'
+import { blockTagsFor, type BlockTagIndex } from './block-tags.ts'
 import { WriteGate, staleWriteResult, type WriteToken } from '../write-token.ts'
 
 /** The act half of the provider; the port only starts bounded actions. */
@@ -60,6 +61,7 @@ const ACTION_TIMEOUTS = {
 } as const
 
 type BlockLike = {
+  type?: number
   name: string
   boundingBox?: string
   shapes?: number[][]
@@ -100,6 +102,7 @@ export class MineflayerClientPort implements ClientPort {
   private readonly now: () => number
   private readonly pollIntervalMs: number
   private readonly worldId: string
+  private readonly blockTags: BlockTagIndex
   private suspensionState: SuspensionState = {
     suspended: false,
     at: 0,
@@ -124,6 +127,7 @@ export class MineflayerClientPort implements ClientPort {
     this.now = options.now ?? (() => performance.now())
     this.pollIntervalMs = options.pollIntervalMs ?? 20
     this.worldId = options.worldId ?? 'unknown'
+    this.blockTags = blockTagsFor(bot)
     this.capabilityList = portCapabilities(acts.capabilities)
     this.timeouts = { ...ACTION_TIMEOUTS, ...options.timeouts }
     this.wireEvents()
@@ -168,7 +172,9 @@ export class MineflayerClientPort implements ClientPort {
 
   blockAt(p: Vec3): BlockInfo | null {
     const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
-    return block === null ? null : blockInfo(block, this.bot.registry)
+    if (block === null) return null
+    const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
+    return blockInfo(block, this.bot.registry, serverTags)
   }
 
   identity(): { worldId: string; characterId: string } {
@@ -266,7 +272,8 @@ export class MineflayerClientPort implements ClientPort {
             continue
           }
           if (filter !== undefined && !filter.includes(block.name)) continue
-          result.push({ ...blockInfo(block, this.bot.registry), pos: { x, y, z } })
+          const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
+          result.push({ ...blockInfo(block, this.bot.registry, serverTags), pos: { x, y, z } })
         }
       }
     }
@@ -690,7 +697,7 @@ export function portCapabilities(providerCapabilities: readonly string[]): Capab
   return capabilities
 }
 
-function blockInfo(block: BlockLike, registry?: unknown): BlockInfo {
+function blockInfo(block: BlockLike, registry?: unknown, serverTags?: ReadonlySet<string>): BlockInfo {
   const properties = typeof block.getProperties === 'function' ? block.getProperties() : {}
   const state: Record<string, string> = {}
   for (const [key, value] of Object.entries(properties)) state[key] = String(value)
@@ -707,6 +714,7 @@ function blockInfo(block: BlockLike, registry?: unknown): BlockInfo {
     ...(block.diggable === undefined ? {} : { diggable: block.diggable }),
     ...(block.hardness === undefined ? {} : { hardness: block.hardness }),
     ...(harvestTools === undefined ? {} : { harvestTools }),
+    ...(serverTags === undefined ? {} : { serverTags }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
 }

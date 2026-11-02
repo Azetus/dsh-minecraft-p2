@@ -196,6 +196,54 @@ describe('motion rules: classifier is the only name-aware layer', () => {
     expect(vanillaClassifier.classify(block)).not.toContain('solid')
     expect(vanillaClassifier.classify({ ...block, collision: FULL_CUBE })).toContain('solid')
   })
+
+  it('uses server tags before names for doors and gates', () => {
+    const tagged = (name: string, tags: string[]) => vanillaClassifier.classify({
+      loaded: true,
+      name,
+      state: {},
+      collision: [],
+      serverTags: new Set(tags),
+    })
+    expect(tagged('pale_oak_door', ['minecraft:doors', 'minecraft:wooden_doors']))
+      .toEqual(expect.arrayContaining(['door', 'openable']))
+    expect(tagged('pale_oak_door', ['minecraft:doors']))
+      .toEqual(expect.arrayContaining(['door', 'locked']))
+    expect(tagged('iron_door', ['minecraft:doors']))
+      .toEqual(expect.arrayContaining(['door', 'locked']))
+    expect(tagged('copper_door', ['minecraft:doors', 'minecraft:mob_interactable_doors']))
+      .toEqual(expect.arrayContaining(['door', 'openable']))
+    expect(tagged('oak_fence_gate', ['minecraft:fence_gates']))
+      .toEqual(expect.arrayContaining(['gate', 'openable']))
+  })
+
+  it('uses server tags for climbable, replaceable and fire', () => {
+    const tagged = (tags: string[]) => vanillaClassifier.classify({
+      loaded: true,
+      name: 'mystery_block',
+      state: {},
+      collision: [],
+      serverTags: new Set(tags),
+    })
+    expect(tagged(['minecraft:climbable'])).toContain('climbable')
+    expect(tagged(['minecraft:replaceable'])).toContain('replaceable')
+    expect(tagged(['minecraft:fire'])).toContain('hazard')
+    expect(tagged(['minecraft:campfires'])).toContain('hazard')
+  })
+
+  it('does not fall back to a name suffix when tags are authoritative', () => {
+    const tagged = (name: string, tags: string[]) => vanillaClassifier.classify({
+      loaded: true,
+      name,
+      state: {},
+      collision: [],
+      serverTags: new Set(tags),
+    })
+    // A door-like name with explicit non-door tags is not a door.
+    expect(tagged('oak_door', [])).not.toContain('door')
+    // An unknown name with the doors tag is a door; iron rule stays conservative.
+    expect(tagged('mystery_block', ['minecraft:doors'])).toEqual(expect.arrayContaining(['door', 'locked']))
+  })
 })
 
 describe('motion rules: placement reference and constraints', () => {

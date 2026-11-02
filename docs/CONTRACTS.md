@@ -26,6 +26,8 @@ type BlockInfo = {
   state?: Record<string, string>
   loaded: boolean
   collision?: number[][]
+  /** Adapter-only server block tags; not serialized to the bridge. Undefined = tags not ready. */
+  serverTags?: ReadonlySet<string>
   material?: string
   diggable?: boolean
   hardness?: number
@@ -100,8 +102,9 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 ### 2.1 移动与站位
 
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
+- `serverTags` 是适配器层的服务端 block tags（`ReadonlySet<string>`），不序列化到 bridge；`undefined` 表示 tags 尚未就绪，不是“没有 tag”。
 - `moveTo` 目标为脚下路径格坐标，按格取整；`range` 默认 1、范围 0–8，使用三维格距离。容差内只接受已加载、有安全支撑及身体净空的格；半砖按真实支撑高度完成读回。
-- `moveTo` 可带 `motion` 与显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。`hazards / unstickDig` 仍走现有导航，直到运动模块覆盖。
+- `moveTo` 可带 `motion` 与显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。当前所有 mind 侧普通移动都带 `motion`；`goto` 仅保留给 `hazards / unstickDig`，`follow` 已删除（无调用方）。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。

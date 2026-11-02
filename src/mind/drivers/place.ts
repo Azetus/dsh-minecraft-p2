@@ -131,7 +131,7 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
   if (explicit.length > 0) {
     const attempts: Attempt[] = []
     for (const stand of explicit) {
-      const moved = await port.moveTo(stand, { range: 0.5, timeoutMs: 20_000 })
+      const moved = await port.moveTo(stand, { range: 0.5, timeoutMs: 20_000, motion: true })
       if (moved.state !== 'ok') {
         attempts.push({ stance: stand, move: 'failed', code: moved.code ?? 'PLACE_APPROACH_FAILED', ok: false })
         continue

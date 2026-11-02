@@ -55,6 +55,13 @@ export type RawBlock = {
   name: string
   state: Readonly<Record<string, string>>
   collision?: readonly CollisionBox[]
+  /**
+   * Raw vanilla block tags from the server (`minecraft:wooden_doors`,
+   * `minecraft:replaceable`, ...). The core never reads these names directly;
+   * `BlockClassifier` maps them to semantic tags. Undefined means the adapter
+   * cannot tell (tags not received yet), never "no tags".
+   */
+  serverTags?: ReadonlySet<string>
 }
 
 /** A raw block plus classifier tags; geometry is never rewritten by classification. */

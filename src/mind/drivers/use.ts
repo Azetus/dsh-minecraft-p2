@@ -57,7 +57,7 @@ async function use(ctx: DriverCtx, params: UseParams): Promise<DriverResult> {
     const alreadyAtBed = block !== null && block.loaded && block.name.endsWith('_bed')
       && Math.hypot(self.x - (target.x + 0.5), self.y - (target.y + 0.5), self.z - (target.z + 0.5)) <= 3
     if (!alreadyAtBed) {
-      const moved = await ctx.port.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000 })
+      const moved = await ctx.port.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000, motion: true })
       if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'USE_MOVE_FAILED' }
     }
     if (block !== null && block.loaded && block.name.endsWith('_bed')) {
