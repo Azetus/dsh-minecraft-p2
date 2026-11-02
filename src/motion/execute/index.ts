@@ -9,6 +9,7 @@ export {
 export {
   AscendMove,
   BridgeMove,
+  ClimbExitMove,
   ClimbMove,
   DescendMove,
   DiagonalMove,
@@ -19,13 +20,16 @@ export {
   ParkourMove,
   PLACE_CLEARANCE,
   PillarMove,
+  SwimMove,
   TraverseMove,
   aim,
   cellOf,
   holdForward,
+  isDeeplySubmerged,
   onClimb,
   reached,
   releaseInputs,
+  standingCell,
   yawTo,
 } from './moves.ts'
 export { distance2d, distance3d } from './geometry.ts'

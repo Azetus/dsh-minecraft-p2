@@ -319,7 +319,9 @@ function findPickupCells(
       reach: { horizontal: 3, vertical: 2 },
       accept: (cell, feetY) => canPickupAt({ ...cell, y: feetY }, self, item),
     },
-    { from: cellOf(self.pos) },
+    // A drop floating on water is a real pickup target: keep water cells
+    // eligible here, unlike reflex/escape queries which must stand dry.
+    { from: cellOf(self.pos), dry: false },
   )
   const rank = (candidate: StandCell): number => candidate.reachable === 'yes'
     ? 0

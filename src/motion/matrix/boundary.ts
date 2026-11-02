@@ -15,7 +15,7 @@ import type { FieldGeometry, MatrixBlockSpec, MatrixFill } from './scenarios.ts'
  * `blocked` is a terminal order state, distinguished by the failure code: a
  * planned refusal must be GOTO_NO_PATH.
  */
-export type BoundaryStage = 'guards' | 'climb' | 'water'
+export type BoundaryStage = 'guards' | 'climb' | 'wade' | 'swim'
 
 export type BoundaryExpectation =
   | { state: 'succeeded' }
@@ -55,7 +55,7 @@ const SUCCESS: BoundaryExpectation = { state: 'succeeded' }
 const NO_PATH: BoundaryExpectation = { state: 'blocked', code: 'GOTO_NO_PATH' }
 
 function same(expectation: BoundaryExpectation): Readonly<Record<BoundaryStage, BoundaryExpectation>> {
-  return { guards: expectation, climb: expectation, water: expectation }
+  return { guards: expectation, climb: expectation, wade: expectation, swim: expectation }
 }
 
 function at(origin: Cell, dx: number, dy: number, dz: number): Cell {
@@ -91,6 +91,7 @@ function waterVolume(origin: Cell, x0: number, y0: number, z0: number, x1: numbe
 const CLEAR = (origin: Cell): FieldGeometry['clear'] => ({ min: at(origin, -4, -8, -3), max: at(origin, 4, 10, 12) })
 
 const LADDER = { facing: 'north', waterlogged: 'false' } as const
+const VINE = { north: 'true', up: 'false' } as const
 const SCAFFOLD = { bottom: 'true', distance: '0', waterlogged: 'false' } as const
 const BOTTOM_SLAB = { type: 'bottom', waterlogged: 'false' } as const
 const TOP_SLAB = { type: 'top', waterlogged: 'false' } as const
@@ -122,18 +123,20 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, 0),
     goal: at(origin, 0, 1, 6),
     probes: [at(origin, 0, 0, 3), at(origin, 0, 1, 3), at(origin, -1, 0, 3), at(origin, 0, -1, 3), at(origin, 0, 1, 5), at(origin, 0, 1, 6)],
-    expect: { guards: NO_PATH, climb: NO_PATH, water: SUCCESS },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
     id: 'water-deep-2',
-    title: '2 深水池（无游泳）',
-    proves: 'deep water stays closed: a water column over the head needs a swim controller',
+    title: '2 深水池（swim 前）',
+    proves: 'deep water stays closed under wade; the swim profile opens it (fallback pass)',
     origin,
     clear: CLEAR(origin),
     fills: [
-      fill(origin, -2, 0, -1, 2, 0, 1, 'stone'),
-      fill(origin, -2, 0, 5, 2, 0, 7, 'stone'),
+      // Banks run down to the pool floor: a one-block-thick bank leaks and the
+      // live water level drops, which invalidates the planned surface.
+      fill(origin, -2, -2, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -2, 5, 2, 0, 7, 'stone'),
       fill(origin, -2, -2, 2, 2, -2, 4, 'stone'),
       fill(origin, -2, 0, 2, -2, 2, 4, 'stone'),
       fill(origin, 2, 0, 2, 2, 2, 4, 'stone'),
@@ -142,7 +145,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, 0),
     goal: at(origin, 0, 1, 6),
     probes: [at(origin, 0, 0, 3), at(origin, 0, -1, 3), at(origin, 0, 1, 6)],
-    expect: same(NO_PATH),
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: SUCCESS },
   })
 
   fields.push({
@@ -164,7 +167,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 2, 0),
     goal: at(origin, 0, 0, 3),
     probes: [at(origin, 0, 1, 1), at(origin, 0, 0, 2), at(origin, 0, 1, 2), at(origin, 0, 0, 3), at(origin, 0, 1, 3), at(origin, 0, -1, 3)],
-    expect: { guards: NO_PATH, climb: NO_PATH, water: SUCCESS },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -204,7 +207,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, 0),
     goal: at(origin, 0, 1, 6),
     probes: [at(origin, 0, 0, 3), at(origin, 0, 1, 3), at(origin, 0, 0, 2)],
-    expect: { guards: NO_PATH, climb: NO_PATH, water: SUCCESS },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -252,7 +255,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, -1),
     goal: at(origin, 0, 4, 1),
     probes: [at(origin, 0, 1, 0), at(origin, 0, 3, 0), at(origin, 0, 4, 0), at(origin, 0, 4, 1)],
-    expect: { guards: NO_PATH, climb: SUCCESS, water: SUCCESS },
+    expect: { guards: NO_PATH, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -277,7 +280,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 4, -1),
     goal: at(origin, 0, 1, 0),
     probes: [at(origin, 0, 3, -1), at(origin, 0, 4, 0), at(origin, 0, 2, 0), at(origin, 0, 1, 0)],
-    expect: { guards: NO_PATH, climb: SUCCESS, water: SUCCESS },
+    expect: { guards: NO_PATH, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -304,7 +307,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
   fields.push({
     id: 'ladder-top-step-up',
     title: '梯顶再上一格',
-    proves: 'stepping up from a ladder top stays closed (Ascend does not start on climbable)',
+    proves: 'ClimbExitMove: jump off a ladder top diagonally onto a ledge one block higher',
     origin,
     clear: CLEAR(origin),
     fills: [
@@ -320,7 +323,54 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 1, -1),
     goal: at(origin, 0, 5, 1),
     probes: [at(origin, 0, 4, 0), at(origin, 0, 4, 1), at(origin, 0, 5, 1)],
-    expect: same(NO_PATH),
+    expect: { guards: NO_PATH, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
+  })
+
+  fields.push({
+    id: 'vine-up',
+    title: '藤蔓上行',
+    proves: 'vines are climbable by tag and passable, so a vine column behaves like a ladder',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 3, 'stone'),
+      fill(origin, 0, 1, 1, 0, 4, 1, 'stone'),
+    ],
+    blocks: [
+      spec(origin, 0, 1, 0, 'vine', VINE),
+      spec(origin, 0, 2, 0, 'vine', VINE),
+      spec(origin, 0, 3, 0, 'vine', VINE),
+      spec(origin, 0, 4, 0, 'vine', VINE),
+    ],
+    start: at(origin, 0, 1, -1),
+    goal: at(origin, 0, 5, 1),
+    probes: [at(origin, 0, 4, 0), at(origin, 0, 4, 1), at(origin, 0, 5, 1)],
+    expect: { guards: NO_PATH, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
+  })
+
+  fields.push({
+    id: 'ladder-second-floor',
+    title: '梯子穿洞进二层',
+    proves: 'the standard two-floor layout (ladder through a ceiling hole) is reachable',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 3, 'stone'),
+      // Ceiling with a hole at the ladder column, so the second floor top is one
+      // block above the ladder top.
+      fill(origin, -2, 3, -1, 2, 3, 3, 'stone'),
+      fill(origin, 0, 3, 0, 0, 3, 0, 'air'),
+      fill(origin, 0, 1, 1, 0, 2, 1, 'stone'),
+    ],
+    blocks: [
+      spec(origin, 0, 1, 0, 'ladder', LADDER),
+      spec(origin, 0, 2, 0, 'ladder', LADDER),
+      spec(origin, 0, 3, 0, 'ladder', LADDER),
+    ],
+    start: at(origin, 0, 1, -1),
+    goal: at(origin, 1, 4, 0),
+    probes: [at(origin, 0, 3, 0), at(origin, 1, 3, 0), at(origin, 1, 4, 0)],
+    expect: { guards: NO_PATH, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
   })
 
   // ------------------------------------------------------------ scaffolding ---
@@ -433,7 +483,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3)],
     // Pre-fix analysis: the stair cell was not standable, so no edge reached it.
     baseline: NO_PATH,
-    expect: { guards: SUCCESS, climb: SUCCESS, water: SUCCESS },
+    expect: { guards: SUCCESS, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -447,7 +497,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     start: at(origin, 0, 2, 3),
     goal: at(origin, 0, 1, 0),
     probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 0, 1, 0)],
-    expect: { guards: SUCCESS, climb: SUCCESS, water: SUCCESS },
+    expect: { guards: SUCCESS, climb: SUCCESS, wade: SUCCESS, swim: SUCCESS },
   })
 
   fields.push({
@@ -466,7 +516,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 1, 2, 3), at(origin, 1, 3, 3)],
     // Pre-fix analysis: planned, then the 1.5 jump failed -> GOTO_STUCK.
     baseline: { state: 'blocked', code: 'GOTO_STUCK' },
-    expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: NO_PATH },
   })
 
   fields.push({
@@ -510,7 +560,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     authorization: { allowPlace: true, material: 'dirt' },
     // Pre-fix analysis: planned, then the placement height was never reached.
     baseline: { state: 'blocked', code: 'GOTO_STUCK' },
-    expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: NO_PATH },
   })
 
   fields.push({
@@ -526,7 +576,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     probes: [at(origin, 0, 3, 1), at(origin, 0, 1, 2), at(origin, 0, 2, 2)],
     // Pre-fix analysis: a half-height landing was allowed, the drop landed at 0.5.
     baseline: { state: 'succeeded' },
-    expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: NO_PATH },
   })
 
   fields.push({
@@ -544,7 +594,7 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     goal: at(origin, 0, 2, 4),
     probes: [at(origin, 0, 1, 0), at(origin, 0, 1, 1), at(origin, 0, 2, 2), at(origin, 0, 2, 4)],
     authorization: { allowParkour: true },
-    expect: { guards: NO_PATH, climb: NO_PATH, water: NO_PATH },
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: NO_PATH },
   })
 
   // ------------------------------------------- partial-support physics ---
@@ -634,6 +684,58 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     goal: at(origin, 1, 1, 3),
     probes: [at(origin, 1, 0, 3), at(origin, 1, 1, 3)],
     expect: same(NO_PATH),
+  })
+
+  // ----------------------------------------------------------------- swim ---
+  fields.push({
+    id: 'swim-lake-5wide',
+    title: '5 格宽湖面横渡',
+    proves: 'the swim profile crosses a wide surface without diving or drowning',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, -2, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -2, 7, 2, 0, 9, 'stone'),
+      fill(origin, -2, -2, 2, 2, -2, 6, 'stone'),
+      fill(origin, -2, 0, 2, -2, 2, 6, 'stone'),
+      fill(origin, 2, 0, 2, 2, 2, 6, 'stone'),
+    ],
+    blocks: waterVolume(origin, -1, -1, 2, 1, 0, 6),
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 1, 8),
+    probes: [at(origin, 0, 0, 2), at(origin, 0, 0, 4), at(origin, 0, 0, 6), at(origin, 0, 1, 4), at(origin, 0, 0, 7), at(origin, 0, 1, 8)],
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: SUCCESS },
+  })
+
+  fields.push({
+    id: 'swim-fall-2deep',
+    title: '落入 2 深水再上岸',
+    proves: 'a planned fall lands in deep water and the swim exit climbs onto a bank',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      // A one-wide walkway two blocks above the pool, sealed on three sides so a
+      // partial plan cannot walk off into the void.
+      fill(origin, -1, 1, -1, 1, 1, 0, 'stone'),
+      fill(origin, -1, 1, -2, 1, 2, -2, 'stone'),
+      fill(origin, -1, 1, -1, -1, 2, 0, 'stone'),
+      fill(origin, 1, 1, -1, 1, 2, 0, 'stone'),
+      fill(origin, -1, -2, 1, 1, -2, 3, 'stone'),
+      // Pool: near face under the walkway edge, floor and side walls.
+      fill(origin, -1, -1, 0, 1, 0, 0, 'stone'),
+      fill(origin, -2, -1, 1, -2, 2, 3, 'stone'),
+      fill(origin, 2, -1, 1, 2, 2, 3, 'stone'),
+      // Far bank (top 101) with its back wall and sides.
+      fill(origin, -1, 0, 4, 1, 0, 4, 'stone'),
+      fill(origin, -1, 1, 5, 1, 2, 5, 'stone'),
+      fill(origin, -2, 0, 4, -2, 2, 5, 'stone'),
+      fill(origin, 2, 0, 4, 2, 2, 5, 'stone'),
+    ],
+    blocks: waterVolume(origin, -1, -1, 1, 1, 0, 3),
+    start: at(origin, 0, 2, 0),
+    goal: at(origin, 0, 1, 4),
+    probes: [at(origin, 0, 1, 0), at(origin, 0, 0, 1), at(origin, 0, 1, 1), at(origin, 0, 0, 4), at(origin, 0, 1, 4)],
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: SUCCESS },
   })
 
   return fields

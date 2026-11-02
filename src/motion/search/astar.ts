@@ -1,6 +1,7 @@
 import {
   AscendMove,
   BridgeMove,
+  ClimbExitMove,
   ClimbMove,
   DescendMove,
   DiagonalMove,
@@ -8,6 +9,7 @@ import {
   FallMove,
   ParkourMove,
   PillarMove,
+  SwimMove,
   TraverseMove,
 } from '../execute/moves.ts'
 import { cellKey, sameCell } from '../model/block.ts'
@@ -224,6 +226,7 @@ export class MotionSearch {
 export function motionNeighbors(cell: Cell, ctx: MoveContext): Move[] {
   const moves: Move[] = []
   const directions: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  const diagonals: Array<[number, number]> = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
   for (const [dx, dz] of directions) {
     const flat = { x: cell.x + dx, y: cell.y, z: cell.z + dz }
     moves.push(new TraverseMove(cell, flat))
@@ -232,9 +235,17 @@ export function motionNeighbors(cell: Cell, ctx: MoveContext): Move[] {
     // Sideways entry into a ladder/vine column; `cost` rejects non-climbable
     // destinations, so this stays a no-op on ordinary ground.
     moves.push(new ClimbMove(cell, flat))
+    // Water-surface edges (water to water / water to bank); `cost` rejects every
+    // dry source, so this is a no-op on land.
+    moves.push(new SwimMove(cell, flat))
     for (let drop = 2; drop <= Math.max(ctx.constraints.maxFall, ctx.constraints.safeFallBudget ?? 0); drop += 1) {
       moves.push(new FallMove(cell, { x: flat.x, y: cell.y - drop, z: flat.z }))
     }
+  }
+  // Leaving a climbable column onto a ledge one block up; `cost` rejects every
+  // non-climbable source, so this is a no-op on ordinary ground.
+  for (const [dx, dz] of [...directions, ...diagonals]) {
+    moves.push(new ClimbExitMove(cell, { x: cell.x + dx, y: cell.y + 1, z: cell.z + dz }))
   }
   moves.push(new ClimbMove(cell, { x: cell.x, y: cell.y + 1, z: cell.z }))
   moves.push(new ClimbMove(cell, { x: cell.x, y: cell.y - 1, z: cell.z }))

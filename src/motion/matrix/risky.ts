@@ -85,11 +85,17 @@ export function riskyFields(origin: Cell): RiskyField[] {
   fields.push({
     id: 'risky-safe-alternative',
     title: '安全拒绝时给出未校验备选',
-    proves: 'a safe GOTO_NO_PATH carries observed.alternative (available=true) and does not move the body',
+    proves: 'a safe GOTO_NO_PATH (half-height landing) carries observed.alternative (available=true) and does not move the body',
     origin,
-    ...river(origin),
-    start: at(origin, 0, 1, 0),
-    goal: at(origin, 4, 1, 0),
+    // The same ledge/slab geometry as the boundary `slab-fall-onto` row: safe
+    // refuses a half-height landing, while the vanilla node graph accepts it.
+    clear: CLEAR(origin),
+    fills: [fill(origin, 0, 3, -1, 0, 3, 1, 'stone')],
+    blocks: [spec(origin, 0, 1, 2, 'oak_slab', { type: 'bottom', waterlogged: 'false' })],
+    // Start on the platform edge: the only safe move would be the refused
+    // half-height landing, so a GOTO_NO_PATH leaves the body exactly there.
+    start: at(origin, 0, 4, 1),
+    goal: at(origin, 0, 2, 2),
     mode: 'safe-alternative',
     expect: 'no-path',
   })

@@ -26,7 +26,8 @@ const fields = boundaryFields(ORIGIN)
 const STAGES: Record<BoundaryStage, Partial<MotionConstraints>> = {
   guards: { waterProfile: 'none', allowClimb: false },
   climb: { waterProfile: 'none', allowClimb: true },
-  water: { waterProfile: 'wade', allowClimb: true },
+  wade: { waterProfile: 'wade', allowClimb: true },
+  swim: { waterProfile: 'swim', allowClimb: true },
 }
 
 function constraintsFor(field: BoundaryField, stage: BoundaryStage): MotionConstraints {
@@ -65,13 +66,14 @@ describe('boundary matrix shape', () => {
     expect(ids).toEqual([
       'water-wade-1', 'water-deep-2', 'water-fall-2', 'waterlogged-top-slab',
       'waterlogged-bottom-slab', 'water-ladder',
-      'ladder-up', 'ladder-down', 'ladder-beside', 'ladder-top-step-up',
+      'ladder-up', 'ladder-down', 'ladder-beside', 'ladder-top-step-up', 'vine-up', 'ladder-second-floor',
       'scaffold-stand', 'scaffold-through', 'scaffold-place', 'scaffold-stack',
       'slab-bottom-step', 'slab-top-step', 'stair-up', 'stair-down',
       'slab-ascend-impossible', 'slab-ascend-bottom-to-bottom', 'slab-pillar',
       'slab-fall-onto', 'slab-parkour-from',
       'farmland-step', 'farmland-pillar', 'stair-pillar',
       'lava-beside-slab', 'lava-step-into',
+    'swim-lake-5wide', 'swim-fall-2deep',
     ])
   })
 
@@ -84,7 +86,7 @@ describe('boundary matrix shape', () => {
   it('every start cell is standable in its own stage', () => {
     for (const field of fields) {
       const world = buildFixture(field)
-      for (const stage of ['guards', 'climb', 'water'] as const) {
+      for (const stage of ['guards', 'climb', 'wade', 'swim'] as const) {
         const rules = createRules(world, constraintsFor(field, stage))
         expect(rules.standInfo(field.start).state, `${field.id} start (${stage})`).toBe('yes')
       }
@@ -94,7 +96,7 @@ describe('boundary matrix shape', () => {
   it('keeps stairs unstandable at the centre sample and standable over the footprint', () => {
     const stairs = fields.find(field => field.id === 'stair-up')!
     const world = buildFixture(stairs)
-    const rules = createRules(world, resolveConstraints(defaultConstraints(), STAGES.water))
+    const rules = createRules(world, resolveConstraints(defaultConstraints(), STAGES.wade))
     const block = world.blockAt({ x: 0, y: 101, z: 3 })
     expect(block).not.toBeNull()
     if (block === null) return
@@ -119,7 +121,7 @@ describe('boundary matrix shape', () => {
   it('keeps scaffolding top walkable but body-impassable', () => {
     const scaffold = fields.find(field => field.id === 'scaffold-stand')!
     const world = buildFixture(scaffold)
-    const rules = createRules(world, resolveConstraints(defaultConstraints(), STAGES.water))
+    const rules = createRules(world, resolveConstraints(defaultConstraints(), STAGES.wade))
     const block = { x: 0, y: 101, z: 3 }
     expect(rules.canWalkOn(block)).toBe('yes')
     // The body cannot occupy the scaffolding cell (its top plate is in the way),
@@ -133,7 +135,7 @@ describe('boundary matrix shape', () => {
     const wade = fields.find(field => field.id === 'water-wade-1')!
     const world = buildFixture(wade)
     const dry = createRules(world, resolveConstraints(defaultConstraints(), STAGES.climb))
-    const wet = createRules(world, resolveConstraints(defaultConstraints(), STAGES.water))
+    const wet = createRules(world, resolveConstraints(defaultConstraints(), STAGES.wade))
     const cell = { x: 0, y: 100, z: 3 }
     expect(dry.standInfo(cell).state).toBe('no')
     expect(dry.canWalkThrough(cell)).toBe('no')
@@ -142,13 +144,13 @@ describe('boundary matrix shape', () => {
     // Deep water stays closed in every stage.
     const deep = fields.find(field => field.id === 'water-deep-2')!
     const deepWorld = buildFixture(deep)
-    const deepRules = createRules(deepWorld, resolveConstraints(defaultConstraints(), STAGES.water))
+    const deepRules = createRules(deepWorld, resolveConstraints(defaultConstraints(), STAGES.wade))
     expect(deepRules.standInfo({ x: 0, y: 100, z: 3 }).state).toBe('no')
   })
 })
 
 describe('boundary matrix planner verdicts', () => {
-  for (const stage of ['guards', 'climb', 'water'] as const) {
+  for (const stage of ['guards', 'climb', 'wade', 'swim'] as const) {
     describe(`stage ${stage}`, () => {
       for (const field of fields) {
         if (field.verifiedBy === 'executor') {
@@ -162,4 +164,22 @@ describe('boundary matrix planner verdicts', () => {
       }
     })
   }
+})
+
+describe('water replanning', () => {
+  it('plans from the middle of the lake to the far bank', () => {
+    const field = boundaryFields({ x: 0, y: 100, z: 0 }).find(field => field.id === 'swim-lake-5wide')!
+    const world = buildFixture(field)
+    const source = new MotionContextSource(world, resolveConstraints(defaultConstraints(), { waterProfile: 'swim' }))
+    // The body floats at the surface mid-lake, so the feet cell is the surface.
+    const start = { x: field.start.x, y: field.start.y - 1, z: field.start.z + 4 }
+    const search = new MotionSearch(start, field.goal, () => source.next(), { sliceMs: 50, timeoutMs: 2_000, maxNodes: 20_000 })
+    let result = search.step(Date.now())
+    let guard = 0
+    while (result.status === 'running' && guard < 2_000) {
+      result = search.step(Date.now())
+      guard += 1
+    }
+    expect(result.status, JSON.stringify({ start, goal: field.goal })).toBe('success')
+  })
 })

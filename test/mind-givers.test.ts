@@ -74,8 +74,46 @@ describe('escape giver', () => {
   })
 
   it('escapes deep water', () => {
-    const result = asCandidate(createEscapeGiver().find(ctx, flatWorld({ self: { inWater: true, onGround: false } })))
+    const deep = new SnapshotWorld({
+      self: self({ inWater: true, onGround: false }),
+      time: { timeOfDay: 1000, worldAge: 100 },
+      entities: [],
+      blocks: [
+        { name: 'stone', loaded: true, pos: { x: 0, y: 62, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 63, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 64, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 65, z: 0 } },
+        // The eye is at y=65; water at y=66 makes the head fully under.
+        { name: 'water', loaded: true, pos: { x: 0, y: 66, z: 0 } },
+        { name: 'stone', loaded: true, pos: { x: 1, y: 64, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 1, y: 65, z: 0 } },
+        // The standable cell at (1,65) needs its whole 1.8-block body loaded;
+        // without y=66 the body check is `unknown`, not a dry target.
+        { name: 'air', loaded: true, pos: { x: 1, y: 66, z: 0 } },
+      ],
+      inventory: [],
+    })
+    const result = asCandidate(createEscapeGiver().find(ctx, deep))
     expect(result?.keys).toBe('escape:water')
+  })
+
+  it('does not flee while floating at the surface of deep water', () => {
+    const floating = new SnapshotWorld({
+      self: self({ pos: { x: 0.5, y: 63.2, z: 0.5 }, inWater: true, onGround: false }),
+      time: { timeOfDay: 1000, worldAge: 100 },
+      entities: [],
+      blocks: [
+        { name: 'stone', loaded: true, pos: { x: 0, y: 62, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 63, z: 0 } },
+        { name: 'water', loaded: true, pos: { x: 0, y: 64, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 0, y: 65, z: 0 } },
+        { name: 'air', loaded: true, pos: { x: 0, y: 66, z: 0 } },
+      ],
+      inventory: [],
+    })
+    // Eye is in the top water cell (y=64), air above: an entry splash is not
+    // an emergency, otherwise the reflex fights every deliberate swim.
+    expect(createEscapeGiver().find(ctx, floating)).toBeNull()
   })
 
   it('does not flee while wading in one block of water', () => {
@@ -103,6 +141,8 @@ describe('escape giver', () => {
         { name: 'water', loaded: true, pos: { x: 0, y: 63, z: 0 } },
         { name: 'water', loaded: true, pos: { x: 0, y: 64, z: 0 } },
         { name: 'water', loaded: true, pos: { x: 0, y: 65, z: 0 } },
+        // Head fully under: water above the eye cell (y=65).
+        { name: 'water', loaded: true, pos: { x: 0, y: 66, z: 0 } },
         { name: 'stone', loaded: true, pos: { x: 1, y: 63, z: 0 } },
         { name: 'air', loaded: true, pos: { x: 1, y: 64, z: 0 } },
         { name: 'air', loaded: true, pos: { x: 1, y: 65, z: 0 } },

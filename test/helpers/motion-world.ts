@@ -64,7 +64,7 @@ function collisionFor(name: string, state: Readonly<Record<string, string>> | un
   if (name.endsWith('_stairs')) {
     return state?.facing === 'south' ? STAIRS_SOUTH : STAIRS_NORTH
   }
-  if (name === 'ladder' || name.endsWith('_vine') || name.includes('vines')) {
+  if (name === 'ladder' || name === 'vine' || name.endsWith('_vine') || name.includes('vines')) {
     return state?.facing === 'south' ? LADDER_SOUTH : LADDER_NORTH
   }
   if (name === 'scaffolding') return SCAFFOLDING_SHAPE

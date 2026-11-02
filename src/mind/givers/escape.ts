@@ -27,15 +27,26 @@ export function createEscapeGiver(): WorkGiver {
       const feet = feetOf(self.pos)
 
       // Wading is ordinary movement, not an emergency: one block of water over
-      // a solid floor (feet wet, head dry). This is physics, not a movement
-      // profile: even when the planner refuses water, standing in it is safe.
+      // a solid floor (feet wet, head dry). A body floating at a water surface
+      // is also not an emergency under the swim profile: the head is out of the
+      // water, so it neither takes damage nor needs rescuing (otherwise the
+      // reflex would fight every deliberate swim order).
       const feetBlock = world.blockAt(feet)
       const headBlock = world.blockAt({ x: feet.x, y: feet.y + 1, z: feet.z })
       const support = world.blockAt({ x: feet.x, y: feet.y - 1, z: feet.z })
       const shallow = feetBlock !== null && feetBlock.loaded && isFluidName(feetBlock.name)
         && !(headBlock !== null && headBlock.loaded && isFluidName(headBlock.name))
       const wading = self.inWater && shallow && isSolid(support)
-      if (self.inLava || (self.inWater && !self.onGround && !wading)) {
+      const eye = { x: Math.floor(self.pos.x), y: Math.floor(self.pos.y + 1.6), z: Math.floor(self.pos.z) }
+      const eyeBlock = world.blockAt(eye)
+      const aboveEye = world.blockAt({ x: eye.x, y: eye.y + 1, z: eye.z })
+      const eyeInWater = eyeBlock !== null && eyeBlock.loaded && isFluidName(eyeBlock.name)
+      // "Head fully under": the eye cell and the cell above it are both fluid.
+      // A surface swimmer's eye is in the top water cell with air above, so an
+      // entry splash (a few tenths below the surface) is not an emergency.
+      const headUnderWater = eyeInWater
+        && aboveEye !== null && aboveEye.loaded && isFluidName(aboveEye.name)
+      if (self.inLava || (self.inWater && !self.onGround && !wading && headUnderWater)) {
         held = undefined
         if (self.inLava) {
           // The active order may explicitly grant lava; the Agent owns that

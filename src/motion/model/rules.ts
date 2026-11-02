@@ -111,7 +111,7 @@ export class RuleSet implements Rules {
     if (block === null || !block.loaded) return 'unknown'
     if (this.isHazard(cell) !== 'no') return 'no'
     if (hasTag(block, 'lava')) return 'no'
-    if (hasTag(block, 'water') && this.wadeCell(cell) !== 'yes') return 'no'
+    if (hasTag(block, 'water')) return this.waterEntry(cell)
     const body = this.bodyCheck(cell, cell.y)
     return body.state === 'yes' ? 'yes' : body.state === 'unknown' ? 'unknown' : 'no'
   }
@@ -122,9 +122,15 @@ export class RuleSet implements Rules {
     if (block === null || !block.loaded) return 'unknown'
     if (this.isHazard(cell) !== 'no') return 'no'
     if (hasTag(block, 'lava')) return 'no'
-    if (hasTag(block, 'water')) return this.wadeCell(cell) === 'yes' ? 'yes' : 'no'
+    if (hasTag(block, 'water')) return this.waterEntry(cell)
     if (block.collision === undefined) return 'unknown'
     return block.collision.length === 0 ? 'yes' : 'no'
+  }
+
+  /** A water cell is enterable when the wade profile or the surface swim profile accepts it. */
+  private waterEntry(cell: Cell): Tri {
+    if (this.wadeCell(cell) === 'yes') return 'yes'
+    return this.swimCell(cell)
   }
 
   canWalkOn(cell: Cell): Tri {
@@ -236,6 +242,15 @@ export class RuleSet implements Rules {
   }
 
   standInfo(cell: Cell, ignoreBody: readonly Cell[] = []): StandInfo {
+    // A surface water cell has no support of its own; under the `swim` profile
+    // it is a standing position of its own kind (feet float at the cell base,
+    // head stays dry). Only water cells take this path, so dry cells keep their
+    // precise support/body reasons.
+    if (this.isWater(cell) === 'yes') {
+      const swim = this.swimCell(cell)
+      if (swim === 'yes') return this.bodyCheck(cell, cell.y, ignoreBody)
+      if (swim === 'unknown') return { state: 'unknown', reason: 'swim-unloaded' }
+    }
     const support = this.supportFeet(cell)
     if (support.state !== 'yes') return support
     return this.bodyCheck(cell, support.feetY, ignoreBody)
@@ -284,6 +299,27 @@ export class RuleSet implements Rules {
     if (top === undefined) return 'unknown'
     // A partial support under water would put the feet below the cell base.
     if (top < 1 - EPSILON) return 'no'
+    return this.bodyCheck(cell, cell.y).state
+  }
+
+  /**
+   * Surface swim stance: a water cell whose head space is dry. Unlike `wade`
+   * it does not need a solid floor below (any depth works) and it never allows
+   * the head under water. `waterProfile: 'swim'` enables it.
+   */
+  private swimCell(cell: Cell): Tri {
+    if (this.constraints.waterProfile !== 'swim') return 'no'
+    const block = this.read(cell)
+    if (block === null || !block.loaded) return 'unknown'
+    if (!hasTag(block, 'water')) return 'no'
+    const above = this.read(offset(cell, 0, 1, 0))
+    if (above === null || !above.loaded) return 'unknown'
+    if (hasTag(above, 'water') || hasTag(above, 'lava')) return 'no'
+    const supportCell = offset(cell, 0, -1, 0)
+    const below = this.read(supportCell)
+    if (below === null || !below.loaded) return 'unknown'
+    if (hasTag(below, 'lava')) return 'no'
+    if (this.isHazard(supportCell) === 'yes') return 'no'
     return this.bodyCheck(cell, cell.y).state
   }
 

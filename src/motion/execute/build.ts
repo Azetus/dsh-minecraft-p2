@@ -1,5 +1,6 @@
 import {
   AscendMove,
+  ClimbExitMove,
   ClimbMove,
   DescendMove,
   DiagonalMove,
@@ -7,6 +8,7 @@ import {
   FallMove,
   ParkourMove,
   PillarMove,
+  SwimMove,
   TraverseMove,
 } from './moves.ts'
 import { cellOf } from './moves.ts'
@@ -65,6 +67,14 @@ function makeMove(
   if (ctx.rules.isClimbable(dest) === 'yes' && horizontal <= 1 && Math.abs(dy) <= 1) {
     return new ClimbMove(src, dest)
   }
+  // Leaving a ladder/vine onto a ledge one block up (the ceiling-hole exit).
+  // Not gated on `allowDiagonal`: this is a climb, not a diagonal walk.
+  if (dy === 1 && (horizontal === 1 || (Math.abs(dx) === 1 && Math.abs(dz) === 1))
+    && ctx.rules.isClimbable(src) === 'yes') {
+    return new ClimbExitMove(src, dest)
+  }
+  // Any edge out of a water surface uses the swim controller.
+  if (horizontal === 1 && ctx.rules.isWater(src) === 'yes') return new SwimMove(src, dest)
   if (horizontal === 1) {
     if (dy === 0) return new TraverseMove(src, dest)
     if (dy === 1) return new AscendMove(src, dest)

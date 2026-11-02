@@ -1,7 +1,7 @@
 import type { Bot } from 'mineflayer'
 
 import type { JsonValue } from '../../contracts/types.ts'
-import { PathExecutor, cellOf } from '../execute/index.ts'
+import { PathExecutor, cellOf, standingCell } from '../execute/index.ts'
 import {
   defaultConstraints,
   createGoal,
@@ -46,6 +46,7 @@ export class MotionRun {
   private readonly world: MineflayerMotionWorld
   private context: MotionContextSource
   private readonly baseConstraints: MotionConstraints
+  private activeConstraints: MotionConstraints
   private readonly classifier: BlockClassifier | undefined
   private readonly avoidance: { coefficient: number; radius: number }
   private readonly from: Cell
@@ -80,6 +81,7 @@ export class MotionRun {
   ) {
     this.world = new MineflayerMotionWorld(bot)
     this.baseConstraints = options.constraints ?? defaultConstraints()
+    this.activeConstraints = this.baseConstraints
     this.classifier = options.classifier
     this.avoidance = options.avoidance ?? { coefficient: 1.5, radius: 8 }
     this.context = new MotionContextSource(
@@ -195,6 +197,8 @@ export class MotionRun {
       generatedNodes: this.generatedNodes,
       replans: this.replans,
       planner: 'astar',
+      swim: this.activeConstraints.waterProfile === 'swim',
+      waterProfile: this.activeConstraints.waterProfile,
       elapsedMs: Date.now() - this.startedAt,
     }
   }
@@ -210,7 +214,7 @@ export class MotionRun {
       ? createGoal(this.target, this.finalArrival)
       : createGoal(this.activeTarget, { kind: 'near', range: 1 })
     const ctx = this.context.next()
-    this.search = new MotionSearch(cellOf(ctx.position), this.motionGoal, () => this.context.next(), {
+    this.search = new MotionSearch(standingCell(ctx.rules, ctx.position), this.motionGoal, () => this.context.next(), {
       sliceMs: 5,
       maxNodes: this.maxNodes,
       timeoutMs: this.searchTimeoutMs,
@@ -297,12 +301,12 @@ export class MotionRun {
     }
     if (!this.searchedSafeFall && this.target.y < cellOf(this.world.self().pos).y - 1) {
       const budget = fallBudgetForHealth(this.world.self().health)
-      if (budget > this.baseConstraints.maxFall) {
+      if (budget > this.activeConstraints.maxFall) {
         this.searchedSafeFall = true
         this.safeFallPass = true
         this.context = new MotionContextSource(
           this.world,
-          { ...this.baseConstraints, safeFallBudget: budget },
+          { ...this.activeConstraints, safeFallBudget: budget },
           this.classifier,
         )
         this.search = undefined
@@ -321,9 +325,15 @@ export class MotionRun {
 
   private arrived(): boolean {
     const self = this.world.self()
-    const cell = cellOf(self.pos)
+    const rules = this.context.next().rules
+    // A floating body's cellOf() lands one below the swim node, so the planner's
+    // identity (standingCell) is what the goal must be compared against.
+    const cell = standingCell(rules, self.pos)
     if (this.finalGoal.isEnd(cell)) {
       if (self.onGround) return true
+      // A water-cell goal is reached while floating (the head stays dry); a
+      // land goal still needs onGround or the exact column below it.
+      if (rules.isWater(cell) === 'yes') return true
       // Landing lag: the move already proved a standing position, but the physics
       // flag can trail one tick. Accept only at the exact requested column.
       return this.insideTarget(self.pos)

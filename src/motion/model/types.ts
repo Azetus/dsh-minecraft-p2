@@ -134,9 +134,10 @@ export type MotionProfile = 'walk' | 'sprint' | 'parkour' | 'descend' | 'ascend'
  * How this pass treats water. `none` keeps every fluid cell impassable (the
  * conservative legacy rule). `wade` allows a single-block water column whose
  * floor still supports the body: the feet get wet, the head stays above the
- * waterline. Deeper water needs a swim/waterline controller and stays closed.
+ * waterline. `swim` additionally accepts the *surface* of any depth: feet in
+ * the top water cell, head in air, no support required. It never dives.
  */
-export type WaterProfile = 'none' | 'wade'
+export type WaterProfile = 'none' | 'wade' | 'swim'
 
 /**
  * What one planning/execution pass is allowed to do. Defaults deny every
@@ -201,9 +202,9 @@ export function defaultConstraints(profile: MotionProfile = 'walk'): MotionConst
     allowFallIntoLava: false,
     assumeWalkOnWater: false,
     allowWalkOnMagma: false,
-    // Wading is the default: one block of water over a walkable floor is
-    // ordinary movement. Deeper water still needs a swim controller.
-    waterProfile: 'wade',
+    // A-tier default: wading is ordinary movement, and the surface of any
+    // depth is swimmable (feet in the top water cell, head dry). It never dives.
+    waterProfile: 'swim',
   }
 }
 
@@ -330,6 +331,7 @@ export type MoveKind =
   | 'diagonal'
   | 'parkour'
   | 'climb'
+  | 'swim'
 
 export type MoveState = {
   status: MoveStatus

@@ -7,6 +7,7 @@ import type {
   MoveKind,
   MoveState,
   MoveStatus,
+  Rules,
   Vec3,
 } from '../model/types.ts'
 import { COST_INF } from '../model/types.ts'
@@ -29,7 +30,11 @@ export const PLACE_CLEARANCE = 1.01
 export function reached(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.55): boolean {
   const info = ctx.rules.standInfo(cell)
   if (info.state !== 'yes') return false
-  return distance2d(pos, cell) <= tolerance && Math.abs(pos.y - info.feetY) <= 0.45
+  // A swimming body floats around the cell base and bobs, so the vertical
+  // tolerance is a full block for water cells (same rule as the vanilla
+  // follower's `e < 1.0`).
+  const vertical = ctx.rules.isWater(cell) === 'yes' ? 1 : 0.45
+  return distance2d(pos, cell) <= tolerance && Math.abs(pos.y - info.feetY) <= vertical
 }
 
 /**
@@ -44,6 +49,27 @@ export function onClimb(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.5
 }
 
 export { cellOf }
+
+/**
+ * The planner's identity for the body's current position. A body floating at a
+ * water surface has its feet about 0.6 below the block-level surface cell, so
+ * `cellOf` reports the submerged cell; the planner's node is the surface cell
+ * one above. Everywhere else this is just `cellOf`.
+ */
+export function standingCell(rules: Rules, pos: Vec3): Cell {
+  const cell = cellOf(pos)
+  if (rules.isWater(cell) !== 'yes') return cell
+  // A floating body's feet sit below the block-level surface cell; walk up to
+  // the topmost water cell (the swim node) if the model accepts it.
+  for (let dy = 0; dy <= 2; dy += 1) {
+    const candidate = { x: cell.x, y: cell.y + dy, z: cell.z }
+    if (rules.isWater(candidate) !== 'yes') continue
+    const above = { x: cell.x, y: candidate.y + 1, z: cell.z }
+    if (rules.isWater(above) === 'yes') continue
+    if (rules.standInfo(candidate).state === 'yes') return candidate
+  }
+  return cell
+}
 
 export function aim(ctx: MoveContext, cell: Cell): void {
   ctx.world.look(yawTo(ctx.position, cell), 0)
@@ -63,6 +89,33 @@ export function releaseInputs(ctx: MoveContext): void {
   for (const control of ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint'] as const) {
     ctx.world.setInput(control, false)
   }
+}
+
+/**
+ * "Head fully under": the eye and the cell above it are both water. A body
+ * floating at the waterline has its eye in the top water cell with air above
+ * it, and must NOT count as submerged: an entry splash sinks it briefly, and a
+ * depth threshold tight enough to catch that would fight every surface swim.
+ */
+export function isDeeplySubmerged(rules: Rules, pos: Vec3): boolean {
+  const eye = { x: Math.floor(pos.x), y: Math.floor(pos.y + 1.6), z: Math.floor(pos.z) }
+  if (rules.isWater(eye) !== 'yes') return false
+  return rules.isWater({ x: eye.x, y: eye.y + 1, z: eye.z }) === 'yes'
+}
+
+/** The eye is inside a water block (a floating body flickers around this line). */
+export function isEyeInWater(rules: Rules, pos: Vec3): boolean {
+  const eye = { x: Math.floor(pos.x), y: Math.floor(pos.y + 1.6), z: Math.floor(pos.z) }
+  return rules.isWater(eye) === 'yes'
+}
+
+function keepHeadAboveWater(ctx: MoveContext): boolean {
+  // Jump as soon as the eye touches water, not only after the head is fully
+  // under: the entry splash otherwise sinks a body to the pool floor before
+  // buoyancy gets a chance to act.
+  if (!isEyeInWater(ctx.rules, ctx.position)) return false
+  ctx.world.setInput('jump', true)
+  return true
 }
 
 abstract class BaseMove implements Move {
@@ -219,6 +272,7 @@ export class TraverseMove extends BaseMove {
     if (stand.state === 'no') return 'unreachable'
     aim(ctx, this.dest)
     holdForward(ctx, ctx.constraints.profile === 'sprint')
+    ctx.world.setInput('jump', keepHeadAboveWater(ctx))
     return 'running'
   }
 
@@ -369,6 +423,7 @@ export class DescendMove extends BaseMove {
     }
     aim(ctx, this.dest)
     holdForward(ctx)
+    ctx.world.setInput('jump', keepHeadAboveWater(ctx))
     return 'running'
   }
 }
@@ -390,14 +445,18 @@ export class FallMove extends BaseMove {
   private landingSafe(ctx: MoveContext): boolean {
     const stand = ctx.rules.standInfo(this.dest)
     if (stand.state !== 'yes') return false
-    const support = ctx.rules.supportFeet(this.dest)
-    if (support.state !== 'yes') return false
-    // Landing on a half-height support (bottom slab, carpet) has an ambiguous
-    // landing height; the reference behaviour refuses it unless explicitly
-    // allowed. Wading water keeps the pool floor as the support, so it is a
-    // full-height landing and unaffected.
-    if (ctx.constraints.allowFallOntoHalfSupport !== true && support.feetY < this.dest.y - 0.01) {
-      return false
+    // Water absorbs the fall: under the swim profile any depth is a landing,
+    // so the solid-support requirement does not apply there.
+    if (ctx.rules.isWater(this.dest) !== 'yes') {
+      const support = ctx.rules.supportFeet(this.dest)
+      if (support.state !== 'yes') return false
+      // Landing on a half-height support (bottom slab, carpet) has an ambiguous
+      // landing height; the reference behaviour refuses it unless explicitly
+      // allowed. Wading water keeps the pool floor as the support, so it is a
+      // full-height landing and unaffected.
+      if (ctx.constraints.allowFallOntoHalfSupport !== true && support.feetY < this.dest.y - 0.01) {
+        return false
+      }
     }
     // A planned fall must pass through loaded, clear, non-hazard cells. The
     // landing cell itself may be wadeable water (the water absorbs the fall).
@@ -431,6 +490,8 @@ export class FallMove extends BaseMove {
     }
     aim(ctx, this.dest)
     holdForward(ctx)
+    // Surfacing after a landing in deeper water; harmless while airborne.
+    ctx.world.setInput('jump', keepHeadAboveWater(ctx))
     return 'running'
   }
 }
@@ -910,6 +971,136 @@ export class ClimbMove extends BaseMove {
     ctx.world.setInput('jump', dy > 0)
     ctx.world.setInput('sneak', dy < 0)
     state.detail = dy > 0 ? 'climbing-up' : 'climbing-down'
+    return 'running'
+  }
+}
+
+/**
+ * Leaving a climbable column onto a ledge one block higher. This is the
+ * standard "ladder through a ceiling hole" exit: the ladder top sits one block
+ * below the upper floor, so the body jumps off the column diagonally (or
+ * straight) onto the floor. `AscendMove` cannot express it because a climbable
+ * cell has no support to stand on.
+ */
+export class ClimbExitMove extends BaseMove {
+  readonly kind = 'climb' as const
+  private jumpTicks = 0
+  private retries = 0
+
+  constructor(readonly src: Cell, readonly dest: Cell) {
+    super()
+  }
+
+  cost(ctx: MoveContext): number {
+    if (ctx.constraints.allowClimb === false) return COST_INF
+    if (this.dest.y !== this.src.y + 1) return COST_INF
+    if (!adjacent(this.src, this.dest) && !diagonal(this.src, this.dest)) return COST_INF
+    // The body must be hanging on a climbable column.
+    if (ctx.rules.isClimbable(this.src) !== 'yes') return COST_INF
+    if (ctx.rules.canWalkThrough(this.src) !== 'yes') return COST_INF
+    const cells = bodyCells(this.dest)
+    if (!passableOrBreakable(ctx, cells)) return COST_INF
+    const stand = standInfoWithBreaks(ctx, this.dest, cells)
+    if (stand.state !== 'yes') return COST_INF
+    // Jumping off the column is a normal jump whose feet start at the cell base.
+    if (stand.feetY - this.src.y > JUMP_PEAK - JUMP_MARGIN) return COST_INF
+    return 1.8 + breakCostOf(ctx, cells)
+  }
+
+  toBreak(ctx: MoveContext): readonly Cell[] {
+    return breakableCells(ctx, bodyCells(this.dest))
+  }
+
+  validPositions(): readonly Cell[] {
+    return [this.src, this.dest]
+  }
+
+  reset(): void {
+    this.jumpTicks = 0
+    this.retries = 0
+  }
+
+  safeToCancel(state: MoveState): boolean {
+    return state.ticks < 3
+  }
+
+  update(state: MoveState, ctx: MoveContext): MoveStatus {
+    state.ticks += 1
+    state.elapsedMs = ctx.now - state.startedAt
+    if (reached(ctx.position, this.dest, ctx)) {
+      releaseInputs(ctx)
+      return 'success'
+    }
+    this.jumpTicks += 1
+    aim(ctx, this.dest)
+    // Rise first, then carry forward: moving into the ledge before clearing its
+    // top would pin the body against the block side.
+    ctx.world.setInput('jump', this.jumpTicks <= 8)
+    ctx.world.setInput('forward', this.jumpTicks > 3)
+    ctx.world.setInput('sneak', false)
+    if (this.jumpTicks > 20) {
+      this.retries += 1
+      if (this.retries > 2) {
+        releaseInputs(ctx)
+        state.detail = 'climb-exit-did-not-land'
+        return 'failed'
+      }
+      this.jumpTicks = 0
+      ctx.world.setInput('jump', false)
+      ctx.world.setInput('forward', false)
+    }
+    return 'running'
+  }
+}
+
+/**
+ * Surface swimming. This is the one move that owns a body floating at the
+ * waterline, modelled on the unvalidated follower's steer loop and on vanilla's
+ * dedicated swimming controller: it holds forward for the whole edge and only
+ * ever adds jump. Releasing forward (or letting another layer gate the tick)
+ * makes a floating body oscillate at the waterline instead of advancing.
+ */
+export class SwimMove extends BaseMove {
+  readonly kind = 'swim' as const
+
+  constructor(readonly src: Cell, readonly dest: Cell) {
+    super()
+  }
+
+  cost(ctx: MoveContext): number {
+    if (ctx.constraints.waterProfile !== 'swim') return COST_INF
+    if (!adjacent(this.src, this.dest)) return COST_INF
+    if (ctx.rules.isWater(this.src) !== 'yes') return COST_INF
+    const dy = this.dest.y - this.src.y
+    if (dy !== 0 && dy !== 1) return COST_INF
+    const destWet = ctx.rules.isWater(this.dest) === 'yes'
+    if (destWet && dy !== 0) return COST_INF
+    if (ctx.rules.standInfo(this.dest).state !== 'yes') return COST_INF
+    return destWet ? 2 : 2.5
+  }
+
+  validPositions(): readonly Cell[] {
+    return [this.src, this.dest]
+  }
+
+  safeToCancel(_state: MoveState): boolean {
+    return true
+  }
+
+  update(state: MoveState, ctx: MoveContext): MoveStatus {
+    state.ticks += 1
+    state.elapsedMs = ctx.now - state.startedAt
+    if (reached(ctx.position, this.dest, ctx)) {
+      releaseInputs(ctx)
+      return 'success'
+    }
+    aim(ctx, this.dest)
+    ctx.world.setInput('forward', true)
+    ctx.world.setInput('sneak', false)
+    // Leaving the water needs the swim-up; inside the water the eye flickers
+    // across the surface, and jumping on that flicker is harmless.
+    const leaving = ctx.rules.isWater(this.dest) !== 'yes'
+    ctx.world.setInput('jump', leaving || isEyeInWater(ctx.rules, ctx.position))
     return 'running'
   }
 }

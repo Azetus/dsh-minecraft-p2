@@ -53,6 +53,11 @@ export type StandOptions = {
   self?: SelfView
   /** `false` skips reachability (cheap reflex queries); default 256 nodes. */
   reachability?: { maxNodes?: number } | false
+  /**
+   * Target selection is dry by default: a swim stance is a movement stance, not
+   * a goal. Callers that genuinely target water cells opt out with `dry: false`.
+   */
+  dry?: boolean
 }
 
 export type StandResult = {
@@ -83,6 +88,7 @@ export function standCells(
     options.classifier === undefined ? {} : { classifier: options.classifier },
   )
   const desired = query.desired ?? query.near
+  const dry = options.dry !== false
   const horizontal = radiusOf(query.reach.horizontal)
   const vertical = radiusOf(query.reach.vertical ?? query.reach.horizontal)
 
@@ -117,6 +123,7 @@ export function standCells(
           continue
         }
         if (info.state !== 'yes') continue
+        if (dry && rules.isWater(cell) === 'yes') continue
         if (query.accept !== undefined && !query.accept(cell, info.feetY)) continue
         cells.push({
           cell,

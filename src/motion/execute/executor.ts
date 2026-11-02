@@ -8,7 +8,7 @@ import {
   type MoveState,
   type Vec3,
 } from '../model/types.ts'
-import { cellOf, reached, releaseInputs } from './moves.ts'
+import { cellOf, isDeeplySubmerged, reached, releaseInputs, standingCell } from './moves.ts'
 
 export type ExecutorState = 'running' | 'succeeded' | 'failed' | 'canceled'
 
@@ -73,6 +73,7 @@ export class PathExecutor {
   private readonly timeoutFor: (move: Move, cost: number) => number
   private readonly breakTimeoutMs: number
   private breaking: { cells: Cell[]; startedAt: number; lastDigAt: number } | undefined
+  private surfacing: { since: number } | undefined
 
   constructor(
     private readonly moves: readonly Move[],
@@ -111,6 +112,9 @@ export class PathExecutor {
       this.finish('succeeded')
       return this.result
     }
+    // Water recovery runs before the edge bookkeeping: a body that slipped under
+    // the surface is not on any planned node, and surfacing is the only way back.
+    if (this.surfaceStep(ctx, now)) return this.result
     const move = this.moves[this.index]!
     if (this.breaking !== undefined) {
       const remaining = this.breaking.cells.filter(cell => ctx.rules.canPass(cell) !== 'yes')
@@ -144,27 +148,33 @@ export class PathExecutor {
       this.finish('failed', 'UNREACHABLE', 'edge-became-infeasible', ctx)
       return this.result
     }
-    if (ctx.self.onGround) {
-      const cell = cellOf(ctx.position)
+    if (ctx.self.onGround && move.kind !== 'swim') {
+      const cell = standingCell(ctx.rules, ctx.position)
       if (!this.isValid(move, cell, ctx) && !reached(ctx.position, move.dest, ctx)) {
         this.recover(ctx, now)
         if (this.result.state !== 'running') return this.result
       }
     }
-    const moved = Math.hypot(
-      ctx.position.x - this.lastPos.x,
-      ctx.position.y - this.lastPos.y,
-      ctx.position.z - this.lastPos.z,
-    )
+    // A floating body bobs vertically every tick; counting that as progress
+    // hides a real horizontal stall, so wet moves are judged on x/z alone.
+    const wet = this.wetMove(move, ctx)
+    const moved = wet
+      ? Math.hypot(ctx.position.x - this.lastPos.x, ctx.position.z - this.lastPos.z)
+      : Math.hypot(
+          ctx.position.x - this.lastPos.x,
+          ctx.position.y - this.lastPos.y,
+          ctx.position.z - this.lastPos.z,
+        )
     if (moved > 0.12) {
       this.lastProgressAt = now
       this.lastPos = ctx.position
       this.offPathTicks = 0
-    } else if (now - this.lastProgressAt > this.stallMs) {
+    } else if (now - this.lastProgressAt > (wet ? this.stallMs * 2 : this.stallMs)) {
       this.finish('failed', 'STUCK', 'no-displacement', ctx)
       return this.result
     }
-    if (now - this.moveStartedAt > this.timeoutFor(move, cost)) {
+    const timeout = this.timeoutFor(move, cost) * (wet ? 3 : 1)
+    if (now - this.moveStartedAt > timeout) {
       this.finish('failed', 'TIMEOUT', `${move.kind}-timeout`, ctx)
       return this.result
     }
@@ -231,6 +241,30 @@ export class PathExecutor {
     for (const valid of move.validPositions()) {
       if (sameCell(valid, cell)) return true
       if (reached(ctx.position, valid, ctx, 0.35)) return true
+    }
+    return false
+  }
+
+  private wetMove(move: Move, ctx: MoveContext): boolean {
+    return ctx.rules.isWater(move.src) === 'yes' || ctx.rules.isWater(move.dest) === 'yes'
+  }
+
+  /**
+   * Guard for a body whose head stays fully under water. The move layer keeps
+   * jump held (see `keepHeadAboveWater`/`SwimMove`); this only tracks how long
+   * the head has been under and aborts after 3 s. Releasing forward here made a
+   * body floating at the waterline alternate between "eye in water" and "eye
+   * in air" and never advance, so the move keeps running until the abort.
+   */
+  private surfaceStep(ctx: MoveContext, now: number): boolean {
+    if (!isDeeplySubmerged(ctx.rules, ctx.position)) {
+      this.surfacing = undefined
+      return false
+    }
+    if (this.surfacing === undefined) this.surfacing = { since: now }
+    if (now - this.surfacing.since > 3_000) {
+      this.finish('failed', 'STUCK', 'still-submerged', ctx)
+      return true
     }
     return false
   }
