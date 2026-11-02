@@ -15,6 +15,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 进程边界、分层、目录、生命周期 |
 | [AUTHORITY.md](AUTHORITY.md) | Agent/P2 决策权二分与新增行为评审清单 |
 | [runtime/P2MIND.md](runtime/P2MIND.md) | P2Mind 控制结构（权威设计） |
+| [runtime/MOTION.md](runtime/MOTION.md) | 运动模块：规则集、规划器、执行器、战斗控制器 |
 | [runtime/PITFALLS.md](runtime/PITFALLS.md) | 踩坑清单与实现红线 |
 | [CONTRACTS.md](CONTRACTS.md) | ClientPort / Job / WorkGiver / Driver / Tracker / 树的契约 |
 | [RUNTIME.md](RUNTIME.md) | tick 循环、预算、失败与恢复 |
