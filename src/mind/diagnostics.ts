@@ -26,6 +26,7 @@ const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> =
   { match: /VANILLA_STUCK|VANILLA_TIMEOUT/, category: 'world', hint: 'unvalidated following made no progress; re-observe and decide whether to retry or give up' },
   { match: /PICKUP_UNREACHABLE|PICKUP_NOT_COLLECTED|PICKUP_ENTITY_GONE|PICKUP_MERGED/, category: 'world', hint: 'drop is unreachable or not collected; adjust the landing/space' },
   { match: /PICKUP_INVENTORY_FULL/, category: 'precondition', hint: 'inventory has no storage space; free a slot before harvesting' },
+  { match: /EQUIP_NO_ITEM|EQUIP_ITEM_MISSING/, category: 'precondition', hint: 'the required item is not in the inventory; obtain it before retrying' },
   { match: /CRAFT_INCOMPLETE/, category: 'world', hint: 'craft ended partially; read observed.crafted/attempted before deciding to continue' },
   { match: /CRAFT_NO_TABLE|CRAFT_NO_INGREDIENTS|CRAFT_UNKNOWN_RECIPE|NO_MATERIAL/, category: 'precondition', hint: 'missing table, ingredients or recipe' },
   { match: /ATTACK_TARGET_LOST|ATTACK_TARGET_CHANGED/, category: 'world', hint: 'target moved or disappeared; reacquire explicitly' },
