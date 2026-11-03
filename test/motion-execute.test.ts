@@ -197,6 +197,13 @@ describe('move state machines', () => {
 
     // The placed y=100 block must not make the move's own cost infeasible.
     expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
+
+    // Reproduce the second placement: y=100 and y=101 are now support, so the
+    // original clearance set would contain two of the move's own solid blocks.
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 102.02, z: 0.5 }, onGround: false }
+    move.update(state, source.next()) // place at y=101
+    expect(world.actions.some(action => action.startsWith('place:0,101,0'))).toBe(true)
+    expect(move.cost(source.next())).toBeLessThan(Number.POSITIVE_INFINITY)
   })
 })
 

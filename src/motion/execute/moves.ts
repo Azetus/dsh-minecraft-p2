@@ -802,9 +802,14 @@ export class PillarMove extends BaseMove {
     // edge from a transient snapshot between place and block-update.
     if (this.placed <= this.level
       && ctx.rules.standInfo(this.columnCell(this.currentY())).state !== 'yes') return COST_INF
+    // During execution the blocks this move already placed are inside the
+    // original clearance set. They are support now, not obstructions; re-check
+    // only the cells above the current feet, otherwise a multi-level pillar
+    // invalidates itself after its second block.
     const cells = pillarClearance(ctx, this.src, this.dest)
-    if (!passableOrBreakable(ctx, cells)) return COST_INF
-    if (ctx.rules.canPlaceAgainst(this.columnCell(this.src.y - 1)) !== 'yes') return COST_INF
+      .filter(cell => cell.y > this.currentY())
+    if (cells.length > 0 && !passableOrBreakable(ctx, cells)) return COST_INF
+    if (ctx.rules.canPlaceAgainst(this.columnCell(this.currentY() - 1)) !== 'yes') return COST_INF
     // Skip the blocks this move already placed; a mid-pillar revalidation must
     // not mistake its own support column for an obstruction.
     for (let y = this.src.y + this.placed; y < this.dest.y; y += 1) {
