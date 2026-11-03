@@ -223,8 +223,8 @@ interface Move {
 ### 4.1 边界地形的默认策略
 
 - **水**：默认是 `swim`（A 档）：`wade` 仍可走 1 深水；水面格（脚在顶层水格、头格干）可站、可规划，任意深度，不潜水、不做 waterline。`SwimMove` 负责水面→水面（同层）和水面→岸（同层/+1）；它始终按住 forward，出水或眼入水时按住 jump。`standingCell` 把浮体的脚格归一化到水面节点，搜索起点和 `arrived()` 都用它；水格目标到达时允许未 `onGround`（浮在水面即算到达），之后 `escape` 仍可能把身体带向岸边（已接受的行为）。执行器对 swim 跳过 `isValid/recover`，湿 move 的停滞只看水平位移，水 move 超时 ×3；只有头部完全没入水（眼格与其上一格都是水）持续 3 s 才报 `STUCK`。`escape` 的水线判定同样只认“头完全没入”，并以 dry 格为目标，避免抢占游泳 order；`standCells` 目标选择默认 dry（`pickup` 显式 `dry:false` 保留水格拾取）。
-- **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`。`ClimbExit` 负责“梯顶再上一格”（含斜向），即标准二层结构里从梯子穿洞上到楼板；反向（从楼板进梯）走 `Climb` 的 dy=−1。
-- **脚手架**：只作为支撑/放置方块，不做攀爬。实机 probe（`.m5-runs/scaffold-probe.mjs`，1.21.1）显示：在 3 高脚手架柱内按住 jump 不上升（ladder 对照从 100 升到 103.15），侧面也进不去——瓶颈在 bot 的客户端物理而不是模型，因此标记为非目标；横穿仍是 no path。
+- **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`。`ClimbExit` 负责“梯顶再上一格”（含斜向），即标准二层结构里从梯子穿洞上到楼板；反向（从楼板进梯）走 `Climb` 的 dy=−1。水面 `swim` 档可从水面进入梯子，梯顶再经 `ClimbExit` 上岸（矩阵 `water-ladder-exit`）；梯子没有到岸时仍为 no path。
+- **脚手架（Phase D2 缩窄）**：只作为支撑/放置方块；支持顶面站立、单块上/下台阶、旁边通过；**不做柱内攀爬与侧穿**。实机 probe（`.m5-runs/scaffold-probe.mjs`，1.21.1）显示：在 3 高脚手架柱内按住 jump 不上升（ladder 对照从 100 升到 103.15），侧面也进不去——瓶颈在 prismarine-physics 的静态 collision，不在 P2Motion 规则；Vanilla 的 scaffolding collision 是 context-dependent，而 mineflayer 的 `bot.blockAt` 只给静态 shape。因此 `scaffold-through` 仍是 no path，柱内攀爬/侧穿标记为 deferred；只有接受局部 physics collision shim 时才重新打开。
 - **半砖/楼梯**：collision + footprint 支撑；从下半砖起跳整方块、从下半砖垫脚、落半砖默认拒绝（物理不可行或落点高度歧义）；下半砖→下半砖允许。
 - **跳跃预算**：两条"物理不可能"用真实脚高与 1.2522 的跳跃峰值比较，而不是"支撑是不是整方块"——
   - `Ascend`：`destFeet − srcFeet > 1.2522 − 0.15` 才拒绝。所以 farmland/dirt_path（0.9375 → 抬升 1.0625）允许，箱子/灵魂沙（1.125）按余量拒绝，下半砖（1.5）拒绝。

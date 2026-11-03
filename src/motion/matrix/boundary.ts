@@ -235,6 +235,77 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
     expect: same(NO_PATH),
   })
 
+  fields.push({
+    id: 'water-ladder-exit',
+    title: '水 + 梯子出岸',
+    proves: 'swim can enter a ladder from the water surface and climb out onto the bank when the ladder reaches the top',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -2, 2, 2, -2, 4, 'stone'),
+      // A two-wide bank gives the climb-exit jump room to settle without
+      // overshooting into the void after the order succeeds.
+      fill(origin, -2, -2, 5, 2, 1, 6, 'stone'),
+      fill(origin, -2, -1, 2, -2, 2, 4, 'stone'),
+      fill(origin, 2, -1, 2, 2, 2, 4, 'stone'),
+    ],
+    blocks: [
+      ...waterVolume(origin, -1, -1, 2, 1, 0, 4),
+      spec(origin, 0, -1, 4, 'ladder', LADDER),
+      spec(origin, 0, 0, 4, 'ladder', LADDER),
+      spec(origin, 0, 1, 4, 'ladder', LADDER),
+    ],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 2, 6),
+    probes: [at(origin, 0, 0, 4), at(origin, 0, 1, 4), at(origin, 0, 1, 5), at(origin, 0, 2, 5), at(origin, 0, 2, 6)],
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: NO_PATH, swim: SUCCESS },
+  })
+
+  fields.push({
+    id: 'water-ladder-shallow',
+    title: '浅水 + 梯子',
+    proves: 'a one-deep pool with a ladder can be waded and climbed out',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -1, 2, 2, -1, 4, 'stone'),
+      fill(origin, -2, -1, 5, 2, 1, 5, 'stone'),
+      fill(origin, -2, 0, 2, -2, 2, 4, 'stone'),
+      fill(origin, 2, 0, 2, 2, 2, 4, 'stone'),
+    ],
+    blocks: [
+      ...waterVolume(origin, -1, 0, 2, 1, 0, 4),
+      spec(origin, 0, 0, 4, 'ladder', LADDER),
+      spec(origin, 0, 1, 4, 'ladder', LADDER),
+    ],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 2, 5),
+    probes: [at(origin, 0, 0, 3), at(origin, 0, 0, 4), at(origin, 0, 1, 4), at(origin, 0, 2, 5)],
+    expect: { guards: NO_PATH, climb: NO_PATH, wade: SUCCESS, swim: SUCCESS },
+  })
+
+  fields.push({
+    id: 'water-ladder-no-ladder',
+    title: '深水 + 高岸（无梯子）',
+    proves: 'without a ladder, a deep pool cannot climb a bank two blocks above the surface even under swim',
+    origin,
+    clear: CLEAR(origin),
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -2, 2, 2, -2, 4, 'stone'),
+      fill(origin, -2, -2, 5, 2, 1, 5, 'stone'),
+      fill(origin, -2, -1, 2, -2, 2, 4, 'stone'),
+      fill(origin, 2, -1, 2, 2, 2, 4, 'stone'),
+    ],
+    blocks: waterVolume(origin, -1, -1, 2, 1, 0, 4),
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 2, 5),
+    probes: [at(origin, 0, 0, 4), at(origin, 0, 1, 5), at(origin, 0, 2, 5)],
+    expect: same(NO_PATH),
+  })
+
   // --------------------------------------------------------------- ladder ---
   fields.push({
     id: 'ladder-up',
@@ -389,9 +460,51 @@ export function boundaryFields(origin: Cell): BoundaryField[] {
   })
 
   fields.push({
+    id: 'scaffold-step-over',
+    title: '脚手架跨过',
+    proves: 'one scaffolding block is a step up and down; the corridor continues beyond it',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [spec(origin, 0, 1, 3, 'scaffolding', { ...SCAFFOLD })],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 1, 6),
+    probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 0, 1, 6)],
+    expect: same(SUCCESS),
+  })
+
+  fields.push({
+    id: 'scaffold-top-down',
+    title: '脚手架上下来',
+    proves: 'standing on a scaffold top can step back down to the floor',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [spec(origin, 0, 1, 3, 'scaffolding', { ...SCAFFOLD })],
+    start: at(origin, 0, 2, 3),
+    goal: at(origin, 0, 1, 0),
+    probes: [at(origin, 0, 1, 3), at(origin, 0, 2, 3), at(origin, 0, 1, 0)],
+    expect: same(SUCCESS),
+  })
+
+  fields.push({
+    id: 'scaffold-beside',
+    title: '脚手架旁通过',
+    proves: 'scaffolding beside the corridor does not become a path obstacle',
+    origin,
+    clear: CLEAR(origin),
+    fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],
+    blocks: [spec(origin, 1, 1, 3, 'scaffolding', { ...SCAFFOLD })],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 1, 6),
+    probes: [at(origin, 1, 1, 3), at(origin, 0, 1, 3), at(origin, 0, 1, 6)],
+    expect: same(SUCCESS),
+  })
+
+  fields.push({
     id: 'scaffold-through',
     title: '脚手架穿越',
-    proves: 'a two-high scaffolding wall is not climbable and blocks the corridor',
+    proves: 'inside/side pass-through stays deferred: a two-high scaffolding wall blocks the corridor in P2Motion',
     origin,
     clear: CLEAR(origin),
     fills: [fill(origin, -2, 0, -1, 2, 0, 7, 'stone')],

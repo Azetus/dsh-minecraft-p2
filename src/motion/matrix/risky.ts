@@ -83,6 +83,31 @@ export function riskyFields(origin: Cell): RiskyField[] {
   })
 
   fields.push({
+    id: 'risky-water-ladder',
+    title: '水 + 梯子出岸（risky）',
+    proves: 'the vanilla node graph can enter a ladder from the water surface and step onto the bank',
+    origin,
+    clear: { min: at(origin, -3, -6, -3), max: at(origin, 5, 8, 7) },
+    fills: [
+      fill(origin, -2, 0, -1, 2, 0, 1, 'stone'),
+      fill(origin, -2, -2, 2, 2, -2, 4, 'stone'),
+      fill(origin, -2, -2, 5, 2, 1, 6, 'stone'),
+      fill(origin, -2, -1, 2, -2, 2, 4, 'stone'),
+      fill(origin, 2, -1, 2, 2, 2, 4, 'stone'),
+    ],
+    blocks: [
+      ...waterVolume(origin, -1, -1, 2, 1, 0, 4),
+      spec(origin, 0, -1, 4, 'ladder', { facing: 'north', waterlogged: 'false' }),
+      spec(origin, 0, 0, 4, 'ladder', { facing: 'north', waterlogged: 'false' }),
+      spec(origin, 0, 1, 4, 'ladder', { facing: 'north', waterlogged: 'false' }),
+    ],
+    start: at(origin, 0, 1, 0),
+    goal: at(origin, 0, 2, 6),
+    mode: 'risky',
+    expect: 'succeeded',
+  })
+
+  fields.push({
     id: 'risky-safe-alternative',
     title: '安全拒绝时给出未校验备选',
     proves: 'a safe GOTO_NO_PATH (half-height landing) carries observed.alternative (available=true) and does not move the body',

@@ -9,7 +9,8 @@ import {
   WaypointFollower,
 } from '../src/motion/vanilla/follow.ts'
 import { planVanillaPath, snapGoal, VANILLA_MAX_FALL } from '../src/motion/vanilla/search.ts'
-import { FixtureWorld, FULL_CUBE, LADDER_NORTH, rawBlock } from './helpers/motion-world.ts'
+import { riskyFields } from '../src/motion/matrix/risky.ts'
+import { buildFixture, FixtureWorld, FULL_CUBE, LADDER_NORTH, SCAFFOLDING_SHAPE, rawBlock } from './helpers/motion-world.ts'
 
 const FENCE: readonly CollisionBox[] = [[0, 0, 0, 1, 1.5, 1] as const]
 
@@ -89,6 +90,14 @@ describe('vanilla node reader', () => {
     const reader = readerFor(world)
     expect(reader.node({ x: 2, y: 64, z: 0 })).toBeUndefined()
     expect(reader.node({ x: 3, y: 64, z: 0 })).toBeUndefined()
+  })
+
+  it('keeps scaffolding inside/side pass deferred for the vanilla graph', () => {
+    const world = corridor()
+    put(world, { x: 2, y: 64, z: 0 }, rawBlock('scaffolding', SCAFFOLDING_SHAPE))
+    const reader = readerFor(world)
+    expect(reader.node({ x: 2, y: 64, z: 0 })).toBeUndefined()
+    expect(reader.passable({ x: 2, y: 64, z: 0 })).toBe(false)
   })
 })
 
@@ -172,6 +181,15 @@ describe('vanilla planning', () => {
     const plan = planVanillaPath(reader, { x: 0, y: 64, z: 0 }, { x: 3, y: 64, z: 0 })
     expect(plan.status).toBe('success')
     expect(plan.waypoints.map(cell => reader.node(cell)?.kind)).toContain('water')
+  })
+
+  it('plans the risky water+ladder bank exit', () => {
+    const field = riskyFields({ x: 0, y: 100, z: 0 }).find(item => item.id === 'risky-water-ladder')
+    expect(field).toBeDefined()
+    const world = buildFixture(field!)
+    const plan = planVanillaPath(readerFor(world), field!.start, field!.goal, { maxDistance: 32 })
+    expect(plan.reached).toBe(true)
+    expect(plan.waypoints.length).toBeGreaterThan(0)
   })
 
   it('opens a closed wooden door on the way and refuses a locked one', () => {

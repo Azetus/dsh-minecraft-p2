@@ -66,8 +66,10 @@ describe('boundary matrix shape', () => {
     expect(ids).toEqual([
       'water-wade-1', 'water-deep-2', 'water-fall-2', 'waterlogged-top-slab',
       'waterlogged-bottom-slab', 'water-ladder',
+      'water-ladder-exit', 'water-ladder-shallow', 'water-ladder-no-ladder',
       'ladder-up', 'ladder-down', 'ladder-beside', 'ladder-top-step-up', 'vine-up', 'ladder-second-floor',
-      'scaffold-stand', 'scaffold-through', 'scaffold-place', 'scaffold-stack',
+      'scaffold-stand', 'scaffold-step-over', 'scaffold-top-down', 'scaffold-beside',
+      'scaffold-through', 'scaffold-place', 'scaffold-stack',
       'slab-bottom-step', 'slab-top-step', 'stair-up', 'stair-down',
       'slab-ascend-impossible', 'slab-ascend-bottom-to-bottom', 'slab-pillar',
       'slab-fall-onto', 'slab-parkour-from',
@@ -129,6 +131,20 @@ describe('boundary matrix shape', () => {
     expect(rules.canWalkThrough(block)).toBe('no')
     expect(rules.isClimbable(block)).toBe('yes')
     expect(rules.standInfo({ x: 0, y: 102, z: 3 }).state).toBe('yes')
+  })
+
+  it('steps over one scaffolding block but does not pass through a wall', () => {
+    const over = fields.find(field => field.id === 'scaffold-step-over')!
+    const overResult = solve(over, 'wade').result
+    expect(overResult.status).toBe('success')
+    if (overResult.status === 'success') {
+      const kinds = overResult.moves.map(move => move.kind)
+      expect(kinds).toContain('ascend')
+      expect(kinds).toContain('descend')
+    }
+
+    const through = fields.find(field => field.id === 'scaffold-through')!
+    expect(solve(through, 'wade').result.status).toBe('noPath')
   })
 
   it('closes every fluid cell until the wade profile is on', () => {
