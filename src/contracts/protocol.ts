@@ -79,6 +79,17 @@ export type ProviderSummary = {
   capabilities: string[]
 }
 
+/** One provider-level disconnect cause, bounded for status/wake output. */
+export type LastDisconnect = {
+  at: number
+  kind: 'kick' | 'error' | 'end' | 'reset'
+  reason: string
+  eventLoopLagMs: number
+  serverAge: number | null
+  paused: boolean
+  ageIdleMs: number
+}
+
 /** Live server-observation state maintained by the provider. */
 export type ProviderRuntimeStatus = {
   connected: boolean
@@ -95,6 +106,8 @@ export type ProviderRuntimeStatus = {
   lastDeathPosition?: { x: number; y: number; z: number } | null
   /** Diagnostics used to tell server pause, client stall and our loop lag apart. */
   pauseDiagnostics?: PauseDiagnostics
+  /** Last disconnect cause; present after the socket ends or a kick/reset. */
+  lastDisconnect?: LastDisconnect
 }
 
 export type PauseDiagnostics = {

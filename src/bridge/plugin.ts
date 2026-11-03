@@ -583,6 +583,7 @@ async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
     target: manager.target === undefined ? null : formatTarget(manager.target),
     owner: status.status.owner?.sessionId ?? null,
     lock: manager.lockInfo ?? null,
+    lastDisconnect: status.status.providerState?.lastDisconnect ?? null,
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
 }

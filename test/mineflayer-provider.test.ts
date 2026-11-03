@@ -157,6 +157,39 @@ describe('MineflayerProvider', () => {
     const provider = new MineflayerProvider(bot)
     emitter.emit('end', 'server closed')
     expect(provider.query('position')).toMatchObject({ status: 'failed' })
+    expect(provider.liveStatus().lastDisconnect).toMatchObject({
+      kind: 'end',
+      reason: 'Mineflayer connection ended: server closed',
+    })
+  })
+
+  it('keeps a server kick reason instead of the generic socket end', () => {
+    const { bot, emitter } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    emitter.emit('kicked', 'You logged in from another location')
+    emitter.emit('end', 'socketClosed')
+
+    expect(provider.liveStatus()).toMatchObject({
+      connected: false,
+      lastDisconnect: {
+        kind: 'kick',
+        reason: 'Mineflayer kicked: You logged in from another location',
+      },
+    })
+  })
+
+  it('records a provider error when no kick arrives', () => {
+    const { bot, emitter } = fakeBot()
+    const provider = new MineflayerProvider(bot)
+    emitter.emit('error', new Error('client timed out after 30000 milliseconds'))
+
+    expect(provider.liveStatus()).toMatchObject({
+      connected: false,
+      lastDisconnect: {
+        kind: 'error',
+        reason: 'client timed out after 30000 milliseconds',
+      },
+    })
   })
 })
 

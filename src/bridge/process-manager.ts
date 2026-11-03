@@ -494,8 +494,12 @@ export class BodyManager {
       this.providerDisconnectPolls += 1
       if (this.providerDisconnectPolls >= 2 && this.autoRestart.enabled) {
         this.providerDisconnectPolls = 0
-        this.log('provider disconnected; restarting body')
-        void this.fault('provider-disconnected', 'provider connection lost for two status polls')
+        const last = status.providerState?.lastDisconnect
+        const detail = last === undefined
+          ? 'provider connection lost for two status polls'
+          : `provider connection lost (${last.kind}: ${last.reason})`
+        this.log(`provider disconnected; restarting body (${last?.kind ?? 'unknown'}: ${last?.reason ?? 'no reason'})`)
+        void this.fault('provider-disconnected', detail)
       }
     } else {
       this.providerDisconnectPolls = 0

@@ -322,6 +322,7 @@ async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonVal
     target: manager.target === undefined ? null : formatTarget(manager.target),
     owner: status.owner?.sessionId ?? null,
     lock: manager.lockInfo ?? null,
+    lastDisconnect: status.providerState?.lastDisconnect ?? null,
     health: status.health,
     connection: status.connection,
     paused: status.providerState?.paused ?? null,

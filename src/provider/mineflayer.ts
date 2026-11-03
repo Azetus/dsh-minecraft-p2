@@ -20,7 +20,7 @@ import { parseUnstickBlocks } from '../port/policy.ts'
  */
 export const mineflayerModule: unknown = mineflayer
 
-import type { PauseDiagnostics, ProviderRuntimeStatus, SuspensionState } from '../contracts/protocol.ts'
+import type { LastDisconnect, PauseDiagnostics, ProviderRuntimeStatus, SuspensionState } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type {
@@ -285,6 +285,7 @@ export class MineflayerProvider implements ActPort {
 
   private current: ActHandle | undefined
   private disconnected: Error | undefined
+  private lastDisconnect: LastDisconnect | undefined
   private paused = false
   private lastDeath: { at: number; position: { x: number; y: number; z: number } | null } | undefined
   private lastServerAge: number | undefined
@@ -331,11 +332,14 @@ export class MineflayerProvider implements ActPort {
       this.timePackets += 1
     })
     bot.once('end', reason => {
-      clearInterval(this.pauseTimer)
-      this.disconnected = new Error(`Mineflayer connection ended: ${String(reason)}`)
-      this.bot.clearControlStates()
-      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
-      current?.abort?.(this.disconnected, 'CONNECTION_LOST')
+      const text = reasonText(reason)
+      this.recordDisconnect('end', `Mineflayer connection ended: ${text}`)
+      this.markDisconnected(new Error(`Mineflayer connection ended: ${text}`))
+    })
+    bot.on('kicked', reason => {
+      const text = reasonText(reason)
+      this.recordDisconnect('kick', `Mineflayer kicked: ${text}`)
+      this.markDisconnected(new Error(`Mineflayer kicked: ${text}`))
     })
     bot.on('death', () => {
       this.bot.clearControlStates()
@@ -351,12 +355,37 @@ export class MineflayerProvider implements ActPort {
       current?.abort?.(new Error('the bot died'), current.deathCode?.() ?? 'DEATH')
     })
     bot.on('error', error => {
-      clearInterval(this.pauseTimer)
-      this.disconnected = error instanceof Error ? error : new Error(String(error))
-      this.bot.clearControlStates()
-      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
-      current?.abort?.(this.disconnected, 'CONNECTION_LOST')
+      const disconnected = error instanceof Error ? error : new Error(String(error))
+      this.recordDisconnect('error', disconnected.message)
+      this.markDisconnected(disconnected)
     })
+  }
+
+  private markDisconnected(error: Error): void {
+    clearInterval(this.pauseTimer)
+    this.disconnected = error
+    this.bot.clearControlStates()
+    const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+    current?.abort?.(this.disconnected, 'CONNECTION_LOST')
+  }
+
+  /**
+   * Keep the most specific cause. A kick arrives before the socket `end`, and
+   * an explicit reset is more useful than the generic socket close that follows.
+   */
+  private recordDisconnect(kind: LastDisconnect['kind'], reason: string): void {
+    const priority: Record<LastDisconnect['kind'], number> = { end: 1, error: 2, reset: 3, kick: 4 }
+    if (this.lastDisconnect !== undefined && priority[this.lastDisconnect.kind] >= priority[kind]) return
+    const now = Date.now()
+    this.lastDisconnect = {
+      at: now,
+      kind,
+      reason: reason.slice(0, 500),
+      eventLoopLagMs: this.eventLoopLagMs,
+      serverAge: this.serverAge(),
+      paused: this.paused,
+      ageIdleMs: this.lastServerAgeAt > 0 ? now - this.lastServerAgeAt : 0,
+    }
   }
 
   /** Server world age, or null when the client has no time packet yet. */
@@ -379,6 +408,7 @@ export class MineflayerProvider implements ActPort {
       controlRelease: current?.controlRelease() ?? null,
       lastDeathAt: this.lastDeath?.at ?? null,
       lastDeathPosition: this.lastDeath?.position ?? null,
+      ...(this.lastDisconnect === undefined ? {} : { lastDisconnect: { ...this.lastDisconnect } }),
       pauseDiagnostics: this.pauseDiagnostics(),
     }
   }
@@ -488,6 +518,7 @@ export class MineflayerProvider implements ActPort {
   private requestReset(): void {
     if (this.resetRequested || this.disconnected !== undefined) return
     this.resetRequested = true
+    this.recordDisconnect('reset', 'p2: act release unconfirmed; requesting body rebuild')
     try {
       this.bot.quit('p2: act release unconfirmed; requesting body rebuild')
     } catch (error) {
@@ -2322,6 +2353,20 @@ class MineflayerActHandle implements ActHandle {
       containerAfter: containerAfter ?? null,
     }
   }
+}
+
+function reasonText(reason: unknown): string {
+  if (typeof reason === 'string') return reason.slice(0, 500)
+  if (reason !== null && typeof reason === 'object') {
+    const text = (reason as { toString?: () => string }).toString?.()
+    if (typeof text === 'string' && text !== '[object Object]') return text.slice(0, 500)
+    try {
+      return JSON.stringify(reason).slice(0, 500)
+    } catch {
+      // Fall through to the generic string form.
+    }
+  }
+  return String(reason).slice(0, 500)
 }
 
 function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
