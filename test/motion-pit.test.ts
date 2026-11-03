@@ -112,6 +112,47 @@ describe('narrow pit and jump-ceiling matrices', () => {
     }
   })
 
+  it('enters a top-open 1x1x2 pit from the surface, but not a covered one', () => {
+    const plan = (covered: boolean) => {
+      const world = new FixtureWorld()
+      const stone = (x: number, y: number, z: number): void => {
+        world.blocks.set(`${x},${y},${z}`, rawBlock('stone', FULL_CUBE))
+      }
+      const air = (x: number, y: number, z: number): void => {
+        world.blocks.set(`${x},${y},${z}`, rawBlock('air', []))
+      }
+      stone(0, 63, 0)
+      for (let y = 64; y <= 65; y += 1) air(0, y, 0)
+      stone(1, 62, 0)
+      for (let y = 63; y <= 66; y += 1) air(1, y, 0)
+      for (const [x, z] of [[1, 1], [1, -1], [2, 0]] as const) {
+        for (let y = 62; y <= 64; y += 1) stone(x, y, z)
+      }
+      if (covered) stone(1, 65, 0)
+      world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+      const source = new MotionContextSource(world)
+      const search = new MotionSearch({ x: 0, y: 64, z: 0 }, { x: 1, y: 63, z: 0 }, () => source.next(), {
+        sliceMs: 50,
+        timeoutMs: 2_000,
+        maxNodes: 4_000,
+      })
+      let result = search.step(Date.now())
+      let guard = 0
+      while (result.status === 'running' && guard < 200) {
+        result = search.step(Date.now())
+        guard += 1
+      }
+      return result
+    }
+
+    const open = plan(false)
+    expect(open.status).toBe('success')
+    expect(open.moves.some(move => move.kind === 'descend')).toBe(true)
+
+    const covered = plan(true)
+    expect(covered.status).toBe('noPath')
+  })
+
   it('skips the exact standability precheck only for scaffold placement', () => {
     const blocks = new Map<string, FakeBlock>()
     set(blocks, 0, 63, 0, 'stone')
