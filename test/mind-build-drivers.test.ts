@@ -221,6 +221,41 @@ describe('place driver', () => {
     expect(failure?.facts?.adjacent).toEqual(expect.arrayContaining([{ x: 2, y: 64, z: 0 }]))
   })
 
+  it('keeps authority cause when a placement is explicitly denied', async () => {
+    const fake = fakePort({
+      failPlaceFaces: ['up'],
+      failPlaceCode: 'PLACE_FAILED',
+      placeFailureObserved: {
+        face: 'up',
+        providerCode: 'ACTION_DENIED',
+        providerMessage: 'you do not have permission to place here',
+        supports: { up: true, down: false, north: false, south: false, east: false, west: false },
+        requestedFace: 'up',
+      },
+    })
+    for (let x = -1; x <= 2; x += 1) {
+      for (let z = -1; z <= 1; z += 1) {
+        fake.world.set(`${x},63,${z}`, block('stone', { x, y: 63, z }))
+        fake.world.set(`${x},64,${z}`, block('air', { x, y: 64, z }))
+        fake.world.set(`${x},65,${z}`, block('air', { x, y: 65, z }))
+      }
+    }
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    expect((handle.result().observed as { failure?: unknown }).failure).toMatchObject({
+      layer: 'driver',
+      code: 'PLACE_FAILED',
+      diagnosis: 'DENIED',
+      cause: { kind: 'authority' },
+      recovery: 'replan',
+      facts: { providerCode: 'ACTION_DENIED', target: { x: 1, y: 64, z: 0 } },
+    })
+  })
+
   it('skips a stance whose own body covers the target cell', async () => {
     const fake = fakePort()
     fake.world.set('0,63,0', block('stone', { x: 0, y: 63, z: 0 }))
@@ -254,8 +289,12 @@ describe('place driver', () => {
     expect(observed.blockedBy).toBe('self')
     expect(observed.adjacent).toEqual(expect.arrayContaining([{ x: 1, y: 64, z: 0 }]))
     expect((result.observed as { failure?: unknown }).failure).toMatchObject({
+      layer: 'driver',
+      code: 'PLACE_BLOCKED_BY_SELF',
       diagnosis: 'START_EMBEDDED',
+      cause: { kind: 'world' },
       recovery: 'replan',
+      facts: { blockedBy: 'self', target: { x: 0, y: 64, z: 0 } },
     })
   })
 

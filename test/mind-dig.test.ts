@@ -165,9 +165,10 @@ describe('dig driver tool handling', () => {
 
     expect(result).toMatchObject({ state: 'failed', code: 'PICKUP_UNREACHABLE' })
     const failure = (result.observed as {
-      failure?: { diagnosis?: string; facts?: Record<string, unknown> }
+      failure?: { diagnosis?: string; cause?: { kind?: string }; facts?: Record<string, unknown> }
     }).failure
     expect(failure?.diagnosis).toBe('NO_STAND_CELL')
+    expect(failure?.cause).toMatchObject({ kind: 'world', code: 'PICKUP_UNREACHABLE' })
     expect(failure?.facts?.target).toEqual({ x: 1, y: 64, z: 0 })
     expect(failure?.facts?.requiredDig).toEqual(expect.arrayContaining([
       expect.objectContaining({ x: 1, y: 62, z: 0, layer: 'feet', name: 'stone' }),
@@ -300,8 +301,9 @@ describe('dig tunnel', () => {
     })
     expect(fake.blocks.get('2,64,0')?.name).toBe('water')
     const failure = (result.observed as {
-      failure?: { facts?: Record<string, unknown> }
+      failure?: { diagnosis?: string; cause?: { kind?: string }; facts?: Record<string, unknown> }
     }).failure
+    expect(failure).toMatchObject({ diagnosis: 'UNKNOWN', cause: { kind: 'world' } })
     expect(failure?.facts).toMatchObject({
       planned: 6,
       dug: 2,
