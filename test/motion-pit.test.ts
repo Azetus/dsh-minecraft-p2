@@ -1,0 +1,110 @@
+import { EventEmitter } from 'node:events'
+
+import type { Bot } from 'mineflayer'
+import { describe, expect, it } from 'vitest'
+
+import { MotionRun } from '../src/motion/mineflayer/run.ts'
+import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
+import { MotionSearch } from '../src/motion/search/index.ts'
+import { FULL_CUBE, FixtureWorld, rawBlock } from './helpers/motion-world.ts'
+
+/**
+ * Category: state safety (PLAN §6 Phase 3 T1, narrow pit / jump ceiling).
+ * Protects: a body in a one-wide two-high pit reports NO_PATH instead of looping
+ * GOTO_STUCK, and a step whose head cell is solid is rejected at planning time
+ * instead of failing later with `jump-did-not-land`.
+ */
+
+type FakeBlock = { name: string; shapes: number[][]; position: { x: number; y: number; z: number } }
+
+function botAt(position: { x: number; y: number; z: number }, blocks: Map<string, FakeBlock>): Bot {
+  const bot = Object.assign(new EventEmitter(), {
+    _client: new EventEmitter(),
+    registry: { blocks: {} },
+    entity: { position, velocity: { x: 0, y: 0, z: 0 }, onGround: true },
+    health: 20,
+    time: { age: 1 },
+    entities: {},
+    getControlState: () => false,
+    clearControlStates: () => {},
+    look: async () => {},
+    dig: async () => {},
+    placeBlock: async () => {},
+    activateBlock: async () => {},
+    blockAt: (p: { x: number; y: number; z: number }) => blocks.get(`${p.x},${p.y},${p.z}`) ?? null,
+  })
+  return bot as unknown as Bot
+}
+
+function set(blocks: Map<string, FakeBlock>, x: number, y: number, z: number, name: string): void {
+  blocks.set(`${x},${y},${z}`, {
+    name,
+    shapes: name === 'air' ? [] : [[0, 0, 0, 1, 1, 1]],
+    position: { x, y, z },
+  })
+}
+
+function tickUntilDone(run: MotionRun, limit = 200): { state: string; code?: string } {
+  let result = run.tick(Date.now())
+  for (let index = 0; index < limit && result.state === 'running'; index += 1) {
+    result = run.tick(Date.now() + index)
+  }
+  return result as { state: string; code?: string }
+}
+
+describe('narrow pit and jump-ceiling matrices', () => {
+  it('reports NO_PATH from a one-wide two-high shaft instead of looping GOTO_STUCK', () => {
+    const blocks = new Map<string, FakeBlock>()
+    // Floor at 63; a 1x1 shaft with air at 64/65 and walls all around.
+    set(blocks, 0, 63, 0, 'stone')
+    set(blocks, 0, 64, 0, 'air')
+    set(blocks, 0, 65, 0, 'air')
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      set(blocks, dx, 63, dz, 'stone')
+      for (let y = 64; y <= 66; y += 1) set(blocks, dx, y, dz, 'stone')
+    }
+    set(blocks, 0, 66, 0, 'air')
+    const run = new MotionRun(botAt({ x: 0.5, y: 64, z: 0.5 }, blocks), { x: 0, y: 64, z: 3 }, 1, 10_000)
+    run.start()
+    const result = tickUntilDone(run)
+    expect(result.state).toBe('failed')
+    expect(result.code).toBe('GOTO_NO_PATH')
+    run.stop()
+  })
+
+  it('rejects a step whose third cell above the takeoff is solid', () => {
+    const world = new FixtureWorld()
+    const air = (x: number, y: number, z: number): void => { world.blocks.set(`${x},${y},${z}`, rawBlock('air', [])) }
+    const stone = (x: number, y: number, z: number): void => { world.blocks.set(`${x},${y},${z}`, rawBlock('stone', FULL_CUBE)) }
+    // A one-wide approach: walls on both sides, a wall behind the step, a step
+    // at z=2, and a solid third cell above the only takeoff cell (z=1).
+    for (let x = -1; x <= 1; x += 1) {
+      for (let z = 0; z <= 4; z += 1) {
+        stone(x, 63, z)
+        for (let y = 64; y <= 67; y += 1) air(x, y, z)
+      }
+    }
+    for (let z = 0; z <= 4; z += 1) {
+      for (let y = 64; y <= 67; y += 1) {
+        stone(-1, y, z)
+        stone(1, y, z)
+      }
+    }
+    for (let y = 64; y <= 67; y += 1) stone(0, y, 3)
+    stone(0, 64, 2)
+    stone(0, 66, 1)
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+    const source = new MotionContextSource(world)
+    const search = new MotionSearch({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 2 }, () => source.next(), {
+      sliceMs: 50,
+      maxNodes: 2_000,
+    })
+    let result = search.step(Date.now())
+    let guard = 0
+    while (result.status === 'running' && guard < 200) {
+      result = search.step(Date.now())
+      guard += 1
+    }
+    expect(result.status).toBe('noPath')
+  })
+})
