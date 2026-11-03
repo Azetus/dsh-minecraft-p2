@@ -6,6 +6,7 @@ import type { MindStatusView } from '../contracts/protocol.ts'
 import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { SuspensionState } from '../contracts/protocol.ts'
 import type { DutyStatusView } from '../contracts/protocol.ts'
+import type { MindOrderResult, MindQueueSummary } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
@@ -93,7 +94,7 @@ export type MindRuntime = {
   status(): MindStatusView
   /** Latest deviation/terminal digest for `p2_report`; null while healthy. */
   report(): JsonValue | null
-  enqueueOrder(input: unknown): { id: string; state: string }
+  enqueueOrder(input: unknown): MindOrderResult
   cancelOrder(id: string): { id: string; state: string }
   /** Cancel every queued/active order (hold barriers included). */
   cancelAll(): { cancelled: number }
@@ -1060,12 +1061,32 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     report(): JsonValue | null {
       return lastReport
     },
-    enqueueOrder(input: unknown): { id: string; state: string } {
+    enqueueOrder(input: unknown): MindOrderResult {
       const id = isRecord(input) && typeof input.id === 'string'
         ? input.id
         : `ord-${Date.now().toString(36)}-${++orderSeq}`
       const record = orders.enqueue(isRecord(input) ? { ...input, id } : input)
-      return { id: record.order.id, state: record.state }
+      const active = orders.active()
+      const queued = orders.queued().length
+      const blocked = active !== undefined && active.order.id !== record.order.id
+        ? { id: active.order.id, verb: active.order.verb }
+        : undefined
+      const queue: MindQueueSummary = {
+        active: active === undefined ? null : { id: active.order.id, verb: active.order.verb },
+        queued,
+        ...(blocked === undefined ? {} : { blockedBy: blocked }),
+        ...(blocked?.verb === 'hold'
+          ? { release: `p2_cancel {id:"${blocked.id}"} or {all:true}` }
+          : {}),
+        ...(record.order.verb === 'hold' && active?.order.id === record.order.id
+          ? {
+              holdsActiveSlot: true,
+              queuedBehind: queued,
+              release: `p2_cancel {id:"${record.order.id}"} or {all:true}`,
+            }
+          : {}),
+      }
+      return { id: record.order.id, state: record.state, queue }
     },
     cancelOrder(id: string): { id: string; state: string } {
       const activeBefore = orders.active()

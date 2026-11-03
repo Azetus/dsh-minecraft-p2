@@ -1,3 +1,4 @@
+import { isRecord } from '../contracts/index.ts'
 import type { JsonValue } from '../contracts/index.ts'
 import { ORDER_VERBS } from '../mind/orders.ts'
 import type { BodyManager } from './process-manager.ts'
@@ -181,16 +182,23 @@ export function registerP2Tools(
         for (const key of ['id', 'params', 'constraints', 'blueprint', 'policy'] as const) {
           if (args[key] !== undefined) order[key] = args[key] as JsonValue
         }
-        const accepted = await manager.mindOrder(order) as unknown as { id?: string; state?: string }
+        const accepted = await manager.mindOrder(order) as unknown as {
+          id?: string
+          state?: string
+          queue?: JsonValue
+        }
         const verb = typeof args.verb === 'string' ? args.verb : ''
         const orderId = typeof accepted?.id === 'string' ? accepted.id : undefined
         const repeatFailures = orderId !== undefined && repeat !== undefined
           ? repeat.noteAccepted(agent.session.id, orderId, verb, args.params)
           : 0
+        const warning = queueWarning(accepted?.queue)
         return {
           accepted: true,
           ...(orderId === undefined ? {} : { id: orderId }),
           ...(typeof accepted?.state === 'string' ? { state: accepted.state } : {}),
+          ...(accepted?.queue === undefined ? {} : { queue: accepted.queue }),
+          ...(warning === undefined ? {} : { warning }),
           ...(repeatFailures >= 2
             ? { repeatFailures, repeatHint: repeatHint(verb, repeatFailures) }
             : {}),
@@ -286,8 +294,20 @@ export function registerP2Tools(
   }
 }
 
-async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonValue> {
-  if (manager.currentState !== 'active') return { state: manager.currentState }
+function queueWarning(queue: JsonValue | undefined): string | undefined {
+  if (!isRecord(queue)) return undefined
+  const blockedBy = isRecord(queue.blockedBy) ? queue.blockedBy : undefined
+  const blockedId = typeof blockedBy?.id === 'string' ? blockedBy.id : undefined
+  if (blockedBy?.verb === 'hold' && blockedId !== undefined) {
+    return `the active hold ${blockedId} is a queue barrier; this order will not start until the hold ends. Release it with p2_cancel {id:"${blockedId}"} or p2_cancel {all:true}.`
+  }
+  if (queue.holdsActiveSlot === true && typeof queue.queuedBehind === 'number' && queue.queuedBehind > 0) {
+    return `hold is a barrier: ${queue.queuedBehind} queued order(s) will not start until this hold ends. This is not a queue purge; use p2_cancel {all:true} to clear the queue, or p2_cancel {id} to release the hold.`
+  }
+  return undefined
+}
+
+async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonValue> {  if (manager.currentState !== 'active') return { state: manager.currentState }
   requireActiveOwner(manager, agent)
   const result = await manager.status()
   if (result.state !== 'active') return { state: result.state }

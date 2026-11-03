@@ -89,6 +89,23 @@ function makeMindAt(port: ClientPort, journalPath: string) {
 }
 
 describe('primitive order retry policy', () => {
+  it('reports a hold barrier and the orders queued behind it', () => {
+    const fake = fakePort([{ state: 'ok' }])
+    const mind = makeMind(fake.port)
+    const hold = mind.enqueueOrder({ id: 'ord-hold', verb: 'hold' })
+    expect(hold.queue).toMatchObject({
+      active: { id: 'ord-hold', verb: 'hold' },
+      holdsActiveSlot: true,
+      queuedBehind: 0,
+    })
+    const go = mind.enqueueOrder({ id: 'ord-go-behind', verb: 'go', params: { x: 1, y: 64, z: 0 } })
+    expect(go.queue).toMatchObject({
+      queued: 1,
+      blockedBy: { id: 'ord-hold', verb: 'hold' },
+      release: expect.stringContaining('p2_cancel'),
+    })
+  })
+
   it('retries a transient go failure inside the same order', async () => {
     const fake = fakePort([
       { state: 'failed', code: 'GOTO_NO_PATH' },

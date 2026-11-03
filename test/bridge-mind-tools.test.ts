@@ -19,6 +19,8 @@ class FakeManager {
   readonly entityQueries: unknown[] = []
   readonly previews: unknown[] = []
   readonly says: string[] = []
+  /** Override the next accepted order result (queue summary tests). */
+  orderResult: unknown = { id: 'ord-1', state: 'active' }
 
   async status(): Promise<unknown> {
     return {
@@ -43,7 +45,7 @@ class FakeManager {
 
   async mindOrder(order: unknown): Promise<unknown> {
     this.orders.push(order)
-    return { id: 'ord-1', state: 'active' }
+    return this.orderResult
   }
 
   async worldObserve(params: unknown): Promise<unknown> {
@@ -141,6 +143,43 @@ describe('mind operator tools', () => {
     )
     expect(value).toEqual({ accepted: true, id: 'ord-1', state: 'active' })
     expect(manager.orders).toEqual([{ verb: 'go', params: { x: 0, y: 64, z: 0 } }])
+  })
+
+  it('surfaces a hold barrier warning in the accepted result', async () => {
+    const { definitions, manager, agent } = harness()
+    manager.orderResult = {
+      id: 'ord-hold',
+      state: 'active',
+      queue: {
+        active: { id: 'ord-hold', verb: 'hold' },
+        queued: 3,
+        holdsActiveSlot: true,
+        queuedBehind: 3,
+        release: 'p2_cancel {id:"ord-hold"} or {all:true}',
+      },
+    }
+    const hold = await definitions.get('p2_order')?.execute({ verb: 'hold' }, { agent }) as {
+      queue: { holdsActiveSlot: boolean }
+      warning: string
+    }
+    expect(hold.queue).toMatchObject({ holdsActiveSlot: true, queuedBehind: 3 })
+    expect(hold.warning).toContain('not a queue purge')
+
+    manager.orderResult = {
+      id: 'ord-go',
+      state: 'queued',
+      queue: {
+        active: { id: 'ord-hold', verb: 'hold' },
+        queued: 1,
+        blockedBy: { id: 'ord-hold', verb: 'hold' },
+        release: 'p2_cancel {id:"ord-hold"} or {all:true}',
+      },
+    }
+    const go = await definitions.get('p2_order')?.execute(
+      { verb: 'go', params: { x: 0, y: 64, z: 0 } },
+      { agent },
+    ) as { warning: string }
+    expect(go.warning).toContain('active hold ord-hold')
   })
 
   it('passes an observation request through, without acting', async () => {

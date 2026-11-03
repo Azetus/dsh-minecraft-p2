@@ -327,7 +327,24 @@ export type MindOrderView = {
   blockedKeys?: string[]
 }
 
-export type MindOrderResult = { id: string; state: string }
+export type MindQueueSummary = {
+  active: { id: string; verb: string } | null
+  queued: number
+  /** Active order that will keep a newly queued order from starting. */
+  blockedBy?: { id: string; verb: string }
+  /** True when the accepted order itself is the active hold barrier. */
+  holdsActiveSlot?: boolean
+  /** Orders already queued behind an active hold. */
+  queuedBehind?: number
+  /** Explicit release instruction for a hold barrier. */
+  release?: string
+}
+
+export type MindOrderResult = {
+  id: string
+  state: string
+  queue?: MindQueueSummary
+}
 
 export type MindOrdersResult = {
   active: MindOrderView | null
