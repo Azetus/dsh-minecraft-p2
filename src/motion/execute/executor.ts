@@ -8,7 +8,7 @@ import {
   type MoveState,
   type Vec3,
 } from '../model/types.ts'
-import { cellOf, isDeeplySubmerged, reached, releaseInputs, standingCell } from './moves.ts'
+import { isDeeplySubmerged, reached, releaseInputs, standingCell } from './moves.ts'
 
 export type ExecutorState = 'running' | 'succeeded' | 'failed' | 'canceled'
 
@@ -270,7 +270,7 @@ export class PathExecutor {
   }
 
   private recover(ctx: MoveContext, now: number): void {
-    const cell = cellOf(ctx.position)
+    const cell = standingCell(ctx.rules, ctx.position)
     const forward = this.findValidFrom(cell, ctx, this.index, Math.min(this.moves.length - 1, this.index + 4))
     if (forward !== undefined) {
       this.jumpTo(forward, now, ctx)

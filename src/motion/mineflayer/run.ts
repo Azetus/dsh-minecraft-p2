@@ -1,7 +1,7 @@
 import type { Bot } from 'mineflayer'
 
 import type { JsonValue } from '../../contracts/types.ts'
-import { PathExecutor, cellOf, standingCell } from '../execute/index.ts'
+import { PathExecutor, standingCell } from '../execute/index.ts'
 import {
   defaultConstraints,
   createGoal,
@@ -90,7 +90,7 @@ export class MotionRun {
       this.baseConstraints,
       this.classifier,
     )
-    this.from = cellOf(this.world.self().pos)
+    this.from = standingCell(this.context.next().rules, this.world.self().pos)
     this.activeTarget = target
     this.finalArrival = options.arrival ?? { kind: 'near', range }
     this.motionGoal = createGoal(target, this.finalArrival)
@@ -237,7 +237,7 @@ export class MotionRun {
    */
   private resolveTarget(): Cell {
     if (this.world.blockAt(this.target) !== null) return this.target
-    const self = cellOf(this.world.self().pos)
+    const self = standingCell(this.context.next().rules, this.world.self().pos)
     const dx = this.target.x - self.x
     const dz = this.target.z - self.z
     const distance = Math.hypot(dx, dz)
@@ -305,7 +305,7 @@ export class MotionRun {
       this.startExecutor(result.moves)
       return
     }
-    if (!this.searchedSafeFall && this.target.y < cellOf(this.world.self().pos).y - 1) {
+    if (!this.searchedSafeFall && this.target.y < standingCell(this.context.next().rules, this.world.self().pos).y - 1) {
       const budget = fallBudgetForHealth(this.world.self().health)
       if (budget > this.activeConstraints.maxFall) {
         this.searchedSafeFall = true

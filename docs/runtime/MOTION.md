@@ -259,6 +259,7 @@ interface Move {
 ### 5.1 搜索
 
 - 节点：脚位格（`Cell`）。
+- 起点身份 `standingCell(rules, pos)`：按真实脚高匹配节点的 `standInfo.feetY`，而不是用 `cell.y` 猜；下半砖（脚 63.5）、farmland（63.9375）等非整数脚高都归一到其上的脚格。中心列不可站时按 0.6 宽 AABB 的四角列兜底；水面仍归一到水面节点。搜索起点、`arrived`、执行器 `validPositions`/`recover` 共用这一个函数。
 - 边：上面 Move Set 中 `cost < COST_INF` 的 Move；**物理不可行的边在规划期就不存在**。
 - A*：`g = 已走代价`，`h = 切比雪夫距离`；每个邻居先构造 Move，再用同一套 `cost` 过滤。
 - 预算：时间片（默认 5ms/步）+ 节点数（默认 20k）+ 总超时（默认 3s）；分片执行，不阻塞 tick/心跳。

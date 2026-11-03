@@ -1,5 +1,5 @@
 import { distance2d } from './geometry.ts'
-import { cellOf } from '../model/block.ts'
+import { cellOf, PLAYER_HALF_WIDTH } from '../model/block.ts'
 import type {
   Cell,
   Move,
@@ -51,24 +51,75 @@ export function onClimb(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.5
 export { cellOf }
 
 /**
- * The planner's identity for the body's current position. A body floating at a
- * water surface has its feet about 0.6 below the block-level surface cell, so
- * `cellOf` reports the submerged cell; the planner's node is the surface cell
- * one above. Everywhere else this is just `cellOf`.
+ * The planner's identity for the body's current position.
+ *
+ * The search node is the *feet cell* whose `standInfo` feet height matches the
+ * real feet position, not simply `floor(pos.y)`: a bottom slab at y=69 puts the
+ * feet at 69.5 and the node at 70; farmland at 69 (top 69.9375) is also node
+ * 70. When the centre column has no matching stand, the body's AABB corners
+ * are tried (vanilla `getStart` fallback), so a body half over a step still
+ * maps to a node it can actually stand on. Water keeps the surface-node rule.
  */
 export function standingCell(rules: Rules, pos: Vec3): Cell {
-  const cell = cellOf(pos)
-  if (rules.isWater(cell) !== 'yes') return cell
+  const water = surfaceWaterCell(rules, pos)
+  if (water !== undefined) return water
+  return groundStandingCell(rules, pos)
+}
+
+function surfaceWaterCell(rules: Rules, pos: Vec3): Cell | undefined {
+  const start = cellOf(pos)
+  if (rules.isWater(start) !== 'yes') return undefined
   // A floating body's feet sit below the block-level surface cell; walk up to
   // the topmost water cell (the swim node) if the model accepts it.
   for (let dy = 0; dy <= 2; dy += 1) {
-    const candidate = { x: cell.x, y: cell.y + dy, z: cell.z }
+    const candidate = { x: start.x, y: start.y + dy, z: start.z }
     if (rules.isWater(candidate) !== 'yes') continue
-    const above = { x: cell.x, y: candidate.y + 1, z: cell.z }
+    const above = { x: start.x, y: candidate.y + 1, z: start.z }
     if (rules.isWater(above) === 'yes') continue
     if (rules.standInfo(candidate).state === 'yes') return candidate
   }
-  return cell
+  return undefined
+}
+
+function groundStandingCell(rules: Rules, pos: Vec3): Cell {
+  const baseY = Math.floor(pos.y + 0.5)
+  const centre = { x: Math.floor(pos.x), z: Math.floor(pos.z) }
+  let best: { cell: Cell; feetDelta: number; centreDistance: number } | undefined
+  for (const column of bodyColumns(pos)) {
+    for (let dy = 1; dy >= -1; dy -= 1) {
+      const cell = { x: column.x, y: baseY + dy, z: column.z }
+      const info = rules.standInfo(cell)
+      if (info.state !== 'yes') continue
+      const feetDelta = Math.abs(info.feetY - pos.y)
+      // The node must actually be the body's feet, not a neighbouring step.
+      if (feetDelta > 0.6) continue
+      const centreDistance = Math.hypot(cell.x - centre.x, cell.z - centre.z)
+      if (best === undefined
+        || feetDelta < best.feetDelta - 1e-9
+        || (Math.abs(feetDelta - best.feetDelta) <= 1e-9 && centreDistance < best.centreDistance)) {
+        best = { cell, feetDelta, centreDistance }
+      }
+    }
+  }
+  return best?.cell ?? { x: centre.x, y: baseY, z: centre.z }
+}
+
+/** Columns the 0.6-wide body AABB covers, including both boundary columns. */
+function bodyColumns(pos: Vec3): Array<{ x: number; z: number }> {
+  const xs = uniqueIndices([pos.x, pos.x - PLAYER_HALF_WIDTH + 1e-4, pos.x + PLAYER_HALF_WIDTH - 1e-4])
+  const zs = uniqueIndices([pos.z, pos.z - PLAYER_HALF_WIDTH + 1e-4, pos.z + PLAYER_HALF_WIDTH - 1e-4])
+  const columns: Array<{ x: number; z: number }> = []
+  for (const x of xs) for (const z of zs) columns.push({ x, z })
+  return columns
+}
+
+function uniqueIndices(values: readonly number[]): number[] {
+  const result: number[] = []
+  for (const value of values) {
+    const index = Math.floor(value)
+    if (!result.includes(index)) result.push(index)
+  }
+  return result
 }
 
 export function aim(ctx: MoveContext, cell: Cell): void {
