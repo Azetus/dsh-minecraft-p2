@@ -152,6 +152,7 @@ const FACT_KEYS = new Set([
   'budget',
   'elapsedMs',
   'elapsedGameAge',
+  'unreachableDrops',
 ])
 
 const MAX_FACT_ARRAY = 8

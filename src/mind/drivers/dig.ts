@@ -4,6 +4,7 @@ import type { JsonValue } from '../../contracts/types.ts'
 import { PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { approachBlock } from '../approach.ts'
 import { pickupNearby } from '../pickup.ts'
+import type { PickupResult } from '../pickup.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { DigPurpose } from '../tools.ts'
@@ -182,6 +183,7 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose): Pro
     inventoryAfter: afterCount,
     dropDelta: afterCount - beforeCount,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
+    unreachableDrops: unreachableDrops(pickup),
   }
   if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0 && afterCount <= beforeCount) {
     const code = pickup.merged > 0
@@ -304,6 +306,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams): Promise<DriverResul
     inventoryAfter,
     dropDelta: inventoryAfter - inventoryBefore,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
+    unreachableDrops: unreachableDrops(pickup),
   }
   if (skipped.length > 0) {
     return {
@@ -434,6 +437,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams): Promise<DriverResul
     inventoryAfter,
     dropDelta: inventoryAfter - inventoryBefore,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
+    unreachableDrops: unreachableDrops(pickup),
   }
   if (reason !== undefined) {
     return {
@@ -658,6 +662,26 @@ function isFluidName(name: string): boolean {
 
 function isAirBlock(block: BlockInfo | null): boolean {
   return block !== null && block.loaded && isAirName(block.name)
+}
+
+/**
+ * Drops the body could not reach after a dig. `dug` is blocks, `drops` is item
+ * entities and `picked` is inventory delta; they are different units, so this
+ * only reports the observed entities and never infers from the block count.
+ */
+function unreachableDrops(pickup: PickupResult | undefined): JsonValue {
+  if (pickup === undefined || pickup.unreachable <= 0) return []
+  const drops: JsonValue[] = []
+  for (const item of pickup.observed.items) {
+    if (item.presentAfter === false) continue
+    drops.push({
+      name: item.item?.name ?? item.name,
+      count: item.item?.count ?? 1,
+      position: (item.positionAfter ?? item.position) as unknown as JsonValue,
+    })
+    if (drops.length >= 5) break
+  }
+  return drops
 }
 
 /** Add the unified failure projection to every dig failure path. */

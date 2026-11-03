@@ -142,6 +142,7 @@ describe('dig driver tool handling', () => {
       state: 'succeeded',
       observed: { kind: 'dig', purpose: 'harvest', dropDelta: 0 },
     })
+    expect((result.observed as { unreachableDrops?: unknown }).unreachableDrops).toEqual([])
     expect(fake.digs()).toBe(1)
   })
 
@@ -171,6 +172,11 @@ describe('dig driver tool handling', () => {
     expect(failure?.facts?.requiredDig).toEqual(expect.arrayContaining([
       expect.objectContaining({ x: 1, y: 62, z: 0, layer: 'feet', name: 'stone' }),
     ]))
+    const drops = [
+      { name: 'cobblestone', count: 2, position: { x: 1.5, y: 62, z: 0.5 } },
+    ]
+    expect((result.observed as { unreachableDrops?: unknown }).unreachableDrops).toEqual(drops)
+    expect(failure?.facts?.unreachableDrops).toEqual(drops)
   })
 
   it('keeps the provider observed data when the dig times out', async () => {
