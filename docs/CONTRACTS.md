@@ -108,6 +108,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。所有普通移动和授权 `unstickDig` 都走 motion；不再有 `motion` 开关或 legacy `goto`。
 - `unstickDig` 是显式 break 白名单：只允许列出的坐标/方块名，核心先挖掘并读回，再执行移动；没有列出的块不可挖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。
+- `BODY_OVERLAP`：真实 0.6×1.8 AABB 与已加载方块碰撞相交（半嵌、1 格高小窝）。规划前与到达后 fail-fast，`observed.blockedBy` 给出 `{x,y,z,name}`，不重试；自动清格不在 motion 内实现，Agent 用 `go {unstickDig}` 显式授权。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。

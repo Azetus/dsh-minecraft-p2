@@ -282,6 +282,7 @@ interface Move {
 ### 6.1 逐 tick 校验（已实现）
 
 - 当前脚位不在 `validPositions`：向前/向后寻找可接上的位置，重置中间 Move。
+- 真实 0.6×1.8 身体 AABB 与已加载方块的碰撞相交（半嵌、1 格高小窝）：规划前与到达后各检查一次，直接失败 `BODY_OVERLAP`，`observed.blockedBy` 列出 `{x,y,z,name}`；不再对“从身体内部出发”的边反复规划。未加载/未知碰撞只进 `unknown`，不算 overlap。
 - 当前 Move 的 `cost` 重新计算变成 `COST_INF`：中止 `UNREACHABLE`。
 - 当前 Move 耗时超过“原代价 + 宽限”：中止 `TIMEOUT`。
 - 无位移超过 `stallMs` 或离路径太远：中止 `STUCK`。
@@ -338,7 +339,7 @@ interface Move {
 - `traverse` order 已委托 motion 的 `moveTo { allowPlace, material }`；provider `pillarUp`/`pillar` 已删除。**致命退出**（lava/void/lethal_fall）由 Agent 层 `fatal` driver 执行，不进入 A*。
 - 所有对外结果包含：`state`、`reason`、`position`、`bestReachable`（如有）、`attempts`（如有）、`elapsedMs`。
 - `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / safeFallPass / healthBefore / healthAfter / elapsedMs`；新增 `planner` 标识本次规划器；Agent 层 `fatal` 的结果由 driver 自己记录。
-- 失败码保持可分类：`NO_PATH` / `UNREACHABLE` / `STUCK` / `TIMEOUT` / `CANCELED` / `STOP_UNCONFIRMED` / `PLACE_FAILED` / `OBSERVATION_UNAVAILABLE` / `APPROACH_NO_STAND` / `APPROACH_NO_PATH` / `APPROACH_UNKNOWN`。
+- 失败码保持可分类：`NO_PATH` / `UNREACHABLE` / `STUCK` / `TIMEOUT` / `CANCELED` / `STOP_UNCONFIRMED` / `PLACE_FAILED` / `BODY_OVERLAP` / `OBSERVATION_UNAVAILABLE` / `APPROACH_NO_STAND` / `APPROACH_NO_PATH` / `APPROACH_UNKNOWN`。
 
 ## 9. 测试与验收
 

@@ -1,4 +1,4 @@
-import type { BlockTag, Cell, ClassifiedBlock, CollisionBox } from './types.ts'
+import type { BlockTag, Box, Cell, ClassifiedBlock, CollisionBox, Vec3 } from './types.ts'
 
 /** Player AABB used for clearance checks; vanilla survival dimensions. */
 export const PLAYER_WIDTH = 0.6
@@ -102,6 +102,50 @@ export function supportTopAt(block: ClassifiedBlock): number | undefined {
 }
 
 /**
+ * The player's real 0.6x1.8 AABB at a continuous feet position. Vanilla keeps
+ * the horizontal centre at `pos` and the vertical span [pos.y, pos.y + height],
+ * so a body near a block boundary covers more than one column.
+ */
+export function bodyBoxAt(pos: Vec3): Box {
+  return {
+    min: { x: pos.x - PLAYER_HALF_WIDTH, y: pos.y, z: pos.z - PLAYER_HALF_WIDTH },
+    max: { x: pos.x + PLAYER_HALF_WIDTH, y: pos.y + PLAYER_HEIGHT, z: pos.z + PLAYER_HALF_WIDTH },
+  }
+}
+
+/** Body AABB for a path cell whose body is centred in the cell. */
+export function bodyBoxAtCell(cell: Cell, feetY: number): Box {
+  return {
+    min: { x: cell.x + 0.5 - PLAYER_HALF_WIDTH, y: feetY, z: cell.z + 0.5 - PLAYER_HALF_WIDTH },
+    max: { x: cell.x + 0.5 + PLAYER_HALF_WIDTH, y: feetY + PLAYER_HEIGHT, z: cell.z + 0.5 + PLAYER_HALF_WIDTH },
+  }
+}
+
+/**
+ * Does this block's collision intersect an explicit player body box? Returns
+ * `undefined` when the collision is unknown. Touching faces do not overlap.
+ */
+export function blockOverlapsBox(block: ClassifiedBlock, cell: Cell, box: Box): boolean | undefined {
+  const boxes = collisionOf(block)
+  if (boxes === undefined) return undefined
+  const minY = box.min.y + EPSILON
+  const maxY = box.max.y - EPSILON
+  for (const single of boxes) {
+    const boxMinX = cell.x + single[0]
+    const boxMinY = cell.y + single[1]
+    const boxMinZ = cell.z + single[2]
+    const boxMaxX = cell.x + single[3]
+    const boxMaxY = cell.y + single[4]
+    const boxMaxZ = cell.z + single[5]
+    if (boxMaxX <= box.min.x + EPSILON || boxMinX >= box.max.x - EPSILON) continue
+    if (boxMaxZ <= box.min.z + EPSILON || boxMinZ >= box.max.z - EPSILON) continue
+    if (boxMaxY <= minY || boxMinY >= maxY) continue
+    return true
+  }
+  return false
+}
+
+/**
  * Does this block's collision intersect the player body at `feetY`? Returns
  * `undefined` when the collision is unknown. The support cell itself is not
  * reported: the body starts just above the derived feet height.
@@ -111,27 +155,7 @@ export function bodyOverlap(
   cell: Cell,
   feetY: number,
 ): boolean | undefined {
-  const boxes = collisionOf(block)
-  if (boxes === undefined) return undefined
-  const minX = cell.x + 0.5 - PLAYER_HALF_WIDTH
-  const maxX = cell.x + 0.5 + PLAYER_HALF_WIDTH
-  const minZ = cell.z + 0.5 - PLAYER_HALF_WIDTH
-  const maxZ = cell.z + 0.5 + PLAYER_HALF_WIDTH
-  const minY = feetY + EPSILON
-  const maxY = feetY + PLAYER_HEIGHT - EPSILON
-  for (const box of boxes) {
-    const boxMinX = cell.x + box[0]
-    const boxMinY = cell.y + box[1]
-    const boxMinZ = cell.z + box[2]
-    const boxMaxX = cell.x + box[3]
-    const boxMaxY = cell.y + box[4]
-    const boxMaxZ = cell.z + box[5]
-    if (boxMaxX <= minX + EPSILON || boxMinX >= maxX - EPSILON) continue
-    if (boxMaxZ <= minZ + EPSILON || boxMinZ >= maxZ - EPSILON) continue
-    if (boxMaxY <= minY || boxMinY >= maxY) continue
-    return true
-  }
-  return false
+  return blockOverlapsBox(block, cell, bodyBoxAtCell(cell, feetY))
 }
 
 /** True when the block can be replaced without first breaking it. */

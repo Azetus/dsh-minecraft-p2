@@ -1,4 +1,6 @@
 import {
+  blockOverlapsBox,
+  bodyBoxAt,
   bodyOverlap,
   cellKey,
   hasTag,
@@ -11,6 +13,7 @@ import { vanillaClassifier } from './semantics/vanilla.ts'
 import {
   defaultConstraints,
   type BlockClassifier,
+  type BodyOverlap,
   type Cell,
   type ClassifiedBlock,
   type Direction,
@@ -20,6 +23,7 @@ import {
   type Rules,
   type StandInfo,
   type Tri,
+  type Vec3,
 } from './types.ts'
 
 const EPSILON = 0.001
@@ -321,6 +325,40 @@ export class RuleSet implements Rules {
     if (hasTag(below, 'lava')) return 'no'
     if (this.isHazard(supportCell) === 'yes') return 'no'
     return this.bodyCheck(cell, cell.y).state
+  }
+
+  /**
+   * Collision blocks intersecting the real body AABB. Unlike `standInfo` this
+   * uses the continuous position (a body near a cell boundary can cover two
+   * columns) and reports every intersecting cell, not just a verdict. Fluid
+   * cells have no collision boxes, so water/lava do not count as an overlap.
+   */
+  bodyOverlapAt(pos: Vec3): BodyOverlap {
+    const body = bodyBoxAt(pos)
+    const blocks: Array<Cell & { name: string }> = []
+    const unknown: Cell[] = []
+    const maxX = Math.floor(body.max.x - EPSILON)
+    const maxY = Math.floor(body.max.y - EPSILON)
+    const maxZ = Math.floor(body.max.z - EPSILON)
+    for (let x = Math.floor(body.min.x); x <= maxX; x += 1) {
+      for (let z = Math.floor(body.min.z); z <= maxZ; z += 1) {
+        for (let y = Math.floor(body.min.y); y <= maxY; y += 1) {
+          const at = { x, y, z }
+          const block = this.read(at)
+          if (block === null || !block.loaded) {
+            unknown.push(at)
+            continue
+          }
+          const overlap = blockOverlapsBox(block, at, body)
+          if (overlap === undefined) {
+            unknown.push(at)
+            continue
+          }
+          if (overlap) blocks.push({ ...at, name: block.name })
+        }
+      }
+    }
+    return { blocks, unknown }
   }
 
   /**

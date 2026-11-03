@@ -277,6 +277,16 @@ export type StandInfo =
   | { state: 'no'; reason: string }
   | { state: 'unknown'; reason: string }
 
+/**
+ * Result of a real-position body check. `blocks` are loaded collision boxes
+ * that intersect the 0.6x1.8 player AABB; `unknown` are cells whose collision
+ * could not be read (unloaded), which are *not* evidence of an overlap.
+ */
+export type BodyOverlap = {
+  blocks: Array<Cell & { name: string }>
+  unknown: Cell[]
+}
+
 /** Shared predicates used by both the planner and the executor. */
 export interface Rules {
   canWalkThrough(cell: Cell): Tri
@@ -296,6 +306,8 @@ export interface Rules {
   /** Relative cost of removing a cell; undefined when it cannot be broken. */
   breakCost(cell: Cell): number | undefined
   standable(cell: Cell): Tri
+  /** Collision blocks intersecting the body at a continuous position. */
+  bodyOverlapAt(pos: Vec3): BodyOverlap
   /**
    * Support surface under `cell`, without evaluating the body: the height the
    * feet would rest at. Used where the body check is not meaningful yet (the

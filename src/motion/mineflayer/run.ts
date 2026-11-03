@@ -8,6 +8,7 @@ import {
   fallBudgetForHealth,
   type ArrivalPolicy,
   type BlockClassifier,
+  type BodyOverlap,
   type Cell,
   type MotionConstraints,
   type MotionGoal,
@@ -187,6 +188,7 @@ export class MotionRun {
       ...(this.baseConstraints.safeFallBudget === undefined ? {} : { safeFall: this.baseConstraints.safeFallBudget }),
       healthBefore: this.healthBefore,
       healthAfter: self.health,
+      bodyOverlap: this.bodyOverlap() ?? null,
       index: observed?.index ?? 0,
       total: observed?.total ?? this.path.length,
       move: observed?.move ?? null,
@@ -205,6 +207,10 @@ export class MotionRun {
 
   private beginPlan(): void {
     if (!this.active) return
+    // A body whose real AABB already intersects a block cannot be moved by a
+    // path: every edge starts from an invalid state. Report the exact cells so
+    // the caller can clear them instead of re-planning into GOTO_STUCK.
+    if (this.failOnBodyOverlap('start-embedded')) return
     this.phase = 'planning'
     this.pathStatus = 'pending'
     this.activeTarget = this.resolveTarget()
@@ -352,7 +358,32 @@ export class MotionRun {
       && pos.z > this.target.z && pos.z < this.target.z + 1
   }
 
+  private bodyOverlap(): BodyOverlap | undefined {
+    try {
+      const ctx = this.context.next()
+      return ctx.rules.bodyOverlapAt(ctx.position)
+    } catch {
+      // A missing bot position is observed elsewhere; never invent an overlap.
+      return undefined
+    }
+  }
+
+  /** Fail fast with the exact cells to clear when the real body is embedded. */
+  private failOnBodyOverlap(phase: string): boolean {
+    const overlap = this.bodyOverlap()
+    if (overlap === undefined || overlap.blocks.length === 0) return false
+    this.fail('BODY_OVERLAP', phase, {
+      at: this.world.self().pos,
+      blockedBy: overlap.blocks,
+      ...(overlap.unknown.length === 0 ? {} : { unknown: overlap.unknown }),
+      hint: 'clear the listed block(s) before moving',
+    })
+    return true
+  }
+
   private succeed(observed?: JsonValue): void {
+    // Arriving inside a block is not a usable standing position.
+    if (this.failOnBodyOverlap('arrived-embedded')) return
     this.active = false
     this.phase = 'done'
     this.world.releaseAll()

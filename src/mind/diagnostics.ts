@@ -16,6 +16,7 @@ export type FailureDiagnostic = {
 const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> = [
   { match: /TOOL_INSUFFICIENT|BLOCK_UNBREAKABLE/, category: 'tool', hint: 'check the tool/block type or use clear instead of harvest' },
   { match: /APPROACH_NO_STAND|APPROACH_NO_PATH|GOTO_INVALID_TARGET|NO_STAND|NO_SUPPORT/, category: 'reachability', hint: 'target has no reachable standing cell; change the target or clear space' },
+  { match: /BODY_OVERLAP/, category: 'world', hint: 'the body AABB intersects a block; clear the listed cell(s) before moving' },
   { match: /APPROACH_UNKNOWN/, category: 'world', hint: 'the stand query could not decide (unloaded window); re-observe before retrying' },
   { match: /GOTO_NO_PATH|GOTO_TIMEOUT|^UNREACHABLE$/, category: 'reachability', hint: 'path is blocked or too long; choose a closer/standable target' },
   { match: /VANILLA_NO_PATH/, category: 'reachability', hint: 'the unvalidated vanilla path got no closer; retry with a closer target or the safe planner' },
