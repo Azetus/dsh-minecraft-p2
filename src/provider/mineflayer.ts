@@ -1556,10 +1556,20 @@ class MineflayerActHandle implements ActHandle {
             this.result = result
             this.completed = true
           }).catch((error: unknown) => {
-            this.failed = error instanceof Error ? error : new Error(String(error))
+            const failed = error instanceof Error ? error : new Error(String(error))
+            this.failed = failed
             this.failedCode = typeof (error as { code?: unknown }).code === 'string'
               ? (error as { code: string }).code
               : 'PLACE_FAILED'
+            // The driver needs the face and the provider's own error text to
+            // explain a placement that did not read back; keep it structured.
+            this.failureDetails = {
+              face: chosenFace,
+              providerCode: this.failedCode,
+              providerMessage: failed.message.slice(0, 200),
+              supports,
+              requestedFace,
+            }
           })
           return
         }

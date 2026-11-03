@@ -17,6 +17,7 @@ function fakeBot(options: {
   blocks?: Map<string, string>
   recipes?: unknown[]
   craftError?: unknown
+  placeWithoutEffect?: boolean
 } = {}) {
   const controls = new Map<string, boolean>()
   const blocks = options.blocks ?? new Map<string, string>()
@@ -106,7 +107,9 @@ function fakeBot(options: {
         z: reference.position.z + vector.z,
       }
       const held = (bot as unknown as { heldItem?: FakeItem | null }).heldItem
-      if (held !== null && held !== undefined) blocks.set(`${target.x},${target.y},${target.z}`, held.name)
+      if (options.placeWithoutEffect !== true && held !== null && held !== undefined) {
+        blocks.set(`${target.x},${target.y},${target.z}`, held.name)
+      }
       calls.push({ name: 'placeBlock', args: { target, vector } })
     },
     setControlState: (name: string, value: boolean) => { controls.set(name, value) },
@@ -394,6 +397,28 @@ describe('baseline placement support', () => {
     expect(result.error.details).toMatchObject({
       requestedFace: 'up',
       supports: { up: false, down: false, north: false, south: false, east: false, west: false },
+    })
+  })
+
+  it('reports PLACE_FAILED with the chosen face and provider evidence', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'air'],
+      ['1,63,0', 'stone'],
+    ])
+    const { bot, raw } = fakeBot({ blocks, placeWithoutEffect: true })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_FAILED')
+    expect(result.error.details).toMatchObject({
+      face: 'up',
+      providerCode: 'PLACE_FAILED',
+      providerMessage: expect.stringContaining('server did not place dirt'),
+      supports: { up: true, down: false, north: false, south: false, east: false, west: false },
+      requestedFace: 'up',
     })
   })
 })

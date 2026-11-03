@@ -1,4 +1,5 @@
 import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
+import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
@@ -77,8 +78,9 @@ type PlaceParams = {
 type Cell = { x: number; y: number; z: number }
 
 type Attempt = {
-  stance: Cell
-  move: string
+  stance?: Cell
+  face?: Face
+  move?: string
   place?: string
   code?: string
   ok: boolean
@@ -154,6 +156,7 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
 
   if (explicit.length > 0) {
     const attempts: Attempt[] = []
+    let lastPlaceObserved: DriverResult['observed']
     for (const stand of explicit) {
       const moved = await port.moveTo(stand, { range: 0.5, timeoutMs: 20_000 })
       if (moved.state !== 'ok') {
@@ -168,9 +171,12 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
         }
       }
       const placed = await placeFaces(port, cells, params, expected)
+      const placedObserved = isRecord(placed.observed) ? placed.observed : undefined
+      if (placed.state !== 'succeeded') lastPlaceObserved = placed.observed
       attempts.push({
         stance: stand,
         move: 'ok',
+        ...(typeof placedObserved?.face === 'string' ? { face: placedObserved.face as Face } : {}),
         place: placed.state === 'succeeded' ? 'ok' : 'failed',
         ...(placed.code === undefined ? {} : { code: placed.code }),
         ok: placed.state === 'succeeded',
@@ -185,6 +191,7 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
       state: 'failed',
       code: last?.code ?? 'PLACE_FAILED',
       observed: {
+        ...(isRecord(lastPlaceObserved) ? lastPlaceObserved : {}),
         attempts: attempts as unknown as never,
         ...(selfBlocked ? { blockedBy: 'self', target, adjacent: suggestedStances(port, cells) } : {}),
       },
@@ -236,7 +243,10 @@ async function placeFaces(
 
   let lastCode = 'PLACE_FAILED'
   let lastObserved: DriverResult['observed']
+  let lastFace: Face | undefined
+  const attempts: Attempt[] = []
   for (const face of faces) {
+    lastFace = face
     const result = await port.place(target, face, params.item)
     if (result.state === 'unknown') {
       return actFailure(result, 'PLACE_FAILED')
@@ -244,25 +254,41 @@ async function placeFaces(
     if (result.state === 'failed') {
       lastCode = result.code ?? 'PLACE_FAILED'
       lastObserved = result.observed
+      attempts.push({ face, place: 'failed', code: lastCode, ok: false })
       // Target-inside-body does not depend on the chosen face; stop early.
       if (lastCode === 'PLACE_BLOCKED_BY_SELF') {
         return {
           state: 'failed',
           code: lastCode,
-          observed: { blockedBy: 'self', target, ...(result.observed === undefined ? {} : { provider: result.observed }) },
+          observed: {
+            blockedBy: 'self',
+            target,
+            face,
+            attempts: attempts as unknown as never,
+            ...(result.observed === undefined ? {} : { provider: result.observed }),
+          },
         }
       }
       continue
     }
+    attempts.push({ face, place: 'ok', ok: true })
     // The server accepted the placement. One immediate read confirms every
     // cell of the group; permanence is the plan verifier's job.
     if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
     lastCode = 'PLACE_READBACK_MISMATCH'
   }
+  // Keep the provider's own failure record (face/provider code/message/
+  // supports) as the same-observation evidence the failure projection copies.
+  const observed: Record<string, JsonValue> = {}
+  if (isRecord(lastObserved)) Object.assign(observed, lastObserved)
+  else if (lastObserved !== undefined) observed.provider = lastObserved
+  observed.target = target as unknown as JsonValue
+  observed.attempts = attempts as unknown as JsonValue
+  if (lastFace !== undefined) observed.face = lastFace
   return {
     state: 'failed',
     code: lastCode,
-    ...(lastObserved === undefined ? {} : { observed: lastObserved }),
+    observed: observed as unknown as JsonValue,
   }
 }
 
@@ -277,16 +303,37 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
   if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
   const code = result.code ?? 'PLACE_FAILED'
   const target = { x: params.x, y: params.y, z: params.z }
+  const cells = [target, ...(params.cells ?? [])]
+  const observed = result.observed
+  const provider = isRecord(observed) ? observed : undefined
   const facts: Record<string, JsonValue> = {
     target,
-    snapshot: failureSnapshot(port, target, result.observed) as unknown as JsonValue,
+    snapshot: failureSnapshot(port, target, observed) as unknown as JsonValue,
   }
-  const observed = result.observed
-  // A placement always needs a loaded, solid reference face. Give the next turn
-  // the same six-face answer instead of making it observe the target again.
+  // The last attempted face plus every attempt makes a refused placement
+  // explainable without a second observation.
+  if (typeof provider?.face === 'string') facts.face = provider.face
+  if (Array.isArray(provider?.attempts)) {
+    facts.attempts = provider.attempts.slice(0, 8) as unknown as JsonValue
+  }
+  // Prefer the provider's own six-face read from the placement window; fall
+  // back to reading the target only when the provider did not report it.
+  const providerSupports = isRecord(provider?.supports) ? provider.supports : undefined
+  if (code === 'PLACE_FAILED' || code === 'PLACE_READBACK_MISMATCH'
+    || code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
+    facts.supports = (providerSupports ?? supportFacts(port, target)) as unknown as JsonValue
+  }
   if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
-    facts.supports = supportFacts(port, target) as unknown as JsonValue
-    facts.suggestedCells = suggestedPlaceCells(port, [target, ...(params.cells ?? [])]) as unknown as JsonValue
+    facts.suggestedCells = suggestedPlaceCells(port, cells) as unknown as JsonValue
+  }
+  // Stand cells, not placement candidates: the same `adjacent` meaning as
+  // PLACE_BLOCKED_BY_SELF.
+  if (code === 'PLACE_FAILED' || code === 'PLACE_BLOCKED_BY_SELF') {
+    facts.adjacent = suggestedStances(port, cells) as unknown as JsonValue
+  }
+  if (typeof provider?.providerCode === 'string') facts.providerCode = provider.providerCode
+  if (typeof provider?.providerMessage === 'string') {
+    facts.providerMessage = provider.providerMessage.slice(0, 200)
   }
   return {
     ...result,

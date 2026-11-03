@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createClearDriver } from '../src/mind/drivers/clear.ts'
 import { createPlaceDriver } from '../src/mind/drivers/place.ts'
 import { createStepDriver } from '../src/mind/drivers/step.ts'
+import type { JsonValue } from '../src/contracts/types.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
 import type { ActResult, BlockInfo, ClientPort, Face, Vec3 } from '../src/port/index.ts'
 
@@ -21,6 +22,8 @@ function block(name: string, p: Vec3): BlockInfo {
 
 type PortOptions = {
   failPlaceFaces?: Face[]
+  failPlaceCode?: string
+  placeFailureObserved?: JsonValue
   placeWithoutEffect?: boolean
   deferred?: boolean
 }
@@ -57,7 +60,12 @@ function fakePort(options: PortOptions = {}): {
     place: async (p: Vec3, face: Face, item: string): Promise<ActResult> => {
       places.push(face)
       if (options.failPlaceFaces?.includes(face) === true) {
-        return { state: 'failed', code: 'PLACE_UNSUPPORTED', elapsedMs: 1 }
+        return {
+          state: 'failed',
+          code: options.failPlaceCode ?? 'PLACE_UNSUPPORTED',
+          elapsedMs: 1,
+          ...(options.placeFailureObserved === undefined ? {} : { observed: options.placeFailureObserved }),
+        }
       }
       if (options.placeWithoutEffect !== true) world.set(key(p), block(item, p))
       return { state: 'ok', elapsedMs: 1 }
@@ -156,6 +164,53 @@ describe('place driver', () => {
     expect(facts.suggestedCells).toHaveLength(3)
     expect(facts.suggestedCells?.every(candidate => candidate.support === 'up')).toBe(true)
     expect(facts.snapshot?.target?.support?.name).toBe('stone')
+  })
+
+  it('keeps face, provider and stand-cell evidence on PLACE_FAILED', async () => {
+    const fake = fakePort({
+      failPlaceFaces: ['up'],
+      failPlaceCode: 'PLACE_FAILED',
+      placeFailureObserved: {
+        face: 'up',
+        providerCode: 'PLACE_FAILED',
+        providerMessage: 'server did not place dirt at 1,64,0',
+        supports: { up: true, down: false, north: false, south: false, east: false, west: false },
+        requestedFace: 'up',
+      },
+    })
+    for (let x = -2; x <= 3; x += 1) {
+      for (let z = -1; z <= 1; z += 1) {
+        fake.world.set(`${x},63,${z}`, block('stone', { x, y: 63, z }))
+        fake.world.set(`${x},64,${z}`, block('air', { x, y: 64, z }))
+        fake.world.set(`${x},65,${z}`, block('air', { x, y: 65, z }))
+      }
+    }
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    const result = handle.result()
+    expect(result).toMatchObject({ state: 'failed', code: 'PLACE_FAILED' })
+    const failure = (result.observed as {
+      failure?: { layer?: string; code?: string; facts?: Record<string, unknown> }
+    }).failure
+    expect(failure).toMatchObject({
+      layer: 'driver',
+      code: 'PLACE_FAILED',
+      facts: {
+        target: { x: 1, y: 64, z: 0 },
+        face: 'up',
+        providerCode: 'PLACE_FAILED',
+        providerMessage: 'server did not place dirt at 1,64,0',
+        supports: { up: true, down: false, north: false, south: false, east: false, west: false },
+      },
+    })
+    expect(failure?.facts?.attempts).toEqual([
+      { face: 'up', place: 'failed', code: 'PLACE_FAILED', ok: false },
+    ])
+    expect(failure?.facts?.adjacent).toEqual(expect.arrayContaining([{ x: 2, y: 64, z: 0 }]))
   })
 
   it('skips a stance whose own body covers the target cell', async () => {
