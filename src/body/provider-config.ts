@@ -67,10 +67,10 @@ function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
 /**
  * Resolve the one provider configuration used by a body.
  *
- * The project file is `.p2/config.json` under the body cwd. Environment
- * variables are explicit overrides, so existing probes and DSH launches keep
- * working without a file. A missing file and missing P2_MC_HOST means the
- * body stays provider-unavailable rather than failing startup.
+ * The MC target (host/port) is supplied by the bridge at start time and is
+ * never read from `.p2/config.json`; the project file only carries character
+ * and connection behaviour (username/version/timeouts/worldId). A missing
+ * `P2_MC_HOST` means the body starts provider-unavailable.
  */
 export async function loadProviderConfig(
   cwd: string = process.cwd(),
@@ -78,7 +78,6 @@ export async function loadProviderConfig(
 ): Promise<LoadedProviderConfig | undefined> {
   const path = join(cwd, '.p2', 'config.json')
   let file: UnknownRecord | undefined
-  let source: ProviderConfigSource = 'env'
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
     if (!isRecord(parsed)) throw new Error('provider config: root must be an object')
@@ -86,7 +85,6 @@ export async function loadProviderConfig(
     if (minecraft !== undefined) {
       if (!isRecord(minecraft)) throw new Error('provider config: minecraft must be an object')
       file = minecraft
-      source = 'file'
     }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
@@ -94,10 +92,10 @@ export async function loadProviderConfig(
   }
 
   const envHost = envValue(env, 'P2_MC_HOST')
-  if (file === undefined && envHost === undefined) return undefined
-
-  const host = asString(envHost ?? file?.host, 'host')
-  const port = asPort(envValue(env, 'P2_MC_PORT') ?? file?.port)
+  // The target is runtime input from `/p2 start`, not a config-file field.
+  if (envHost === undefined) return undefined
+  const host = asString(envHost, 'host')
+  const port = asPort(envValue(env, 'P2_MC_PORT'))
   const username = asString(
     envValue(env, 'P2_MC_USERNAME') ?? file?.username,
     'username',
@@ -129,8 +127,8 @@ export async function loadProviderConfig(
     throw new Error('provider config: crashAfterPending must be a boolean')
   }
 
-  if (envHost !== undefined) source = file === undefined ? 'env' : 'file+env'
   return {
+    source: file === undefined ? 'env' : 'file+env',
     config: {
       host,
       port,
@@ -141,7 +139,6 @@ export async function loadProviderConfig(
       worldId,
       crashAfterPending,
     },
-    source,
   }
 }
 

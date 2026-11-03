@@ -1,7 +1,5 @@
 {
   "minecraft": {
-    "host": "127.0.0.1",
-    "port": 25575,
     "username": "P2_Bot",
     "version": "1.21.1",
     "connectTimeoutMs": 15000,

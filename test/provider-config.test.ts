@@ -22,32 +22,44 @@ afterEach(() => {
 })
 
 describe('provider config', () => {
-  it('is absent when there is no file and no host environment variable', async () => {
+  it('is absent without a start target, even when a config file exists', async () => {
     await expect(loadProviderConfig(configDir(undefined), {})).resolves.toBeUndefined()
-  })
-
-  it('loads the project file with defaults', async () => {
-    const loaded = await loadProviderConfig(configDir({
-      host: '127.0.0.1',
+    await expect(loadProviderConfig(configDir({
+      host: 'old-host',
       port: 25575,
       username: 'P2_Bot',
-    }), {})
+    }), {})).resolves.toBeUndefined()
+  })
+
+  it('loads role and connection behaviour from the file with an env target', async () => {
+    const loaded = await loadProviderConfig(configDir({
+      host: 'ignored-host',
+      port: 1,
+      username: 'FileBot',
+      version: '1.20.1',
+      connectTimeoutMs: 9000,
+      serverIdleMs: 2500,
+      worldId: 'devworld',
+    }), {
+      P2_MC_HOST: '127.0.0.1',
+      P2_MC_PORT: '25575',
+    })
     expect(loaded).toEqual({
-      source: 'file',
+      source: 'file+env',
       config: {
         host: '127.0.0.1',
         port: 25575,
-        username: 'P2_Bot',
-        version: '1.21.1',
-        connectTimeoutMs: 15000,
-        serverIdleMs: 1500,
-        worldId: '127.0.0.1:25575',
+        username: 'FileBot',
+        version: '1.20.1',
+        connectTimeoutMs: 9000,
+        serverIdleMs: 2500,
+        worldId: 'devworld',
         crashAfterPending: false,
       },
     })
   })
 
-  it('lets environment variables override file fields', async () => {
+  it('ignores file host/port and lets environment fields override the file', async () => {
     const loaded = await loadProviderConfig(configDir({
       host: 'file-host',
       port: 25575,
@@ -73,20 +85,23 @@ describe('provider config', () => {
     expect(loaded?.config).toMatchObject({ host: '127.0.0.1', port: 25575, username: 'P2_Bot' })
   })
 
-  it('accepts an explicit world identity', async () => {
-    const loaded = await loadProviderConfig(configDir({ host: '127.0.0.1', worldId: 'devworld' }), {})
+  it('accepts an explicit world identity and crash flag', async () => {
+    const loaded = await loadProviderConfig(configDir({
+      username: 'P2_Bot',
+      worldId: 'devworld',
+      crashAfterPending: true,
+    }), { P2_MC_HOST: '127.0.0.1' })
     expect(loaded?.config.worldId).toBe('devworld')
-  })
-
-  it('accepts the development crash flag', async () => {
-    const loaded = await loadProviderConfig(configDir({ host: '127.0.0.1', crashAfterPending: true }), {})
     expect(loaded?.config.crashAfterPending).toBe(true)
   })
 
-  it('rejects invalid config values', async () => {
-    await expect(loadProviderConfig(configDir({ host: '127.0.0.1', port: 0 }), {})).rejects.toThrow(/port/)
-    await expect(loadProviderConfig(configDir({}), {})).rejects.toThrow(/host/)
+  it('rejects invalid target or config values', async () => {
+    await expect(loadProviderConfig(configDir(undefined), {
+      P2_MC_HOST: '127.0.0.1',
+      P2_MC_PORT: '0',
+    })).rejects.toThrow(/port/)
+    await expect(loadProviderConfig(configDir({ username: '' }), {
+      P2_MC_HOST: '127.0.0.1',
+    })).rejects.toThrow(/username/)
   })
 })
-
-

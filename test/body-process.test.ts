@@ -1,5 +1,4 @@
 import { spawnSync } from 'node:child_process'
-import { createConnection } from 'node:net'
 import { existsSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,18 +8,10 @@ import { PROTOCOL_VERSION } from '../src/contracts/index.ts'
 const BODY_ENTRY = resolve('lib/body/body.mjs')
 const built = existsSync(BODY_ENTRY)
 
-function canConnect(host: string, port: number, timeoutMs = 300): Promise<boolean> {
-  return new Promise(resolve => {
-    const socket = createConnection({ host, port })
-    const timer = setTimeout(() => { socket.destroy(); resolve(false) }, timeoutMs)
-    socket.once('connect', () => { clearTimeout(timer); socket.destroy(); resolve(true) })
-    socket.once('error', () => { clearTimeout(timer); socket.destroy(); resolve(false) })
-  })
-}
-
-const providerAvailable = await canConnect('127.0.0.1', 25575)
-
-describe.skipIf(!built || !providerAvailable)('body process entry', () => {
+// The body starts provider-unavailable when no target is injected; this test
+// must never connect to a real server (a second P2_Bot login would kick the
+// live body with duplicate_login).
+describe.skipIf(!built)('body process entry', () => {
   it('reads hello from stdin and writes one JSON line to stdout', () => {
     const directory = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-'))
     const input = join(directory, 'in.jsonl')
@@ -44,7 +35,12 @@ describe.skipIf(!built || !providerAvailable)('body process entry', () => {
           cwd: process.cwd(),
           stdio: [inputFd, outputFd, 'ignore'],
           timeout: 5000,
-          env: { ...process.env, P2_JOURNAL_PATH: join(directory, 'journal.jsonl') },
+          env: {
+            ...process.env,
+            P2_JOURNAL_PATH: join(directory, 'journal.jsonl'),
+            P2_MC_HOST: '',
+            P2_MC_PORT: '',
+          },
         })
       } finally {
         closeSync(inputFd)
