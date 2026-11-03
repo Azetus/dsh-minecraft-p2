@@ -85,10 +85,11 @@ export class FakeHandle implements ActHandle {
     private readonly mode: Exclude<FakeMode, 'disconnected'>,
     private readonly failCode: string,
     readonly result?: JsonValue,
+    private readonly releaseOnStop = true,
   ) {}
 
   poll(): ActPoll {
-    if (this.stopped) return { status: 'cancelled' }
+    if (this.stopped && this.releaseOnStop) return { status: 'cancelled' }
     if (this.mode === 'running') return { status: 'running' }
     if (this.mode === 'fail') {
       return { status: 'failed', error: p2Error(this.failCode, 'environment', 'act failed') }
@@ -99,6 +100,15 @@ export class FakeHandle implements ActHandle {
   stop(): void {
     this.stopped = true
   }
+
+  controlState(): 'idle' | 'active' {
+    if (!this.stopped) return 'active'
+    return this.releaseOnStop ? 'idle' : 'active'
+  }
+
+  controlRelease(): 'confirmed' | null {
+    return this.stopped && this.releaseOnStop ? 'confirmed' : null
+  }
 }
 
 export class FakeActSource implements MineflayerActSource {
@@ -106,6 +116,8 @@ export class FakeActSource implements MineflayerActSource {
   readonly handles: FakeHandle[] = []
   mode: FakeMode = 'succeed'
   failCode = 'DIG_NO_BLOCK'
+  /** Set false to model a stop request the provider cannot prove has landed. */
+  releaseOnStop = true
   onStart: ((name: string, args: Record<string, JsonValue>) => void) | undefined
 
   constructor(readonly capabilities: readonly string[] = ['motion', 'dig', 'place', 'use', 'interact', 'attack']) {}
@@ -116,7 +128,7 @@ export class FakeActSource implements MineflayerActSource {
     }
     this.calls.push({ name, args })
     this.onStart?.(name, args)
-    const handle = new FakeHandle(this.mode, this.failCode, { name })
+    const handle = new FakeHandle(this.mode, this.failCode, { name }, this.releaseOnStop)
     this.handles.push(handle)
     return handle
   }

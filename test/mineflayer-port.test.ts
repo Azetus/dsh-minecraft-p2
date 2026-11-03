@@ -133,6 +133,38 @@ describe('mineflayer port timeout and authority', () => {
     expect(source.handles[0]?.stopped).toBe(true)
   })
 
+  it('carries provider evidence on a non-move timeout instead of an empty observed', async () => {
+    const source = new FakeActSource()
+    const { port } = createPort(source, new FakeBot(), { timeouts: { dig: 20 } })
+    source.mode = 'running'
+    const result = await port.dig({ x: 1, y: 64, z: 1 })
+    expect(result.observed).toMatchObject({
+      layer: 'port',
+      actId: 'dig',
+      epoch: 1,
+      lastPoll: 'cancelled',
+      providerCode: null,
+      controlState: 'idle',
+      controlRelease: 'confirmed',
+    })
+    expect((result.observed as { elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('reports STOP_UNCONFIRMED when a non-move stop is not proven released', async () => {
+    const source = new FakeActSource()
+    const { port } = createPort(source, new FakeBot(), { timeouts: { dig: 20 } })
+    source.mode = 'running'
+    source.releaseOnStop = false
+    const result = await port.dig({ x: 1, y: 64, z: 1 })
+    expect(result).toMatchObject({ state: 'unknown', code: 'STOP_UNCONFIRMED' })
+    expect(result.observed).toMatchObject({
+      actId: 'dig',
+      lastPoll: 'running',
+      controlState: 'active',
+      controlRelease: null,
+    })
+  })
+
   it('rejects writes without a token', async () => {
     const source = new FakeActSource()
     const port = new MineflayerClientPort(new FakeBot() as unknown as Bot, source, { pollIntervalMs: 2 })

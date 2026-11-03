@@ -2,7 +2,7 @@ import type { SchemaNode } from '../schema.ts'
 import { approachBlock } from '../approach.ts'
 import type { ClientPort, Vec3 } from '../../port/index.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import { AsyncDriverHandle } from './handle.ts'
+import { AsyncDriverHandle, actFailure } from './handle.ts'
 
 export const CRAFT_DRIVER_ID = 'craft'
 
@@ -64,8 +64,7 @@ async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult>
     }
     result = await ctx.port.craft(params.item, count)
   }
-  if (result.state === 'failed') return { state: 'failed', code: result.code ?? 'CRAFT_FAILED' }
-  if (result.state === 'unknown') return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
+  if (result.state !== 'ok') return actFailure(result, 'CRAFT_FAILED')
   const after = countItem(ctx.port.inventory(), params.item)
   if (after < before + count) return { state: 'failed', code: 'CRAFT_READBACK_MISMATCH' }
   return {

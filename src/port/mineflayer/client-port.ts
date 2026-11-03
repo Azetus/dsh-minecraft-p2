@@ -547,7 +547,7 @@ export class MineflayerClientPort implements ClientPort {
     this.running.add(entry)
     try {
       if (isMove) this.emit('move.started', { target: args, from: this.self().pos, epoch })
-      const waited = await this.poll(handle, timeoutMs, isMove ? epoch : undefined)
+      const waited = await this.poll(handle, name, timeoutMs, epoch, isMove, startedAt)
       // Release uncertainty must survive revocation; otherwise the next driver
       // would see an ordinary stale result and assume it is safe to dispatch.
       if ((waited.kind === 'timeout' && !waited.released)
@@ -589,8 +589,16 @@ export class MineflayerClientPort implements ClientPort {
     }
   }
 
-  private async poll(handle: ActHandle, timeoutMs: number, moveEpoch?: number): Promise<WaitResult> {
+  private async poll(
+    handle: ActHandle,
+    name: string,
+    timeoutMs: number,
+    epoch: number | undefined,
+    isMove: boolean,
+    startedAt: number,
+  ): Promise<WaitResult> {
     const deadline = this.now() + timeoutMs
+    const moveEpoch = isMove ? epoch : undefined
     let lastProgressAt = Number.NEGATIVE_INFINITY
     let lastActionSeq = 0
     while (true) {
@@ -620,13 +628,44 @@ export class MineflayerClientPort implements ClientPort {
       }
       if (this.now() >= deadline) {
         this.stopHandle(handle)
+        // Release is an observation, not a request. This is the same rule for
+        // move and non-move acts: a stop that the provider cannot prove is
+        // `STOP_UNCONFIRMED`, never a silent timeout.
+        const after = handle.poll()
+        const controlState = handle.controlState?.() ?? null
+        const released = after.status === 'cancelled' || controlState === 'idle'
         return {
           kind: 'timeout',
-          released: moveEpoch === undefined || handle.controlState?.() === 'idle' || handle.poll().status === 'cancelled',
-          ...(poll.progress === undefined ? {} : { observed: poll.progress }),
+          released,
+          observed: this.timeoutEvidence(handle, name, after, epoch, poll.progress, startedAt),
         }
       }
       await sleep(this.pollIntervalMs)
+    }
+  }
+
+  /** Provider-side facts for a timeout; kept under `observed` so the job terminal can carry them. */
+  private timeoutEvidence(
+    handle: ActHandle,
+    name: string,
+    after: ActPoll,
+    epoch: number | undefined,
+    progress: JsonValue | undefined,
+    startedAt: number,
+  ): JsonValue {
+    const base = progress !== null && typeof progress === 'object' && !Array.isArray(progress)
+      ? progress as Record<string, JsonValue>
+      : {}
+    return {
+      ...base,
+      layer: 'port',
+      actId: name,
+      epoch: epoch ?? null,
+      elapsedMs: this.now() - startedAt,
+      lastPoll: after.status,
+      providerCode: after.status === 'failed' ? after.error.code : null,
+      controlState: handle.controlState?.() ?? null,
+      controlRelease: handle.controlRelease?.() ?? null,
     }
   }
 

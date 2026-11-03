@@ -128,4 +128,28 @@ describe('dig driver tool handling', () => {
     })
     expect(fake.digs()).toBe(1)
   })
+
+  it('keeps the provider observed data when the dig times out', async () => {
+    const fake = portWith()
+    const evidence = {
+      layer: 'port',
+      actId: 'dig',
+      epoch: 1,
+      elapsedMs: 15_000,
+      lastPoll: 'cancelled',
+      controlState: 'idle',
+      controlRelease: 'confirmed',
+      providerCode: null,
+    }
+    fake.port.dig = async () => ({
+      state: 'unknown' as const,
+      code: 'CLIENT_TIMEOUT',
+      observed: evidence,
+      elapsedMs: 15_000,
+    })
+
+    const result = await run(fake.port, 'clear')
+
+    expect(result).toEqual({ state: 'failed', code: 'CLIENT_TIMEOUT', observed: evidence })
+  })
 })

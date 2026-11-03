@@ -3,7 +3,7 @@ import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import { AsyncDriverHandle, sleep } from './handle.ts'
+import { AsyncDriverHandle, actFailure, sleep } from './handle.ts'
 
 export const CLEAR_DRIVER_ID = 'clear'
 
@@ -71,12 +71,11 @@ async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverR
   }
   if (choice.item !== undefined) {
     const equipped = await port.equip(choice.item)
-    if (equipped.state !== 'ok') return { state: 'failed', code: equipped.code ?? 'EQUIP_FAILED' }
+    if (equipped.state !== 'ok') return actFailure(equipped, 'EQUIP_FAILED')
   }
 
   const result = await port.dig(target)
-  if (result.state === 'failed') return { state: 'failed', code: result.code ?? 'DIG_FAILED' }
-  if (result.state === 'unknown') return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
+  if (result.state !== 'ok') return actFailure(result, 'DIG_FAILED')
 
   const first = port.blockAt(target)
   await sleep(200)

@@ -4,7 +4,7 @@ import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import { AsyncDriverHandle } from './handle.ts'
+import { AsyncDriverHandle, actFailure } from './handle.ts'
 
 export const PLACE_DRIVER_ID = 'place'
 
@@ -196,13 +196,15 @@ async function placeFaces(
   if (faces.length === 0) return { state: 'failed', code: 'NO_SUPPORT' }
 
   let lastCode = 'PLACE_FAILED'
+  let lastObserved: DriverResult['observed']
   for (const face of faces) {
     const result = await port.place(target, face, params.item)
     if (result.state === 'unknown') {
-      return { state: 'failed', code: result.code ?? 'CLIENT_TIMEOUT' }
+      return actFailure(result, 'PLACE_FAILED')
     }
     if (result.state === 'failed') {
       lastCode = result.code ?? 'PLACE_FAILED'
+      lastObserved = result.observed
       continue
     }
     // The server accepted the placement. One immediate read confirms every
@@ -210,7 +212,11 @@ async function placeFaces(
     if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
     lastCode = 'PLACE_READBACK_MISMATCH'
   }
-  return { state: 'failed', code: lastCode }
+  return {
+    state: 'failed',
+    code: lastCode,
+    ...(lastObserved === undefined ? {} : { observed: lastObserved }),
+  }
 }
 
 async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefined> {

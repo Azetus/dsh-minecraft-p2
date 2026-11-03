@@ -26,6 +26,8 @@ export type ActHandle = {
   poll(): ActPoll
   stop(): void
   controlState?(): 'idle' | 'active' | 'unknown'
+  /** How the last stop was proven; `null` until a stop was requested. */
+  controlRelease?(): 'confirmed' | 'best-effort' | null
   cleanup?(): ActPoll
 }
 
