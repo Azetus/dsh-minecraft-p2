@@ -418,9 +418,11 @@ export function ensureFailureObserved(
     ? 'authority'
     : category === 'budget'
       ? 'budget'
-      : category === 'unknown'
-        ? 'unknown'
-        : 'world'
+      : category === 'definition'
+        ? 'definition'
+        : category === 'unknown'
+          ? 'unknown'
+          : 'world'
   return withFailure(observed, failureBody({
     layer: budgetExhausted ? 'budget' : 'driver',
     phase: budgetExhausted ? 'execute' : 'unknown',
@@ -428,7 +430,7 @@ export function ensureFailureObserved(
     observed,
     facts: driverId === undefined ? undefined : { driverId },
     cause: { kind, code: resolved },
-    recovery: kind === 'authority' ? 'none' : 'reobserve',
+    recovery: kind === 'authority' || kind === 'definition' ? 'none' : 'reobserve',
   }))
 }
 

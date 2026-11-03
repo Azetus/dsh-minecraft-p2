@@ -10,6 +10,7 @@ describe('failure diagnostics', () => {
     expect(classifyFailure('ATTACK_TARGET_PROTECTED')).toMatchObject({ category: 'safety' })
     expect(classifyFailure('BUDGET_EXCEEDED')).toMatchObject({ category: 'budget' })
     expect(classifyFailure('PICKUP_UNREACHABLE')).toMatchObject({ category: 'world' })
+    expect(classifyFailure('ERR_ASSERTION')).toMatchObject({ category: 'definition' })
     expect(classifyFailure('SOMETHING_NEW')).toMatchObject({ category: 'unknown' })
   })
 })

@@ -5,6 +5,7 @@ export type FailureCategory =
   | 'world'
   | 'budget'
   | 'safety'
+  | 'definition'
   | 'unknown'
 
 export type FailureDiagnostic = {
@@ -36,6 +37,9 @@ const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> =
   { match: /ACTION_DENIED/, category: 'precondition', hint: 'the server refused the action; check permission, protection or target rules' },
   { match: /BUDGET_EXCEEDED|ACT_TIMEOUT|CLIENT_TIMEOUT/, category: 'budget', hint: 'budget exhausted before the result could be proven; only retry-safe actions may be repeated' },
   { match: /BAD_ARGS|STALE_WRITE|CAPABILITY_MISSING|DEFINITION_ERROR/, category: 'precondition', hint: 'invalid request, stale authority or missing capability' },
+  // An assertion is a broken definition/assumption, not a world state: the
+  // same job would fail again, so the Agent must change the definition.
+  { match: /ERR_ASSERTION/, category: 'definition', hint: 'the driver hit an internal assertion; the definition/assumption is wrong, do not retry the same job' },
   { match: /DIG_NO_BLOCK|DIG_READBACK_UNSTABLE|CHECK_|PLACE_|CONTAINER_/, category: 'world', hint: 'the world did not match the request; observe and retry deliberately' },
   { match: /STOP_UNCONFIRMED|DRIVER_FAULT/, category: 'safety', hint: 'stop/release was not confirmed; do not assume the action ended' },
 ]

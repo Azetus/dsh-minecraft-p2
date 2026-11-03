@@ -1255,6 +1255,7 @@ const RETRYABLE_ORDER_VERBS = new Set([
 /** Failures that retrying the same target cannot fix. */
 const NON_RETRYABLE_CODES = new Set([
   'BUDGET_EXCEEDED', 'BAD_ARGS', 'STALE_WRITE', 'CAPABILITY_MISSING', 'DEFINITION_ERROR',
+  'ERR_ASSERTION',
   'TOOL_INSUFFICIENT', 'BLOCK_UNBREAKABLE', 'DIG_NO_BLOCK', 'APPROACH_NO_STAND',
   'EQUIP_NO_ITEM',
   // A timeout after the request may have reached the server is not safe to

@@ -201,4 +201,17 @@ describe('failure projection', () => {
     expect(serialized).not.toContain('"action"')
     expect(serialized).not.toContain('"params"')
   })
+
+  it('classifies an assertion as a definition error that must not be retried', () => {
+    const observed = ensureFailureObserved(undefined, 'ERR_ASSERTION', 'place')
+    expect(readFailure(observed)).toMatchObject({
+      layer: 'driver',
+      phase: 'unknown',
+      code: 'ERR_ASSERTION',
+      diagnosis: 'UNKNOWN',
+      cause: { kind: 'definition', code: 'ERR_ASSERTION' },
+      recovery: 'none',
+      facts: { driverId: 'place' },
+    })
+  })
 })

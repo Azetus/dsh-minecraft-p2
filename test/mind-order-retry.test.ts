@@ -202,6 +202,29 @@ describe('primitive order retry policy', () => {
     expect((terminals[0]?.data as { retry?: boolean }).retry).not.toBe(true)
   })
 
+  it('does not retry an assertion failure', async () => {
+    const base = fakePort([{ state: 'ok' }]).port as unknown as Record<string, unknown>
+    const port = {
+      ...base,
+      // A write-authority assertion is a definition error: the same order
+      // must fail on the first job instead of retrying.
+      beginWrite: () => { throw Object.assign(new Error('driver assertion'), { code: 'ERR_ASSERTION' }) },
+    } as unknown as ClientPort
+    const mind = makeMind(port)
+    mind.enqueueOrder({ id: 'ord-assert', verb: 'go', params: { x: 1, y: 64, z: 0 } })
+    await runUntilTerminal(mind, 'ord-assert')
+
+    expect(mind.orders.get('ord-assert')?.state).toBe('failed')
+    const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
+    expect(terminals).toHaveLength(1)
+    const data = terminals[0]?.data as {
+      code?: string
+      observed?: { failure?: { cause?: { kind?: string }; recovery?: string } }
+    }
+    expect(data.code).toBe('ERR_ASSERTION')
+    expect(data.observed?.failure).toMatchObject({ cause: { kind: 'definition' }, recovery: 'none' })
+  })
+
   it('does not retry a one-shot equip failure', async () => {
     const fake = fakePort([{ state: 'failed', code: 'EQUIP_ITEM_MISSING' }])
     const mind = makeMind(fake.port)
