@@ -25,6 +25,8 @@ function source(results: ActResult[]): { port: ClientPort; calls: Array<{ target
       const next = results.shift()
       return Promise.resolve(next ?? { state: 'failed', code: 'NO_MORE_RESULTS', elapsedMs: 1 })
     },
+    self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+    blockAt: () => ({ name: 'air', loaded: true }),
   } as unknown as ClientPort
   return { port, calls }
 }

@@ -123,6 +123,41 @@ describe('place driver', () => {
     expect(fake.places.some(face => face !== 'up')).toBe(true)
   })
 
+  it('reports six-face supports and bounded candidate cells for PLACE_UNSUPPORTED', async () => {
+    const fake = fakePort({ failPlaceFaces: ['up'] })
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    for (const candidate of [
+      { x: 2, y: 64, z: 0 }, { x: 3, y: 64, z: 0 },
+      { x: 1, y: 64, z: 1 }, { x: 1, y: 64, z: -1 },
+    ]) {
+      fake.world.set(`${candidate.x},${candidate.y - 1},${candidate.z}`, block('stone', {
+        x: candidate.x, y: candidate.y - 1, z: candidate.z,
+      }))
+      fake.world.set(`${candidate.x},${candidate.y},${candidate.z}`, block('air', candidate))
+    }
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    const result = handle.result()
+    expect(result).toMatchObject({ state: 'failed', code: 'PLACE_UNSUPPORTED' })
+    const failure = (result.observed as { failure?: Record<string, unknown> }).failure
+    const facts = failure?.facts as {
+      supports?: Record<string, boolean>
+      suggestedCells?: Array<{ cell: number[]; support: string }>
+      snapshot?: { target?: { support?: { name?: string } } }
+    }
+    expect(facts.supports).toEqual({
+      up: true, down: false, north: false, south: false, east: false, west: false,
+    })
+    expect(facts.suggestedCells).toHaveLength(3)
+    expect(facts.suggestedCells?.every(candidate => candidate.support === 'up')).toBe(true)
+    expect(facts.snapshot?.target?.support?.name).toBe('stone')
+  })
+
   it('skips a stance whose own body covers the target cell', async () => {
     const fake = fakePort()
     fake.world.set('0,63,0', block('stone', { x: 0, y: 63, z: 0 }))

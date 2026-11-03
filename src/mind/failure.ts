@@ -68,6 +68,38 @@ export type FailureBody = {
   suggestions?: FailureSuggestion[]
 }
 
+/** One bounded cell in a failure snapshot; `name` is null when unloaded. */
+export type FailureSnapshotCell = {
+  cell: [number, number, number]
+  name: string | null
+  loaded: boolean
+}
+
+export type FailureSnapshotBody = {
+  feet: FailureSnapshotCell
+  head: FailureSnapshotCell
+  support: FailureSnapshotCell
+}
+
+/**
+ * Facts captured next to the failure so the next Agent turn does not need a
+ * second observation. At most 16 unique cells, no path/candidate/visited data.
+ */
+export type FailureSnapshot = {
+  cellCount: number
+  self: FailureSnapshotBody
+  target: FailureSnapshotBody
+  targetNeighbors: FailureSnapshotCell[]
+  bodyOverlap: FailureSnapshotCell[]
+  pathStatus: string | null
+  bestReachable: [number, number, number] | null
+}
+
+type SnapshotPort = {
+  self(): { pos: { x: number; y: number; z: number } }
+  blockAt(p: { x: number; y: number; z: number }): { name: string; loaded: boolean } | null
+}
+
 /** Facts are copied from the same snapshot; this is the only whitelist. */
 const FACT_KEYS = new Set([
   'at',
@@ -112,6 +144,9 @@ const FACT_KEYS = new Set([
   'reason',
   'candidates',
   'nearbyCandidates',
+  'snapshot',
+  'supports',
+  'suggestedCells',
 ])
 
 const MAX_FACT_ARRAY = 8
@@ -127,6 +162,67 @@ export function failureFacts(observed: JsonValue | undefined): Record<string, Js
     if (bounded !== undefined) facts[key] = bounded
   }
   return facts
+}
+
+/**
+ * Read one failure-time snapshot through the caller's own port. The helper is
+ * deliberately bounded: it reads only self/target feet/head/support, four
+ * target neighbours and up to four body-overlap cells, and writes at most 16
+ * unique cells. It never copies the path, candidates or visited nodes.
+ */
+export function failureSnapshot(
+  port: SnapshotPort,
+  target: { x: number; y: number; z: number },
+  observed?: JsonValue,
+): FailureSnapshot {
+  const cells = new Map<string, FailureSnapshotCell>()
+  const read = (x: number, y: number, z: number): FailureSnapshotCell => {
+    const key = `${x},${y},${z}`
+    const existing = cells.get(key)
+    if (existing !== undefined) return existing
+    const block = port.blockAt({ x, y, z })
+    const cell: FailureSnapshotCell = {
+      cell: [x, y, z],
+      name: block?.name ?? null,
+      loaded: block?.loaded === true,
+    }
+    if (cells.size < 16) cells.set(key, cell)
+    return cell
+  }
+  const body = (x: number, y: number, z: number): FailureSnapshotBody => ({
+    feet: read(x, y, z),
+    head: read(x, y + 1, z),
+    support: read(x, y - 1, z),
+  })
+
+  const selfPos = floorCell(port.self().pos)
+  const targetPos = floorCell(target)
+  const self = body(selfPos.x, selfPos.y, selfPos.z)
+  const targetBody = body(targetPos.x, targetPos.y, targetPos.z)
+  const targetNeighbors = [
+    read(targetPos.x + 1, targetPos.y, targetPos.z),
+    read(targetPos.x - 1, targetPos.y, targetPos.z),
+    read(targetPos.x, targetPos.y, targetPos.z + 1),
+    read(targetPos.x, targetPos.y, targetPos.z - 1),
+  ]
+  const bodyOverlap = overlapCells(observed).slice(0, 4)
+    .map(cell => read(cell.x, cell.y, cell.z))
+  const pathStatus = isRecord(observed) && typeof observed.pathStatus === 'string'
+    ? observed.pathStatus
+    : null
+  const bestReachable = isRecord(observed) && isCell(observed.bestReachable)
+    ? [observed.bestReachable.x, observed.bestReachable.y, observed.bestReachable.z] as [number, number, number]
+    : null
+
+  return {
+    cellCount: cells.size,
+    self,
+    target: targetBody,
+    targetNeighbors,
+    bodyOverlap,
+    pathStatus,
+    bestReachable,
+  }
 }
 
 export function failureBody(input: {
@@ -243,6 +339,33 @@ function uniqueSuggestions(suggestions: FailureSuggestion[]): FailureSuggestion[
     if (result.length >= 3) break
   }
   return result
+}
+
+function floorCell(p: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
+}
+
+function overlapCells(observed: JsonValue | undefined): Array<{ x: number; y: number; z: number }> {
+  if (!isRecord(observed)) return []
+  const value = observed.bodyOverlap
+  const blocks = isRecord(value) && Array.isArray(value.blocks)
+    ? value.blocks
+    : Array.isArray(value) ? value : []
+  const cells: Array<{ x: number; y: number; z: number }> = []
+  for (const item of blocks.slice(0, 8)) {
+    if (!isRecord(item)) continue
+    const cell = isRecord(item.cell) && isCell(item.cell) ? item.cell : item
+    if (!isCell(cell)) continue
+    cells.push({ x: cell.x, y: cell.y, z: cell.z })
+  }
+  return cells
+}
+
+function isCell(value: unknown): value is { x: number; y: number; z: number } {
+  return isRecord(value)
+    && typeof value.x === 'number'
+    && typeof value.y === 'number'
+    && typeof value.z === 'number'
 }
 
 function boundFact(value: JsonValue): JsonValue | undefined {

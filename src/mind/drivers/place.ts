@@ -5,7 +5,7 @@ import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { standCells } from '../../motion/search/index.ts'
 import { approachBlock } from '../approach.ts'
-import { failureBody, readFailure, withFailure } from '../failure.ts'
+import { failureBody, failureSnapshot, readFailure, withFailure } from '../failure.ts'
 import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
@@ -111,7 +111,7 @@ export function createPlaceDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as PlaceParams
       const key = `place:${params.x},${params.y},${params.z},${params.item}`
-      return new AsyncDriverHandle(key, placeCell(ctx.port, params).then(result => attachPlaceFailure(result, params)))
+      return new AsyncDriverHandle(key, placeCell(ctx.port, params).then(result => attachPlaceFailure(result, params, ctx.port)))
     },
   }
 }
@@ -274,14 +274,22 @@ async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefine
 }
 
 /** Add the unified failure projection to every placement failure path. */
-function attachPlaceFailure(result: DriverResult, params: PlaceParams): DriverResult {
+function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: ClientPort): DriverResult {
   if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
   const code = result.code ?? 'PLACE_FAILED'
+  const target = { x: params.x, y: params.y, z: params.z }
   const facts: Record<string, JsonValue> = {
-    target: { x: params.x, y: params.y, z: params.z },
+    target,
+    snapshot: failureSnapshot(port, target, result.observed) as unknown as JsonValue,
+  }
+  const observed = result.observed
+  // A placement always needs a loaded, solid reference face. Give the next turn
+  // the same six-face answer instead of making it observe the target again.
+  if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
+    facts.supports = supportFacts(port, target) as unknown as JsonValue
+    facts.suggestedCells = suggestedPlaceCells(port, [target, ...(params.cells ?? [])]) as unknown as JsonValue
   }
   const suggestions: Array<{ action: string; params?: Record<string, JsonValue>; confidence: 'exact' | 'candidate'; why: string }> = []
-  const observed = result.observed
   if (code === 'PLACE_BLOCKED_BY_SELF' && isRecord(observed) && Array.isArray(observed.adjacent)) {
     for (const entry of observed.adjacent.slice(0, 2)) {
       if (!isRecord(entry)
@@ -327,6 +335,60 @@ function matchesName(block: BlockInfo, expected: ExpectedBlock): boolean {
   // The driver proves the block identity; the plan verifier proves the state
   // subset (door half, bed part) once the server's update has applied.
   return matchesExpected({ name: block.name, loaded: block.loaded }, { name: expected.name })
+}
+
+/** All six faces of one target cell, true when that neighbour is solid. */
+function supportFacts(port: ClientPort, target: Cell): Record<Face, boolean> {
+  const result = {} as Record<Face, boolean>
+  for (const face of FACES) {
+    result[face.name] = isSolid(port.blockAt({
+      x: target.x + face.dx,
+      y: target.y + face.dy,
+      z: target.z + face.dz,
+    }))
+  }
+  return result
+}
+
+/**
+ * Up to three nearby empty cells that already have a solid reference face and
+ * are not occupied by the body. These are candidate placement cells, not stand
+ * cells; the caller remains responsible for choosing and approaching them.
+ */
+function suggestedPlaceCells(
+  port: ClientPort,
+  cells: readonly Cell[],
+): Array<{ cell: [number, number, number]; support: Face }> {
+  const target = cells[0]
+  if (target === undefined) return []
+  const self = port.self().pos
+  const candidates: Array<{ cell: [number, number, number]; support: Face; distance: number }> = []
+  for (let dx = -2; dx <= 2; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dz = -2; dz <= 2; dz += 1) {
+        if (dx === 0 && dy === 0 && dz === 0) continue
+        const candidate: Cell = { x: target.x + dx, y: target.y + dy, z: target.z + dz }
+        if (cells.some(cell => cell.x === candidate.x && cell.y === candidate.y && cell.z === candidate.z)) continue
+        if (bodyCoversCells(self, [candidate])) continue
+        const block = port.blockAt(candidate)
+        if (block === null || !block.loaded || !isAir(block.name)) continue
+        const support = FACES.find(face => isSolid(port.blockAt({
+          x: candidate.x + face.dx,
+          y: candidate.y + face.dy,
+          z: candidate.z + face.dz,
+        })))
+        if (support === undefined) continue
+        candidates.push({
+          cell: [candidate.x, candidate.y, candidate.z],
+          support: support.name,
+          distance: Math.abs(dx) + Math.abs(dy) + Math.abs(dz),
+        })
+      }
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance || a.cell[1] - b.cell[1]
+    || a.cell[0] - b.cell[0] || a.cell[2] - b.cell[2])
+  return candidates.slice(0, 3).map(({ cell, support }) => ({ cell, support }))
 }
 
 function supportFaces(port: ClientPort, target: Cell): Face[] {

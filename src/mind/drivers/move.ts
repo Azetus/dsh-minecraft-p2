@@ -10,7 +10,7 @@ import type {
   Job,
   WorldView,
 } from '../types.ts'
-import { failureBody, withFailure } from '../failure.ts'
+import { failureBody, failureSnapshot, withFailure } from '../failure.ts'
 import type { FailureSuggestion } from '../failure.ts'
 import { AsyncDriverHandle } from './handle.ts'
 
@@ -159,7 +159,9 @@ function moveFailure(
   observed: JsonValue | undefined,
   params: MoveParams,
 ): JsonValue {
-  const facts: Record<string, JsonValue> = {}
+  const facts: Record<string, JsonValue> = {
+    snapshot: failureSnapshot(ctx.port, params, observed) as unknown as JsonValue,
+  }
   const blocked = [
     ...blockCells(observed, 'bodyOverlap'),
     ...blockCells(observed, 'blockedBy'),

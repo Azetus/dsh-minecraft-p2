@@ -41,6 +41,8 @@ function portWith(promise: Promise<ActResult>): {
       calls.push({ target, opts })
       return promise
     },
+    self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+    blockAt: () => ({ name: 'air', loaded: true }),
   } as unknown as ClientPort
   return { port, calls }
 }
@@ -85,6 +87,46 @@ describe('move driver', () => {
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
     expect((handle.result().observed as { failure?: unknown }).failure)
       .toMatchObject({ layer: 'motion', code: 'GOTO_NO_PATH', facts: { pathStatus: 'noPath' } })
+  })
+
+  it('adds a bounded snapshot to a no-path failure', async () => {
+    const pending = deferred<ActResult>()
+    const blocks = new Map([
+      ['1,65,0', { name: 'stone', loaded: true }],
+      ['1,63,0', { name: 'stone', loaded: true }],
+      ['0,63,0', { name: 'stone', loaded: true }],
+    ])
+    const port = {
+      moveTo: () => pending.promise,
+      self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+      blockAt: (p: { x: number; y: number; z: number }) =>
+        blocks.get(`${p.x},${p.y},${p.z}`) ?? { name: 'air', loaded: true },
+    } as unknown as ClientPort
+    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    pending.resolve({
+      state: 'failed',
+      code: 'GOTO_NO_PATH',
+      elapsedMs: 10,
+      observed: { pathStatus: 'noPath', bestReachable: { x: 1, y: 64, z: 0 } },
+    })
+    await flush()
+
+    const failure = (handle.result().observed as { failure?: Record<string, unknown> }).failure
+    const snapshot = (failure?.facts as { snapshot?: Record<string, any> }).snapshot
+    expect(snapshot?.cellCount).toBeLessThanOrEqual(16)
+    expect(snapshot?.self).toMatchObject({
+      feet: { cell: [0, 64, 0] },
+      head: { cell: [0, 65, 0] },
+      support: { cell: [0, 63, 0], name: 'stone' },
+    })
+    expect(snapshot?.target).toMatchObject({
+      feet: { cell: [1, 64, 0] },
+      head: { cell: [1, 65, 0], name: 'stone' },
+      support: { cell: [1, 63, 0], name: 'stone' },
+    })
+    expect(snapshot?.targetNeighbors).toHaveLength(4)
+    expect(snapshot?.pathStatus).toBe('noPath')
+    expect(snapshot?.bestReachable).toEqual([1, 64, 0])
   })
 
   it('adds a stuck failure body with probe and exact clear suggestions', async () => {

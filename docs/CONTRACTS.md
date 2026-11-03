@@ -154,6 +154,8 @@ type Job = {
 - 失败计数键 = `(orderId|workItemId|driverId)`。
 - 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, cause, recovery?, suggestions?}`：
   - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
+  - `facts.snapshot` 是失败时的有界同快照：`self/target` 各含 feet/head/support，`targetNeighbors` 四邻，`bodyOverlap` 最多 4 格，另带 `pathStatus`/`bestReachable`；每格为 `{cell:[x,y,z], name, loaded}`，最多 16 个去重格，不含 path/candidates/visited；
+  - `PLACE_UNSUPPORTED` 的 `facts` 额外带 `supports` 六面布尔（up/down/north/south/east/west）与最多 3 个 `suggestedCells`（`{cell,support}`，指附近已有实心参照面、可实际放置的候选目标格，不是站位）；
   - `cause` 是 `{kind: "provider"|"world"|"authority"|"budget"|"unknown", code}`，不是自然语言；
   - `suggestions` 最多 3 条，每条 `{action, params?, confidence: "exact"|"candidate", why}`，可为空，**只作证据，绝不自动执行**；
   - port/provider 失败只给 `reobserve` / `wait` / `restart-provider`，不给游戏动作；`STOP_UNCONFIRMED` 保持 tracker fault 语义。

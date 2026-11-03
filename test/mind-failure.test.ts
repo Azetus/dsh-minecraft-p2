@@ -5,6 +5,7 @@ import {
   ensureFailureObserved,
   failureBody,
   failureFacts,
+  failureSnapshot,
   providerFailureSuggestions,
   readFailure,
   withFailure,
@@ -27,6 +28,47 @@ describe('failure projection', () => {
     expect(facts).toHaveProperty('blockedBy')
     expect(facts).not.toHaveProperty('secret')
     expect((facts.path as unknown[]).length).toBe(8)
+  })
+
+  it('builds a bounded same-observation snapshot with body and target cells', () => {
+    const blocks = new Map([
+      ['0,65,0', { name: 'dirt', loaded: true }],
+      ['0,63,0', { name: 'stone', loaded: true }],
+      ['1,63,0', { name: 'stone', loaded: true }],
+      ['1,65,0', { name: 'air', loaded: true }],
+    ])
+    const port = {
+      self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+      blockAt: (p: { x: number; y: number; z: number }) =>
+        blocks.get(`${p.x},${p.y},${p.z}`) ?? { name: 'air', loaded: true },
+    }
+    const snapshot = failureSnapshot(port, { x: 1, y: 64, z: 0 }, {
+      pathStatus: 'noPath',
+      bestReachable: { x: 1, y: 64, z: 0 },
+      bodyOverlap: { blocks: [{ x: 0, y: 64, z: 0, name: 'dirt' }] },
+      path: Array.from({ length: 20 }, (_, index) => ({ x: index, y: 64, z: 0 })),
+      candidates: [{ x: 9, y: 64, z: 9 }],
+      visitedNodes: 40,
+    } as unknown as JsonValue)
+
+    expect(snapshot.cellCount).toBeLessThanOrEqual(16)
+    expect(snapshot.self.head).toMatchObject({ cell: [0, 65, 0], name: 'dirt', loaded: true })
+    expect(snapshot.self.support).toMatchObject({ cell: [0, 63, 0], name: 'stone', loaded: true })
+    expect(snapshot.target.support).toMatchObject({ cell: [1, 63, 0], name: 'stone', loaded: true })
+    expect(snapshot.targetNeighbors).toHaveLength(4)
+    expect(snapshot.bodyOverlap[0]?.cell).toEqual([0, 64, 0])
+    expect(snapshot.pathStatus).toBe('noPath')
+    expect(snapshot.bestReachable).toEqual([1, 64, 0])
+
+    const all = [
+      snapshot.self.feet, snapshot.self.head, snapshot.self.support,
+      snapshot.target.feet, snapshot.target.head, snapshot.target.support,
+      ...snapshot.targetNeighbors, ...snapshot.bodyOverlap,
+    ]
+    expect(new Set(all.map(cell => cell.cell.join(','))).size).toBe(snapshot.cellCount)
+    expect(snapshot).not.toHaveProperty('path')
+    expect(snapshot).not.toHaveProperty('candidates')
+    expect(snapshot).not.toHaveProperty('visitedNodes')
   })
 
   it('caps suggestions at three and removes duplicates', () => {
