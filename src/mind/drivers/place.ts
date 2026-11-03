@@ -1,8 +1,12 @@
 import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
+import { standingCell } from '../../motion/execute/index.ts'
+import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
+import { standCells } from '../../motion/search/index.ts'
 import { approachBlock } from '../approach.ts'
 import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
+import { createReadOnlyMotionWorld } from '../standing.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle, actFailure } from './handle.ts'
 
@@ -123,10 +127,28 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
   }
   if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
 
-  const explicit = params.stands ?? (params.standX !== undefined && params.standY !== undefined
+  const requestedStands = params.stands ?? (params.standX !== undefined && params.standY !== undefined
     && params.standZ !== undefined
     ? [{ x: params.standX, y: params.standY, z: params.standZ }]
     : [])
+  // A stance whose own body occupies a target cell can never place it: the
+  // server answers PLACE_BLOCKED_BY_SELF. Drop it before moving there.
+  const explicit = requestedStands.filter(stand => !bodyCoversCells(
+    { x: stand.x + 0.5, y: stand.y, z: stand.z + 0.5 },
+    cells,
+  ))
+  if (requestedStands.length > 0 && explicit.length === 0) {
+    return {
+      state: 'failed',
+      code: 'PLACE_BLOCKED_BY_SELF',
+      observed: {
+        blockedBy: 'self',
+        target,
+        skippedStands: requestedStands.length,
+        adjacent: suggestedStances(port, cells),
+      },
+    }
+  }
 
   if (explicit.length > 0) {
     const attempts: Attempt[] = []
@@ -156,10 +178,14 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
       }
     }
     const last = attempts[attempts.length - 1]
+    const selfBlocked = attempts.some(attempt => attempt.code === 'PLACE_BLOCKED_BY_SELF')
     return {
       state: 'failed',
       code: last?.code ?? 'PLACE_FAILED',
-      observed: { attempts: attempts as unknown as never },
+      observed: {
+        attempts: attempts as unknown as never,
+        ...(selfBlocked ? { blockedBy: 'self', target, adjacent: suggestedStances(port, cells) } : {}),
+      },
     }
   }
 
@@ -176,6 +202,17 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
         code: approach.code,
         ...(approach.observed === undefined ? {} : { observed: approach.observed }),
       }
+    }
+  }
+  if (bodyCoversCells(port.self().pos, cells)) {
+    return {
+      state: 'failed',
+      code: 'PLACE_BLOCKED_BY_SELF',
+      observed: {
+        blockedBy: 'self',
+        target,
+        adjacent: suggestedStances(port, cells),
+      },
     }
   }
   if (params.yaw !== undefined) {
@@ -205,6 +242,14 @@ async function placeFaces(
     if (result.state === 'failed') {
       lastCode = result.code ?? 'PLACE_FAILED'
       lastObserved = result.observed
+      // Target-inside-body does not depend on the chosen face; stop early.
+      if (lastCode === 'PLACE_BLOCKED_BY_SELF') {
+        return {
+          state: 'failed',
+          code: lastCode,
+          observed: { blockedBy: 'self', target, ...(result.observed === undefined ? {} : { provider: result.observed }) },
+        }
+      }
       continue
     }
     // The server accepted the placement. One immediate read confirms every
@@ -258,4 +303,30 @@ function isAir(name: string): boolean {
 function isSolid(block: BlockInfo | null): boolean {
   return block !== null && block.loaded && !isAir(block.name)
     && block.name !== 'water' && block.name !== 'lava'
+}
+
+/** Does the body at `pos` occupy any of the target cells? */
+function bodyCoversCells(pos: { x: number; y: number; z: number }, cells: readonly Cell[]): boolean {
+  const x = Math.floor(pos.x)
+  const z = Math.floor(pos.z)
+  const firstY = Math.floor(pos.y + 0.001)
+  const lastY = Math.floor(pos.y + PLAYER_HEIGHT - 0.001)
+  return cells.some(cell => cell.x === x && cell.z === z && cell.y >= firstY && cell.y <= lastY)
+}
+
+/**
+ * Stand cells from which the target group is not inside the body. Evidence for
+ * a PLACE_BLOCKED_BY_SELF failure, not an automatic placement policy.
+ */
+function suggestedStances(port: ClientPort, cells: readonly Cell[]): Cell[] {
+  const target = cells[0]
+  if (target === undefined) return []
+  const world = createReadOnlyMotionWorld(point => port.blockAt(point))
+  const rules = createRules(world, defaultConstraints())
+  const query = standCells(world, {
+    near: target,
+    reach: { horizontal: 2, vertical: 1 },
+    accept: (cell, feetY) => !bodyCoversCells({ x: cell.x + 0.5, y: feetY, z: cell.z + 0.5 }, cells),
+  }, { from: standingCell(rules, port.self().pos), dry: true })
+  return query.cells.slice(0, 4).map(candidate => candidate.cell)
 }

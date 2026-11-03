@@ -123,6 +123,40 @@ describe('place driver', () => {
     expect(fake.places.some(face => face !== 'up')).toBe(true)
   })
 
+  it('skips a stance whose own body covers the target cell', async () => {
+    const fake = fakePort()
+    fake.world.set('0,63,0', block('stone', { x: 0, y: 63, z: 0 }))
+    fake.world.set('0,64,0', block('air', { x: 0, y: 64, z: 0 }))
+    fake.world.set('0,65,0', block('air', { x: 0, y: 65, z: 0 }))
+    const handle = createPlaceDriver().start(job({
+      x: 0, y: 64, z: 0, item: 'dirt',
+      stands: [{ x: 0, y: 64, z: 0 }, { x: 1, y: 64, z: 0 }],
+    }), { port: fake.port, now: () => 0 })
+    await wait(30)
+    expect(handle.result()).toMatchObject({ state: 'succeeded' })
+    expect(fake.moves).toEqual([{ x: 1, y: 64, z: 0 }])
+  })
+
+  it('reports blockedBy self with adjacent stances when every stance covers the target', async () => {
+    const fake = fakePort()
+    fake.world.set('0,63,0', block('stone', { x: 0, y: 63, z: 0 }))
+    fake.world.set('0,64,0', block('air', { x: 0, y: 64, z: 0 }))
+    fake.world.set('0,65,0', block('air', { x: 0, y: 65, z: 0 }))
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    fake.world.set('1,65,0', block('air', { x: 1, y: 65, z: 0 }))
+    const handle = createPlaceDriver().start(job({
+      x: 0, y: 64, z: 0, item: 'dirt',
+      stands: [{ x: 0, y: 64, z: 0 }],
+    }), { port: fake.port, now: () => 0 })
+    await wait(30)
+    const result = handle.result()
+    expect(result).toMatchObject({ state: 'failed', code: 'PLACE_BLOCKED_BY_SELF' })
+    const observed = result.observed as { blockedBy?: string; adjacent?: Vec3[] }
+    expect(observed.blockedBy).toBe('self')
+    expect(observed.adjacent).toEqual(expect.arrayContaining([{ x: 1, y: 64, z: 0 }]))
+  })
+
   it('attempts a non-air target instead of pre-rejecting it', async () => {
     const fake = fakePort()
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
