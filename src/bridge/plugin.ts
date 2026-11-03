@@ -563,20 +563,26 @@ function assertBodyOwner(manager: BodyManager, sessionId: string): void {
   if (manager.currentState !== 'active') return
   const current = manager.currentOwner
   if (current !== undefined && current.sessionId !== sessionId) {
-    throw new Error('P2 body is owned by a different session')
+    const target = manager.target === undefined ? 'unknown target' : formatTarget(manager.target)
+    throw new Error(
+      `P2 body is owned by a different session (session ${current.sessionId}, agent ${current.agentId}, ${target}); `
+      + 'ask that owner to stop it first',
+    )
   }
 }
 
 async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
   if (manager.currentState !== 'active') {
-    return { state: manager.currentState }
+    return { state: manager.currentState, locks: await manager.locks() }
   }
   const status = await manager.status()
-  if (status.state !== 'active') return { state: status.state }
+  if (status.state !== 'active') return { state: status.state, locks: await manager.locks() }
   return {
     state: 'active',
     epoch: manager.bodyEpoch ?? null,
     target: manager.target === undefined ? null : formatTarget(manager.target),
+    owner: status.status.owner?.sessionId ?? null,
+    lock: manager.lockInfo ?? null,
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
 }
@@ -600,7 +606,11 @@ async function startBody(manager: BodyManager, agent: AgentLike, target?: McTarg
   if (manager.currentState === 'active') {
     const current = manager.currentOwner
     if (current !== undefined && (current.sessionId !== owner.sessionId || current.agentId !== owner.agentId)) {
-      throw new Error('P2 body is owned by a different session')
+      const target = manager.target === undefined ? 'unknown target' : formatTarget(manager.target)
+      throw new Error(
+        `P2 body is owned by a different session (session ${current.sessionId}, agent ${current.agentId}, ${target}); `
+        + 'ask that owner to stop it first',
+      )
     }
     if (target !== undefined) {
       const currentTarget = manager.target
@@ -689,7 +699,13 @@ function ownerOf(agent: CommandInvocation['agent']): OwnerContext {
 }
 
 async function statusText(manager: BodyManager): Promise<string> {
-  if (manager.currentState !== 'active') return `P2 body ${manager.currentState}`
+  if (manager.currentState !== 'active') {
+    const locks = await manager.locks()
+    const locked = locks.length === 0
+      ? ''
+      : `; locked=${locks.map(lock => `${formatTarget({ host: lock.host, port: lock.port })} by ${lock.ownerSessionId}`).join(',')}`
+    return `P2 body ${manager.currentState}${locked}`
+  }
   const result = await manager.status()
   if (result.state !== 'active') return `P2 body ${result.state}`
   const status = result.status
@@ -697,8 +713,8 @@ async function statusText(manager: BodyManager): Promise<string> {
     'P2 body active',
     `epoch=${status.bodyEpoch}`,
     `target=${manager.target === undefined ? 'unknown' : formatTarget(manager.target)}`,
-    `health=${status.health}`,
     `owner=${status.owner?.sessionId ?? 'none'}`,
+    `health=${status.health}`,
     `paused=${status.providerState?.paused ?? false}`,
   ].join(' ')
 }

@@ -21,6 +21,7 @@ class FakeManager {
   readonly says: string[] = []
   /** Override the next accepted order result (queue summary tests). */
   orderResult: unknown = { id: 'ord-1', state: 'active' }
+  locksResult: unknown[] = []
 
   async status(): Promise<unknown> {
     return {
@@ -84,6 +85,10 @@ class FakeManager {
   async mindEvents(): Promise<unknown> {
     return { events: [], seq: 0 }
   }
+
+  async locks(): Promise<unknown[]> {
+    return this.locksResult
+  }
 }
 
 function harness(sessionId = 's1'): {
@@ -121,6 +126,32 @@ describe('mind operator tools', () => {
       'p2_report',
       'p2_events',
     ])
+  })
+
+  it('reports locks while the body is inactive', async () => {
+    const { manager, definitions, agent } = harness()
+    manager.currentState = 'inactive'
+    manager.locksResult = [{
+      version: 1,
+      lockId: 'lock-1',
+      host: '127.0.0.1',
+      port: 25575,
+      ownerSessionId: 'session-9',
+      agentId: 'agent-9',
+      bridgePid: 999,
+      startedAt: 1,
+      heartbeatAt: 2,
+    }]
+    const value = await definitions.get('p2_status')?.execute({}, { agent }) as {
+      state?: string
+      locks?: Array<{ ownerSessionId?: string; host?: string; port?: number }>
+    }
+    expect(value.state).toBe('inactive')
+    expect(value.locks?.[0]).toMatchObject({
+      host: '127.0.0.1',
+      port: 25575,
+      ownerSessionId: 'session-9',
+    })
   })
 
   it('reports mind state through p2_status', async () => {
