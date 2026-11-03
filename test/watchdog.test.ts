@@ -229,6 +229,17 @@ describe('body watchdog', () => {
     expect(harness.faults.at(-1)).toMatchObject({
       reason: 'provider-disconnected',
       autoRestart: 'disabled',
+      lastDisconnect: {
+        kind: 'kick',
+        reason: 'multiplayer.disconnect.duplicate_login',
+      },
+    })
+    const faulted = await harness.manager.status()
+    expect(faulted).toMatchObject({
+      state: 'faulted',
+      fault: {
+        lastDisconnect: { kind: 'kick', reason: 'multiplayer.disconnect.duplicate_login' },
+      },
     })
     expect(harness.manager.lockInfo).toBeUndefined()
     await harness.manager.stop()
@@ -362,6 +373,68 @@ describe('body watchdog', () => {
     expect(harness.faults[0]).toMatchObject({ autoRestart: 'disabled' })
   })
 
+  it('keeps lastDisconnect visible in faulted p2_body status', async () => {
+    const providerStatus = (): ProviderRuntimeStatus => ({
+      connected: false,
+      paused: false,
+      serverAge: 1,
+      idleMs: 0,
+      lastDisconnect: {
+        at: 1,
+        kind: 'kick',
+        reason: 'multiplayer.disconnect.duplicate_login',
+        eventLoopLagMs: 0,
+        serverAge: 1,
+        paused: false,
+        ageIdleMs: 0,
+      },
+    })
+    const bodies = [createFakeBody('epoch-1', { providerStatus })]
+    let spawns = 0
+    const tools = new Map<string, ToolDefinition>()
+    const ctx = {
+      commands: { register: () => () => {} },
+      tools: {
+        register: (definition: ToolDefinition) => {
+          tools.set(definition.name, definition)
+          return () => tools.delete(definition.name)
+        },
+      },
+      agents: { get: () => undefined },
+      effect: (callback: () => unknown) => {
+        callback()
+        return () => {}
+      },
+    }
+    const plugin = createP2Plugin({
+      bodyEntry: 'unused-body.mjs',
+      heartbeatMs: 10,
+      requestTimeoutMs: 20,
+      devBodyControl: true,
+      devAutoRestart: true,
+      restartBackoffMs: [0],
+      lockDir: tempLockDir(),
+      spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
+      log: () => {},
+    })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const bodyTool = tools.get('p2_body')
+    if (bodyTool === undefined) throw new Error('p2_body was not registered')
+    const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    await bodyTool.execute({ action: 'start', host: '127.0.0.1', port: 25575 }, { agent })
+    await wait(150)
+
+    const status = await bodyTool.execute({ action: 'status' }, { agent }) as {
+      state?: string
+      fault?: { lastDisconnect?: { kind?: string; reason?: string } }
+    }
+    expect(status.state).toBe('faulted')
+    expect(status.fault?.lastDisconnect).toMatchObject({
+      kind: 'kick',
+      reason: 'multiplayer.disconnect.duplicate_login',
+    })
+  })
+
   it('starts the body with an explicit p2_body target', async () => {
     const bodies = [createFakeBody('epoch-1')]
     let spawns = 0
@@ -453,6 +526,72 @@ describe('body watchdog', () => {
     expect(texts.some(text => text.includes('body restarted'))).toBe(true)
     expect(followups.every(message => message.source.kind === 'p2-runtime')).toBe(true)
     expect(followups.every(message => message.role === 'user')).toBe(true)
+  })
+
+  it('includes provider detail in the fault wake', async () => {
+    const providerStatus = (): ProviderRuntimeStatus => ({
+      connected: false,
+      paused: false,
+      serverAge: 1,
+      idleMs: 0,
+      lastDisconnect: {
+        at: 1,
+        kind: 'kick',
+        reason: 'multiplayer.disconnect.duplicate_login',
+        eventLoopLagMs: 0,
+        serverAge: 1,
+        paused: false,
+        ageIdleMs: 0,
+      },
+    })
+    const bodies = [createFakeBody('epoch-1', { providerStatus })]
+    const followups: Array<{
+      role: string
+      content: Array<{ type: string; text: string }>
+      source: { kind: string }
+    }> = []
+    const definitions: Array<{ handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }> }> = []
+    let spawns = 0
+    const ctx = {
+      commands: {
+        register: (definition: typeof definitions[number]) => {
+          definitions.push(definition)
+          return () => {}
+        },
+      },
+      agents: {
+        get: (id: string) => id === owner.sessionId
+          ? { followup: (message: typeof followups[number]) => followups.push(message) }
+          : undefined,
+      },
+      effect: (callback: () => unknown) => {
+        callback()
+        return () => {}
+      },
+    }
+    const plugin = createP2Plugin({
+      bodyEntry: 'unused-body.mjs',
+      heartbeatMs: 10,
+      requestTimeoutMs: 20,
+      devAutoRestart: true,
+      restartBackoffMs: [0],
+      lockDir: tempLockDir(),
+      spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
+      log: () => {},
+    })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    const started = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
+    expect(started.kind).toBe('success')
+    await wait(150)
+
+    const texts = followups.map(message => message.content[0]?.text ?? '')
+    expect(texts.some(text => text.includes('body faulted (provider-disconnected)'))).toBe(true)
+    expect(texts.some(text => text.includes(
+      'detail=provider connection lost (kick: multiplayer.disconnect.duplicate_login)',
+    ))).toBe(true)
+    expect(texts.some(text => text.includes('Start a new body manually'))).toBe(true)
+    expect(texts.some(text => text.includes('body restarted'))).toBe(false)
   })
 })
 

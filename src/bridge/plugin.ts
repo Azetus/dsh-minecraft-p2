@@ -250,8 +250,9 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           : fault.autoRestart === 'exhausted'
             ? 'Auto-restart budget is exhausted; start a new body manually with /p2 start.'
             : 'Start a new body manually with /p2 start.'
+        const detail = fault.detail === undefined ? '' : ` detail=${boundedText(fault.detail)}`
         deliverWake(
-          `[p2 runtime] body faulted (${fault.reason}) epoch=${fault.epoch ?? 'none'}; control state is unknown and was lost with the epoch. ${next}`,
+          `[p2 runtime] body faulted (${fault.reason})${detail} epoch=${fault.epoch ?? 'none'}; control state is unknown and was lost with the epoch. ${next}`,
           'critical',
         )
       }
@@ -572,11 +573,22 @@ function assertBodyOwner(manager: BodyManager, sessionId: string): void {
 }
 
 async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
+  if (manager.currentState === 'faulted') {
+    const result = await manager.status()
+    const fault = result.state === 'faulted' ? result.fault ?? null : null
+    return { state: 'faulted', locks: await manager.locks(), fault } as unknown as JsonValue
+  }
   if (manager.currentState !== 'active') {
     return { state: manager.currentState, locks: await manager.locks() }
   }
   const status = await manager.status()
-  if (status.state !== 'active') return { state: status.state, locks: await manager.locks() }
+  if (status.state !== 'active') {
+    return {
+      state: status.state,
+      locks: await manager.locks(),
+      ...(status.state === 'faulted' && status.fault !== undefined ? { fault: status.fault } : {}),
+    } as unknown as JsonValue
+  }
   return {
     state: 'active',
     epoch: manager.bodyEpoch ?? null,
@@ -700,6 +712,12 @@ function ownerOf(agent: CommandInvocation['agent']): OwnerContext {
 }
 
 async function statusText(manager: BodyManager): Promise<string> {
+  if (manager.currentState === 'faulted') {
+    const result = await manager.status()
+    const fault = result.state === 'faulted' ? result.fault : undefined
+    const detail = fault?.detail === undefined ? '' : ` detail=${boundedText(fault.detail)}`
+    return `P2 body faulted${fault === undefined ? '' : ` (${fault.reason})${detail}`}`
+  }
   if (manager.currentState !== 'active') {
     const locks = await manager.locks()
     const locked = locks.length === 0
@@ -718,6 +736,11 @@ async function statusText(manager: BodyManager): Promise<string> {
     `health=${status.health}`,
     `paused=${status.providerState?.paused ?? false}`,
   ].join(' ')
+}
+
+function boundedText(text: string, max = 300): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim()
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}...`
 }
 
 function success(text: string): CommandResult {

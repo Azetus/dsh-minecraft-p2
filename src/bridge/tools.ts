@@ -309,12 +309,23 @@ function queueWarning(queue: JsonValue | undefined): string | undefined {
 }
 
 async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonValue> {
+  if (manager.currentState === 'faulted') {
+    const result = await manager.status()
+    const fault = result.state === 'faulted' ? result.fault ?? null : null
+    return { state: 'faulted', locks: await manager.locks(), fault } as unknown as JsonValue
+  }
   if (manager.currentState !== 'active') {
     return { state: manager.currentState, locks: await manager.locks() }
   }
   requireActiveOwner(manager, agent)
   const result = await manager.status()
-  if (result.state !== 'active') return { state: result.state, locks: await manager.locks() }
+  if (result.state !== 'active') {
+    return {
+      state: result.state,
+      locks: await manager.locks(),
+      ...(result.state === 'faulted' && result.fault !== undefined ? { fault: result.fault } : {}),
+    } as unknown as JsonValue
+  }
   const status = result.status
   return {
     state: 'active',

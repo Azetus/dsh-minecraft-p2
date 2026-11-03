@@ -7,6 +7,7 @@ import {
 } from '../contracts/index.ts'
 import type {
   JsonValue,
+  LastDisconnect,
   MessageTransport,
   OwnerContext,
   StatusResult,
@@ -49,6 +50,8 @@ export type BodyFault = {
   reason: BodyFaultReason
   epoch?: string
   detail?: string
+  /** Structured provider cause, retained for faulted-status diagnostics. */
+  lastDisconnect?: LastDisconnect
   control: 'unknown'
   autoRestart: AutoRestartDecision
 }
@@ -504,7 +507,10 @@ export class BodyManager {
           `provider disconnected; ${suppress ? 'not restarting (duplicate login)' : 'restarting body'} `
           + `(${last?.kind ?? 'unknown'}: ${last?.reason ?? 'no reason'})`,
         )
-        void this.fault('provider-disconnected', detail, { allowRestart: !suppress })
+        void this.fault('provider-disconnected', detail, {
+          allowRestart: !suppress,
+          ...(last === undefined ? {} : { lastDisconnect: last }),
+        })
       }
     } else {
       this.providerDisconnectPolls = 0
@@ -537,7 +543,7 @@ export class BodyManager {
   private async fault(
     reason: BodyFaultReason,
     detail?: string,
-    options: { allowRestart?: boolean } = {},
+    options: { allowRestart?: boolean; lastDisconnect?: LastDisconnect } = {},
   ): Promise<void> {
     if (this.state !== 'active' && this.state !== 'starting') return
     this.state = 'faulted'
@@ -548,6 +554,7 @@ export class BodyManager {
       reason,
       ...(this.epoch === undefined ? {} : { epoch: this.epoch }),
       ...(detail === undefined ? {} : { detail }),
+      ...(options.lastDisconnect === undefined ? {} : { lastDisconnect: options.lastDisconnect }),
       control: 'unknown',
       autoRestart: 'disabled',
     }
