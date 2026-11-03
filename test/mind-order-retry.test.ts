@@ -156,6 +156,31 @@ describe('primitive order retry policy', () => {
     expect(terminals).toHaveLength(1)
   })
 
+  it('does not retry an interaction whose required item is missing', async () => {
+    const port = {
+      on: () => {},
+      self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 }, yaw: 0, pitch: 0, health: 20, food: 20,
+        onGround: true, inWater: false, inLava: false }),
+      time: () => ({ timeOfDay: 1000, worldAge: 1 }),
+      blockAt: (p: { x: number; y: number; z: number }) => ({ name: 'air', loaded: true, pos: p }),
+      blocksIn: () => [],
+      entities: () => [],
+      inventory: () => [],
+      beginWrite: () => {},
+      endWrite: () => {},
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      equip: async () => ({ state: 'failed' as const, code: 'EQUIP_NO_ITEM', elapsedMs: 1 }),
+      useItem: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    const mind = makeMind(port)
+    mind.enqueueOrder({ id: 'ord-noitem', verb: 'use', params: { item: 'dirt' } })
+    await runUntilTerminal(mind, 'ord-noitem')
+
+    expect(mind.orders.get('ord-noitem')?.state).toBe('failed')
+    const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
+    expect(terminals).toHaveLength(1)
+  })
+
   it('appends one metrics line per order terminal with attempts and last code', async () => {
     const journalPath = tempJournal()
     const fake = fakePort([
