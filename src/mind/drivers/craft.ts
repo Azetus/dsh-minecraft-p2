@@ -1,8 +1,9 @@
 import type { SchemaNode } from '../schema.ts'
 import { approachBlock } from '../approach.ts'
+import type { JsonValue } from '../../contracts/types.ts'
 import type { ClientPort, Vec3 } from '../../port/index.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import { AsyncDriverHandle, actFailure } from './handle.ts'
+import { AsyncDriverHandle } from './handle.ts'
 
 export const CRAFT_DRIVER_ID = 'craft'
 
@@ -49,7 +50,9 @@ async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult>
   let result = await ctx.port.craft(params.item, count)
   if (result.state === 'failed' && result.code === 'CRAFT_NO_TABLE') {
     const table = findCraftingTable(ctx.port)
-    if (table === undefined) return { state: 'failed', code: 'CRAFT_NO_TABLE' }
+    if (table === undefined) {
+      return { state: 'failed', code: 'CRAFT_NO_TABLE', observed: craftEvidence(result.observed, params.item, count, before, countItem(ctx.port.inventory(), params.item)) }
+    }
     const approach = await approachBlock(ctx.port, table, {
       range: 2,
       timeoutMs: 12_000,
@@ -64,13 +67,52 @@ async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult>
     }
     result = await ctx.port.craft(params.item, count)
   }
-  if (result.state !== 'ok') return actFailure(result, 'CRAFT_FAILED')
   const after = countItem(ctx.port.inventory(), params.item)
-  if (after < before + count) return { state: 'failed', code: 'CRAFT_READBACK_MISMATCH' }
-  return {
-    state: 'succeeded',
-    observed: { kind: 'craft', item: params.item, count, before, after },
+  const evidence = craftEvidence(result.observed, params.item, count, before, after)
+  if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'CRAFT_FAILED', observed: evidence }
+  // The provider proves how many crafts ran and how many items it produced;
+  // prefer that over a driver-side guess so a partial batch is never silent.
+  const produced = numericField(result.observed, 'produced') ?? (after - before)
+  if (produced < count) return { state: 'failed', code: 'CRAFT_INCOMPLETE', observed: evidence }
+  return { state: 'succeeded', observed: evidence }
+}
+
+/**
+ * `attempted` is the requested craft count, `crafted` the provider's executed
+ * batches (falling back to the inventory delta), and `produced` the item count.
+ * A partial batch is reported with these numbers instead of a bare failure.
+ */
+function craftEvidence(
+  upstream: JsonValue | undefined,
+  item: string,
+  attempted: number,
+  before: number,
+  after: number,
+): JsonValue {
+  const evidence: Record<string, JsonValue> = {
+    kind: 'craft',
+    item,
+    count: attempted,
+    attempted,
+    before,
+    after,
+    crafted: numericField(upstream, 'crafted') ?? (after - before),
   }
+  for (const key of ['produced', 'requested', 'usedTable', 'requiresTable', 'recipeCount'] as const) {
+    const value = field(upstream, key)
+    if (value !== undefined) evidence[key] = value
+  }
+  return evidence
+}
+
+function field(upstream: JsonValue | undefined, key: string): JsonValue | undefined {
+  if (upstream === null || typeof upstream !== 'object' || Array.isArray(upstream)) return undefined
+  return (upstream as Record<string, JsonValue>)[key]
+}
+
+function numericField(upstream: JsonValue | undefined, key: string): number | undefined {
+  const value = field(upstream, key)
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function findCraftingTable(port: ClientPort): Vec3 | undefined {

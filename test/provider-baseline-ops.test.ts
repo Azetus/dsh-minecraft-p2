@@ -323,7 +323,78 @@ describe('baseline control operations', () => {
     const provider = new MineflayerProvider(bot)
     const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
     await new Promise(resolve => setTimeout(resolve, 20))
-    expect(handle.poll()).toMatchObject({ status: 'failed', error: { code: 'CRAFT_INCOMPLETE' } })
+    expect(handle.poll()).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'CRAFT_INCOMPLETE',
+        details: { item: 'oak_planks', requested: 1, crafted: 0, produced: 0 },
+      },
+    })
+  })
+
+  it('resolves a no-table recipe before consulting a nearby table', async () => {
+    const recipe = { result: { id: 5, count: 4 }, requiresTable: false, delta: [{ id: 17, count: -1 }] }
+    const { bot, raw, calls } = fakeBot({ inventory: [{ name: 'oak_log', count: 2 }], recipes: [recipe] })
+    const lookedAt: unknown[] = []
+    ;(raw as unknown as { recipesFor: (...args: unknown[]) => unknown[] }).recipesFor =
+      (_type, _meta, _min, table) => {
+        lookedAt.push(table)
+        return [recipe]
+      }
+    ;(raw as unknown as { findBlock: () => unknown }).findBlock = () => ({
+      name: 'crafting_table',
+      position: { x: 0, y: 63, z: 1 },
+    })
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    expect(lookedAt[0]).toBeNull()
+    expect(handle.poll()).toMatchObject({
+      status: 'succeeded',
+      result: { usedTable: false, requiresTable: false, recipeCount: 1 },
+    })
+    const craft = calls.find(call => call.name === 'craft')
+    expect((craft?.args as { table?: unknown } | undefined)?.table).toBeUndefined()
+  })
+
+  it('uses the table recipe only when no no-table recipe is available', async () => {
+    const recipe = { result: { id: 5, count: 4 }, requiresTable: true, delta: [{ id: 17, count: -1 }] }
+    const { bot, raw, calls } = fakeBot({ inventory: [{ name: 'oak_log', count: 2 }], recipes: [recipe] })
+    ;(raw as unknown as { recipesFor: (...args: unknown[]) => unknown[] }).recipesFor =
+      (_type, _meta, _min, table) => (table === null ? [] : [recipe])
+    ;(raw as unknown as { findBlock: () => unknown }).findBlock = () => ({
+      name: 'crafting_table',
+      position: { x: 0, y: 63, z: 1 },
+    })
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    expect(handle.poll()).toMatchObject({
+      status: 'succeeded',
+      result: { usedTable: true, requiresTable: true },
+    })
+    const craft = calls.find(call => call.name === 'craft')
+    expect((craft?.args as { table?: unknown } | undefined)?.table).toBeDefined()
+  })
+
+  it('reports missing ingredients, not a missing table, when a no-table recipe exists', async () => {
+    const noTable = { result: { id: 5, count: 4 }, requiresTable: false, delta: [{ id: 17, count: -1 }] }
+    const table = { result: { id: 5, count: 4 }, requiresTable: true, delta: [{ id: 17, count: -1 }] }
+    const { bot, raw } = fakeBot({ inventory: [], recipes: [noTable, table] })
+    ;(raw as unknown as { recipesAll: () => unknown[] }).recipesAll = () => [noTable, table]
+    ;(raw as unknown as { recipesFor: () => unknown[] }).recipesFor = () => []
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(handle.poll()).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'CRAFT_NO_INGREDIENTS',
+        details: { recipeCount: 2, requiresTable: false },
+      },
+    })
   })
 
   it('fails craft for an unknown item', () => {
@@ -423,6 +494,10 @@ describe('baseline control operations', () => {
       const matching = Array.isArray(options.matching) ? options.matching : [options.matching]
       return matching.includes(58) ? { name: 'crafting_table', position: { x: 1, y: 63, z: 0 } } : null
     }
+    // A table-only recipe: the no-table lookup must come back empty, otherwise
+    // the provider would (correctly) prefer the inventory recipe.
+    ;(raw as unknown as { recipesFor: (...args: unknown[]) => unknown[] }).recipesFor =
+      (_type, _meta, _min, table) => (table === null ? [] : recipes)
     const provider = new MineflayerProvider(bot)
     const handle = provider.start('craft', { item: 'oak_planks', count: 1 })
     await new Promise(resolve => setTimeout(resolve, 20))

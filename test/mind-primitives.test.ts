@@ -109,6 +109,37 @@ describe('finite primitive orders', () => {
     expect(count).toBe(4)
   })
 
+  it('reports a partial craft with crafted/attempted instead of a bare failure', async () => {
+    let inventory = [{ slot: 36, name: 'stick', count: 3 }]
+    const port = {
+      inventory: () => inventory,
+      craft: async () => {
+        inventory = [{ slot: 36, name: 'stick', count: 15 }]
+        return {
+          state: 'failed' as const,
+          code: 'CRAFT_INCOMPLETE',
+          observed: { item: 'stick', requested: 3, crafted: 1, produced: 4, expected: 12 },
+          elapsedMs: 1,
+        }
+      },
+    } as unknown as ClientPort
+    const result = await driverResult(createCraftDriver(), port,
+      { driverId: 'craft', params: { item: 'stick', count: 3 } } as unknown as Job)
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'CRAFT_INCOMPLETE',
+      observed: {
+        kind: 'craft',
+        item: 'stick',
+        attempted: 3,
+        crafted: 1,
+        produced: 4,
+        before: 3,
+        after: 15,
+      },
+    })
+  })
+
   it('uses a bed by sleeping, a block by activating it, and an item by using it', async () => {
     const calls: string[] = []
     const at = { pos: { x: 0.5, y: 64, z: 0.5 }, yaw: 0, pitch: 0, health: 20, food: 20,

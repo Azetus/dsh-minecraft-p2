@@ -1712,20 +1712,7 @@ class MineflayerActHandle implements ActHandle {
             return
           }
           const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : 1
-          const table = this.craftTable()
-          // Resolve the recipe for one execution; the loop below crafts one at a
-          // time so a stale window cannot silently swallow a whole batch.
-          const recipes = this.bot.recipesFor(itemType, null, 1, table ?? null)
-          const recipe = recipes[0]
-          if (recipe === undefined) {
-            const needsTable = this.bot.recipesAll(itemType, null, true).some(entry => entry.requiresTable)
-            this.failed = new Error(needsTable && table === undefined
-              ? `crafting ${name} requires a crafting table`
-              : `no craftable recipe for ${name}`)
-            this.failedCode = needsTable && table === undefined ? 'CRAFT_NO_TABLE' : 'CRAFT_NO_INGREDIENTS'
-            return
-          }
-          void this.craftRepeatedly(recipe, count, table, itemType, name).then(result => {
+          void this.craftFlow(itemType, name, count).then(result => {
             this.result = result
             this.completed = true
           }).catch((error: unknown) => {
@@ -1733,6 +1720,7 @@ class MineflayerActHandle implements ActHandle {
             this.failedCode = typeof (error as { code?: unknown }).code === 'string'
               ? (error as { code: string }).code
               : 'CRAFT_FAILED'
+            this.failureDetails = (error as { details?: JsonValue }).details
           })
           return
         }
@@ -2050,6 +2038,53 @@ class MineflayerActHandle implements ActHandle {
   }
 
   /**
+   * Resolve the recipe after refreshing the inventory model, preferring a
+   * no-table recipe so a nearby table never narrows the candidate set. Falls
+   * back to a table recipe only when one exists and a table is actually found.
+   */
+  private async craftFlow(itemType: number, name: string, count: number): Promise<JsonValue> {
+    await this.syncInventoryWindow()
+    this.ensureNotStopped()
+    const table = this.craftTable()
+    const all = this.bot.recipesAll(itemType, null, true)
+    let recipe = this.bot.recipesFor(itemType, null, 1, null)[0]
+    let usedTable = false
+    if (recipe === undefined && table !== undefined) {
+      recipe = this.bot.recipesFor(itemType, null, 1, table)[0]
+      usedTable = recipe !== undefined
+    }
+    if (recipe === undefined) {
+      const requiresTable = all.length > 0 && all.every(entry => entry.requiresTable)
+      const code = requiresTable && table === undefined ? 'CRAFT_NO_TABLE' : 'CRAFT_NO_INGREDIENTS'
+      const detail = requiresTable && table === undefined
+        ? `crafting ${name} requires a crafting table`
+        : `no craftable recipe for ${name}`
+      throw Object.assign(new Error(detail), {
+        code,
+        details: {
+          item: name,
+          recipeCount: all.length,
+          requiresTable,
+          tableFound: table !== undefined,
+        },
+      })
+    }
+    const result = await this.craftRepeatedly(
+      recipe,
+      count,
+      usedTable ? table : undefined,
+      itemType,
+      name,
+    )
+    return {
+      ...result,
+      usedTable,
+      requiresTable: recipe.requiresTable === true,
+      recipeCount: all.length,
+    }
+  }
+
+  /**
    * Craft one recipe at a time and verify the inventory delta.
    *
    * `bot.craft(recipe, N)` performs N window transactions; when a window gets
@@ -2063,7 +2098,7 @@ class MineflayerActHandle implements ActHandle {
     table: Parameters<Bot['craft']>[2],
     itemType: number,
     name: string,
-  ): Promise<JsonValue> {
+  ): Promise<Record<string, JsonValue>> {
     this.craftRunning = true
     try {
       await this.syncInventoryWindow()
@@ -2112,7 +2147,10 @@ class MineflayerActHandle implements ActHandle {
             `crafted ${crafted}/${requested} of ${name} (produced ${produced}, expected ${expected})`
             + (lastError === undefined ? '' : `: ${errorMessage(lastError)}`),
           ),
-          { code: 'CRAFT_INCOMPLETE' },
+          {
+            code: 'CRAFT_INCOMPLETE',
+            details: { item: name, requested, crafted, produced, expected },
+          },
         )
       }
       return { item: name, requested, crafted, produced }
