@@ -1,5 +1,6 @@
 import type { JsonValue } from '../../contracts/types.ts'
 import type { DriverHandle, DriverResult } from '../types.ts'
+import { failureBody, providerFailureSuggestions, withFailure } from '../failure.ts'
 
 /** Async driver handle: completion is the promise, stop is observe-only. */
 export class AsyncDriverHandle implements DriverHandle {
@@ -66,11 +67,33 @@ export function actFailure(
   result: { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?: JsonValue },
   fallback: string,
 ): DriverResult {
-  return {
-    state: 'failed',
-    code: result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : fallback),
-    ...(result.observed === undefined ? {} : { observed: result.observed }),
-  }
+  const code = result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : fallback)
+  const providerFailure = code === 'ACT_TIMEOUT'
+    || code === 'ACT_UNCONFIRMED'
+    || code === 'STOP_UNCONFIRMED'
+    || code === 'ACTION_DENIED'
+    || code === 'CLIENT_TIMEOUT'
+  const observed = withFailure(result.observed, failureBody({
+    layer: providerFailure ? 'port' : 'driver',
+    phase: providerFailure ? 'execute' : 'unknown',
+    code,
+    observed: result.observed,
+    cause: {
+      kind: providerFailure
+        ? code === 'STOP_UNCONFIRMED' ? 'authority' : 'provider'
+        : 'world',
+      code,
+    },
+    recovery: code === 'ACT_TIMEOUT'
+      ? { kind: 'retry' }
+      : code === 'STOP_UNCONFIRMED'
+        ? { kind: 'restart' }
+        : providerFailure
+          ? { kind: 'reobserve' }
+          : { kind: 'none' },
+    ...(providerFailure ? { suggestions: providerFailureSuggestions(code) } : {}),
+  }))
+  return { state: 'failed', code, observed }
 }
 
 export function sleep(ms: number): Promise<void> {

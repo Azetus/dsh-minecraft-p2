@@ -1,8 +1,11 @@
 import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
+import type { JsonValue } from '../../contracts/types.ts'
+import { isRecord } from '../../contracts/index.ts'
 import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { standCells } from '../../motion/search/index.ts'
 import { approachBlock } from '../approach.ts'
+import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
@@ -108,7 +111,7 @@ export function createPlaceDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as PlaceParams
       const key = `place:${params.x},${params.y},${params.z},${params.item}`
-      return new AsyncDriverHandle(key, placeCell(ctx.port, params))
+      return new AsyncDriverHandle(key, placeCell(ctx.port, params).then(result => attachPlaceFailure(result, params)))
     },
   }
 }
@@ -268,6 +271,49 @@ async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefine
   if (port.lookYaw === undefined) return undefined
   const result = await port.lookYaw(yaw)
   return result.state === 'ok' ? undefined : (result.code ?? 'PLACE_LOOK_FAILED')
+}
+
+/** Add the unified failure projection to every placement failure path. */
+function attachPlaceFailure(result: DriverResult, params: PlaceParams): DriverResult {
+  if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
+  const code = result.code ?? 'PLACE_FAILED'
+  const facts: Record<string, JsonValue> = {
+    target: { x: params.x, y: params.y, z: params.z },
+  }
+  const suggestions: Array<{ action: string; params?: Record<string, JsonValue>; confidence: 'exact' | 'candidate'; why: string }> = []
+  const observed = result.observed
+  if (code === 'PLACE_BLOCKED_BY_SELF' && isRecord(observed) && Array.isArray(observed.adjacent)) {
+    for (const entry of observed.adjacent.slice(0, 2)) {
+      if (!isRecord(entry)
+        || typeof entry.x !== 'number' || typeof entry.y !== 'number' || typeof entry.z !== 'number') continue
+      suggestions.push({
+        action: 'go',
+        params: { x: entry.x, y: entry.y, z: entry.z, range: 0 },
+        confidence: 'exact',
+        why: 'this adjacent stand cell is proven not to overlap the target group',
+      })
+    }
+  }
+  if (suggestions.length === 0) {
+    suggestions.push({
+      action: 'reobserve',
+      confidence: 'exact',
+      why: 'read the target and adjacent cells before choosing another stance',
+    })
+  }
+  return {
+    ...result,
+    observed: withFailure(observed, failureBody({
+      layer: 'driver',
+      phase: 'execute',
+      code,
+      observed,
+      facts,
+      cause: { kind: 'world', code },
+      recovery: code === 'PLACE_BLOCKED_BY_SELF' ? { kind: 'replan' } : { kind: 'replan' },
+      suggestions,
+    })),
+  }
 }
 
 function cellsMatch(port: ClientPort, cells: Cell[], expected: ExpectedBlock): boolean {

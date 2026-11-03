@@ -24,6 +24,7 @@ import { createFatalDriver, FATAL_DRIVER_ID } from '../mind/drivers/fatal.ts'
 import { MindEvents } from '../mind/events.ts'
 import type { MindEvent } from '../mind/events.ts'
 import { classifyFailure } from '../mind/diagnostics.ts'
+import { ensureFailureObserved } from '../mind/failure.ts'
 import { MindMetrics } from '../mind/metrics.ts'
 import { createEscapeGiver } from '../mind/givers/escape.ts'
 import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
@@ -331,8 +332,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       const diagnostic = event.kind === 'job.terminal' && code !== undefined
         ? classifyFailure(code)
         : undefined
+      const eventObserved = event.kind === 'job.terminal' ? event.observed : undefined
+      const observed = event.kind === 'job.terminal' && event.state === 'failed'
+        ? ensureFailureObserved(eventObserved, event.code, event.driverId)
+        : eventObserved
       const data = {
         ...event,
+        ...(event.kind === 'job.terminal' && observed !== eventObserved ? { observed } : {}),
         ...(retry ? { retry: true } : {}),
         ...(diagnostic === undefined ? {} : { diagnostic }),
       } as unknown as JsonValue
@@ -347,7 +353,6 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         )
       }
       if (event.kind === 'job.terminal' && event.driverId === 'check') {
-        const observed = event.observed
         if (order !== undefined && order.order.verb === 'check') {
           const ok = isRecord(observed) && observed.state === 'ok'
           orders.complete(order.order.id, ok ? 'succeeded' : 'failed')
@@ -372,7 +377,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
               orderId: order.order.id,
               state: terminal,
               ...(event.code === undefined ? {} : { code: event.code }),
-              ...(event.observed === undefined ? {} : { observed: event.observed }),
+              ...(observed === undefined ? {} : { observed }),
             })
           }
         }

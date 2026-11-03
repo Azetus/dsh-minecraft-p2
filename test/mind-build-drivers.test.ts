@@ -174,7 +174,9 @@ describe('place driver', () => {
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
     await wait(30)
-    expect(handle.result()).toEqual({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
+    expect((handle.result().observed as { failure?: unknown }).failure)
+      .toMatchObject({ layer: 'driver', code: 'PLACE_READBACK_MISMATCH', facts: { target: { x: 1, y: 64, z: 0 } } })
   })
 
   it('approaches a distant work face before placing', async () => {

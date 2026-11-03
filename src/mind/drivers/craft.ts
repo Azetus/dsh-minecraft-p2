@@ -3,6 +3,7 @@ import { approachBlock } from '../approach.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import type { ClientPort, Vec3 } from '../../port/index.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
+import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { AsyncDriverHandle } from './handle.ts'
 
 export const CRAFT_DRIVER_ID = 'craft'
@@ -39,7 +40,7 @@ export function createCraftDriver(): Driver {
     },
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as CraftParams
-      return new AsyncDriverHandle(`craft:${params.item}:${params.count ?? 1}`, craft(ctx, params))
+      return new AsyncDriverHandle(`craft:${params.item}:${params.count ?? 1}`, craft(ctx, params).then(result => attachCraftFailure(result, params)))
     },
   }
 }
@@ -127,4 +128,41 @@ function findCraftingTable(port: ClientPort): Vec3 | undefined {
 
 function countItem(inventory: Array<{ name: string; count: number }>, name: string): number {
   return inventory.filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0)
+}
+
+function attachCraftFailure(result: DriverResult, params: CraftParams): DriverResult {
+  if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
+  const code = result.code ?? 'CRAFT_FAILED'
+  const count = params.count ?? 1
+  const suggestions: Array<{ action: string; params?: Record<string, JsonValue>; confidence: 'exact' | 'candidate'; why: string }> = []
+  if (code === 'CRAFT_INCOMPLETE') {
+    const produced = numericField(result.observed, 'produced') ?? numericField(result.observed, 'crafted') ?? 0
+    const remaining = Math.max(1, count - produced)
+    suggestions.push({
+      action: 'craft',
+      params: { item: params.item, count: remaining },
+      confidence: 'candidate',
+      why: 'the provider already started the batch; only the remaining amount is missing',
+    })
+  }
+  if (suggestions.length === 0) {
+    suggestions.push({
+      action: 'reobserve',
+      confidence: 'exact',
+      why: 'read the inventory and nearby crafting table before retrying',
+    })
+  }
+  return {
+    ...result,
+    observed: withFailure(result.observed, failureBody({
+      layer: 'driver',
+      phase: 'execute',
+      code,
+      observed: result.observed,
+      facts: { item: params.item, count },
+      cause: { kind: 'world', code },
+      recovery: code === 'CRAFT_INCOMPLETE' ? { kind: 'retry' } : { kind: 'replan' },
+      suggestions,
+    })),
+  }
 }

@@ -214,6 +214,7 @@ function jobFailureItem(
 ): CompletionItem {
   const code = text(data.code)
   const observedState = isRecord(data.observed) ? text(data.observed.state) : undefined
+  const failure = isRecord(data.observed) ? data.observed.failure : undefined
   return {
     severity: 'critical',
     payload: compact({
@@ -229,6 +230,7 @@ function jobFailureItem(
         : observedState !== undefined && observedState !== 'ok'
           ? observedState.toUpperCase()
           : 'FAILED'),
+      ...(failure === undefined ? {} : { failure }),
       ...(data.observed === undefined ? {} : { observed: data.observed }),
     }),
   }
@@ -253,11 +255,13 @@ function orderPayload(
 ): Record<string, JsonValue> {
   const reason = cause === undefined ? undefined : text(cause.reason)
   const observed = cause?.observed
+  const failure = isRecord(observed) ? observed.failure : undefined
   return compact({
     kind: 'order.terminal',
     ...(orderId === undefined ? {} : { orderId }),
     state,
     ...(reason === undefined ? {} : { reason }),
+    ...(failure === undefined ? {} : { failure }),
     ...(observed === undefined ? {} : { observed }),
     ...(cause === undefined ? {} : { cause: without(cause, 'observed') }),
   })

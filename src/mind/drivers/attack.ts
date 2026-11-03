@@ -10,6 +10,7 @@ import {
   type CombatPort,
 } from '../../motion/combat/index.ts'
 import { AsyncDriverHandle } from './handle.ts'
+import { failureBody, readFailure, withFailure } from '../failure.ts'
 
 export const ATTACK_DRIVER_ID = 'attack'
 
@@ -52,7 +53,7 @@ export function createAttackDriver(): Driver {
     },
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as AttackParams
-      return new AsyncDriverHandle(`attack:${params.entityId}`, attack(ctx.port, params))
+      return new AsyncDriverHandle(`attack:${params.entityId}`, attack(ctx.port, params).then(result => attachAttackFailure(result, params)))
     },
   }
 }
@@ -119,5 +120,33 @@ function locate(port: ClientPort, entityId: string): CombatEntity | undefined {
     position: entity.position,
     ...(entity.type === undefined ? {} : { type: entity.type }),
     ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+  }
+}
+
+function attachAttackFailure(result: DriverResult, params: AttackParams): DriverResult {
+  if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
+  const code = result.code ?? 'ATTACK_FAILED'
+  const suggestions = code === 'ATTACK_TARGET_PROTECTED'
+    ? []
+    : [{
+        action: 'reobserve',
+        confidence: 'exact' as const,
+        why: 'the entity id is locked; re-observe before naming a new target',
+      }]
+  return {
+    ...result,
+    observed: withFailure(result.observed, failureBody({
+      layer: 'driver',
+      phase: 'execute',
+      code,
+      observed: result.observed,
+      facts: {
+        entityId: params.entityId,
+        ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
+      },
+      cause: { kind: code === 'ATTACK_TARGET_PROTECTED' ? 'authority' : 'world', code },
+      recovery: { kind: 'none' },
+      suggestions,
+    })),
   }
 }

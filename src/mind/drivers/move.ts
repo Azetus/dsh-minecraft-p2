@@ -1,4 +1,6 @@
-import type { ActResult, MoveOptions, Vec3 } from '../../port/index.ts'
+import type { ActResult, BlockInfo, ClientPort, MoveOptions, Vec3 } from '../../port/index.ts'
+import type { JsonValue } from '../../contracts/types.ts'
+import { isRecord } from '../../contracts/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type {
   Driver,
@@ -8,6 +10,8 @@ import type {
   Job,
   WorldView,
 } from '../types.ts'
+import { failureBody, withFailure } from '../failure.ts'
+import type { FailureSuggestion } from '../failure.ts'
 import { AsyncDriverHandle } from './handle.ts'
 
 export const MOVE_DRIVER_ID = 'move'
@@ -104,7 +108,7 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       return {
         state: 'failed',
         code: 'GOTO_TIMEOUT',
-        ...(last?.observed === undefined ? {} : { observed: last.observed }),
+        observed: moveFailure(ctx, 'GOTO_TIMEOUT', last?.observed, params),
       }
     }
     const result = await ctx.port.moveTo(goal, {
@@ -133,16 +137,136 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       timeoutRetries += 1
       continue
     }
+    const code = result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : 'GOTO_NO_PATH')
     return {
       state: 'failed',
-      code: result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : 'GOTO_NO_PATH'),
-      ...(result.observed === undefined ? {} : { observed: result.observed }),
+      code,
+      observed: moveFailure(ctx, code, result.observed, params),
     }
   }
 
   return {
     state: 'failed',
     code: 'GOTO_SEGMENTS_EXCEEDED',
-    ...(last?.observed === undefined ? {} : { observed: last.observed }),
+    observed: moveFailure(ctx, 'GOTO_SEGMENTS_EXCEEDED', last?.observed, params),
   }
+}
+
+/** Failure body for one movement attempt; facts come from the same report. */
+function moveFailure(
+  ctx: DriverCtx,
+  code: string,
+  observed: JsonValue | undefined,
+  params: MoveParams,
+): JsonValue {
+  const facts: Record<string, JsonValue> = {}
+  const blocked = [
+    ...blockCells(observed, 'bodyOverlap'),
+    ...blockCells(observed, 'blockedBy'),
+  ]
+  if (code === 'GOTO_STUCK') {
+    facts.probe = probeBody(ctx.port)
+    // Only claim blockedAhead when the body itself overlaps a known block;
+    // a sampled neighbour is evidence, but not proof of the blocking cell.
+    if (blocked.length > 0) facts.blockedAhead = blocked as unknown as JsonValue
+  }
+  const suggestions: FailureSuggestion[] = []
+  for (const cell of blocked.slice(0, 3)) {
+    suggestions.push({
+      action: 'dig',
+      params: { x: cell.x, y: cell.y, z: cell.z },
+      confidence: 'exact',
+      why: 'this block is proven to block the body or the planned stand cell',
+    })
+  }
+  if (suggestions.length === 0 && (code === 'GOTO_STUCK' || code === 'GOTO_NO_PATH')) {
+    suggestions.push({
+      action: 'reobserve',
+      confidence: 'exact',
+      why: 'no blocking cell could be proven; observe the body before retrying',
+    })
+  }
+  if (suggestions.length < 3 && code === 'GOTO_NO_PATH' && isRecord(observed) && isRecord(observed.bestReachable)) {
+    const best = observed.bestReachable
+    if (isCell(best)) {
+      suggestions.push({
+        action: 'go',
+        params: { x: best.x, y: best.y, z: best.z, range: 0 },
+        confidence: 'candidate',
+        why: 'move to the proven reachable prefix before planning the full target',
+      })
+    }
+  }
+  return withFailure(observed, failureBody({
+    layer: 'motion',
+    phase: 'execute',
+    code,
+    observed,
+    facts,
+    cause: {
+      kind: code === 'GOTO_TIMEOUT' || code === 'GOTO_SEARCH_TIMEOUT' ? 'budget' : 'world',
+      code,
+    },
+    recovery: code === 'GOAL_NOT_STANDABLE' || code === 'BODY_OVERLAP'
+      ? { kind: 'none' }
+      : { kind: 'replan', detail: `target ${params.x},${params.y},${params.z}` },
+    suggestions,
+  }))
+}
+
+function blockCells(
+  observed: JsonValue | undefined,
+  key: 'bodyOverlap' | 'blockedBy',
+): Array<{ x: number; y: number; z: number; name?: string }> {
+  if (!isRecord(observed)) return []
+  const value = observed[key]
+  const blocks = isRecord(value) && Array.isArray(value.blocks)
+    ? value.blocks
+    : Array.isArray(value) ? value : []
+  const cells: Array<{ x: number; y: number; z: number; name?: string }> = []
+  for (const item of blocks.slice(0, 8)) {
+    if (!isRecord(item)) continue
+    const cell = isRecord(item.cell) && isCell(item.cell) ? item.cell : item
+    if (!isCell(cell)) continue
+    cells.push({
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      ...(typeof item.name === 'string' ? { name: item.name } : {}),
+    })
+  }
+  return cells
+}
+
+function probeBody(port: ClientPort): JsonValue {
+  const pos = port.self().pos
+  const x = Math.floor(pos.x)
+  const y = Math.floor(pos.y)
+  const z = Math.floor(pos.z)
+  const probes: Array<[string, number, number, number]> = [
+    ['feet', x, y, z],
+    ['head', x, y + 1, z],
+    ['east', x + 1, y, z],
+    ['west', x - 1, y, z],
+    ['south', x, y, z + 1],
+    ['north', x, y, z - 1],
+  ]
+  return probes.map(([layer, px, py, pz]) => {
+    const block: BlockInfo | null = port.blockAt({ x: px, y: py, z: pz })
+    return {
+      layer,
+      x: px,
+      y: py,
+      z: pz,
+      name: block?.name ?? null,
+      loaded: block?.loaded ?? false,
+    }
+  })
+}
+
+function isCell(value: unknown): value is { x: number; y: number; z: number } {
+  return isRecord(value)
+    && typeof value.x === 'number'
+    && typeof value.y === 'number'
+    && typeof value.z === 'number'
 }

@@ -161,7 +161,9 @@ describe('dig driver tool handling', () => {
 
     const result = await run(fake.port, 'clear')
 
-    expect(result).toEqual({ state: 'failed', code: 'CLIENT_TIMEOUT', observed: evidence })
+    expect(result).toMatchObject({ state: 'failed', code: 'CLIENT_TIMEOUT', observed: evidence })
+    expect((result.observed as { failure?: unknown }).failure)
+      .toMatchObject({ layer: 'port', code: 'CLIENT_TIMEOUT', cause: { kind: 'provider' } })
   })
 })
 

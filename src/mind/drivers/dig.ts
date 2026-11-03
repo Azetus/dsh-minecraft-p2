@@ -1,5 +1,6 @@
 import type { BlockInfo } from '../../port/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
+import { isRecord } from '../../contracts/index.ts'
 import { PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { approachBlock } from '../approach.ts'
 import { pickupNearby } from '../pickup.ts'
@@ -7,6 +8,8 @@ import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
 import type { DigPurpose } from '../tools.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
+import { failureBody, readFailure, withFailure } from '../failure.ts'
+import type { FailureSuggestion } from '../failure.ts'
 import { AsyncDriverHandle, actFailure, sleep } from './handle.ts'
 
 export const DIG_DRIVER_ID = 'dig'
@@ -101,9 +104,9 @@ export function createDigDriver(): Driver {
       const key = params.shape === undefined
         ? `dig:${params.x},${params.y},${params.z}:${params.purpose ?? 'harvest'}`
         : `dig.volume:${params.shape}:${params.from?.x},${params.from?.y},${params.from?.z}:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
-      return new AsyncDriverHandle(key, params.shape === undefined
+      return new AsyncDriverHandle(key, (params.shape === undefined
         ? digOne(ctx, { x: params.x as number, y: params.y as number, z: params.z as number }, params.purpose ?? 'harvest')
-        : digVolume(ctx, params))
+        : digVolume(ctx, params)).then(result => attachDigFailure(result, params)))
     },
   }
 }
@@ -368,4 +371,66 @@ function isAirName(name: string): boolean {
 
 function isAirBlock(block: BlockInfo | null): boolean {
   return block !== null && block.loaded && isAirName(block.name)
+}
+
+/** Add the unified failure projection to every dig failure path. */
+function attachDigFailure(result: DriverResult, params: DigParams): DriverResult {
+  if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
+  const code = result.code ?? 'DIG_FAILED'
+  const phase = code.startsWith('PICKUP_')
+    ? 'pickup'
+    : code === 'DIG_READBACK_UNSTABLE' ? 'readback' : 'execute'
+  const facts: Record<string, JsonValue> = {}
+  const single = { x: params.x, y: params.y, z: params.z }
+  if (params.shape === undefined && isCell(single)) {
+    facts.target = { x: single.x, y: single.y, z: single.z }
+  } else if (isCell(params.from) && isCell(params.to)) {
+    facts.target = { from: params.from, to: params.to } as unknown as JsonValue
+  }
+  return {
+    ...result,
+    observed: withFailure(result.observed, failureBody({
+      layer: 'driver',
+      phase,
+      code,
+      observed: result.observed,
+      facts,
+      cause: {
+        kind: code === 'DIG_VOLUME_TOO_LARGE' ? 'definition' : 'world',
+        code,
+      },
+      recovery: code === 'DIG_PARTIAL' || code === 'DIG_VOLUME_TOO_LARGE'
+        ? { kind: 'none' }
+        : { kind: 'replan' },
+      suggestions: digSuggestions(code, result.observed),
+    })),
+  }
+}
+
+function digSuggestions(code: string, observed: JsonValue | undefined): FailureSuggestion[] {
+  const suggestions: FailureSuggestion[] = []
+  if (code === 'PICKUP_UNREACHABLE' && isRecord(observed)) {
+    const pickup = observed.pickup
+    const standQuery = isRecord(pickup) ? pickup.standQuery : undefined
+    const requiredDig = isRecord(standQuery) && Array.isArray(standQuery.requiredDig)
+      ? standQuery.requiredDig
+      : []
+    for (const entry of requiredDig.slice(0, 3)) {
+      if (!isRecord(entry) || !isCell(entry)) continue
+      suggestions.push({
+        action: 'dig',
+        params: { x: entry.x, y: entry.y, z: entry.z },
+        confidence: 'exact',
+        why: 'this block is the proven stand/support obstruction for the drop',
+      })
+    }
+  }
+  if (suggestions.length === 0) {
+    suggestions.push({
+      action: 'reobserve',
+      confidence: 'exact',
+      why: 'read the target cells and inventory before deciding whether to retry',
+    })
+  }
+  return suggestions
 }

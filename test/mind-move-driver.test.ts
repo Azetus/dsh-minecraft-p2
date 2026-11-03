@@ -71,7 +71,9 @@ describe('move driver', () => {
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
     pending.resolve({ state: 'unknown', code: 'CLIENT_TIMEOUT', elapsedMs: 10 })
     await flush()
-    expect(handle.result()).toEqual({ state: 'failed', code: 'CLIENT_TIMEOUT' })
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'CLIENT_TIMEOUT' })
+    expect((handle.result().observed as { failure?: unknown }).failure)
+      .toMatchObject({ layer: 'motion', phase: 'execute', code: 'CLIENT_TIMEOUT' })
   })
 
   it('keeps a provider failure code', async () => {
@@ -80,7 +82,37 @@ describe('move driver', () => {
     const handle = createMoveDriver().start(job(), { port, now: () => 0 })
     pending.resolve({ state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 10, observed: { pathStatus: 'noPath' } })
     await flush()
-    expect(handle.result()).toEqual({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
+    expect((handle.result().observed as { failure?: unknown }).failure)
+      .toMatchObject({ layer: 'motion', code: 'GOTO_NO_PATH', facts: { pathStatus: 'noPath' } })
+  })
+
+  it('adds a stuck failure body with probe and exact clear suggestions', async () => {
+    const pending = deferred<ActResult>()
+    const port = {
+      moveTo: () => pending.promise,
+      self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+      blockAt: () => ({ name: 'dirt', loaded: true }),
+    } as unknown as ClientPort
+    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    pending.resolve({
+      state: 'failed',
+      code: 'GOTO_STUCK',
+      elapsedMs: 10,
+      observed: { bodyOverlap: { blocks: [{ x: 0, y: 64, z: 0, name: 'dirt' }] } },
+    })
+    await flush()
+
+    const failure = (handle.result().observed as { failure?: Record<string, unknown> }).failure
+    expect(failure).toMatchObject({
+      layer: 'motion',
+      code: 'GOTO_STUCK',
+      cause: { kind: 'world', code: 'GOTO_STUCK' },
+    })
+    expect((failure?.facts as { probe?: unknown[] }).probe).toHaveLength(6)
+    expect((failure?.facts as { blockedAhead?: unknown[] }).blockedAhead).toHaveLength(1)
+    expect((failure?.suggestions as Array<{ action: string; confidence: string }>)[0])
+      .toMatchObject({ action: 'dig', confidence: 'exact' })
   })
 
   it('never reports stopped when the port cannot confirm release', async () => {

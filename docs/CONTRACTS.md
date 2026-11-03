@@ -149,6 +149,12 @@ type Job = {
 
 - `runId` 在每次尝试时新生成；旧 `runId` 的结果只对账。
 - 失败计数键 = `(orderId|workItemId|driverId)`。
+- 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, cause, recovery?, suggestions?}`：
+  - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
+  - `cause` 是 `{kind: "provider"|"world"|"authority"|"budget"|"unknown", code}`，不是自然语言；
+  - `suggestions` 最多 3 条，每条 `{action, params?, confidence: "exact"|"candidate", why}`，可为空，**只作证据，绝不自动执行**；
+  - port/provider 失败只给 `reobserve` / `wait` / `restart-provider`，不给游戏动作；`STOP_UNCONFIRMED` 保持 tracker fault 语义。
+- 没有专门失败体的 driver 由 body 在 `job.terminal` 处补一个通用投影，保证每个失败终态都能回答“在哪、为什么、下一步”。
 
 ## 4. WorkGiver
 
