@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
@@ -77,7 +77,15 @@ import { verifyUsableRoom } from '../mind/verify/usable-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
 import type { ClientPort, Vec3 } from '../port/index.ts'
 
-export type MindOrderView = { id: string; verb: string; state: string }
+export type MindOrderView = {
+  id: string
+  verb: string
+  state: string
+  /** Job attempts recorded for this order so far. */
+  attempts?: number
+  lastCode?: string
+  blockedKeys?: string[]
+}
 
 export type MindRuntime = {
   tick(): void
@@ -184,6 +192,37 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let lastReport: JsonValue | null = null
   let loopRef: MindLoop | undefined
 
+  type OrderDebug = { attempts: number; lastCode?: string; blockedKeys?: string[] }
+  const orderDiagnostics = new Map<string, OrderDebug>()
+  const metricsPath = join(dirname(options.journalPath), 'metrics.jsonl')
+  const appendOrderMetric = (orderId: string, state: string): void => {
+    const record = orders.get(orderId)
+    if (record === undefined) return
+    const debug = orderDiagnostics.get(orderId)
+    const params = record.order.params
+    const target = params !== undefined
+      && typeof params.x === 'number' && typeof params.y === 'number' && typeof params.z === 'number'
+      ? { x: params.x, y: params.y, z: params.z }
+      : null
+    const line = {
+      at: now(),
+      orderId,
+      verb: record.order.verb,
+      state,
+      acceptedAt: record.acceptedAt,
+      durationMs: Math.max(0, now() - record.acceptedAt),
+      attempts: debug?.attempts ?? 0,
+      ...(target === null ? {} : { target }),
+      ...(debug?.lastCode === undefined ? {} : { lastCode: debug.lastCode }),
+      ...(debug?.blockedKeys === undefined ? {} : { blockedKeys: debug.blockedKeys }),
+    }
+    try {
+      appendFileSync(metricsPath, `${JSON.stringify(line)}\n`)
+    } catch {
+      // Metrics are a sidecar; a write failure must not fail the order path.
+    }
+  }
+
   const orders = new OrderStore({
     journalPath: options.journalPath,
     ...(options.identity === undefined
@@ -200,7 +239,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     onEvent: event => {
       events.push(event.kind, event.at, event as unknown as JsonValue)
       metrics.record(event.kind, event as unknown as JsonValue, event.at)
-      if (event.kind === 'order.accepted' || event.kind === 'order.terminal') {
+      if (event.kind === 'order.accepted') {
+        orderDiagnostics.set(event.orderId, { attempts: 0 })
+        loopRef?.invalidate()
+      } else if (event.kind === 'order.terminal') {
+        appendOrderMetric(event.orderId, event.state)
         loopRef?.invalidate()
       }
     },
@@ -267,6 +310,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
     },
     onEvent: event => {
+      if (event.kind === 'job.terminal' && event.orderId !== undefined) {
+        const debug = orderDiagnostics.get(event.orderId) ?? { attempts: 0 }
+        debug.attempts += 1
+        if (event.code !== undefined) debug.lastCode = event.code
+        if (event.blocked === true) debug.blockedKeys = [...(debug.blockedKeys ?? []), event.keys]
+        orderDiagnostics.set(event.orderId, debug)
+      }
       const order = event.kind === 'job.terminal' && event.orderId !== undefined
         ? orders.get(event.orderId)
         : undefined
@@ -1034,8 +1084,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     listOrders(): { active: MindOrderView | null; queued: MindOrderView[]; queueBlockedBy: { id: string; verb: string } | null } {
       const active = orders.active()
       return {
-        active: active === undefined ? null : viewOf(active),
-        queued: orders.queued().map(viewOf),
+        active: active === undefined ? null : viewOf(active, orderDiagnostics.get(active.order.id)),
+        queued: orders.queued().map(record => viewOf(record, orderDiagnostics.get(record.order.id))),
         queueBlockedBy: active !== undefined && active.order.verb === 'hold'
           ? { id: active.order.id, verb: active.order.verb }
           : null,
@@ -1076,8 +1126,18 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
 }
 
-function viewOf(record: { order: { id: string; verb: string }; state: string }): MindOrderView {
-  return { id: record.order.id, verb: record.order.verb, state: record.state }
+function viewOf(
+  record: { order: { id: string; verb: string }; state: string },
+  debug?: { attempts: number; lastCode?: string; blockedKeys?: string[] },
+): MindOrderView {
+  return {
+    id: record.order.id,
+    verb: record.order.verb,
+    state: record.state,
+    ...(debug === undefined ? {} : { attempts: debug.attempts }),
+    ...(debug?.lastCode === undefined ? {} : { lastCode: debug.lastCode }),
+    ...(debug?.blockedKeys === undefined ? {} : { blockedKeys: debug.blockedKeys }),
+  }
 }
 
 const PRIMITIVE_ORDER_VERBS = new Set([

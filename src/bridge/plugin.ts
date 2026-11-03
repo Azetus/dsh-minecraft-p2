@@ -433,7 +433,7 @@ type BodyToolHooks = {
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
   return {
     name: 'p2_body',
-    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command.',
+    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command. stop/start (or restart) creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. A stuck provider action is usually recovered by restart, at the cost of losing queued orders.',
     parameters: {
       type: 'object',
       properties: {

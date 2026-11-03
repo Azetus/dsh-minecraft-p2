@@ -146,7 +146,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_order',
-      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command. dig accepts either one cell {x,y,z} or a bounded volume {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?} (maxBlocks hard cap 64, default 24).',
+      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command. Verbs/primitives: go {x,y,z,range?,exact?,risky?}, dig {x,y,z} or volume {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?} (hard cap 64, default 24), place {x,y,z,item,face?,stands?}, traverse {mode:"bridge"|"scaffold",x,y,z,item,maxBlocks?}, craft {item,count?}, use {x,y,z|item,durationMs?}, equip {item}, check {x,y,z}, container {x,y,z,action,item,count?}, attack {entityId}, hold. risky go is unvalidated and opt-in; exact disables goal snapping and requires a standable goal.',
       parameters: {
         type: 'object',
         properties: {

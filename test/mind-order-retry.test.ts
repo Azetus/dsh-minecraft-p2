@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -76,11 +76,15 @@ async function runUntilTerminal(mind: ReturnType<typeof createMind>, id: string)
 }
 
 function makeMind(port: ClientPort) {
+  return makeMindAt(port, tempJournal())
+}
+
+function makeMindAt(port: ClientPort, journalPath: string) {
   return createMind({
     port,
     home: { x: 0, y: 64, z: 0 },
     plansDir: join(process.cwd(), 'content', 'plans'),
-    journalPath: tempJournal(),
+    journalPath,
   })
 }
 
@@ -150,5 +154,30 @@ describe('primitive order retry policy', () => {
     expect(mind.orders.get('ord-self')?.state).toBe('failed')
     const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
     expect(terminals).toHaveLength(1)
+  })
+
+  it('appends one metrics line per order terminal with attempts and last code', async () => {
+    const journalPath = tempJournal()
+    const fake = fakePort([
+      { state: 'failed', code: 'GOTO_NO_PATH' },
+      { state: 'failed', code: 'GOTO_NO_PATH' },
+      { state: 'ok' },
+    ])
+    const mind = makeMindAt(fake.port, journalPath)
+    mind.enqueueOrder({ id: 'ord-metrics', verb: 'go', params: { x: 1, y: 64, z: 0 } })
+    await runUntilTerminal(mind, 'ord-metrics')
+
+    expect(mind.orders.get('ord-metrics')?.state).toBe('succeeded')
+    const lines = readFileSync(join(dirname(journalPath), 'metrics.jsonl'), 'utf8')
+      .trim().split('\n')
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0] as string)).toMatchObject({
+      orderId: 'ord-metrics',
+      verb: 'go',
+      state: 'succeeded',
+      attempts: 3,
+      lastCode: 'GOTO_NO_PATH',
+      target: { x: 1, y: 64, z: 0 },
+    })
   })
 })

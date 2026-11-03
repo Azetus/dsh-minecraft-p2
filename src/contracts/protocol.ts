@@ -318,7 +318,14 @@ export type WorldEntitiesResult = {
 
 export type ShutdownResult = { closing: true }
 
-export type MindOrderView = { id: string; verb: string; state: string }
+export type MindOrderView = {
+  id: string
+  verb: string
+  state: string
+  attempts?: number
+  lastCode?: string
+  blockedKeys?: string[]
+}
 
 export type MindOrderResult = { id: string; state: string }
 
