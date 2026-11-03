@@ -61,7 +61,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
 | `P2 body is already running at <target>` | 同 target 已有 body（锁或同进程 owner）；先让 owner `/p2 stop`，不要重复 `/p2 start` |
-| `providerState.lastDisconnect` | provider 断开原因（`kick`/`error`/`end`/`reset`）；`kick` 常见是 `duplicate_login`，不要 auto-restart 互踢 |
+| `providerState.lastDisconnect` | provider 断开原因（`kick`/`error`/`end`/`reset`）；`kick` 且为 duplicate_login 时不 auto-restart、释放锁，由 owner 决定是否重新 start |
 | `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |
 | `failed(ACT_TIMEOUT)` | 预算内无终态但动作可安全重试；重试仍失败就换目标/方案 |
 | `failed(ACTION_DENIED)` | 服务端消息明确拒绝；换位置/权限/目标，不要重试 |

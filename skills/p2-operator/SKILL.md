@@ -81,7 +81,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - **不微操**：不要用 move/dig/place 调试入口替角色行动；需要改行为就改目标/参数/蓝图。
 - **不重复下同一 order**：同一 `(verb,target)` 第二次失败先看 `failure`/`hint`，换策略而不是重试。
 - **一条控制路径**：一个 body、一个 owner、一条活动 order 链。`p2_body start` 报 already running/owned 时不要重试；先让 owner 关闭或换 target。
-- **provider 断开先看原因**：`p2_status.providerState.lastDisconnect` 的 `kind/reason`；`kick`（如 duplicate_login）不要 auto-restart 互踢。
+- **provider 断开先看原因**：`p2_status.providerState.lastDisconnect` 的 `kind/reason`；`kick` 且为 duplicate_login 时 P2 不 auto-restart、释放锁，按 fault 处理，由 owner 决定是否重新 start。
 
 ## 6. 恢复
 

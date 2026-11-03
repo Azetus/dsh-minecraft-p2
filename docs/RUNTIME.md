@@ -7,7 +7,7 @@
 3. 进入 tick 循环（50ms）。
 4. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出；超时先 SIGTERM，再 killTree。
 5. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**；auto-restart 复用上次 target。
-6. 同一 MC target 只允许一个 body：跨进程锁记录 owner/target/heartbeat；stale 锁自动清理，孤儿 body 先要求退出。DSH 退出时插件 dispose 会 stop body；异常退出由 stdin EOF 兜底。
+6. 同一 MC target 只允许一个 body：跨进程锁记录 owner/target/heartbeat；stale 锁自动清理，孤儿 body 先要求退出。DSH 退出时插件 dispose 会 stop body；异常退出由 stdin EOF 兜底。`kick` 且 duplicate_login 时不 auto-restart，释放锁并 fault 唤醒 owner。
 
 ## 2. tick 循环
 
