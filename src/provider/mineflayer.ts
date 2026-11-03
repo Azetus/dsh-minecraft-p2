@@ -35,6 +35,10 @@ export type MineflayerProviderOptions = {
   actionTimeoutMs?: number
   /** How long the server age must stay unchanged before the provider treats it as paused. */
   serverIdleMs?: number
+  /** How long a requested stop may stay unconfirmed before it counts as one release fault. */
+  releaseFaultIntervalMs?: number
+  /** Consecutive release faults before the provider drops the connection for a body rebuild. */
+  releaseFaultLimit?: number
   /** Reported provider version; the body passes its own bodyVersion. */
   providerVersion?: string
 }
@@ -277,6 +281,9 @@ export class MineflayerProvider implements ActPort {
   private suspendedSince = 0
   private packetsAtSuspend = 0
   private ageChangesAtSuspend = 0
+  private releasePendingSince: number | undefined
+  private releaseFaults = 0
+  private resetRequested = false
 
   constructor(
     private readonly bot: Bot,
@@ -285,6 +292,8 @@ export class MineflayerProvider implements ActPort {
     this.options = {
       actionTimeoutMs: options.actionTimeoutMs ?? 600_000,
       serverIdleMs: options.serverIdleMs ?? 1500,
+      releaseFaultIntervalMs: options.releaseFaultIntervalMs ?? 5_000,
+      releaseFaultLimit: options.releaseFaultLimit ?? 3,
       providerVersion: options.providerVersion ?? '0',
     }
     this.providerVersion = this.options.providerVersion
@@ -297,6 +306,7 @@ export class MineflayerProvider implements ActPort {
       this.eventLoopLagMs = Math.max(lag, Math.floor(this.eventLoopLagMs * 0.9))
       this.lastTimerAt = now
       this.refreshPauseState(now)
+      this.refreshReleaseWatchdog(now)
     }, 250)
     this.pauseTimer.unref?.()
     bot.on('time', () => {
@@ -343,7 +353,7 @@ export class MineflayerProvider implements ActPort {
     const serverAge = this.serverAge()
     const current = this.current as MineflayerActHandle | undefined
     return {
-      connected: this.disconnected === undefined,
+      connected: this.disconnected === undefined && !this.resetRequested,
       paused: this.paused,
       serverAge,
       idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
@@ -389,7 +399,7 @@ export class MineflayerProvider implements ActPort {
    * observe its effects, so the state stays `unknown` instead of claiming idle.
    */
   controlState(): 'idle' | 'active' | 'unknown' {
-    if (this.disconnected !== undefined) return 'unknown'
+    if (this.disconnected !== undefined || this.resetRequested) return 'unknown'
     const current = this.current as MineflayerActHandle | undefined
     return current === undefined ? 'idle' : current.controlState()
   }
@@ -431,6 +441,46 @@ export class MineflayerProvider implements ActPort {
     }
   }
 
+  /**
+   * A stop is only a request; if the provider cannot observe the effect for
+   * `releaseFaultIntervalMs`, that is one release fault. `releaseFaultLimit`
+   * consecutive faults drop the connection so the body rebuilds a new epoch
+   * instead of dispatching into a half-released bot forever.
+   */
+  refreshReleaseWatchdog(now = Date.now()): void {
+    if (this.disconnected !== undefined) return
+    const current = this.current as (ActHandle & { stopPending?: () => boolean }) | undefined
+    if (current === undefined || current.stopPending?.() !== true) {
+      this.releasePendingSince = undefined
+      this.releaseFaults = 0
+      return
+    }
+    if (this.releasePendingSince === undefined) {
+      this.releasePendingSince = now
+      return
+    }
+    if (now - this.releasePendingSince < this.options.releaseFaultIntervalMs) return
+    this.releasePendingSince = now
+    this.releaseFaults += 1
+    if (this.releaseFaults < this.options.releaseFaultLimit) return
+    this.requestReset()
+  }
+
+  /** Drop the connection so the body's existing fault/rebuild path takes over. */
+  private requestReset(): void {
+    if (this.resetRequested || this.disconnected !== undefined) return
+    this.resetRequested = true
+    try {
+      this.bot.quit('p2: act release unconfirmed; requesting body rebuild')
+    } catch (error) {
+      // A failed quit leaves the connection in an unknown state; report it as
+      // lost instead of pretending the reset happened.
+      this.disconnected = error instanceof Error ? error : new Error(String(error))
+      const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
+      current?.abort?.(this.disconnected, 'CONNECTION_LOST')
+    }
+  }
+
   private emitSuspension(suspended: boolean, at: number): void {
     const state: ProviderSuspension = {
       suspended,
@@ -454,8 +504,9 @@ export class MineflayerProvider implements ActPort {
 
   /** Operator rescue channel; commands are normalized and allow-listed by the body. */
   sendCommand(command: string): void {
-    if (this.disconnected !== undefined) {
-      throw p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' })
+    if (this.disconnected !== undefined || this.resetRequested) {
+      const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
+      throw p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' })
     }
     if (!command.startsWith('/') || command.length > 200 || /[\r\n]/u.test(command)) {
       throw p2Error('RESCUE_COMMAND_INVALID', 'validation', 'rescue command is not a single chat command', { module: 'provider.mineflayer' })
@@ -661,10 +712,11 @@ export class MineflayerProvider implements ActPort {
   }
 
   query(op: string, args: Record<string, JsonValue> = {}): QueryOutcome {
-    if (this.disconnected !== undefined) {
+    if (this.disconnected !== undefined || this.resetRequested) {
+      const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
       return {
         status: 'failed',
-        error: p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' }),
+        error: p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' }),
       }
     }
     this.refreshPauseState()
@@ -1010,8 +1062,9 @@ export class MineflayerProvider implements ActPort {
   }
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
-    if (this.disconnected !== undefined) {
-      throw p2Error('CONNECTION_LOST', 'environment', this.disconnected.message, { module: 'provider.mineflayer' })
+    if (this.disconnected !== undefined || this.resetRequested) {
+      const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
+      throw p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' })
     }
     this.refreshPauseState()
     if (this.paused) {
@@ -1138,6 +1191,23 @@ class MineflayerActHandle implements ActHandle {
   stop(): void {
     if (this.stopRequested || this.completed) return
     this.stopRequested = true
+    this.forceAbort()
+    // A cancel flag alone never proves the effect is gone: confirm only what
+    // the provider can still observe (pathfinder path, dig target, craft loop).
+    this.refreshRelease()
+  }
+
+  /** Requested but not yet observed: the release watchdog's observation window. */
+  stopPending(): boolean {
+    return this.stopRequested && !this.cancelled && !this.completed
+  }
+
+  /**
+   * Idempotent cleanup for every way an act can end abruptly. `stop()` and
+   * `abort()` share it so a timeout, a death or a connection loss leave the
+   * same observable state instead of an act-specific residue.
+   */
+  private forceAbort(): void {
     let unknown = false
     const attempt = (fn: () => void): void => {
       try {
@@ -1148,8 +1218,11 @@ class MineflayerActHandle implements ActHandle {
       }
     }
     if (this.timer !== undefined) clearTimeout(this.timer)
-    if (this.name === 'dig') attempt(() => this.bot.stopDigging())
-    if (this.name === 'use') attempt(() => this.bot.deactivateItem())
+    if (this.name === 'dig') {
+      attempt(() => this.bot.stopDigging())
+      attempt(() => { (this.bot as unknown as { targetDigBlock: unknown }).targetDigBlock = null })
+    }
+    if (this.name === 'use' || this.name === 'fish') attempt(() => this.bot.deactivateItem())
     if (this.name === 'motion-goto') {
       if (this.motionRun !== undefined) {
         if (!this.motionRun.stop()) unknown = true
@@ -1158,16 +1231,26 @@ class MineflayerActHandle implements ActHandle {
         if (!this.vanillaRun.stop()) unknown = true
       }
     }
-    if (this.name === 'fish') attempt(() => this.bot.deactivateItem())
     if (this.name === 'sleep') {
       // Documented way out of a bed; stop() must not leave the bot asleep.
       attempt(() => { void this.bot.wake() })
     }
     attempt(() => this.bot.clearControlStates())
-    this.releaseUnknown = unknown
-    // A cancel flag alone never proves the effect is gone: confirm only what
-    // the provider can still observe (pathfinder path, dig target, craft loop).
-    this.refreshRelease()
+    // A timed-out container/craft/trade act can leave a window open; release is
+    // only confirmed once the window is gone.
+    attempt(() => this.closeOpenWindow())
+    // The client inventory model lags after a timeout; the next act reads the
+    // world, so refresh it once here (best effort, not a release proof).
+    attempt(() => { void this.syncInventoryWindow() })
+    if (unknown) this.releaseUnknown = true
+  }
+
+  private closeOpenWindow(): void {
+    const window = this.bot.currentWindow as unknown as { close?: () => Promise<void> } | null
+    if (window === null || window === undefined) return
+    void window.close?.().catch(() => {
+      // The server may already have closed it; refreshRelease re-observes.
+    })
   }
 
   /**
@@ -1225,6 +1308,8 @@ class MineflayerActHandle implements ActHandle {
     }
     if (this.name === 'craft' && this.craftRunning) return false
     if (this.name === 'sleep' && (this.bot as unknown as { isSleeping?: boolean }).isSleeping === true) return false
+    const window = (this.bot as unknown as { currentWindow?: unknown }).currentWindow
+    if (window !== null && window !== undefined) return false
     const getControlState = (this.bot as unknown as { getControlState?: (name: string) => boolean }).getControlState
     if (typeof getControlState === 'function') {
       for (const state of ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint'] as const) {
@@ -1266,12 +1351,7 @@ class MineflayerActHandle implements ActHandle {
     if (this.cancelled || this.completed) return
     this.failed = error
     this.failedCode = code
-    if (this.motionRun !== undefined && !this.motionRun.stop()) this.releaseUnknown = true
-    if (this.timer !== undefined) clearTimeout(this.timer)
-    if (this.name === 'use') {
-      try { this.bot.deactivateItem() } catch { /* the connection may already be gone */ }
-    }
-    this.bot.clearControlStates()
+    this.forceAbort()
   }
 
   private run(): void {

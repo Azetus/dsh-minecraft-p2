@@ -28,6 +28,8 @@ export type ActHandle = {
   controlState?(): 'idle' | 'active' | 'unknown'
   /** How the last stop was proven; `null` until a stop was requested. */
   controlRelease?(): 'confirmed' | 'best-effort' | null
+  /** True while a stop was requested but its release is not proven. */
+  stopPending?(): boolean
   cleanup?(): ActPoll
 }
 

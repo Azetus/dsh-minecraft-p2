@@ -112,7 +112,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
 - 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。
-- 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。
+- 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。强制收尾统一执行 `stopDigging` / `deactivateItem` / `closeWindow` / `clearControlStates` / 清 dig 目标 / 背包重同步；一次停止在 `releaseFaultIntervalMs` 内仍无法确认记一次 fault，连续 `releaseFaultLimit` 次由 provider 主动断开连接，交给 body 既有的 fault/rebuild 路径重建 epoch。
 - **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，motion 第二遍按 `health - 6 + 3` 允许安全下落。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。
 - **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。这部分**不在 motion 核心**：`go` 把显式 lava/void 目标，以及目标低于当前 >2 格且允许 `lethal_fall` 的请求交给 Agent 层 `fatal` driver；driver 做受控 step-off，只有真实 `died` 才成功；`unloaded` 永不允许。
 - 终态 `observed` 包含 `safeFallPass / safeFall / healthBefore / healthAfter`；致命边由 `fatal` driver 的 `died` 证据判断。

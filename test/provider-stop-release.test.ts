@@ -27,6 +27,9 @@ function fakeBot(options: FakeOptions = {}) {
     craftCalls: 0,
     pathfinderCalls: [] as string[],
     wakeCalls: 0,
+    windowClosed: 0,
+    syncCalls: 0,
+    quitCalls: [] as string[],
     moving: options.moving ?? true,
     setGoalClears: options.setGoalClears ?? true,
     stuckControl: undefined as string | undefined,
@@ -70,13 +73,20 @@ function fakeBot(options: FakeOptions = {}) {
     },
     recipesFor: () => [recipe],
     recipesAll: () => [recipe],
+    dig: () => new Promise(() => {}),
     craft: async () => {
       state.craftCalls += 1
       await new Promise(resolve => setTimeout(resolve, options.craftDelayMs ?? 20))
       inventory.push({ name: 'oak_planks', type: 5, count: 4 })
     },
     closeWindow: async () => {},
-    _syncWindow: async () => {},
+    _syncWindow: async () => { state.syncCalls += 1 },
+    quit: (reason?: string) => {
+      state.quitCalls.push(reason ?? '')
+      // The library confirms the close asynchronously; the provider sees it on
+      // the `end` event, never from the quit call itself.
+      queueMicrotask(() => bot.emit('end', reason))
+    },
     pathfinder: {
       isMoving: () => state.moving,
       stop: () => {
@@ -133,6 +143,50 @@ describe('Mineflayer provider release semantics (M0)', () => {
     handle.stop()
     expect(provider.controlState()).toBe('idle')
     expect(handle.poll()).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('force-aborts an open window and resyncs the inventory model', async () => {
+    const { bot, state } = fakeBot()
+    const current = {
+      close: async () => {
+        await delay(5)
+        state.windowClosed += 1
+        ;(bot as unknown as { currentWindow: unknown }).currentWindow = null
+      },
+    }
+    ;(bot as unknown as { currentWindow: unknown }).currentWindow = current
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('dig', { x: 2, y: 64, z: 2 })
+    handle.stop()
+    // The window close is async, so release is not proven yet.
+    expect(provider.controlState()).toBe('active')
+    await delay(10)
+    expect(provider.controlState()).toBe('idle')
+    expect(state.windowClosed).toBe(1)
+    expect(state.syncCalls).toBe(1)
+  })
+
+  it('drops the connection after consecutive unconfirmed releases', async () => {
+    const { bot, state, controls } = fakeBot()
+    state.stuckControl = 'forward'
+    controls.set('forward', true)
+    const provider = new MineflayerProvider(bot, { releaseFaultIntervalMs: 5, releaseFaultLimit: 2 })
+    const handle = provider.start('dig', { x: 2, y: 64, z: 2 })
+    handle.stop()
+    expect(handle.stopPending?.()).toBe(true)
+    expect(provider.controlState()).toBe('active')
+
+    provider.refreshReleaseWatchdog(0)
+    provider.refreshReleaseWatchdog(6)
+    expect(state.quitCalls).toHaveLength(0)
+    provider.refreshReleaseWatchdog(12)
+    expect(state.quitCalls).toHaveLength(1)
+
+    await delay(0)
+    expect(provider.liveStatus().connected).toBe(false)
+    expect(() => provider.start('stop', {})).toThrowError(
+      expect.objectContaining({ code: 'CONNECTION_LOST' }),
+    )
   })
 })
 
