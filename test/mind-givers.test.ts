@@ -270,5 +270,38 @@ describe('order and traverse givers', () => {
     })
   })
 
+  it('passes a bounded dig volume through with its filters', () => {
+    const dig = createDigOrderGiver(() => ({
+      order: {
+        id: 'd-v',
+        verb: 'dig',
+        params: {
+          shape: 'box',
+          from: { x: 2, y: 64, z: 0 },
+          to: { x: 4, y: 66, z: 2 },
+          only: ['stone'],
+          height: 2,
+          preserveFloor: false,
+          maxBlocks: 12,
+          purpose: 'clear',
+        },
+      },
+    }))
+    expect(dig.find(ctx, flatWorld())).toMatchObject({
+      driverId: 'dig',
+      target: { kind: 'point', pos: { x: 2, y: 64, z: 0 } },
+      params: {
+        shape: 'box',
+        from: { x: 2, y: 64, z: 0 },
+        to: { x: 4, y: 66, z: 2 },
+        only: ['stone'],
+        height: 2,
+        preserveFloor: false,
+        maxBlocks: 12,
+        purpose: 'clear',
+      },
+    })
+  })
+
 })
 

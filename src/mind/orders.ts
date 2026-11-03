@@ -400,11 +400,54 @@ function requirePosition(params: Record<string, JsonValue>, verb: string): void 
 }
 
 function validateDigParams(params: JsonValue | undefined): void {
-  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'dig requires params {x,y,z,purpose?}')
-  requirePosition(params, 'dig')
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'dig requires params {x,y,z,purpose?} or a volume')
   if (params.purpose !== undefined && params.purpose !== 'clear' && params.purpose !== 'harvest') {
     throw orderError('INVALID_ORDER', 'dig.purpose must be clear or harvest')
   }
+  if (params.shape !== undefined) {
+    if (params.shape !== 'box' && params.shape !== 'line') {
+      throw orderError('INVALID_ORDER', 'dig.shape must be box or line')
+    }
+    const from = volumePoint(params.from, 'dig.from')
+    const to = volumePoint(params.to, 'dig.to')
+    if (params.shape === 'line') {
+      const differing = (['x', 'y', 'z'] as const).filter(axis => from[axis] !== to[axis])
+      if (differing.length !== 1) {
+        throw orderError('INVALID_ORDER', 'dig line requires exactly one differing axis')
+      }
+    }
+    if (params.only !== undefined) {
+      if (!Array.isArray(params.only) || params.only.length === 0
+        || params.only.some(name => typeof name !== 'string' || name.length === 0)) {
+        throw orderError('INVALID_ORDER', 'dig.only must be a non-empty array of block names')
+      }
+    }
+    if (params.height !== undefined
+      && (typeof params.height !== 'number' || !Number.isInteger(params.height)
+        || params.height < 1 || params.height > 8)) {
+      throw orderError('INVALID_ORDER', 'dig.height must be an integer between 1 and 8')
+    }
+    if (params.preserveFloor !== undefined && typeof params.preserveFloor !== 'boolean') {
+      throw orderError('INVALID_ORDER', 'dig.preserveFloor must be a boolean')
+    }
+    if (params.maxBlocks !== undefined
+      && (typeof params.maxBlocks !== 'number' || !Number.isInteger(params.maxBlocks)
+        || params.maxBlocks < 1 || params.maxBlocks > 64)) {
+      throw orderError('INVALID_ORDER', 'dig.maxBlocks must be an integer between 1 and 64')
+    }
+    return
+  }
+  requirePosition(params, 'dig')
+}
+
+function volumePoint(value: JsonValue | undefined, name: string): { x: number; y: number; z: number } {
+  if (!isRecord(value)) throw orderError('INVALID_ORDER', `${name} must be {x,y,z}`)
+  for (const axis of ['x', 'y', 'z'] as const) {
+    if (typeof value[axis] !== 'number' || !Number.isInteger(value[axis])) {
+      throw orderError('INVALID_ORDER', `${name}.${axis} must be an integer`)
+    }
+  }
+  return { x: value.x as number, y: value.y as number, z: value.z as number }
 }
 
 function validatePlaceParams(params: JsonValue | undefined): void {

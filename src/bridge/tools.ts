@@ -146,7 +146,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_order',
-      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command.',
+      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command. dig accepts either one cell {x,y,z} or a bounded volume {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?} (maxBlocks hard cap 64, default 24).',
       parameters: {
         type: 'object',
         properties: {

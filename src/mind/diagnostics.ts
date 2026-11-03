@@ -14,6 +14,8 @@ export type FailureDiagnostic = {
 }
 
 const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> = [
+  { match: /DIG_PARTIAL/, category: 'world', hint: 'volume dig ended partially; read observed.dug/skipped before continuing' },
+  { match: /DIG_VOLUME_TOO_LARGE/, category: 'precondition', hint: 'volume exceeds maxBlocks; split the order or raise the cap' },
   { match: /TOOL_INSUFFICIENT|BLOCK_UNBREAKABLE/, category: 'tool', hint: 'check the tool/block type or use clear instead of harvest' },
   { match: /GOAL_NOT_STANDABLE/, category: 'reachability', hint: 'the exact goal cell is not standable; choose a standable cell or clear it' },
   { match: /APPROACH_NO_STAND|APPROACH_NO_PATH|GOTO_INVALID_TARGET|NO_STAND|NO_SUPPORT/, category: 'reachability', hint: 'target has no reachable standing cell; change the target or clear space' },

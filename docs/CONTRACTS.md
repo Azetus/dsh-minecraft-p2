@@ -83,8 +83,10 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `blockAt` 返回 `null` 表示未加载，**不等于空气**。
 - `BlockInfo.harvestTools` 是适配器给出的“可掉落工具”名称列表；`[]` 表示手即可。缺省表示适配器不知道，不能当作“需要任何工具”。
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
-  - `harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；
-  - `clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
+  - 单格：`{x,y,z}` 保持旧语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
+  - 体积：`{shape:"box"|"line", from:{x,y,z}, to:{x,y,z}, height? 1–8, only?:string[], preserveFloor? 默认 true, maxBlocks? 1–64 默认 24}`。`line` 要求恰好一个轴不同；超过 `maxBlocks` 直接 `DIG_VOLUME_TOO_LARGE`，不静默截断；
+  - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
+  - `harvest` 在整批结束后统一拾取一次（中心点）；单格 `harvest` 仍在挖后立即拾取；
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`。
 - `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。`go.params.range`（0–8）透传到 move job，不再固定为 1。旧的 `moveTo.approach` 死参数已删除；站位调整只由 giver 的 standability/nearestStandable 完成。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
@@ -304,5 +306,7 @@ type WorkState =
 | `DIG_NO_BLOCK` | 目标是空气/没有方块 |
 | `PICKUP_UNREACHABLE` | 掉落物存在但无法走到 |
 | `CRAFT_INCOMPLETE` | 合成已开始但未达到请求数量；`observed.crafted/attempted` 如实记录 |
+| `DIG_PARTIAL` | 体积挖掘部分完成；`observed.dug/skipped/partial` 如实记录，不自动重试 |
+| `DIG_VOLUME_TOO_LARGE` | 体积超过 `maxBlocks`，未开始挖掘 |
 | `GOAL_NOT_STANDABLE` | `exact` 目标格不可站；带 `reason/blockedBy` |
 | `PICKUP_NOT_COLLECTED` | 已到达掉落物附近，背包仍未增加 |

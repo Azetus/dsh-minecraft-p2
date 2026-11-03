@@ -30,6 +30,7 @@ function portWith(options: {
   block?: BlockInfo
   inventory?: Item[]
   drops?: Item[]
+  moveFails?: boolean
 } = {}): { port: ClientPort; digs: () => number; equips: string[]; blocks: Map<string, BlockInfo> } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set(key(target), options.block ?? stone())
@@ -46,6 +47,9 @@ function portWith(options: {
     },
     inventory: () => items,
     entities: () => [],
+    moveTo: async () => (options.moveFails === true
+      ? { state: 'failed' as const, code: 'GOTO_NO_PATH', elapsedMs: 1 }
+      : { state: 'ok' as const, elapsedMs: 1 }),
     equip: async (item: string) => { equips.push(item); return { state: 'ok' as const, elapsedMs: 1 } },
     dig: async (p: Vec3) => {
       digs += 1
@@ -59,14 +63,21 @@ function portWith(options: {
   return { port, digs: () => digs, equips, blocks }
 }
 
-async function run(port: ClientPort, purpose: 'clear' | 'harvest'): Promise<{ state: string; code?: string; observed?: unknown }> {
+async function runJob(
+  port: ClientPort,
+  params: Record<string, unknown>,
+): Promise<{ state: string; code?: string; observed?: unknown }> {
   const driver = createDigDriver()
-  const job = { driverId: 'dig', params: { ...target, purpose } } as unknown as Job
+  const job = { driverId: 'dig', params } as unknown as Job
   const handle = driver.start(job, { port, now: () => 1 })
-  for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) {
+  for (let index = 0; index < 2_000 && handle.result().state === 'running'; index += 1) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
   return handle.result() as { state: string; code?: string; observed?: unknown }
+}
+
+async function run(port: ClientPort, purpose: 'clear' | 'harvest'): Promise<{ state: string; code?: string; observed?: unknown }> {
+  return runJob(port, { ...target, purpose })
 }
 
 describe('dig driver tool handling', () => {
@@ -151,5 +162,83 @@ describe('dig driver tool handling', () => {
     const result = await run(fake.port, 'clear')
 
     expect(result).toEqual({ state: 'failed', code: 'CLIENT_TIMEOUT', observed: evidence })
+  })
+})
+
+describe('dig volume', () => {
+  it('digs a bounded box and reports the planned cells', async () => {
+    const fake = portWith()
+    for (const [x, z] of [[1, 2], [2, 2], [1, 3], [2, 3]] as const) {
+      fake.blocks.set(`${x},64,${z}`, stone())
+    }
+    const result = await runJob(fake.port, {
+      shape: 'box', from: { x: 1, y: 64, z: 2 }, to: { x: 2, y: 64, z: 3 }, purpose: 'clear',
+    })
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'dig.volume', planned: 4, dug: 4, alreadyAir: 0, skipped: [] },
+    })
+    expect(fake.digs()).toBe(4)
+  })
+
+  it('reports partial with unreachable cells instead of failing the whole order', async () => {
+    const fake = portWith({ moveFails: true })
+    for (let z = 2; z <= 6; z += 1) fake.blocks.set(`1,64,${z}`, stone())
+    const result = await runJob(fake.port, {
+      shape: 'line', from: { x: 1, y: 64, z: 2 }, to: { x: 1, y: 64, z: 6 }, purpose: 'clear',
+    })
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: {
+        kind: 'dig.volume',
+        planned: 5,
+        dug: 2,
+        partial: { dug: 2, skipped: 3 },
+      },
+    })
+    const skipped = (result.observed as { skipped: Array<{ reason: string }> }).skipped
+    expect(skipped.every(entry => entry.reason === 'unreachable')).toBe(true)
+  })
+
+  it('never digs the support cell under the body by default', async () => {
+    const fake = portWith()
+    fake.blocks.set('1,63,0', stone())
+    const result = await runJob(fake.port, {
+      shape: 'box', from: { x: 1, y: 63, z: 0 }, to: { x: 1, y: 63, z: 0 }, purpose: 'clear',
+    })
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: { dug: 0, skipped: [{ reason: 'preserve-floor' }] },
+    })
+    expect(fake.digs()).toBe(0)
+  })
+
+  it('filters by block name and keeps by-name skips', async () => {
+    const fake = portWith()
+    fake.blocks.set('1,64,2', stone())
+    fake.blocks.set('2,64,2', stone({ name: 'dirt' }))
+    const result = await runJob(fake.port, {
+      shape: 'box',
+      from: { x: 1, y: 64, z: 2 },
+      to: { x: 2, y: 64, z: 2 },
+      only: ['stone'],
+      purpose: 'clear',
+    })
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: { dug: 1, skipped: [{ x: 2, y: 64, z: 2, reason: 'filtered', code: 'dirt' }] },
+    })
+  })
+
+  it('rejects a volume above maxBlocks without digging', async () => {
+    const fake = portWith()
+    const result = await runJob(fake.port, {
+      shape: 'box', from: { x: 0, y: 60, z: 0 }, to: { x: 5, y: 64, z: 5 },
+    })
+    expect(result).toMatchObject({ state: 'failed', code: 'DIG_VOLUME_TOO_LARGE' })
+    expect(fake.digs()).toBe(0)
   })
 })
