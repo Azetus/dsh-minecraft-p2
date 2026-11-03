@@ -325,6 +325,8 @@ export type MindOrderView = {
   attempts?: number
   lastCode?: string
   blockedKeys?: string[]
+  /** Set for a timed hold that is active. */
+  expiresAt?: number
 }
 
 export type MindQueueSummary = {
@@ -338,6 +340,8 @@ export type MindQueueSummary = {
   queuedBehind?: number
   /** Explicit release instruction for a hold barrier. */
   release?: string
+  /** Wall-clock expiry of a timed hold (ms since epoch). */
+  expiresAt?: number
 }
 
 export type MindOrderResult = {

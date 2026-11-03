@@ -106,6 +106,29 @@ describe('primitive order retry policy', () => {
     })
   })
 
+  it('expires a timed hold from its active slot as a succeeded pause', () => {
+    let clock = 10_000
+    const mind = createMind({
+      port: fakePort([{ state: 'ok' }]).port,
+      home: { x: 0, y: 64, z: 0 },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: tempJournal(),
+      now: () => clock,
+    })
+    const accepted = mind.enqueueOrder({ id: 'ord-hold', verb: 'hold', params: { durationMs: 1_000 } })
+    expect(accepted.queue?.expiresAt).toBe(11_000)
+    expect(mind.listOrders().active?.expiresAt).toBe(11_000)
+
+    clock = 12_001
+    mind.tick()
+
+    expect(mind.orders.get('ord-hold')?.state).toBe('succeeded')
+    const terminal = [...mind.events.since(0)]
+      .filter(event => event.kind === 'order.terminal')
+      .at(-1)
+    expect(terminal?.data).toMatchObject({ state: 'succeeded', observed: { expired: true } })
+  })
+
   it('retries a transient go failure inside the same order', async () => {
     const fake = fakePort([
       { state: 'failed', code: 'GOTO_NO_PATH' },

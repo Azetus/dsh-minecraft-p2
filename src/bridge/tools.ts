@@ -231,7 +231,7 @@ export function registerP2Tools(
     }),
     tools.register({
       name: 'p2_orders',
-      description: 'Active and queued orders. Read-only. queueBlockedBy names a barrier order (such as hold) that is occupying the single active slot and keeping the queue from starting.',
+      description: 'Active and queued orders. Read-only. queueBlockedBy names a barrier order (such as hold) that is occupying the single active slot and keeping the queue from starting. A timed hold shows expiresAt; an indefinite hold has no expiry and must be cancelled.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: output(),
       execute: async () => {

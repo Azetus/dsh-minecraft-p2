@@ -167,7 +167,7 @@ export class CompletionFeed {
           pending.push({
             item: {
               severity,
-              payload: orderPayload(orderId, state, folded?.item.payload),
+              payload: orderPayload(orderId, state, folded?.item.payload, data.observed),
             },
             cause: false,
           })
@@ -252,9 +252,10 @@ function orderPayload(
   orderId: string | undefined,
   state: string,
   cause: Record<string, JsonValue> | undefined,
+  directObserved: JsonValue | undefined,
 ): Record<string, JsonValue> {
   const reason = cause === undefined ? undefined : text(cause.reason)
-  const observed = cause?.observed
+  const observed = cause?.observed ?? directObserved
   const failure = isRecord(observed) ? observed.failure : undefined
   return compact({
     kind: 'order.terminal',

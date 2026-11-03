@@ -60,6 +60,15 @@ describe('order store', () => {
     expect(errorCode(() => store.enqueue(order('ord-1')))).toBe('ORDER_EXISTS')
   })
 
+  it('validates the optional hold duration', () => {
+    const store = new OrderStore()
+    expect(store.enqueue({ id: 'hold-timed', verb: 'hold', params: { durationMs: 1_000 } }).state).toBe('active')
+    expect(errorCode(() => store.enqueue({ id: 'hold-short', verb: 'hold', params: { durationMs: 500 } })))
+      .toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'hold-long', verb: 'hold', params: { durationMs: 3_600_001 } })))
+      .toBe('INVALID_ORDER')
+  })
+
   it('accepts only the finite execution surface', () => {
     expect(ORDER_VERBS).toEqual([
       'go', 'place', 'dig', 'equip', 'use', 'attack', 'check', 'container', 'craft', 'build', 'traverse', 'hold',

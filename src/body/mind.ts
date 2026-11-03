@@ -87,6 +87,8 @@ export type MindOrderView = {
   attempts?: number
   lastCode?: string
   blockedKeys?: string[]
+  /** Set for a timed hold that is active. */
+  expiresAt?: number
 }
 
 export type MindRuntime = {
@@ -901,6 +903,27 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     events.push('mind.resumed', at, { pausedMs })
   }
 
+  /**
+   * Timed holds expire from the active slot, not from acceptance: a hold that
+   * waited behind another order starts its clock when it becomes active.
+   */
+  function expireTimedHold(): void {
+    const active = orders.active()
+    if (active === undefined || active.order.verb !== 'hold') return
+    const expiresAt = holdExpiresAt(active)
+    if (expiresAt === undefined || now() < expiresAt) return
+    const durationMs = active.order.params?.durationMs
+    try {
+      orders.complete(active.order.id, 'succeeded', {
+        expired: true,
+        ...(typeof durationMs === 'number' ? { durationMs } : {}),
+        expiresAt,
+      })
+    } catch {
+      // Another path made the order terminal between the snapshot and expiry.
+    }
+  }
+
   const tick = (): void => {
     const suspension = options.port.suspension?.()
     if (suspension?.suspended === true) {
@@ -916,6 +939,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     if (suspended) leaveSuspend()
+    expireTimedHold()
     syncPlan()
     if (!pendingReconciled) {
       pendingReconciled = true
@@ -1083,6 +1107,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
               holdsActiveSlot: true,
               queuedBehind: queued,
               release: `p2_cancel {id:"${record.order.id}"} or {all:true}`,
+              ...(holdExpiresAt(record) === undefined ? {} : { expiresAt: holdExpiresAt(record) as number }),
             }
           : {}),
       }
@@ -1156,10 +1181,28 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
 }
 
+function holdExpiresAt(record: {
+  order: { verb: string; params?: Record<string, JsonValue> }
+  activeAt?: number
+  acceptedAt: number
+}): number | undefined {
+  if (record.order.verb !== 'hold') return undefined
+  const duration = record.order.params?.durationMs
+  if (typeof duration !== 'number' || !Number.isFinite(duration)) return undefined
+  const startedAt = record.activeAt ?? record.acceptedAt
+  return startedAt + duration
+}
+
 function viewOf(
-  record: { order: { id: string; verb: string }; state: string },
+  record: {
+    order: { id: string; verb: string; params?: Record<string, JsonValue> }
+    state: string
+    acceptedAt: number
+    activeAt?: number
+  },
   debug?: { attempts: number; lastCode?: string; blockedKeys?: string[] },
 ): MindOrderView {
+  const expiresAt = holdExpiresAt(record)
   return {
     id: record.order.id,
     verb: record.order.verb,
@@ -1167,6 +1210,7 @@ function viewOf(
     ...(debug === undefined ? {} : { attempts: debug.attempts }),
     ...(debug?.lastCode === undefined ? {} : { lastCode: debug.lastCode }),
     ...(debug?.blockedKeys === undefined ? {} : { blockedKeys: debug.blockedKeys }),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   }
 }
 

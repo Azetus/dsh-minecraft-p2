@@ -90,6 +90,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`。
 - `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。`go.params.range`（0–8）透传到 move job，不再固定为 1。旧的 `moveTo.approach` 死参数已删除；站位调整只由 giver 的 standability/nearestStandable 完成。
 - `p2_order` 的 accepted 结果带 `queue` 摘要：`{active, queued, blockedBy?, holdsActiveSlot?, queuedBehind?, release?}`。`hold` 是占住 active 位的 barrier，不是清空队列；`blockedBy`/`release` 直接指出被哪个 hold 堵住、如何释放。`p2_orders` 的 `queueBlockedBy` 保持同一语义。
+- `hold.params.durationMs` 可选，1000–3_600_000；从 hold **成为 active** 的时刻起算，到期由 body 置为 `succeeded` 并带 `observed.expired:true`，队列恢复。不带 duration 的 hold 是永久 barrier，只能 cancel。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
 - `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不再移动过去。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。

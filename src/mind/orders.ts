@@ -48,12 +48,14 @@ export type OrderRecord = {
   order: Order
   state: OrderState
   acceptedAt: number
+  /** Set when a queued order becomes the single active order. */
+  activeAt?: number
   terminalAt?: number
 }
 
 export type OrderEvent =
   | { kind: 'order.accepted'; at: number; orderId: string }
-  | { kind: 'order.terminal'; at: number; orderId: string; state: OrderState }
+  | { kind: 'order.terminal'; at: number; orderId: string; state: OrderState; observed?: JsonValue }
   | { kind: 'journal.legacy-accepted'; at: number; defVersion: string }
 
 /** A driver action written before it starts; it is reconciled, never replayed. */
@@ -222,12 +224,16 @@ export class OrderStore {
     return this.terminate(id, 'cancelled')
   }
 
-  complete(id: string, state: Exclude<OrderState, 'queued' | 'active' | 'cancelled'>): OrderRecord {
+  complete(
+    id: string,
+    state: Exclude<OrderState, 'queued' | 'active' | 'cancelled'>,
+    observed?: JsonValue,
+  ): OrderRecord {
     const record = this.records.get(id)
     if (record === undefined || isTerminalState(record.state)) {
       throw orderError('ORDER_NOT_FOUND', `no active order: ${id}`)
     }
-    return this.terminate(id, state)
+    return this.terminate(id, state, observed)
   }
 
   active(): OrderRecord | undefined {
@@ -269,12 +275,19 @@ export class OrderStore {
   private terminate(
     id: string,
     state: Exclude<OrderState, 'queued' | 'active'>,
+    observed?: JsonValue,
   ): OrderRecord {
     const at = this.now()
     this.appendJournal({ at, kind: 'order.terminal', orderId: id, state })
     this.applyTerminal(id, state, at)
     this.promote()
-    this.onEvent?.({ kind: 'order.terminal', at, orderId: id, state })
+    this.onEvent?.({
+      kind: 'order.terminal',
+      at,
+      orderId: id,
+      state,
+      ...(observed === undefined ? {} : { observed }),
+    })
     return this.records.get(id) as OrderRecord
   }
 
@@ -298,6 +311,7 @@ export class OrderStore {
       const record = this.records.get(id)
       if (record !== undefined && record.state === 'queued') {
         record.state = 'active'
+        record.activeAt = this.now()
         this.activeId = id
         return
       }
@@ -346,6 +360,7 @@ function validateOrder(value: unknown): Order {
   if (value.verb === 'use') validateUseParams(value.params)
   if (value.verb === 'craft') validateCraftParams(value.params)
   if (value.verb === 'container') validateContainerParams(value.params)
+  if (value.verb === 'hold') validateHoldParams(value.params)
   if (value.policy !== undefined) {
     const conflict = parseConflictPolicy(value.policy)
     if (!conflict.ok) throw orderError('INVALID_ORDER', conflict.error)
@@ -366,6 +381,18 @@ function validateOrder(value: unknown): Order {
     }
   }
   return value as unknown as Order
+}
+
+/** Optional timed barrier: 1s–1h. Without duration the hold is indefinite. */
+function validateHoldParams(params: JsonValue | undefined): void {
+  if (params === undefined) return
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'hold.params must be an object')
+  const duration = params.durationMs
+  if (duration !== undefined
+    && (typeof duration !== 'number' || !Number.isInteger(duration)
+      || duration < 1_000 || duration > 3_600_000)) {
+    throw orderError('INVALID_ORDER', 'hold.durationMs must be an integer between 1000 and 3600000')
+  }
 }
 
 /** Material and geometry are mandatory at call time; no implicit material. */
