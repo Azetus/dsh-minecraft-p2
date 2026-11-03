@@ -5,7 +5,7 @@ import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { standCells } from '../../motion/search/index.ts'
 import { approachBlock } from '../approach.ts'
-import { failureBody, failureSnapshot, readFailure, withFailure } from '../failure.ts'
+import { failureBody, failureSnapshot, readFailure, withFailure, diagnoseFailure } from '../failure.ts'
 import { matchesExpected } from '../plan.ts'
 import type { ExpectedBlock } from '../plan.ts'
 import type { SchemaNode } from '../schema.ts'
@@ -335,6 +335,8 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
   if (typeof provider?.providerMessage === 'string') {
     facts.providerMessage = provider.providerMessage.slice(0, 200)
   }
+  if (isRecord(provider?.denial)) facts.denial = provider.denial
+  const diagnosis = diagnoseFailure({ code, observed, facts })
   return {
     ...result,
     observed: withFailure(observed, failureBody({
@@ -343,7 +345,8 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
       code,
       observed,
       facts,
-      cause: { kind: 'world', code },
+      diagnosis,
+      cause: { kind: diagnosis === 'DENIED' ? 'authority' : 'world', code },
       recovery: 'replan',
     })),
   }

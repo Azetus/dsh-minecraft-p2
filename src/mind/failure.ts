@@ -124,7 +124,9 @@ const FACT_KEYS = new Set([
   'skipped',
   'partial',
   'dug',
+  'planned',
   'stoppedAt',
+  'causeCode',
   'item',
   'count',
   'entityId',
@@ -274,6 +276,14 @@ const NO_STAND_CODES = new Set([
   'PICKUP_UNREACHABLE',
 ])
 
+/** Codes that share the placement diagnosis order. */
+const PLACE_CODES = new Set([
+  'PLACE_FAILED',
+  'PLACE_UNSUPPORTED',
+  'NO_SUPPORT',
+  'PLACE_BLOCKED_BY_SELF',
+])
+
 /**
  * One closed classification per failure. The classifier reads only facts the
  * driver already captured; when they do not prove a cause it returns UNKNOWN
@@ -289,6 +299,9 @@ export function diagnoseFailure(input: {
   if (code === 'ACT_UNCONFIRMED' || code === 'CLIENT_TIMEOUT') return 'EFFECT_UNCONFIRMED'
   if (code === 'ACTION_DENIED') return 'DENIED'
   if (TOOL_CODES.has(code)) return 'TOOL_MISSING'
+  // PICKUP_UNREACHABLE is the drop-specific "no reachable stand cell" code;
+  // its requiredDig lists the blocking cells, not a body head/support fault.
+  if (code === 'PICKUP_UNREACHABLE') return 'NO_STAND_CELL'
 
   const facts = input.facts ?? failureFacts(input.observed)
   const snapshot = isRecord(facts.snapshot) ? facts.snapshot : undefined
@@ -298,6 +311,9 @@ export function diagnoseFailure(input: {
   const overlap = snapshot !== undefined && Array.isArray(snapshot.bodyOverlap)
     ? snapshot.bodyOverlap
     : []
+  // Placement has its own closed order: embedded body first, then the six-face
+  // support read, then an explicit server refusal, then UNKNOWN.
+  if (PLACE_CODES.has(code)) return diagnosePlaceFailure(code, facts, overlap)
   if (code === 'BODY_OVERLAP' || overlap.length > 0) return 'START_EMBEDDED'
   if (UNLOADED_CODES.has(code) || target?.feet.loaded === false) return 'TARGET_UNLOADED'
   if (target?.support !== undefined && !target.support.loaded) return 'TARGET_UNLOADED'
@@ -313,6 +329,27 @@ export function diagnoseFailure(input: {
   if (target?.support.loaded === true && !isSolidName(target.support.name)) return 'SUPPORT_MISSING'
   if (self?.support.loaded === true && !isSolidName(self.support.name)) return 'SUPPORT_MISSING'
   if (NO_STAND_CODES.has(code)) return 'NO_STAND_CELL'
+  return 'UNKNOWN'
+}
+
+/**
+ * Placement order from the contract: a target inside the body beats every
+ * other cause, then a six-face support read, then an explicit refusal.
+ */
+function diagnosePlaceFailure(
+  code: string,
+  facts: Record<string, JsonValue>,
+  overlap: JsonValue[],
+): FailureDiagnosis {
+  if (code === 'PLACE_BLOCKED_BY_SELF' || facts.blockedBy === 'self' || overlap.length > 0) {
+    return 'START_EMBEDDED'
+  }
+  if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') return 'SUPPORT_MISSING'
+  const supportFlags = readSupports(facts.supports)
+  if (supportFlags !== undefined && !supportFlags.some(Boolean)) return 'SUPPORT_MISSING'
+  const denial = facts.denial
+  if (facts.providerCode === 'ACTION_DENIED'
+    || (isRecord(denial) && typeof denial.text === 'string')) return 'DENIED'
   return 'UNKNOWN'
 }
 

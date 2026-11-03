@@ -103,6 +103,32 @@ describe('failure projection', () => {
     expect(diagnoseFailure({ code: 'GOTO_NO_PATH' })).toBe('UNKNOWN')
   })
 
+  it('applies the placement diagnosis order', () => {
+    const supports = (value: boolean) => ({
+      supports: { up: value, down: value, north: value, south: value, east: value, west: value },
+    } as Record<string, JsonValue>)
+
+    expect(diagnoseFailure({ code: 'PLACE_FAILED', facts: supports(false) })).toBe('SUPPORT_MISSING')
+    expect(diagnoseFailure({
+      code: 'PLACE_FAILED',
+      facts: { ...supports(false), blockedBy: 'self' },
+    })).toBe('START_EMBEDDED')
+    expect(diagnoseFailure({
+      code: 'PLACE_FAILED',
+      facts: { ...supports(true), providerCode: 'ACTION_DENIED' },
+    })).toBe('DENIED')
+    expect(diagnoseFailure({ code: 'PLACE_FAILED', facts: supports(true) })).toBe('UNKNOWN')
+    expect(diagnoseFailure({ code: 'PLACE_BLOCKED_BY_SELF' })).toBe('START_EMBEDDED')
+    expect(diagnoseFailure({ code: 'PLACE_UNSUPPORTED' })).toBe('SUPPORT_MISSING')
+    expect(diagnoseFailure({
+      code: 'PLACE_FAILED',
+      facts: {
+        ...supports(true),
+        snapshot: { bodyOverlap: [{ cell: [0, 64, 0], name: 'dirt', loaded: true }] },
+      } as unknown as Record<string, JsonValue>,
+    })).toBe('START_EMBEDDED')
+  })
+
   it('adds diagnosis and recovery without action parameters', () => {
     const body = failureBody({
       layer: 'motion',

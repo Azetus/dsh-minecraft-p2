@@ -194,11 +194,19 @@ describe('place driver', () => {
     const result = handle.result()
     expect(result).toMatchObject({ state: 'failed', code: 'PLACE_FAILED' })
     const failure = (result.observed as {
-      failure?: { layer?: string; code?: string; facts?: Record<string, unknown> }
+      failure?: {
+        layer?: string
+        code?: string
+        diagnosis?: string
+        cause?: { kind?: string }
+        facts?: Record<string, unknown>
+      }
     }).failure
     expect(failure).toMatchObject({
       layer: 'driver',
       code: 'PLACE_FAILED',
+      diagnosis: 'UNKNOWN',
+      cause: { kind: 'world' },
       facts: {
         target: { x: 1, y: 64, z: 0 },
         face: 'up',
@@ -245,6 +253,10 @@ describe('place driver', () => {
     const observed = result.observed as { blockedBy?: string; adjacent?: Vec3[] }
     expect(observed.blockedBy).toBe('self')
     expect(observed.adjacent).toEqual(expect.arrayContaining([{ x: 1, y: 64, z: 0 }]))
+    expect((result.observed as { failure?: unknown }).failure).toMatchObject({
+      diagnosis: 'START_EMBEDDED',
+      recovery: 'replan',
+    })
   })
 
   it('attempts a non-air target instead of pre-rejecting it', async () => {

@@ -1,4 +1,5 @@
 import type { BlockInfo } from '../../port/index.ts'
+import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { approachBlock } from '../approach.ts'
@@ -674,6 +675,17 @@ function attachDigFailure(result: DriverResult, params: DigParams): DriverResult
     facts.target = { to: params.to } as unknown as JsonValue
   } else if (isCell(params.from) && isCell(params.to)) {
     facts.target = { from: params.from, to: params.to } as unknown as JsonValue
+  }
+  // PICKUP_UNREACHABLE keeps its stand query nested under `pickup`; lift the
+  // same observation's requiredDig so the wake can name the blocking cells.
+  if (code === 'PICKUP_UNREACHABLE') {
+    const pickup = isRecord(result.observed) && isRecord(result.observed.pickup)
+      ? result.observed.pickup
+      : undefined
+    const standQuery = isRecord(pickup?.standQuery) ? pickup.standQuery : undefined
+    if (Array.isArray(standQuery?.requiredDig)) {
+      facts.requiredDig = standQuery.requiredDig.slice(0, 8) as unknown as JsonValue
+    }
   }
   return {
     ...result,

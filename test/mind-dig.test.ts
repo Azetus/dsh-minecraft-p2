@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createDigDriver } from '../src/mind/drivers/dig.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { BlockInfo, ClientPort, Item, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, ClientPort, EntityInfo, Item, Vec3 } from '../src/port/index.ts'
 
 /**
  * Category: cross-module contract (dig tool selection).
@@ -30,6 +30,7 @@ function portWith(options: {
   block?: BlockInfo
   inventory?: Item[]
   drops?: Item[]
+  entities?: EntityInfo[]
   moveFails?: boolean
   start?: Vec3
 } = {}): { port: ClientPort; digs: () => number; equips: string[]; blocks: Map<string, BlockInfo> } {
@@ -48,7 +49,7 @@ function portWith(options: {
       return null
     },
     inventory: () => items,
-    entities: () => [],
+    entities: () => options.entities ?? [],
     moveTo: async (p: Vec3) => {
       if (options.moveFails === true) return { state: 'failed' as const, code: 'GOTO_NO_PATH', elapsedMs: 1 }
       self = { x: p.x + 0.5, y: p.y, z: p.z + 0.5 }
@@ -142,6 +143,34 @@ describe('dig driver tool handling', () => {
       observed: { kind: 'dig', purpose: 'harvest', dropDelta: 0 },
     })
     expect(fake.digs()).toBe(1)
+  })
+
+  it('keeps requiredDig in failure facts for an unreachable drop', async () => {
+    const fake = portWith({
+      inventory: [{ slot: 36, name: 'stone_pickaxe', count: 1 }],
+      entities: [{
+        id: 'drop-1',
+        name: 'item',
+        position: { x: 1.5, y: 62, z: 0.5 },
+        width: 0.25,
+        height: 0.25,
+        item: { name: 'cobblestone', count: 2 },
+      }],
+    })
+    for (const y of [61, 62, 63]) {
+      fake.blocks.set(`1,${y},0`, stone({ pos: { x: 1, y, z: 0 } }))
+    }
+    const result = await run(fake.port, 'harvest')
+
+    expect(result).toMatchObject({ state: 'failed', code: 'PICKUP_UNREACHABLE' })
+    const failure = (result.observed as {
+      failure?: { diagnosis?: string; facts?: Record<string, unknown> }
+    }).failure
+    expect(failure?.diagnosis).toBe('NO_STAND_CELL')
+    expect(failure?.facts?.target).toEqual({ x: 1, y: 64, z: 0 })
+    expect(failure?.facts?.requiredDig).toEqual(expect.arrayContaining([
+      expect.objectContaining({ x: 1, y: 62, z: 0, layer: 'feet', name: 'stone' }),
+    ]))
   })
 
   it('keeps the provider observed data when the dig times out', async () => {
@@ -264,6 +293,17 @@ describe('dig tunnel', () => {
       },
     })
     expect(fake.blocks.get('2,64,0')?.name).toBe('water')
+    const failure = (result.observed as {
+      failure?: { facts?: Record<string, unknown> }
+    }).failure
+    expect(failure?.facts).toMatchObject({
+      planned: 6,
+      dug: 2,
+      reason: 'fluid',
+      causeCode: 'water',
+      stoppedAt: { x: 2, y: 64, z: 0 },
+    })
+    expect(Array.isArray(failure?.facts?.path)).toBe(true)
   })
 
   it('stops at an unloaded cell instead of guessing through it', async () => {
