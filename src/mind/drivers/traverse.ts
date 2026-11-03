@@ -100,6 +100,7 @@ async function moveWithPlacement(
     timeoutMs: 60_000,
     allowPlace: true,
     material: params.item,
+    ...(pillar ? { allowUnsupportedGoal: true } : {}),
   })
   if (moved.state !== 'ok') {
     return {

@@ -1435,7 +1435,11 @@ class MineflayerActHandle implements ActHandle {
             this.motionTarget,
             range,
             timeout,
-            { constraints, arrival },
+            {
+              constraints,
+              arrival,
+              ...(this.args.allowUnsupportedGoal === true ? { allowUnsupportedGoal: true } : {}),
+            },
           )
           this.motionRun.start()
           return

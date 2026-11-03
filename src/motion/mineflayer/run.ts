@@ -36,6 +36,11 @@ export type MotionRunOptions = {
   maxReplans?: number
   /** Core-owned arrival policy; defaults to a near goal of `range`. */
   arrival?: ArrivalPolicy
+  /**
+   * Explicit scaffold only: skip the exact-goal standability precheck because
+   * the Pillar move will make the target standable. Requires `allowPlace`.
+   */
+  allowUnsupportedGoal?: boolean
   /** Soft hostile avoidance; defaults to Baritone-like 1.5x within 8 blocks. */
   avoidance?: { coefficient: number; radius: number }
 }
@@ -56,6 +61,7 @@ export class MotionRun {
   private readonly finalGoal: MotionGoal
   private activeTarget: Cell
   private readonly finalArrival: ArrivalPolicy
+  private readonly allowUnsupportedGoal: boolean
   private readonly searchTimeoutMs: number
   private readonly maxNodes: number
   private readonly maxReplans: number
@@ -95,6 +101,7 @@ export class MotionRun {
     this.from = standingCell(this.context.next().rules, this.world.self().pos)
     this.activeTarget = target
     this.finalArrival = options.arrival ?? { kind: 'near', range }
+    this.allowUnsupportedGoal = options.allowUnsupportedGoal === true
     this.motionGoal = createGoal(target, this.finalArrival)
     this.finalGoal = this.motionGoal
     this.searchTimeoutMs = options.searchTimeoutMs ?? 2_000
@@ -222,7 +229,8 @@ export class MotionRun {
     if (this.failOnBodyOverlap('start-embedded')) return
     // An exact arrival promises a standing position. Refuse a target that is
     // provably not standable instead of silently ending one cell below it.
-    if (this.finalArrival.kind === 'exact') {
+    const scaffoldGoal = this.allowUnsupportedGoal && this.activeConstraints.allowPlace
+    if (this.finalArrival.kind === 'exact' && !scaffoldGoal) {
       const info = this.context.next().rules.standInfo(this.target)
       if (info.state !== 'yes') {
         this.fail('GOAL_NOT_STANDABLE', 'goal-not-standable', {

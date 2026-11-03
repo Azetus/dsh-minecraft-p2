@@ -266,7 +266,10 @@ export function motionNeighbors(cell: Cell, ctx: MoveContext): Move[] {
     for (const [dx, dz] of directions) {
       moves.push(new BridgeMove(cell, { x: cell.x + dx, y: cell.y, z: cell.z + dz }))
     }
-    for (let levels = 1; levels <= 4; levels += 1) {
+    // PillarMove already supports up to eight levels (and traverse scaffold
+    // accepts the same bound); generate the same range so a single plan can
+    // leave a deep pit instead of being capped at four.
+    for (let levels = 1; levels <= 8; levels += 1) {
       moves.push(new PillarMove(cell, { x: cell.x, y: cell.y + levels, z: cell.z }))
     }
   }

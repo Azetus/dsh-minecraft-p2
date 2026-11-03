@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { MotionRun } from '../src/motion/mineflayer/run.ts'
 import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
 import { MotionSearch } from '../src/motion/search/index.ts'
+import { defaultConstraints, resolveConstraints } from '../src/motion/model/index.ts'
 import { FULL_CUBE, FixtureWorld, rawBlock } from './helpers/motion-world.ts'
 
 /**
@@ -70,6 +71,73 @@ describe('narrow pit and jump-ceiling matrices', () => {
     expect(result.state).toBe('failed')
     expect(result.code).toBe('GOTO_NO_PATH')
     run.stop()
+  })
+
+  it('plans a scaffold out of 2/3/5-deep pits when placement is authorized', () => {
+    for (const depth of [2, 3, 5]) {
+      const world = new FixtureWorld()
+      const stone = (x: number, y: number, z: number): void => {
+        world.blocks.set(`${x},${y},${z}`, rawBlock('stone', FULL_CUBE))
+      }
+      const air = (x: number, y: number, z: number): void => {
+        world.blocks.set(`${x},${y},${z}`, rawBlock('air', []))
+      }
+      stone(0, 63, 0)
+      for (let y = 64; y <= 64 + depth + 1; y += 1) air(0, y, 0)
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        stone(dx, 63, dz)
+        for (let y = 64; y <= 63 + depth; y += 1) stone(dx, y, dz)
+      }
+      world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+      const source = new MotionContextSource(world, resolveConstraints(defaultConstraints(), {
+        allowPlace: true,
+        material: 'dirt',
+      }))
+      const search = new MotionSearch(
+        { x: 0, y: 64, z: 0 },
+        { x: 0, y: 64 + depth, z: 0 },
+        () => source.next(),
+        { sliceMs: 50, timeoutMs: 3_000, maxNodes: 20_000 },
+      )
+      let result = search.step(Date.now())
+      let guard = 0
+      while (result.status === 'running' && guard < 500) {
+        result = search.step(Date.now())
+        guard += 1
+      }
+      expect(result.status, `depth ${depth}`).toBe('success')
+      const pillars = result.moves.filter(move => move.kind === 'pillar')
+      expect(pillars.length, `depth ${depth}`).toBeGreaterThan(0)
+      expect(pillars.flatMap(move => move.toPlace()).length, `depth ${depth}`).toBeGreaterThanOrEqual(depth)
+    }
+  })
+
+  it('skips the exact standability precheck only for scaffold placement', () => {
+    const blocks = new Map<string, FakeBlock>()
+    set(blocks, 0, 63, 0, 'stone')
+    set(blocks, 0, 64, 0, 'air')
+    set(blocks, 0, 65, 0, 'air')
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      set(blocks, dx, 63, dz, 'stone')
+      set(blocks, dx, 64, dz, 'stone')
+    }
+    const bot = botAt({ x: 0.5, y: 64, z: 0.5 }, blocks)
+    const strict = new MotionRun(bot, { x: 0, y: 66, z: 0 }, 0, 10_000, {
+      arrival: { kind: 'exact' },
+      constraints: { ...defaultConstraints(), allowPlace: true, material: 'dirt' },
+    })
+    strict.start()
+    expect(strict.tick(Date.now())).toMatchObject({ state: 'failed', code: 'GOAL_NOT_STANDABLE' })
+
+    const scaffold = new MotionRun(bot, { x: 0, y: 66, z: 0 }, 0, 10_000, {
+      arrival: { kind: 'exact' },
+      allowUnsupportedGoal: true,
+      constraints: { ...defaultConstraints(), allowPlace: true, material: 'dirt' },
+    })
+    scaffold.start()
+    const result = scaffold.tick(Date.now())
+    expect(result.code).not.toBe('GOAL_NOT_STANDABLE')
+    scaffold.stop()
   })
 
   it('rejects a step whose third cell above the takeoff is solid', () => {

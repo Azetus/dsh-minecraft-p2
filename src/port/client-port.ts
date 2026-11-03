@@ -48,6 +48,12 @@ export type MoveOptions = {
   allowPlace?: boolean
   material?: string
   /**
+   * Only for an explicit `traverse scaffold`: an exact goal may start
+   * unsupported because the Pillar move will place the column under it. The
+   * provider ignores this unless `allowPlace` is also true.
+   */
+  allowUnsupportedGoal?: boolean
+  /**
    * `astar` (default) is the validated planner: it refuses edges it cannot
    * prove. `vanilla` is the unvalidated, best-effort mode (`go { risky: true }`):
    * it never promises safety and may drown or fall.
