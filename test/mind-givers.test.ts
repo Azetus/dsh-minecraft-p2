@@ -226,7 +226,7 @@ describe('order and traverse givers', () => {
     const unstickDig = [{ x: 1, y: 65, z: 0, name: 'dirt' }]
     const giver = createGoOrderGiver(() => ({ order: { id: 'go-1', verb: 'go',
       params: { x: 6, y: 64, z: 0, exact: true, unstickDig } } }))
-    expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { approach: true, exact: true, unstickDig } })
+    expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { exact: true, unstickDig } })
   })
 
   it("honours the order's explicit range instead of always using 1", () => {

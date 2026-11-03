@@ -355,7 +355,6 @@ export class MineflayerClientPort implements ClientPort {
       range,
       timeoutMs,
       ...(opts.exact === undefined ? {} : { exact: opts.exact }),
-      ...(opts.approach === undefined ? {} : { approach: opts.approach }),
       ...(opts.unstickDig === undefined ? {} : { unstickDig: opts.unstickDig }),
       ...(opts.intent === undefined ? {} : { intent: opts.intent }),
       ...(opts.allowParkour === undefined ? {} : { allowParkour: opts.allowParkour }),

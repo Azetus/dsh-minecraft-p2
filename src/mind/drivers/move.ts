@@ -21,7 +21,6 @@ const MOVE_SCHEMA: SchemaNode = {
     range: { type: 'number', minimum: 0, maximum: 8 },
     timeoutMs: { type: 'integer', minimum: 1 },
     exact: { type: 'boolean' },
-    approach: { type: 'boolean' },
     intent: { type: 'string', enum: ['interact', 'attack'] },
     allowParkour: { type: 'boolean' },
     allowDiagonal: { type: 'boolean' },
@@ -47,7 +46,6 @@ type MoveParams = {
   range?: number
   timeoutMs?: number
   exact?: boolean
-  approach?: boolean
   allowParkour?: boolean
   allowDiagonal?: boolean
   allowPlace?: boolean
@@ -113,7 +111,6 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       range,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
       ...(params.exact === undefined ? {} : { exact: params.exact }),
-      ...(params.approach === undefined ? {} : { approach: params.approach }),
       ...(params.unstickDig === undefined ? {} : { unstickDig: params.unstickDig }),
       ...(params.intent === undefined ? {} : { intent: params.intent }),
       ...(params.allowParkour === undefined ? {} : { allowParkour: params.allowParkour }),

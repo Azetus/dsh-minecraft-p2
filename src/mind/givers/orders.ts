@@ -92,7 +92,6 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
         driverId: 'move',
         target: { kind: 'point', pos },
         params: { x: pos.x, y: pos.y, z: pos.z, range: requestedRange, timeoutMs: 120_000,
-          approach: true,
           ...(current.order.params?.exact === undefined ? {} : { exact: current.order.params.exact }),
           ...(current.order.params?.unstickDig === undefined ? {} : { unstickDig: current.order.params.unstickDig }),
           ...(current.order.params?.allowParkour === true ? { allowParkour: true } : {}),

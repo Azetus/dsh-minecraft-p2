@@ -40,7 +40,6 @@ export type MoveOptions = {
   range?: number
   timeoutMs?: number
   exact?: boolean
-  approach?: boolean
   unstickDig?: UnstickBlock[]
   intent?: 'interact' | 'attack'
   /** Extra motion capabilities; all default false and require explicit order authorization. */
