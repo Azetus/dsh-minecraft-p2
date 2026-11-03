@@ -42,7 +42,8 @@
     "dev": "node scripts/dev.mjs",
     "dev:check": "node scripts/dev.mjs --no-start",
     "dev:smoke": "node scripts/dev-api-smoke.mjs",
-    "verify:dist": "node scripts/verify-dist.mjs"
+    "verify:dist": "node scripts/verify-dist.mjs",
+    "metrics:summary": "node scripts/metrics-summary.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",

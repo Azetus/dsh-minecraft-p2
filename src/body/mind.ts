@@ -196,7 +196,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let lastReport: JsonValue | null = null
   let loopRef: MindLoop | undefined
 
-  type OrderDebug = { attempts: number; lastCode?: string; blockedKeys?: string[] }
+  type OrderDebug = { attempts: number; lastCode?: string; lastLayer?: string; blockedKeys?: string[] }
   const orderDiagnostics = new Map<string, OrderDebug>()
   const metricsPath = join(dirname(options.journalPath), 'metrics.jsonl')
   const appendOrderMetric = (orderId: string, state: string): void => {
@@ -222,6 +222,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       attempts: debug?.attempts ?? 0,
       ...(target === null ? {} : { target }),
       ...(debug?.lastCode === undefined ? {} : { lastCode: debug.lastCode }),
+      ...(debug?.lastLayer === undefined ? {} : { lastLayer: debug.lastLayer }),
       ...(debug?.blockedKeys === undefined ? {} : { blockedKeys: debug.blockedKeys }),
     }
     try {
@@ -322,6 +323,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         const debug = orderDiagnostics.get(event.orderId) ?? { attempts: 0 }
         debug.attempts += 1
         if (event.code !== undefined) debug.lastCode = event.code
+        const observed = event.observed
+        const failure = isRecord(observed) && isRecord(observed.failure) ? observed.failure : undefined
+        if (failure !== undefined && typeof failure.layer === 'string') debug.lastLayer = failure.layer
         if (event.blocked === true) debug.blockedKeys = [...(debug.blockedKeys ?? []), event.keys]
         orderDiagnostics.set(event.orderId, debug)
       }

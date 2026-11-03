@@ -82,3 +82,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 夜间/危险环境由 Agent 决定休息或避险；P2Mind 不做自主睡眠/建造/采集决策，v1 只做 eat/retreat/unstuck。
 - 对话：验收场景可关闭对话；任何情况下都不接受 `/` 开头的请求。
 - 禁止：游戏指令、传送、改模式、改 gamerule、注入物品。
+
+## 8. 复盘统计
+
+`node scripts/metrics-summary.mjs` 只读聚合 `.p2/metrics.jsonl`：按状态/verb/code/layer、p50/p95、attempts 统计；`--from/--to` 选时间窗，`--baseline <path>` 做两轮对比，`--json` 输出机器可读结果。它不调用 body、不改 order 状态，也不进生产路径。
