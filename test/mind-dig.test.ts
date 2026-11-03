@@ -226,10 +226,12 @@ describe('dig tunnel', () => {
   it('digs a one-block step down and a one-block step up', async () => {
     const down = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
     tunnelCorridor(down, { from: 0, to: 2, y: 64, height: 2, stepTo: 63 })
+    // DescendMove's clearance includes the cell two above the landing.
+    down.blocks.set('2,65,0', stone())
     const downResult = await runJob(down.port, {
       shape: 'tunnel', to: { x: 2, y: 63, z: 0 }, height: 2, purpose: 'clear',
     })
-    expect(downResult).toMatchObject({ state: 'succeeded', observed: { dug: 4, returnable: true } })
+    expect(downResult).toMatchObject({ state: 'succeeded', observed: { dug: 5, returnable: true } })
 
     const up = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
     tunnelCorridor(up, { from: 0, to: 2, y: 64, height: 2, stepTo: 65 })

@@ -325,6 +325,8 @@ type TunnelPlan = {
   height: number
   preserveFloor: boolean
   path: DigCell[]
+  /** Per corridor cell, the blocks to clear (feet/head plus step clearance). */
+  blocks: DigCell[][]
   cells: DigCell[]
   maxBlocks: number
 }
@@ -352,8 +354,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams): Promise<DriverResul
 
   outer: for (let index = 1; index < plan.path.length; index += 1) {
     const cell = plan.path[index]!
-    for (let layer = 0; layer < plan.height; layer += 1) {
-      const block = { x: cell.x, y: cell.y + layer, z: cell.z }
+    for (const block of plan.blocks[index - 1] ?? []) {
       const check = inspectTunnelBlock(ctx.port, block, plan.direction, plan.preserveFloor)
       if (check.stop === true) {
         stoppedAt = block
@@ -493,10 +494,22 @@ function planTunnel(
     })
   }
   const cells: DigCell[] = []
-  for (const cell of path.slice(1)) {
+  const blocks: DigCell[][] = []
+  for (const [index, cell] of path.slice(1).entries()) {
+    const stack: DigCell[] = []
     for (let layer = 0; layer < height; layer += 1) {
-      cells.push({ x: cell.x, y: cell.y + layer, z: cell.z })
+      stack.push({ x: cell.x, y: cell.y + layer, z: cell.z })
     }
+    // DescendMove also checks the cell two above the landing. A one-step-down
+    // tunnel that stops at feet+1 leaves that cell solid and cannot walk out.
+    if (to.y < start.y && index === path.length - 2) {
+      const above = { x: to.x, y: to.y + 2, z: to.z }
+      if (!stack.some(block => block.x === above.x && block.y === above.y && block.z === above.z)) {
+        stack.push(above)
+      }
+    }
+    blocks.push(stack)
+    cells.push(...stack)
   }
   if (cells.length > maxBlocks) {
     return {
@@ -514,6 +527,7 @@ function planTunnel(
       height,
       preserveFloor: params.preserveFloor !== false,
       path,
+      blocks,
       cells,
       maxBlocks,
     },
