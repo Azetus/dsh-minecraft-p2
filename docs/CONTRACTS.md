@@ -94,6 +94,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
 - `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不再移动过去。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
+- provider `place` 也按人类逻辑选支撑：先试请求的 `face`，其参照格不是实心/流体时继续扫描 up/down/north/south/east/west；任意一面有实心参照即可放置，成功体带实际使用的 `face`。只有六面都没有实心参照才报 `PLACE_UNSUPPORTED`，并在 provider details 与 driver failure 中带 `supports` 六面事实。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`（不再报 `CRAFT_NO_INGREDIENTS`），由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
 - `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失、受保护或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
@@ -152,13 +153,14 @@ type Job = {
 
 - `runId` 在每次尝试时新生成；旧 `runId` 的结果只对账。
 - 失败计数键 = `(orderId|workItemId|driverId)`。
-- 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, cause, recovery?, suggestions?}`：
+- 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, diagnosis, cause, recovery}`：
   - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
   - `facts.snapshot` 是失败时的有界同快照：`self/target` 各含 feet/head/support，`targetNeighbors` 四邻，`bodyOverlap` 最多 4 格，另带 `pathStatus`/`bestReachable`；每格为 `{cell:[x,y,z], name, loaded}`，最多 16 个去重格，不含 path/candidates/visited；
   - `PLACE_UNSUPPORTED` 的 `facts` 额外带 `supports` 六面布尔（up/down/north/south/east/west）与最多 3 个 `suggestedCells`（`{cell,support}`，指附近已有实心参照面、可实际放置的候选目标格，不是站位）；
+  - `diagnosis` 是闭合枚举，一条失败最多一个：`HEAD_BLOCKED`、`SUPPORT_MISSING`、`TARGET_UNLOADED`、`START_EMBEDDED`、`NO_STAND_CELL`、`EFFECT_UNCONFIRMED`、`RELEASE_UNCONFIRMED`、`TOOL_MISSING`、`DENIED`、`UNKNOWN`；事实不足就是 `UNKNOWN`，不生成动作；
+  - `recovery` 是契约级字符串：`retry` / `replan` / `reobserve` / `wait` / `restart` / `none`，不是具体动作；
   - `cause` 是 `{kind: "provider"|"world"|"authority"|"budget"|"unknown", code}`，不是自然语言；
-  - `suggestions` 最多 3 条，每条 `{action, params?, confidence: "exact"|"candidate", why}`，可为空，**只作证据，绝不自动执行**；
-  - port/provider 失败只给 `reobserve` / `wait` / `restart-provider`，不给游戏动作；`STOP_UNCONFIRMED` 保持 tracker fault 语义。
+  - 失败体不再包含 `suggestions` / `action` / `params`；具体下一步选项由静态 skill 表或 Agent 决策，P2 不预测后续世界。
 - 没有专门失败体的 driver 由 body 在 `job.terminal` 处补一个通用投影，保证每个失败终态都能回答“在哪、为什么、下一步”。
 
 ## 4. WorkGiver

@@ -1,6 +1,6 @@
 import type { JsonValue } from '../../contracts/types.ts'
 import type { DriverHandle, DriverResult } from '../types.ts'
-import { failureBody, providerFailureSuggestions, withFailure } from '../failure.ts'
+import { failureBody, withFailure } from '../failure.ts'
 
 /** Async driver handle: completion is the promise, stop is observe-only. */
 export class AsyncDriverHandle implements DriverHandle {
@@ -85,13 +85,12 @@ export function actFailure(
       code,
     },
     recovery: code === 'ACT_TIMEOUT'
-      ? { kind: 'retry' }
+      ? 'retry'
       : code === 'STOP_UNCONFIRMED'
-        ? { kind: 'restart' }
+        ? 'restart'
         : providerFailure
-          ? { kind: 'reobserve' }
-          : { kind: 'none' },
-    ...(providerFailure ? { suggestions: providerFailureSuggestions(code) } : {}),
+          ? 'reobserve'
+          : 'none',
   }))
   return { state: 'failed', code, observed }
 }

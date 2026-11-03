@@ -134,24 +134,6 @@ function attachCraftFailure(result: DriverResult, params: CraftParams): DriverRe
   if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
   const code = result.code ?? 'CRAFT_FAILED'
   const count = params.count ?? 1
-  const suggestions: Array<{ action: string; params?: Record<string, JsonValue>; confidence: 'exact' | 'candidate'; why: string }> = []
-  if (code === 'CRAFT_INCOMPLETE') {
-    const produced = numericField(result.observed, 'produced') ?? numericField(result.observed, 'crafted') ?? 0
-    const remaining = Math.max(1, count - produced)
-    suggestions.push({
-      action: 'craft',
-      params: { item: params.item, count: remaining },
-      confidence: 'candidate',
-      why: 'the provider already started the batch; only the remaining amount is missing',
-    })
-  }
-  if (suggestions.length === 0) {
-    suggestions.push({
-      action: 'reobserve',
-      confidence: 'exact',
-      why: 'read the inventory and nearby crafting table before retrying',
-    })
-  }
   return {
     ...result,
     observed: withFailure(result.observed, failureBody({
@@ -161,8 +143,7 @@ function attachCraftFailure(result: DriverResult, params: CraftParams): DriverRe
       observed: result.observed,
       facts: { item: params.item, count },
       cause: { kind: 'world', code },
-      recovery: code === 'CRAFT_INCOMPLETE' ? { kind: 'retry' } : { kind: 'replan' },
-      suggestions,
+      recovery: code === 'CRAFT_INCOMPLETE' ? 'retry' : 'replan',
     })),
   }
 }

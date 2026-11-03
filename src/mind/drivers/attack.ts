@@ -126,13 +126,6 @@ function locate(port: ClientPort, entityId: string): CombatEntity | undefined {
 function attachAttackFailure(result: DriverResult, params: AttackParams): DriverResult {
   if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
   const code = result.code ?? 'ATTACK_FAILED'
-  const suggestions = code === 'ATTACK_TARGET_PROTECTED'
-    ? []
-    : [{
-        action: 'reobserve',
-        confidence: 'exact' as const,
-        why: 'the entity id is locked; re-observe before naming a new target',
-      }]
   return {
     ...result,
     observed: withFailure(result.observed, failureBody({
@@ -145,8 +138,7 @@ function attachAttackFailure(result: DriverResult, params: AttackParams): Driver
         ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
       },
       cause: { kind: code === 'ATTACK_TARGET_PROTECTED' ? 'authority' : 'world', code },
-      recovery: { kind: 'none' },
-      suggestions,
+      recovery: 'none',
     })),
   }
 }

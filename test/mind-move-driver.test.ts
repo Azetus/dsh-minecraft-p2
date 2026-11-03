@@ -129,7 +129,7 @@ describe('move driver', () => {
     expect(snapshot?.bestReachable).toEqual([1, 64, 0])
   })
 
-  it('adds a stuck failure body with probe and exact clear suggestions', async () => {
+  it('adds a stuck failure body with probe and embedded diagnosis', async () => {
     const pending = deferred<ActResult>()
     const port = {
       moveTo: () => pending.promise,
@@ -153,8 +153,8 @@ describe('move driver', () => {
     })
     expect((failure?.facts as { probe?: unknown[] }).probe).toHaveLength(6)
     expect((failure?.facts as { blockedAhead?: unknown[] }).blockedAhead).toHaveLength(1)
-    expect((failure?.suggestions as Array<{ action: string; confidence: string }>)[0])
-      .toMatchObject({ action: 'dig', confidence: 'exact' })
+    expect(failure).toMatchObject({ diagnosis: 'START_EMBEDDED', recovery: 'replan' })
+    expect(failure).not.toHaveProperty('suggestions')
   })
 
   it('never reports stopped when the port cannot confirm release', async () => {

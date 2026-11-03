@@ -1,6 +1,5 @@
 import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import { isRecord } from '../../contracts/index.ts'
 import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
 import { standCells } from '../../motion/search/index.ts'
@@ -289,26 +288,6 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
     facts.supports = supportFacts(port, target) as unknown as JsonValue
     facts.suggestedCells = suggestedPlaceCells(port, [target, ...(params.cells ?? [])]) as unknown as JsonValue
   }
-  const suggestions: Array<{ action: string; params?: Record<string, JsonValue>; confidence: 'exact' | 'candidate'; why: string }> = []
-  if (code === 'PLACE_BLOCKED_BY_SELF' && isRecord(observed) && Array.isArray(observed.adjacent)) {
-    for (const entry of observed.adjacent.slice(0, 2)) {
-      if (!isRecord(entry)
-        || typeof entry.x !== 'number' || typeof entry.y !== 'number' || typeof entry.z !== 'number') continue
-      suggestions.push({
-        action: 'go',
-        params: { x: entry.x, y: entry.y, z: entry.z, range: 0 },
-        confidence: 'exact',
-        why: 'this adjacent stand cell is proven not to overlap the target group',
-      })
-    }
-  }
-  if (suggestions.length === 0) {
-    suggestions.push({
-      action: 'reobserve',
-      confidence: 'exact',
-      why: 'read the target and adjacent cells before choosing another stance',
-    })
-  }
   return {
     ...result,
     observed: withFailure(observed, failureBody({
@@ -318,8 +297,7 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
       observed,
       facts,
       cause: { kind: 'world', code },
-      recovery: code === 'PLACE_BLOCKED_BY_SELF' ? { kind: 'replan' } : { kind: 'replan' },
-      suggestions,
+      recovery: 'replan',
     })),
   }
 }

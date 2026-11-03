@@ -11,7 +11,6 @@ import type {
   WorldView,
 } from '../types.ts'
 import { failureBody, failureSnapshot, withFailure } from '../failure.ts'
-import type { FailureSuggestion } from '../failure.ts'
 import { AsyncDriverHandle } from './handle.ts'
 
 export const MOVE_DRIVER_ID = 'move'
@@ -172,33 +171,6 @@ function moveFailure(
     // a sampled neighbour is evidence, but not proof of the blocking cell.
     if (blocked.length > 0) facts.blockedAhead = blocked as unknown as JsonValue
   }
-  const suggestions: FailureSuggestion[] = []
-  for (const cell of blocked.slice(0, 3)) {
-    suggestions.push({
-      action: 'dig',
-      params: { x: cell.x, y: cell.y, z: cell.z },
-      confidence: 'exact',
-      why: 'this block is proven to block the body or the planned stand cell',
-    })
-  }
-  if (suggestions.length === 0 && (code === 'GOTO_STUCK' || code === 'GOTO_NO_PATH')) {
-    suggestions.push({
-      action: 'reobserve',
-      confidence: 'exact',
-      why: 'no blocking cell could be proven; observe the body before retrying',
-    })
-  }
-  if (suggestions.length < 3 && code === 'GOTO_NO_PATH' && isRecord(observed) && isRecord(observed.bestReachable)) {
-    const best = observed.bestReachable
-    if (isCell(best)) {
-      suggestions.push({
-        action: 'go',
-        params: { x: best.x, y: best.y, z: best.z, range: 0 },
-        confidence: 'candidate',
-        why: 'move to the proven reachable prefix before planning the full target',
-      })
-    }
-  }
   return withFailure(observed, failureBody({
     layer: 'motion',
     phase: 'execute',
@@ -209,10 +181,7 @@ function moveFailure(
       kind: code === 'GOTO_TIMEOUT' || code === 'GOTO_SEARCH_TIMEOUT' ? 'budget' : 'world',
       code,
     },
-    recovery: code === 'GOAL_NOT_STANDABLE' || code === 'BODY_OVERLAP'
-      ? { kind: 'none' }
-      : { kind: 'replan', detail: `target ${params.x},${params.y},${params.z}` },
-    suggestions,
+    recovery: code === 'GOAL_NOT_STANDABLE' || code === 'BODY_OVERLAP' ? 'none' : 'replan',
   }))
 }
 

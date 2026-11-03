@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import type { JsonValue } from '../src/contracts/types.ts'
 import {
+  diagnoseFailure,
   ensureFailureObserved,
   failureBody,
   failureFacts,
   failureSnapshot,
-  providerFailureSuggestions,
   readFailure,
   withFailure,
 } from '../src/mind/failure.ts'
@@ -14,8 +14,8 @@ import { actFailure } from '../src/mind/drivers/handle.ts'
 
 /**
  * Category: cross-module contract (failed-job evidence).
- * Protects: one bounded failure projection, no invented game actions, and
- * provider-layer suggestions limited to reobserve/wait/restart-provider.
+ * Protects: one bounded failure projection, one closed diagnosis, and no
+ * action parameters in the failure object.
  */
 
 describe('failure projection', () => {
@@ -71,29 +71,69 @@ describe('failure projection', () => {
     expect(snapshot).not.toHaveProperty('visitedNodes')
   })
 
-  it('caps suggestions at three and removes duplicates', () => {
+  it('classifies one closed diagnosis and falls back to UNKNOWN', () => {
+    const cell = (name: string, loaded = true) => ({ cell: [0, 0, 0], name, loaded })
+    const body = (head = 'air', support = 'stone', feet = 'air') => ({
+      feet: cell(feet), head: cell(head), support: cell(support),
+    })
+    const withSnapshot = (snapshot: unknown) => ({ snapshot } as unknown as Record<string, JsonValue>)
+
+    expect(diagnoseFailure({ code: 'STOP_UNCONFIRMED' })).toBe('RELEASE_UNCONFIRMED')
+    expect(diagnoseFailure({ code: 'ACT_UNCONFIRMED' })).toBe('EFFECT_UNCONFIRMED')
+    expect(diagnoseFailure({ code: 'ACTION_DENIED' })).toBe('DENIED')
+    expect(diagnoseFailure({ code: 'TOOL_INSUFFICIENT' })).toBe('TOOL_MISSING')
+    expect(diagnoseFailure({ code: 'BODY_OVERLAP' })).toBe('START_EMBEDDED')
+    expect(diagnoseFailure({
+      code: 'GOTO_NO_PATH',
+      facts: withSnapshot({
+        self: { ...body(), support: cell('stone', false) },
+        target: body(),
+        bodyOverlap: [],
+      }),
+    })).toBe('TARGET_UNLOADED')
+    expect(diagnoseFailure({
+      code: 'PLACE_UNSUPPORTED',
+      facts: withSnapshot({ self: body(), target: body('air', 'air'), bodyOverlap: [] }),
+    })).toBe('SUPPORT_MISSING')
+    expect(diagnoseFailure({
+      code: 'GOTO_NO_PATH',
+      facts: withSnapshot({ self: body('stone'), target: body(), bodyOverlap: [] }),
+    })).toBe('HEAD_BLOCKED')
+    expect(diagnoseFailure({ code: 'GOAL_NOT_STANDABLE' })).toBe('NO_STAND_CELL')
+    expect(diagnoseFailure({ code: 'GOTO_NO_PATH' })).toBe('UNKNOWN')
+  })
+
+  it('adds diagnosis and recovery without action parameters', () => {
     const body = failureBody({
       layer: 'motion',
       phase: 'execute',
-      code: 'GOTO_STUCK',
-      cause: { kind: 'world', code: 'GOTO_STUCK' },
-      suggestions: [
-        { action: 'dig', params: { x: 1, y: 2, z: 3 }, confidence: 'exact', why: 'a' },
-        { action: 'dig', params: { x: 1, y: 2, z: 3 }, confidence: 'exact', why: 'b' },
-        { action: 'go', params: { x: 4, y: 5, z: 6 }, confidence: 'candidate', why: 'c' },
-        { action: 'go', params: { x: 7, y: 8, z: 9 }, confidence: 'candidate', why: 'd' },
-      ],
+      code: 'GOTO_NO_PATH',
+      facts: {
+        snapshot: {
+          self: {
+            feet: { cell: [0, 64, 0], name: 'air', loaded: true },
+            head: { cell: [0, 65, 0], name: 'stone', loaded: true },
+            support: { cell: [0, 63, 0], name: 'stone', loaded: true },
+          },
+          target: {
+            feet: { cell: [1, 64, 0], name: 'air', loaded: true },
+            head: { cell: [1, 65, 0], name: 'air', loaded: true },
+            support: { cell: [1, 63, 0], name: 'stone', loaded: true },
+          },
+          targetNeighbors: [],
+          bodyOverlap: [],
+          pathStatus: 'noPath',
+          bestReachable: null,
+        } as unknown as JsonValue,
+      },
+      cause: { kind: 'world', code: 'GOTO_NO_PATH' },
     })
-    expect(body.suggestions).toHaveLength(3)
-    expect(body.suggestions?.[0]).toMatchObject({ action: 'dig', confidence: 'exact' })
-    expect(body.suggestions?.[1]).toMatchObject({ action: 'go', params: { x: 4, y: 5, z: 6 } })
-  })
-
-  it('never suggests a game action for provider failures', () => {
-    for (const code of ['ACT_TIMEOUT', 'ACT_UNCONFIRMED', 'STOP_UNCONFIRMED']) {
-      const actions = providerFailureSuggestions(code).map(suggestion => suggestion.action)
-      expect(actions.every(action => ['reobserve', 'wait', 'restart-provider'].includes(action))).toBe(true)
-    }
+    expect(body).toMatchObject({ diagnosis: 'HEAD_BLOCKED', recovery: 'replan' })
+    expect(body).not.toHaveProperty('suggestions')
+    const serialized = JSON.stringify(body)
+    expect(serialized).not.toContain('"suggestions"')
+    expect(serialized).not.toContain('"action"')
+    expect(serialized).not.toContain('"params"')
   })
 
   it('attaches a port failure to an unconfirmed action result', () => {
@@ -108,10 +148,11 @@ describe('failure projection', () => {
       layer: 'port',
       phase: 'execute',
       code: 'ACT_UNCONFIRMED',
+      diagnosis: 'EFFECT_UNCONFIRMED',
+      recovery: 'reobserve',
       cause: { kind: 'provider', code: 'ACT_UNCONFIRMED' },
     })
-    expect(failure?.suggestions?.map(suggestion => suggestion.action))
-      .toEqual(['reobserve', 'wait'])
+    expect(failure).not.toHaveProperty('suggestions')
   })
 
   it('adds exactly one generic failure body when a driver did not provide one', () => {

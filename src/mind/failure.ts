@@ -8,8 +8,8 @@ import { classifyFailure } from './diagnostics.ts'
  * `p2_report` or a replay can answer "where, why, what next" without parsing
  * driver-specific shapes.
  *
- * `suggestions` are evidence, not commands: at most three deterministic
- * actions, each tagged exact or candidate, and never executed by P2Mind.
+ * `diagnosis` is one closed classification over the same facts; `recovery` is
+ * a contract-level next mode, not a game action.
  */
 export type FailureLayer =
   | 'port'
@@ -30,14 +30,17 @@ export type FailurePhase =
   | 'plan'
   | 'unknown'
 
-export type FailureConfidence = 'exact' | 'candidate'
-
-export type FailureSuggestion = {
-  action: string
-  params?: Record<string, JsonValue>
-  confidence: FailureConfidence
-  why: string
-}
+export type FailureDiagnosis =
+  | 'HEAD_BLOCKED'
+  | 'SUPPORT_MISSING'
+  | 'TARGET_UNLOADED'
+  | 'START_EMBEDDED'
+  | 'NO_STAND_CELL'
+  | 'EFFECT_UNCONFIRMED'
+  | 'RELEASE_UNCONFIRMED'
+  | 'TOOL_MISSING'
+  | 'DENIED'
+  | 'UNKNOWN'
 
 export type FailureCauseKind =
   | 'provider'
@@ -53,19 +56,16 @@ export type FailureCause = {
   detail?: string
 }
 
-export type FailureRecovery = {
-  kind: 'retry' | 'replan' | 'reobserve' | 'wait' | 'restart' | 'none'
-  detail?: string
-}
+export type FailureRecovery = 'retry' | 'replan' | 'reobserve' | 'wait' | 'restart' | 'none'
 
 export type FailureBody = {
   layer: FailureLayer
   phase: FailurePhase
   code: string
   facts: Record<string, JsonValue>
+  diagnosis: FailureDiagnosis
   cause: FailureCause
-  recovery?: FailureRecovery
-  suggestions?: FailureSuggestion[]
+  recovery: FailureRecovery
 }
 
 /** One bounded cell in a failure snapshot; `name` is null when unloaded. */
@@ -232,25 +232,148 @@ export function failureBody(input: {
   observed?: JsonValue | undefined
   facts?: Record<string, JsonValue> | undefined
   cause: FailureCause
+  diagnosis?: FailureDiagnosis | undefined
   recovery?: FailureRecovery | undefined
-  suggestions?: FailureSuggestion[] | undefined
 }): FailureBody {
   const facts: Record<string, JsonValue> = {
     ...failureFacts(input.observed),
     ...(input.facts ?? {}),
   }
-  const suggestions = input.suggestions === undefined
-    ? undefined
-    : uniqueSuggestions(input.suggestions)
+  const diagnosis = input.diagnosis ?? diagnoseFailure({ code: input.code, observed: input.observed, facts })
   return {
     layer: input.layer,
     phase: input.phase,
     code: input.code,
     facts,
+    diagnosis,
     cause: input.cause,
-    ...(input.recovery === undefined ? {} : { recovery: input.recovery }),
-    ...(suggestions === undefined || suggestions.length === 0 ? {} : { suggestions }),
+    recovery: input.recovery ?? defaultRecovery(diagnosis),
   }
+}
+
+const TOOL_CODES = new Set([
+  'TOOL_INSUFFICIENT',
+  'EQUIP_NO_ITEM',
+  'USE_NO_ITEM',
+  'PLACE_NO_ITEM',
+])
+
+const UNLOADED_CODES = new Set([
+  'GOTO_TARGET_UNLOADED',
+  'OBSERVATION_UNAVAILABLE',
+])
+
+const NO_STAND_CODES = new Set([
+  'GOAL_NOT_STANDABLE',
+  'APPROACH_NO_STAND',
+  'GOTO_INVALID_TARGET',
+  'NO_STAND',
+  'PICKUP_UNREACHABLE',
+])
+
+/**
+ * One closed classification per failure. The classifier reads only facts the
+ * driver already captured; when they do not prove a cause it returns UNKNOWN
+ * instead of guessing an action.
+ */
+export function diagnoseFailure(input: {
+  code: string
+  observed?: JsonValue | undefined
+  facts?: Record<string, JsonValue> | undefined
+}): FailureDiagnosis {
+  const code = input.code
+  if (code === 'STOP_UNCONFIRMED') return 'RELEASE_UNCONFIRMED'
+  if (code === 'ACT_UNCONFIRMED' || code === 'CLIENT_TIMEOUT') return 'EFFECT_UNCONFIRMED'
+  if (code === 'ACTION_DENIED') return 'DENIED'
+  if (TOOL_CODES.has(code)) return 'TOOL_MISSING'
+
+  const facts = input.facts ?? failureFacts(input.observed)
+  const snapshot = isRecord(facts.snapshot) ? facts.snapshot : undefined
+  const self = snapshotBody(snapshot, 'self')
+  const target = snapshotBody(snapshot, 'target')
+  const blocked = blockedLayers(facts)
+  const overlap = snapshot !== undefined && Array.isArray(snapshot.bodyOverlap)
+    ? snapshot.bodyOverlap
+    : []
+  if (code === 'BODY_OVERLAP' || overlap.length > 0) return 'START_EMBEDDED'
+  if (UNLOADED_CODES.has(code) || target?.feet.loaded === false) return 'TARGET_UNLOADED'
+  if (target?.support !== undefined && !target.support.loaded) return 'TARGET_UNLOADED'
+  if (self?.support !== undefined && !self.support.loaded) return 'TARGET_UNLOADED'
+  if (blocked.has('head')) return 'HEAD_BLOCKED'
+  if (self?.head.loaded === true && isBlockingName(self.head.name)) return 'HEAD_BLOCKED'
+  if (target?.head.loaded === true && isBlockingName(target.head.name)) return 'HEAD_BLOCKED'
+  if (blocked.has('support')) return 'SUPPORT_MISSING'
+  if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
+    const supportFlags = readSupports(facts.supports)
+    if (supportFlags === undefined || !supportFlags.some(Boolean)) return 'SUPPORT_MISSING'
+  }
+  if (target?.support.loaded === true && !isSolidName(target.support.name)) return 'SUPPORT_MISSING'
+  if (self?.support.loaded === true && !isSolidName(self.support.name)) return 'SUPPORT_MISSING'
+  if (NO_STAND_CODES.has(code)) return 'NO_STAND_CELL'
+  return 'UNKNOWN'
+}
+
+function defaultRecovery(diagnosis: FailureDiagnosis): FailureRecovery {
+  if (diagnosis === 'DENIED' || diagnosis === 'START_EMBEDDED') return 'none'
+  if (diagnosis === 'RELEASE_UNCONFIRMED') return 'restart'
+  if (diagnosis === 'UNKNOWN' || diagnosis === 'EFFECT_UNCONFIRMED' || diagnosis === 'TARGET_UNLOADED') {
+    return 'reobserve'
+  }
+  return 'replan'
+}
+
+function snapshotBody(
+  snapshot: Record<string, JsonValue> | undefined,
+  key: 'self' | 'target',
+): { feet: SnapshotCellView; head: SnapshotCellView; support: SnapshotCellView } | undefined {
+  const body = snapshot?.[key]
+  if (!isRecord(body)) return undefined
+  const feet = snapshotCell(body.feet)
+  const head = snapshotCell(body.head)
+  const support = snapshotCell(body.support)
+  if (feet === undefined || head === undefined || support === undefined) return undefined
+  return { feet, head, support }
+}
+
+type SnapshotCellView = { name: string | null; loaded: boolean }
+
+function snapshotCell(value: JsonValue | undefined): SnapshotCellView | undefined {
+  if (!isRecord(value)) return undefined
+  return {
+    name: typeof value.name === 'string' ? value.name : null,
+    loaded: value.loaded === true,
+  }
+}
+
+function blockedLayers(facts: Record<string, JsonValue>): Set<string> {
+  const layers = new Set<string>()
+  for (const key of ['blockedBy', 'requiredDig'] as const) {
+    const value = facts[key]
+    const entries = Array.isArray(value) ? value : isRecord(value) ? [value] : []
+    for (const entry of entries.slice(0, 8)) {
+      if (!isRecord(entry) || typeof entry.layer !== 'string') continue
+      layers.add(entry.layer)
+    }
+  }
+  return layers
+}
+
+function readSupports(value: JsonValue | undefined): boolean[] | undefined {
+  if (!isRecord(value)) return undefined
+  const values = Object.values(value).filter((entry): entry is boolean => typeof entry === 'boolean')
+  return values.length === 0 ? undefined : values
+}
+
+function isBlockingName(name: string | null): boolean {
+  return name !== null && !isAirName(name) && name !== 'water' && name !== 'lava'
+}
+
+function isSolidName(name: string | null): boolean {
+  return name !== null && isBlockingName(name)
+}
+
+function isAirName(name: string): boolean {
+  return name === 'air' || name === 'cave_air' || name === 'void_air'
 }
 
 /** Add the failure projection while preserving the driver's existing evidence. */
@@ -270,31 +393,6 @@ export function readFailure(observed: JsonValue | undefined): FailureBody | unde
     return undefined
   }
   return failure as unknown as FailureBody
-}
-
-/**
- * Provider/port failures never suggest a game action. The only safe next
- * steps are to re-observe, wait, or restart the provider.
- */
-export function providerFailureSuggestions(code: string): FailureSuggestion[] {
-  const suggestions: FailureSuggestion[] = [
-    {
-      action: 'reobserve',
-      confidence: 'exact',
-      why: 'the effect is unknown; read the world before deciding the next order',
-    },
-  ]
-  if (code === 'STOP_UNCONFIRMED') {
-    suggestions.push(
-      { action: 'wait', confidence: 'candidate', why: 'release may still settle before the next action' },
-      { action: 'restart-provider', confidence: 'candidate', why: 'restart the body if release stays unconfirmed' },
-    )
-  } else if (code === 'ACT_TIMEOUT') {
-    suggestions.push({ action: 'wait', confidence: 'candidate', why: 'the action may still complete within the server tick' })
-  } else {
-    suggestions.push({ action: 'wait', confidence: 'candidate', why: 'give the server a moment before re-observing' })
-  }
-  return suggestions
 }
 
 /**
@@ -324,21 +422,8 @@ export function ensureFailureObserved(
     observed,
     facts: driverId === undefined ? undefined : { driverId },
     cause: { kind, code: resolved },
-    recovery: kind === 'authority' ? { kind: 'none' } : { kind: 'reobserve' },
+    recovery: kind === 'authority' ? 'none' : 'reobserve',
   }))
-}
-
-function uniqueSuggestions(suggestions: FailureSuggestion[]): FailureSuggestion[] {
-  const seen = new Set<string>()
-  const result: FailureSuggestion[] = []
-  for (const suggestion of suggestions) {
-    const key = `${suggestion.action}:${JSON.stringify(suggestion.params ?? {})}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    result.push(suggestion)
-    if (result.length >= 3) break
-  }
-  return result
 }
 
 function floorCell(p: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
