@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
  * Drive the dev Web API end to end: authenticate, create a Session, then run
- * `/p2 start`, `/p2 status`, and `/p2 stop` through the real command surface.
+ * `/p2 start <host>:<port>`, `/p2 status`, and `/p2 stop` through the real
+ * command surface.
  *
- * Usage: node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace>
+ * Usage: node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace> [host:port]
  */
-const [rawUrl, workspace] = process.argv.slice(2)
+const [rawUrl, workspace, targetArg] = process.argv.slice(2)
 if (rawUrl === undefined || workspace === undefined) {
-  console.error('usage: node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace>')
+  console.error('usage: node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace> [host:port]')
   process.exit(2)
 }
+const target = targetArg ?? '127.0.0.1:25575'
 
 const url = new URL(rawUrl)
 const origin = url.origin
@@ -75,7 +77,7 @@ try {
   console.log(`/p2 setup: ${JSON.stringify(setup)}`)
   if (setup?.kind !== 'success') throw new Error('setup did not succeed')
 
-  const started = await command(sessionId, '/p2 start')
+  const started = await command(sessionId, `/p2 start ${target}`)
   console.log(`/p2 start: ${JSON.stringify(started)}`)
   if (started?.kind !== 'success') throw new Error('start did not succeed')
 
