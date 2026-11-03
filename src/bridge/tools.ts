@@ -1,12 +1,18 @@
 import type { JsonValue } from '../contracts/index.ts'
 import { ORDER_VERBS } from '../mind/orders.ts'
 import type { BodyManager } from './process-manager.ts'
+import { repeatHint } from './repeat.ts'
+import type { RepeatTracker } from './repeat.ts'
 
 export type AgentLike = {
   id: string
   session: {
     id: string
     header?: { cwd?: string }
+  }
+  /** Agent-scoped Cordis context; optional in tests. */
+  ctx?: {
+    get(name: string): unknown
   }
 }
 
@@ -33,7 +39,12 @@ export type ToolsService = {
  * Agent-scoped observation/control surface. These tools only read P2Mind state
  * or submit orders; they never perform a game action themselves.
  */
-export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: ToolsService): ToolRegistration {
+export function registerP2Tools(
+  agent: AgentLike,
+  manager: BodyManager,
+  tools: ToolsService,
+  repeat?: RepeatTracker,
+): ToolRegistration {
   const disposers = [
     tools.register({
       name: 'p2_status',
@@ -146,7 +157,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_order',
-      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Do not use it as a micro-command. Verbs/primitives: go {x,y,z,range?,exact?,risky?}, dig {x,y,z} or volume {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?} (hard cap 64, default 24), place {x,y,z,item,face?,stands?}, traverse {mode:"bridge"|"scaffold",x,y,z,item,maxBlocks?}, craft {item,count?}, use {x,y,z|item,durationMs?}, equip {item}, check {x,y,z}, container {x,y,z,action,item,count?}, attack {entityId}, hold. risky go is unvalidated and opt-in; exact disables goal snapping and requires a standable goal.',
+      description: 'Submit one goal-level order. Returns as soon as the order is accepted (id + state); terminal, blocked and failed results are pushed back as a completion wake, so end the turn instead of sleeping or polling. Keep one active order. If the same (verb,target) has failed twice, change the coordinate, verb, or region instead of resubmitting it unchanged. hold is a queue barrier that occupies the active slot, not a queue purge: use p2_cancel {all:true} to clear queued orders. A body restart creates a new epoch and loses queued orders. Before the first order after start, load the p2-operator skill if it is listed. Verbs/primitives: go {x,y,z,range?,exact?,risky?}, dig {x,y,z} or volume {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?} (hard cap 64, default 24), place {x,y,z,item,face?,stands?}, traverse {mode:"bridge"|"scaffold",x,y,z,item,maxBlocks?}, craft {item,count?}, use {x,y,z|item,durationMs?}, equip {item}, check {x,y,z}, container {x,y,z,action,item,count?}, attack {entityId}, hold {durationMs?}. risky go is unvalidated and opt-in; exact disables goal snapping and requires a standable goal.',
       parameters: {
         type: 'object',
         properties: {
@@ -171,10 +182,18 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
           if (args[key] !== undefined) order[key] = args[key] as JsonValue
         }
         const accepted = await manager.mindOrder(order) as unknown as { id?: string; state?: string }
+        const verb = typeof args.verb === 'string' ? args.verb : ''
+        const orderId = typeof accepted?.id === 'string' ? accepted.id : undefined
+        const repeatFailures = orderId !== undefined && repeat !== undefined
+          ? repeat.noteAccepted(agent.session.id, orderId, verb, args.params)
+          : 0
         return {
           accepted: true,
-          ...(typeof accepted?.id === 'string' ? { id: accepted.id } : {}),
+          ...(orderId === undefined ? {} : { id: orderId }),
           ...(typeof accepted?.state === 'string' ? { state: accepted.state } : {}),
+          ...(repeatFailures >= 2
+            ? { repeatFailures, repeatHint: repeatHint(verb, repeatFailures) }
+            : {}),
         } as JsonValue
       },
     }),

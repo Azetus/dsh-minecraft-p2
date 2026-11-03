@@ -1,6 +1,7 @@
 # 操作员手册（P2Mind）
 
 > 目标是让角色像一个有点笨的玩家：agent 下目标，P2Mind 自己干活；agent 只在中断/偏离时介入。
+> 运行时操作以插件内置 `skills/p2-operator/SKILL.md` 为准（body 启动时注册给 owner session）；本文保留为开发参考，不自动注入。
 
 ## 1. 启动
 

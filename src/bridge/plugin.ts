@@ -13,6 +13,9 @@ import type { JsonValue } from '../contracts/index.ts'
 import type { ChatMessage, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
+import { loadOperatorSkill, OPERATOR_CONTRACT, registerOperatorSkill } from './operator-skill.ts'
+import type { OperatorSkillSource } from './operator-skill.ts'
+import { annotateCompletion, RepeatTracker } from './repeat.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
 import { registerP2Tools } from './tools.ts'
@@ -110,6 +113,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     name: 'dsh-minecraft-p2',
     inject: ['commands', 'tools', 'agents'],
     apply(ctx: P2Context): void {
+      const repeat = new RepeatTracker()
+      const contractSessions = new Set<string>()
+      const skillSource: OperatorSkillSource | undefined = loadOperatorSkill(
+        fileURLToPath(new URL('../skills/p2-operator', import.meta.url)),
+      )
       let chatCursor = 0
       let chatTimer: ReturnType<typeof setInterval> | undefined
       let chatPolling = false
@@ -187,6 +195,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       }
       const deliverCompletion = (items: CompletionItem[], epoch: string | undefined): void => {
         if (items.length === 0) return
+        const owner = manager.currentOwner
+        if (owner !== undefined) annotateCompletion(items, repeat, owner.sessionId)
         if (!items.some(item => item.severity === 'critical')) {
           // Successful results are merged into one digest; a finished job does
           // not wake a running turn by itself. The window starts at the first
@@ -218,6 +228,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         stopChatPolling?.()
         pendingNormal.length = 0
         resetCompletion()
+        const owner = manager.currentOwner
+        if (owner !== undefined) repeat.reset(owner.sessionId)
         const next = fault.autoRestart === 'scheduled'
           ? 'Auto-restarting within the development budget.'
           : fault.autoRestart === 'exhausted'
@@ -233,6 +245,8 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         perceptionCursor = 0
         pendingNormal.length = 0
         resetCompletion()
+        const owner = manager.currentOwner
+        if (owner !== undefined) repeat.reset(owner.sessionId)
         startChatPolling?.()
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
@@ -372,9 +386,30 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 
       const globalDisposers: Array<() => void> = []
       const registrations: Array<{ dispose(): void }> = []
+      /** Body start is the only point that adds P2-specific context to a session. */
+      const injectOperatorContract = (agent: AgentLike): void => {
+        const sessionId = agent.session.id
+        if (contractSessions.has(sessionId)) return
+        contractSessions.add(sessionId)
+        const target = agent as AgentLike & { inject?: (message: WakeMessage) => void }
+        if (target.inject === undefined) return
+        try {
+          target.inject(wakeMessage(OPERATOR_CONTRACT))
+        } catch (cause) {
+          options.log?.(`p2 operator contract injection failed: ${formatError(cause)}`)
+        }
+      }
       const ensureTools = (agent: AgentLike): void => {
         if (ctx.tools === undefined || registrations.length > 0) return
-        registrations.push(registerP2Tools(agent, manager, ctx.tools))
+        registrations.push(registerP2Tools(agent, manager, ctx.tools, repeat))
+        if (skillSource !== undefined) {
+          const disposeSkill = registerOperatorSkill(agent, skillSource)
+          if (disposeSkill !== undefined) registrations.push({ dispose: disposeSkill })
+          else options.log?.('p2 operator skill was not registered (skills service or agent scope unavailable)')
+        } else {
+          options.log?.('p2 operator skill file was not found in the installed package')
+        }
+        injectOperatorContract(agent)
       }
       const disposeTools = (): void => {
         for (const registration of registrations.splice(0)) registration.dispose()
@@ -433,7 +468,7 @@ type BodyToolHooks = {
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
   return {
     name: 'p2_body',
-    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command. stop/start (or restart) creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. A stuck provider action is usually recovered by restart, at the cost of losing queued orders.',
+    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command. stop/start (or restart) creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. After a restart, observe before ordering again and do not replay the last order blindly. A stuck provider action is usually recovered by restart, at the cost of losing queued orders.',
     parameters: {
       type: 'object',
       properties: {
