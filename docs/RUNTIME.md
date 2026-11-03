@@ -2,11 +2,11 @@
 
 ## 1. body 生命周期
 
-1. `p2_body start`（或 `/p2 start`）→ bridge 启动 body 子进程。
-2. body 连接 provider（ClientPort 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。
+1. `p2_body start`（或 `/p2 start <host>:<port>`）→ bridge 启动 body 子进程，并把 MC target 注入子进程环境。
+2. body 连接 provider（ClientPort 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。target 来自启动参数，不来自 `.p2/config.json`。
 3. 进入 tick 循环（50ms）。
 4. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出。
-5. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**。
+5. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**；auto-restart 复用上次 target。
 
 ## 2. tick 循环
 
@@ -206,7 +206,7 @@ order 可带 `policy.conflict`：
 ### 10.5 恢复身份与故障注入
 
 - journal 头写入 `journal.identity`：
-  - `worldId`：provider 配置 `worldId`（默认 `host:port`）+ dimension；
+  - `worldId`：provider 配置 `worldId`（默认启动 target 的 `host:port`）+ dimension；
   - `characterId`：provider 的玩家 UUID/username；
   - `defVersion`：plan 模板内容摘要（`defScope: "plans"`）；树定义已代码化，不参与身份。
 - `worldId` / `characterId` / plan `defVersion` 任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报。

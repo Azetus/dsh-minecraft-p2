@@ -18,8 +18,8 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 
 ## 1. 启动与检查
 
-1. 人类 `/p2 start`，或开发时 `p2_body start`；body 启动后才会注册本 skill 和 P2 工具。
-2. `p2_status` 确认 `connection=connected`、`bodyEpoch` 非空、owner 是本 session。
+1. 人类 `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`），或开发时 `p2_body {action:"start", host, port}`；body 启动后才会注册本 skill 和 P2 工具。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
+2. `p2_status` 确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。
 3. `p2_observe` 一次，确认维度、位置、周围方块；不要用它反复扫描。
 
 ## 2. 下单
@@ -87,4 +87,4 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - `ACT_UNCONFIRMED`：先读回；如果方块/背包/位置已经变化，按新事实继续，不要重放。
 - `STOP_UNCONFIRMED`：停止未确认，继续下 order 可能叠加副作用；重启 body 是恢复手段，但会丢队列。
 - body 重启 = 新 epoch、事件环清空、队列不恢复；旧 queued order 与 active hold 会以 `abandoned`（`reason:"RESTART"`）结束，不会自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
-- provider 卡死时，`p2_body restart` 通常比连续重试更安全；代价是丢队列和未确认动作。
+- provider 卡死时，`p2_body restart` 通常比连续重试更安全；可带 `host`/`port` 换服，省略则复用上次 target；代价是丢队列和未确认动作。

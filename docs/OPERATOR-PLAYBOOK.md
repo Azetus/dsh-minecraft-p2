@@ -5,8 +5,8 @@
 
 ## 1. 启动
 
-1. 人类：`/p2 setup` → `/p2 start`；或开发时 `p2_body start`。
-2. `p2_status`：确认 `connection=connected`、`bodyEpoch` 非空、owner 是本 session。
+1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
+2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。
 3. `p2_observe`：确认进服、维度、位置与周围方块。
 
 ## 2. 下 order
@@ -41,8 +41,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 |---|---|
 | `p2_cancel {id}` | 取消 order；结束其当前 job（等待停止确认） |
 | `p2_order` 新一条 | 排队；替换类命令走立即替换语义 |
-| `p2_body stop` | 冻结 dispatch → 等停止 → 落盘 → 退出 |
-| `p2_body restart` | 重启 body；P2Mind 从意图日志 + 世界重建 |
+| `p2_body stop` | 唯一“关闭”：冻结 dispatch → 等停止 → 落盘 → 退出 body 进程 |
+| `p2_body restart` | 停止并用上次 target 重启；可传新 `host`/`port` 换服。新 epoch，队列不恢复 |
 
 ## 5. 异常处理
 

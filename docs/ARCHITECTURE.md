@@ -86,7 +86,7 @@ content/
 
 ## 5. 生命周期
 
-1. `/p2 start` 或 `p2_body start` → bridge 启动 body 子进程。
+1. `/p2 start <host>:<port>` 或 `p2_body start` → bridge 启动 body 子进程并注入 MC target。
 2. body 连接 provider → 加载 `content/`（树、模板）与注册表 → 读取意图日志恢复未完成 order。
 3. body 进入 tick 循环（50ms）：观测 → 常驻树 → 主树（事件）→ tracker → driver。
 4. 停止：`p2_body stop` 先冻结新 dispatch，请求当前 driver 停止并等待确认，落盘意图日志后退出。
