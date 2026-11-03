@@ -79,6 +79,7 @@ function createFakeBody(epoch: string): FakeBody {
 type ManagerHarness = {
   manager: BodyManager
   spawns: number
+  spawnEnvs: Array<Record<string, string> | undefined>
   faults: BodyFault[]
   restarts: RestartInfo[]
 }
@@ -91,6 +92,7 @@ function createManager(
   const restarts: RestartInfo[] = []
   const harness: ManagerHarness = {
     spawns: 0,
+    spawnEnvs: [],
     faults,
     restarts,
     manager: undefined as unknown as BodyManager,
@@ -107,7 +109,8 @@ function createManager(
       backoffMs: [0, 0, 0],
     },
     delay: async () => {},
-    spawnBody: () => {
+    spawnBody: (_entry, _cwd, env) => {
+      harness.spawnEnvs.push(env)
       const fake = bodies[Math.min(harness.spawns, bodies.length - 1)] as FakeBody
       harness.spawns += 1
       return fake.handle
@@ -127,6 +130,32 @@ function wait(ms: number): Promise<void> {
 }
 
 describe('body watchdog', () => {
+  it('passes the start target to the body and reuses it on restart', async () => {
+    const bodies = [createFakeBody('epoch-1'), createFakeBody('epoch-2')]
+    const harness = createManager(bodies)
+    const target = { host: '127.0.0.1', port: 25575 }
+    await harness.manager.start(owner, target)
+    expect(harness.manager.target).toEqual(target)
+    expect(harness.spawnEnvs[0]).toMatchObject({ P2_MC_HOST: '127.0.0.1', P2_MC_PORT: '25575' })
+
+    bodies[0]!.setSilent(true)
+    await wait(150)
+    expect(harness.spawns).toBe(2)
+    expect(harness.spawnEnvs[1]).toMatchObject({ P2_MC_HOST: '127.0.0.1', P2_MC_PORT: '25575' })
+    expect(harness.manager.target).toEqual(target)
+    await harness.manager.stop()
+  })
+
+  it('rejects a different target while the body is active', async () => {
+    const bodies = [createFakeBody('epoch-1')]
+    const harness = createManager(bodies, { autoRestart: false })
+    await harness.manager.start(owner, { host: '127.0.0.1', port: 25575 })
+    await expect(harness.manager.start(owner, { host: '127.0.0.1', port: 25576 }))
+      .rejects.toThrow(/different target/)
+    expect(harness.spawns).toBe(1)
+    await harness.manager.stop()
+  })
+
   it('restarts a hung body with a new epoch and reports the fault', async () => {
     const bodies = [createFakeBody('epoch-1'), createFakeBody('epoch-2')]
     const harness = createManager(bodies)
@@ -267,7 +296,7 @@ describe('body watchdog', () => {
     })
     ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
     const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
-    const started = await definitions[0]!.handler({ agent, rawInput: ' start' })
+    const started = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
     expect(started.kind).toBe('success')
 
     bodies[0]!.setSilent(true)

@@ -63,11 +63,11 @@ export class BodyClient {
     return this.epoch
   }
 
-  async hello(protocols: number[], owner: OwnerContext): Promise<HelloResult> {
+  async hello(protocols: number[], owner: OwnerContext, timeoutMs?: number): Promise<HelloResult> {
     const result = await this.send('hello', {
       protocols,
       owner,
-    }, { requireEpoch: false })
+    }, { requireEpoch: false, ...(timeoutMs === undefined ? {} : { timeoutMs }) })
     const hello = result as unknown as HelloResult
     this.epoch = hello.bodyEpoch
     return hello
@@ -96,7 +96,7 @@ export class BodyClient {
   private send(
     method: string,
     params: JsonValue,
-    options: { requireEpoch: boolean },
+    options: { requireEpoch: boolean; timeoutMs?: number },
   ): Promise<JsonValue> {
     if (this.closed) return Promise.reject(new Error('body client is closed'))
     if (options.requireEpoch && this.epoch === undefined) {
@@ -127,7 +127,7 @@ export class BodyClient {
           { module: 'bridge.client' },
           { method },
         )))
-      }, this.timeoutMs)
+      }, options.timeoutMs ?? this.timeoutMs)
       this.pending.set(requestId, { resolve, reject, timer })
       this.transport.send(encodeJsonLine(request))
     })

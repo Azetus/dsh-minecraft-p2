@@ -463,7 +463,7 @@ function createHarness(
     state,
     tools,
     async start() {
-      const result = await definitions[0]!.handler({ agent, rawInput: ' start' })
+      const result = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
       expect(result.kind).toBe('success')
     },
     async stop() {

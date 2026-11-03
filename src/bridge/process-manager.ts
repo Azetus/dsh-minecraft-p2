@@ -12,6 +12,7 @@ import type {
   StatusResult,
 } from '../contracts/index.ts'
 import { BodyClient } from './body-client.ts'
+import type { McTarget } from './target.ts'
 
 export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
 
@@ -24,7 +25,11 @@ export type BodyHandle = {
   waitForExit(): Promise<BodyExit>
 }
 
-export type BodySpawner = (entry: string, cwd: string) => BodyHandle
+export type BodySpawner = (
+  entry: string,
+  cwd: string,
+  env?: Record<string, string>,
+) => BodyHandle
 
 export type BodyManagerState = 'inactive' | 'starting' | 'active' | 'stopping' | 'faulted'
 
@@ -64,6 +69,10 @@ export type BodyManagerOptions = {
   stopTimeoutMs?: number
   /** Timeout for one body request; shorter values make fault detection faster. */
   requestTimeoutMs?: number
+  /** The body connects the MC provider before hello; give start its own budget. */
+  startTimeoutMs?: number
+  /** How long a fault waits for the old body process to exit before restarting. */
+  faultExitTimeoutMs?: number
   autoRestart?: AutoRestartOptions
   onFault?: (fault: BodyFault) => void
   onRestart?: (info: RestartInfo) => void
@@ -102,6 +111,8 @@ export class BodyManager {
   private readonly stopTimeoutMs: number
   private readonly log: (line: string) => void
   private readonly requestTimeoutMs: number
+  private readonly startTimeoutMs: number
+  private readonly faultExitTimeoutMs: number
   private readonly livenessMs: number
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
   private readonly restartTimes: number[] = []
@@ -110,6 +121,8 @@ export class BodyManager {
   private lastFaultValue: BodyFault | undefined
   private lastContactAt = 0
   private heartbeatInFlight = false
+  /** Last target used by a successful start; auto-restart reuses it. */
+  private lastTargetValue: McTarget | undefined
   /** Consecutive status polls reporting a disconnected provider. */
   private providerDisconnectPolls = 0
 
@@ -118,6 +131,8 @@ export class BodyManager {
     this.heartbeatMs = options.heartbeatMs ?? 2000
     this.stopTimeoutMs = options.stopTimeoutMs ?? 2000
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000
+    this.startTimeoutMs = options.startTimeoutMs ?? 20_000
+    this.faultExitTimeoutMs = options.faultExitTimeoutMs ?? 2000
     this.livenessMs = this.heartbeatMs * 3
     this.log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`))
     const auto = options.autoRestart
@@ -146,8 +161,16 @@ export class BodyManager {
     return this.epoch
   }
 
-  async start(owner: OwnerContext): Promise<StartResult> {
+  /** Last successfully started MC target, retained across faults for restart. */
+  get target(): McTarget | undefined {
+    return this.lastTargetValue
+  }
+
+  async start(owner: OwnerContext, target?: McTarget): Promise<StartResult> {
     if (this.state === 'active' && this.epoch !== undefined) {
+      if (target !== undefined && !sameTarget(target, this.lastTargetValue)) {
+        throw new Error('P2 body is already active with a different target; restart it instead')
+      }
       return { state: 'active', epoch: this.epoch }
     }
     if (this.state !== 'inactive' && this.state !== 'faulted') {
@@ -159,11 +182,11 @@ export class BodyManager {
     if (this.handle !== undefined) await this.cleanup(this.handle)
     let handle: BodyHandle | undefined
     try {
-      handle = this.spawnBody(this.options.bodyEntry, owner.cwd)
+      handle = this.spawnBody(this.options.bodyEntry, owner.cwd, targetEnv(target))
       this.handle = handle
       const client = new BodyClient(handle.transport, { log: this.log, timeoutMs: this.requestTimeoutMs })
       this.client = client
-      const hello = await client.hello([PROTOCOL_VERSION], owner)
+      const hello = await client.hello([PROTOCOL_VERSION], owner, this.startTimeoutMs)
       if (hello.protocolVersion !== PROTOCOL_VERSION) {
         throw new Error(`body negotiated unsupported protocol ${hello.protocolVersion}`)
       }
@@ -173,6 +196,7 @@ export class BodyManager {
         throw new Error('body describe does not match the hello handshake')
       }
       this.epoch = hello.bodyEpoch
+      this.lastTargetValue = target
       this.state = 'active'
       this.lastContactAt = this.now()
       this.startHeartbeat()
@@ -433,7 +457,7 @@ export class BodyManager {
       } catch {
         // The tree may already be gone; the fault is still recorded.
       }
-      await this.waitForExit(handle, 200)
+      await this.waitForExit(handle, this.faultExitTimeoutMs)
     }
     fault.autoRestart = this.planRestart()
     this.lastFaultValue = fault
@@ -459,7 +483,9 @@ export class BodyManager {
     const owner = this.owner
     if (owner === undefined || this.state !== 'faulted') return
     try {
-      const started = await this.start(owner)
+      // Reuse the target from the successful start; a providerless body cannot
+      // recover the game connection on its own.
+      const started = await this.start(owner, this.lastTargetValue)
       const info: RestartInfo = {
         fault,
         epoch: started.epoch,
@@ -519,11 +545,12 @@ export class BodyManager {
 
 /** Spawn the body bundle next to the bridge with a dedicated stdio channel. */
 export function createProcessSpawner(log: (line: string) => void = line => process.stderr.write(`${line}\n`)): BodySpawner {
-  return (entry, cwd) => {
+  return (entry, cwd, env = {}) => {
     const child = spawn(process.execPath, [entry], {
       cwd,
       env: {
         ...process.env,
+        ...env,
         ELECTRON_RUN_AS_NODE: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -571,6 +598,18 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => {
     setTimeout(resolve, ms)
   })
+}
+
+function sameTarget(left: McTarget, right: McTarget | undefined): boolean {
+  return right !== undefined && left.host === right.host && left.port === right.port
+}
+
+/** Empty values explicitly clear an inherited P2_MC_HOST/PORT in the child. */
+function targetEnv(target: McTarget | undefined): Record<string, string> {
+  return {
+    P2_MC_HOST: target?.host ?? '',
+    P2_MC_PORT: target === undefined ? '' : String(target.port),
+  }
 }
 
 function errorText(error: unknown): string {
