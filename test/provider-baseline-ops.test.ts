@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Bot } from 'mineflayer'
 
 import { MineflayerProvider } from '../src/provider/mineflayer.ts'
-import type { QueryOutcome } from '../src/provider/runtime.ts'
+import type { ActPoll, QueryOutcome } from '../src/provider/runtime.ts'
 
 type Vec = { x: number; y: number; z: number }
 
@@ -99,6 +99,16 @@ function fakeBot(options: {
     },
     look: async () => {},
     lookAt: async () => {},
+    placeBlock: async (reference: { position: Vec }, vector: Vec) => {
+      const target = {
+        x: reference.position.x + vector.x,
+        y: reference.position.y + vector.y,
+        z: reference.position.z + vector.z,
+      }
+      const held = (bot as unknown as { heldItem?: FakeItem | null }).heldItem
+      if (held !== null && held !== undefined) blocks.set(`${target.x},${target.y},${target.z}`, held.name)
+      calls.push({ name: 'placeBlock', args: { target, vector } })
+    },
     setControlState: (name: string, value: boolean) => { controls.set(name, value) },
     getControlState: (name: string) => controls.get(name) ?? false,
     clearControlStates: () => { controls.clear() },
@@ -154,6 +164,16 @@ async function settle(query: QueryOutcome, timeoutMs = 1000): Promise<QueryOutco
   while (current.status === 'pending' && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 10))
     current = current.poll()
+  }
+  return current
+}
+
+async function settleAct(handle: { poll(): ActPoll }, timeoutMs = 1000): Promise<ActPoll> {
+  let current = handle.poll()
+  const deadline = Date.now() + timeoutMs
+  while (current.status === 'running' && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    current = handle.poll()
   }
   return current
 }
@@ -298,6 +318,45 @@ describe('baseline query operations', () => {
     expect(provider.query('weather')).toMatchObject({
       status: 'ok',
       value: { raining: false, thundering: false },
+    })
+  })
+})
+
+describe('baseline placement support', () => {
+  it('falls back from the requested up face to a solid side reference', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'air'],
+      ['0,64,0', 'stone'],
+    ])
+    const { bot, raw, calls } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      result: { name: 'dirt', x: 1, y: 64, z: 0, face: 'east' },
+    })
+    expect(blocks.get('1,64,0')).toBe('dirt')
+    expect(calls.find(call => call.name === 'placeBlock')?.args).toMatchObject({
+      target: { x: 1, y: 64, z: 0 },
+      vector: { x: 1, y: 0, z: 0 },
+    })
+  })
+
+  it('reports PLACE_UNSUPPORTED with six-face facts only when no reference is solid', async () => {
+    const blocks = new Map<string, string>([['1,64,0', 'air']])
+    const { bot, raw } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_UNSUPPORTED')
+    expect(result.error.details).toMatchObject({
+      requestedFace: 'up',
+      supports: { up: false, down: false, north: false, south: false, east: false, west: false },
     })
   })
 })

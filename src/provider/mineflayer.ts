@@ -1473,17 +1473,43 @@ class MineflayerActHandle implements ActHandle {
           const y = typeof this.args.y === 'number' ? this.args.y : undefined
           const z = typeof this.args.z === 'number' ? this.args.z : undefined
           if (x === undefined || y === undefined || z === undefined) throw new Error('place requires numeric x, y and z')
-          const face = typeof this.args.face === 'string' ? this.args.face : 'up'
-          const vector = PLACE_FACES[face]
-          if (vector === undefined) throw new Error(`unsupported place face: ${face}`)
+          const requestedFace = typeof this.args.face === 'string' ? this.args.face : 'up'
+          if (PLACE_FACES[requestedFace] === undefined) {
+            throw new Error(`unsupported place face: ${requestedFace}`)
+          }
           const target = new Vec3(x, y, z)
-          const reference = new Vec3(x - vector[0], y - vector[1], z - vector[2])
-          const referenceBlock = this.bot.blockAt(reference)
-          if (referenceBlock === null || isAirName(referenceBlock.name)) {
-            this.failed = new Error(`no support block at ${reference.x},${reference.y},${reference.z}`)
+          const supports: Record<string, boolean> = {}
+          for (const [name, vector] of Object.entries(PLACE_FACES)) {
+            const reference = new Vec3(x - vector[0], y - vector[1], z - vector[2])
+            const block = this.bot.blockAt(reference)
+            supports[name] = block !== null && !isAirName(block.name) && !isFluidName(block.name)
+          }
+          // Prefer the requested face, then fall back to any other solid
+          // reference. A side/top/bottom face is enough for mineflayer; the
+          // old "up only" assumption rejected valid human placements.
+          const order = [requestedFace, ...Object.keys(PLACE_FACES).filter(name => name !== requestedFace)]
+          let vector: readonly [number, number, number] | undefined
+          let referenceBlock: ReturnType<Bot['blockAt']> | null = null
+          let usedFace: string | undefined
+          for (const name of order) {
+            if (supports[name] !== true) continue
+            const candidate = PLACE_FACES[name]
+            if (candidate === undefined) continue
+            const reference = new Vec3(x - candidate[0], y - candidate[1], z - candidate[2])
+            vector = candidate
+            referenceBlock = this.bot.blockAt(reference)
+            usedFace = name
+            break
+          }
+          if (vector === undefined || referenceBlock === null || usedFace === undefined) {
+            this.failed = new Error(`no support block around ${x},${y},${z}`)
             this.failedCode = 'PLACE_UNSUPPORTED'
+            this.failureDetails = { supports, requestedFace }
             return
           }
+          const chosenVector = vector
+          const chosenReference = referenceBlock
+          const chosenFace = usedFace
           void (async () => {
             // The client inventory model can lag behind the server; refresh it
             // before trusting `heldItem` or the placement will be refused.
@@ -1498,12 +1524,12 @@ class MineflayerActHandle implements ActHandle {
             if (held === null || held === undefined) {
               throw Object.assign(new Error('no item is held for placement'), { code: 'PLACE_NO_ITEM' })
             }
-            await this.bot.placeBlock(referenceBlock, new Vec3(vector[0], vector[1], vector[2]))
+            await this.bot.placeBlock(chosenReference, new Vec3(chosenVector[0], chosenVector[1], chosenVector[2]))
             const placed = this.bot.blockAt(target)
             if (placed === null || isAirName(placed.name) || placed.name !== held.name) {
               throw Object.assign(new Error(`server did not place ${held.name} at ${x},${y},${z}`), { code: 'PLACE_FAILED' })
             }
-            return { name: placed.name, x, y, z }
+            return { name: placed.name, x, y, z, face: chosenFace }
           })().then(result => {
             this.result = result
             this.completed = true
