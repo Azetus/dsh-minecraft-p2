@@ -296,6 +296,8 @@ describe('body watchdog', () => {
     })
     ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
     const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    const missingTarget = await definitions[0]!.handler({ agent, rawInput: ' start' })
+    expect(missingTarget.kind).toBe('error')
     const started = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
     expect(started.kind).toBe('success')
 

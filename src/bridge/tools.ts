@@ -2,6 +2,7 @@ import { isRecord } from '../contracts/index.ts'
 import type { JsonValue } from '../contracts/index.ts'
 import { ORDER_VERBS } from '../mind/orders.ts'
 import type { BodyManager } from './process-manager.ts'
+import { formatTarget } from './target.ts'
 import { repeatHint } from './repeat.ts'
 import type { RepeatTracker } from './repeat.ts'
 
@@ -307,7 +308,8 @@ function queueWarning(queue: JsonValue | undefined): string | undefined {
   return undefined
 }
 
-async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonValue> {  if (manager.currentState !== 'active') return { state: manager.currentState }
+async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonValue> {
+  if (manager.currentState !== 'active') return { state: manager.currentState }
   requireActiveOwner(manager, agent)
   const result = await manager.status()
   if (result.state !== 'active') return { state: result.state }
@@ -315,6 +317,7 @@ async function statusOf(manager: BodyManager, agent: AgentLike): Promise<JsonVal
   return {
     state: 'active',
     epoch: status.bodyEpoch,
+    target: manager.target === undefined ? null : formatTarget(manager.target),
     health: status.health,
     connection: status.connection,
     paused: status.providerState?.paused ?? null,

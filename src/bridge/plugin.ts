@@ -18,6 +18,8 @@ import type { OperatorSkillSource } from './operator-skill.ts'
 import { annotateCompletion, RepeatTracker } from './repeat.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
+import { formatTarget, parseTargetArgs, parseTargetFields } from './target.ts'
+import type { McTarget } from './target.ts'
 import { registerP2Tools } from './tools.ts'
 import type { AgentLike, ToolDefinition, ToolsService } from './tools.ts'
 
@@ -468,11 +470,13 @@ type BodyToolHooks = {
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
   return {
     name: 'p2_body',
-    description: 'Development-only: start, stop, or inspect the P2 body process without the /p2 command. stop/start (or restart) creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. After a restart, observe before ordering again and do not replay the last order blindly. A stuck provider action is usually recovered by restart, at the cost of losing queued orders.',
+    description: 'Development-only body lifecycle. start requires host/port and both starts the body and connects it to that Minecraft server. restart stops and starts again; omit host/port to reuse the last target. stop closes the body process (there is no separate disconnect). A new start/restart creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. After a restart, observe before ordering again and do not replay the last order blindly.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['start', 'stop', 'restart', 'status'], description: 'Body lifecycle action' },
+        host: { type: 'string', description: 'MC server host for start/restart; required for start' },
+        port: { type: 'integer', minimum: 1, maximum: 65535, description: 'MC server port for start/restart; required for start' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -491,21 +495,43 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
       }
       if (action === 'start') {
         assertBodyOwner(manager, agent.session.id)
-        const result = await startBody(manager, agent)
+        const parsed = parseTargetFields(args.host, args.port)
+        if ('error' in parsed) throw new Error(parsed.error)
+        const result = await startBody(manager, agent, parsed.target)
         hooks.ensureTools(agent)
         hooks.startChatPolling()
-        void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
+        void auditBodyControl(agent, {
+          action,
+          state: result.state,
+          epoch: result.epoch,
+          target: formatTarget(parsed.target),
+        })
         return { action, ...result, status: await bodyStatus(manager) }
       }
       if (action === 'restart') {
         assertBodyOwner(manager, agent.session.id)
+        const hasTarget = args.host !== undefined || args.port !== undefined
+        let target: McTarget | undefined
+        if (hasTarget) {
+          const parsed = parseTargetFields(args.host, args.port)
+          if ('error' in parsed) throw new Error(parsed.error)
+          target = parsed.target
+        } else {
+          target = manager.target
+          if (target === undefined) throw new Error('restart requires host/port; no previous target is known')
+        }
         const stopped = await stopBody(manager)
         if (stopped.state === 'faulted') return { action, ...stopped }
-        const result = await startBody(manager, agent)
+        const result = await startBody(manager, agent, target)
         hooks.ensureTools(agent)
         hooks.startChatPolling()
-        void auditBodyControl(agent, { action, state: result.state, epoch: result.epoch })
-        return { action, ...result, status: await bodyStatus(manager) }
+        void auditBodyControl(agent, {
+          action,
+          state: result.state,
+          epoch: result.epoch,
+          target: formatTarget(target),
+        })
+        return { action, ...result, target: formatTarget(target), status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
         assertBodyOwner(manager, agent.session.id)
@@ -537,6 +563,7 @@ async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
   return {
     state: 'active',
     epoch: manager.bodyEpoch ?? null,
+    target: manager.target === undefined ? null : formatTarget(manager.target),
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
 }
@@ -555,16 +582,22 @@ async function auditBodyControl(agent: AgentLike, entry: Record<string, unknown>
   }
 }
 
-async function startBody(manager: BodyManager, agent: AgentLike): Promise<StartResult> {
+async function startBody(manager: BodyManager, agent: AgentLike, target?: McTarget): Promise<StartResult> {
   const owner = ownerOf(agent)
   if (manager.currentState === 'active') {
     const current = manager.currentOwner
     if (current !== undefined && (current.sessionId !== owner.sessionId || current.agentId !== owner.agentId)) {
       throw new Error('P2 body is owned by a different session')
     }
+    if (target !== undefined) {
+      const currentTarget = manager.target
+      if (currentTarget === undefined || currentTarget.host !== target.host || currentTarget.port !== target.port) {
+        throw new Error(`P2 body is already active at ${currentTarget === undefined ? 'an unknown target' : formatTarget(currentTarget)}; use restart`)
+      }
+    }
     return { state: 'active', epoch: manager.bodyEpoch ?? '' }
   }
-  return manager.start(owner)
+  return manager.start(owner, target)
 }
 
 async function stopBody(manager: BodyManager): Promise<StopResult> {
@@ -583,14 +616,22 @@ export async function handleP2Command(
     switch (verb) {
       case '':
       case 'help':
-        return success('P2 commands: /p2 setup | start | status | stop')
+        return success('P2 commands: /p2 setup | start <host>:<port> | status | stop')
       case 'setup':
         return setup(invocation.agent)
       case 'start': {
-        const result = await startBody(manager, invocation.agent)
+        const parsed = parseTargetArgs(rest)
+        if ('error' in parsed) return error(parsed.error)
+        const result = await startBody(manager, invocation.agent, parsed.target)
         hooks.onStarted?.(invocation.agent)
-        void auditBodyControl(invocation.agent, { action: 'start', state: result.state, epoch: result.epoch, via: 'command' })
-        return success(`P2 body active (epoch ${result.epoch})`)
+        void auditBodyControl(invocation.agent, {
+          action: 'start',
+          state: result.state,
+          epoch: result.epoch,
+          target: formatTarget(parsed.target),
+          via: 'command',
+        })
+        return success(`P2 body active at ${formatTarget(parsed.target)} (epoch ${result.epoch})`)
       }
       case 'status':
         return success(await statusText(manager))
@@ -642,6 +683,7 @@ async function statusText(manager: BodyManager): Promise<string> {
   return [
     'P2 body active',
     `epoch=${status.bodyEpoch}`,
+    `target=${manager.target === undefined ? 'unknown' : formatTarget(manager.target)}`,
     `health=${status.health}`,
     `owner=${status.owner?.sessionId ?? 'none'}`,
     `paused=${status.providerState?.paused ?? false}`,
