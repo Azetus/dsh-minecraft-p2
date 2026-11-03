@@ -271,13 +271,15 @@ export class PathExecutor {
 
   private recover(ctx: MoveContext, now: number): void {
     const cell = standingCell(ctx.rules, ctx.position)
-    const forward = this.findValidFrom(cell, ctx, this.index, Math.min(this.moves.length - 1, this.index + 4))
+    // Resync over the whole remaining path, not just ±4: a push through a
+    // doorway or a channel can land the body several edges ahead/behind.
+    const forward = this.findValidFrom(cell, ctx, this.index, this.moves.length - 1)
     if (forward !== undefined) {
       this.jumpTo(forward, now, ctx)
       this.recoveries += 1
       return
     }
-    const backward = this.findValidFrom(cell, ctx, Math.max(0, this.index - 3), this.index - 1, true)
+    const backward = this.findValidFrom(cell, ctx, this.index - 1, 0, true)
     if (backward !== undefined) {
       this.jumpTo(backward, now, ctx)
       this.backtracks += 1

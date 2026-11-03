@@ -160,3 +160,25 @@ describe('MotionRun: BODY_OVERLAP fail-fast', () => {
     run.stop()
   })
 })
+
+describe('MotionRun: exact goal standability', () => {
+  it('fails GOAL_NOT_STANDABLE instead of settling one cell below the goal', () => {
+    const bot = embeddedBot({ x: 0.5, y: 64, z: 0.5 }, false)
+    // Only the start column has a floor; the exact target column is air all the
+    // way down, so the goal cannot be stood on.
+    ;(bot as unknown as { blockAt: (p: { x: number; y: number; z: number }) => unknown }).blockAt =
+      (p: { x: number; y: number; z: number }) => (p.x === 0 && p.z === 0 && p.y === 63
+        ? { name: 'stone', shapes: [[0, 0, 0, 1, 1, 1]], position: p }
+        : { name: 'air', shapes: [], position: p })
+
+    const run = new MotionRun(bot, { x: 0, y: 64, z: 3 }, 1, 30_000, { arrival: { kind: 'exact' } })
+    run.start()
+    const result = run.tick(Date.now())
+
+    expect(result).toMatchObject({ state: 'failed', code: 'GOAL_NOT_STANDABLE' })
+    expect(result.observed).toMatchObject({
+      detail: 'goal-not-standable',
+      executor: { target: { x: 0, y: 64, z: 3 }, reason: 'no-support' },
+    })
+  })
+})

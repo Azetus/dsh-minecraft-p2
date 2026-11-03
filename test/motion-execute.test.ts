@@ -11,6 +11,7 @@ import {
   PillarMove,
   TraverseMove,
   AscendMove,
+  DescendMove,
   FallMove,
   JUMP_MARGIN,
   JUMP_PEAK,
@@ -222,6 +223,43 @@ describe('PathExecutor', () => {
     executor.tick(100)
     expect(executor.report().recoveries).toBe(1)
     expect(executor.tick(200).state).toBe('succeeded')
+  })
+
+  it('resyncs over the whole remaining path, not just four edges ahead', () => {
+    const world = flatWorld()
+    for (let z = 5; z <= 8; z += 1) {
+      world.blocks.set(`0,63,${z}`, rawBlock('stone', FULL_CUBE))
+      for (let y = 64; y <= 66; y += 1) world.blocks.set(`0,${y},${z}`, rawBlock('air', []))
+    }
+    const source = contextFor(world)
+    const moves = Array.from({ length: 7 }, (_, index) => new TraverseMove(
+      { x: 0, y: 64, z: index },
+      { x: 0, y: 64, z: index + 1 },
+    ))
+    const executor = new PathExecutor(moves, () => source.next())
+    executor.tick(0)
+    // Pushed seven edges ahead: the old ±4 window would never resync.
+    movePos(world, { x: 0, y: 64, z: 7 })
+    executor.tick(100)
+    expect(executor.report().recoveries).toBe(1)
+    expect(executor.report().index).toBe(6)
+    expect(executor.tick(200).state).toBe('succeeded')
+  })
+
+  it('exposes Baritone-style valid positions for ascend/descend/fall', () => {
+    const ascend = new AscendMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 1 })
+    expect(ascend.validPositions()).toEqual(expect.arrayContaining([
+      { x: 0, y: 65, z: 0 },
+      { x: 0, y: 65, z: -1 },
+      { x: 0, y: 66, z: -1 },
+    ]))
+    const descend = new DescendMove({ x: 0, y: 65, z: 1 }, { x: 0, y: 64, z: 2 })
+    expect(descend.validPositions()).toEqual(expect.arrayContaining([{ x: 0, y: 65, z: 2 }]))
+    const fall = new FallMove({ x: 0, y: 66, z: 0 }, { x: 0, y: 62, z: 1 })
+    expect(fall.validPositions()).toEqual(expect.arrayContaining([
+      { x: 0, y: 64, z: 1 },
+      { x: 0, y: 63, z: 1 },
+    ]))
   })
 
   it('aborts when the current edge stops being feasible', () => {

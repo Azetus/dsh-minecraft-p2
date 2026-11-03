@@ -434,7 +434,18 @@ export class AscendMove extends BaseMove {
   }
 
   validPositions(): readonly Cell[] {
-    return [this.src, this.dest]
+    // Baritone: the source, the source head, the destination, and the cell
+    // behind the source one level up (backplace / sprint ascend).
+    const dx = this.dest.x - this.src.x
+    const dz = this.dest.z - this.src.z
+    const prior = { x: this.src.x - dx, y: this.src.y + 1, z: this.src.z - dz }
+    return [
+      this.src,
+      { x: this.src.x, y: this.src.y + 1, z: this.src.z },
+      this.dest,
+      prior,
+      { x: prior.x, y: prior.y + 1, z: prior.z },
+    ]
   }
 
   reset(): void {
@@ -510,7 +521,9 @@ export class DescendMove extends BaseMove {
   }
 
   validPositions(): readonly Cell[] {
-    return [this.src, this.dest]
+    // The body briefly occupies the destination head cell (= source feet) while
+    // stepping off the ledge.
+    return [this.src, { x: this.dest.x, y: this.src.y, z: this.dest.z }, this.dest]
   }
 
   safeToCancel(_state: MoveState): boolean {
@@ -577,7 +590,12 @@ export class FallMove extends BaseMove {
   }
 
   validPositions(): readonly Cell[] {
-    return [this.src, this.dest]
+    // Every height the falling body passes through in the destination column.
+    const cells: Cell[] = [this.src]
+    for (let y = this.dest.y; y <= this.src.y; y += 1) {
+      cells.push({ x: this.dest.x, y, z: this.dest.z })
+    }
+    return cells
   }
 
   safeToCancel(_state: MoveState): boolean {
@@ -617,7 +635,12 @@ export class DownwardMove extends BaseMove {
   }
 
   validPositions(): readonly Cell[] {
-    return [this.src, this.dest]
+    // Every height the body passes through in the source column.
+    const cells: Cell[] = [this.src]
+    for (let y = this.dest.y; y <= this.src.y; y += 1) {
+      cells.push({ x: this.dest.x, y, z: this.dest.z })
+    }
+    return cells
   }
 
   safeToCancel(_state: MoveState): boolean {

@@ -56,6 +56,40 @@ describe('MotionSearch', () => {
     expect(result.moves.some(move => move.kind === 'ascend')).toBe(true)
   })
 
+  it('walks a 2-high passage and steps up instead of descending', () => {
+    const world = new FixtureWorld()
+    for (let z = 0; z <= 6; z += 1) {
+      world.blocks.set(`0,63,${z}`, rawBlock('stone', FULL_CUBE))
+      world.blocks.set(`0,67,${z}`, rawBlock('stone', FULL_CUBE))
+    }
+    // Passage floor at 63: feet 64, head 65, plus the jump cell 66.
+    for (let z = 0; z <= 3; z += 1) {
+      for (let y = 64; y <= 66; y += 1) world.blocks.set(`0,${y},${z}`, rawBlock('air', []))
+    }
+    // One-block step at z=4, then a walkable upper shelf at feet 65.
+    for (let z = 4; z <= 6; z += 1) {
+      world.blocks.set(`0,64,${z}`, rawBlock('stone', FULL_CUBE))
+      world.blocks.set(`0,65,${z}`, rawBlock('air', []))
+      world.blocks.set(`0,66,${z}`, rawBlock('air', []))
+    }
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+    const source = contextFor(world)
+    const search = new MotionSearch({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 6 }, () => source.next(), {
+      sliceMs: 50,
+      timeoutMs: 2_000,
+    })
+    let result = search.step(Date.now())
+    let guard = 0
+    while (result.status === 'running' && guard < 200) {
+      result = search.step(Date.now())
+      guard += 1
+    }
+    expect(result.status).toBe('success')
+    const kinds = result.moves.map(move => move.kind)
+    expect(kinds).toContain('ascend')
+    expect(kinds).not.toContain('descend')
+  })
+
   it('routes through a closed hand-openable door', () => {
     const { result } = solve('door')
     expect(result.status).toBe('success')

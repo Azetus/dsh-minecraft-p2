@@ -211,6 +211,19 @@ export class MotionRun {
     // path: every edge starts from an invalid state. Report the exact cells so
     // the caller can clear them instead of re-planning into GOTO_STUCK.
     if (this.failOnBodyOverlap('start-embedded')) return
+    // An exact arrival promises a standing position. Refuse a target that is
+    // provably not standable instead of silently ending one cell below it.
+    if (this.finalArrival.kind === 'exact') {
+      const info = this.context.next().rules.standInfo(this.target)
+      if (info.state !== 'yes') {
+        this.fail('GOAL_NOT_STANDABLE', 'goal-not-standable', {
+          target: this.target,
+          reason: info.reason,
+          ...(info.state === 'no' && info.blockedBy !== undefined ? { blockedBy: info.blockedBy } : {}),
+        })
+        return
+      }
+    }
     this.phase = 'planning'
     this.pathStatus = 'pending'
     this.activeTarget = this.resolveTarget()

@@ -110,6 +110,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `unstickDig` 是显式 break 白名单：只允许列出的坐标/方块名，核心先挖掘并读回，再执行移动；没有列出的块不可挖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。
 - `BODY_OVERLAP`：真实 0.6×1.8 AABB 与已加载方块碰撞相交（半嵌、1 格高小窝）。规划前与到达后 fail-fast，`observed.blockedBy` 给出 `{x,y,z,name}`，不重试；自动清格不在 motion 内实现，Agent 用 `go {unstickDig}` 显式授权。
+- `GOAL_NOT_STANDABLE`：`exact` 到达的目标格经 `Rules.standInfo` 证明不可站；带 `reason/blockedBy` 直接失败，不把“下一层”当目标。执行器在身体离开 `validPositions` 时按整条剩余路径前后重同步，不再只扫描 ±4 条边。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
@@ -302,4 +303,5 @@ type WorkState =
 | `DIG_NO_BLOCK` | 目标是空气/没有方块 |
 | `PICKUP_UNREACHABLE` | 掉落物存在但无法走到 |
 | `CRAFT_INCOMPLETE` | 合成已开始但未达到请求数量；`observed.crafted/attempted` 如实记录 |
+| `GOAL_NOT_STANDABLE` | `exact` 目标格不可站；带 `reason/blockedBy` |
 | `PICKUP_NOT_COLLECTED` | 已到达掉落物附近，背包仍未增加 |
