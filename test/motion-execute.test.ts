@@ -14,6 +14,7 @@ import {
   FallMove,
   JUMP_MARGIN,
   JUMP_PEAK,
+  ParkourMove,
 } from '../src/motion/execute/index.ts'
 import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
 import { defaultConstraints, resolveConstraints, type Cell, type MotionConstraints } from '../src/motion/model/index.ts'
@@ -291,6 +292,61 @@ describe('PathExecutor', () => {
     executor.cancel()
     expect(executor.report().status).toBe('canceled')
     expect(world.inputs.size).toBe(0)
+  })
+})
+
+/**
+ * M3: every jump-like edge requires the cells the body enters near the apex,
+ * not just its destination. The third cell above the takeoff is the one the
+ * real failure hit; the set is shared by cost and toBreak.
+ */
+describe('move clearance: jump apex cells', () => {
+  const parkour = (ctx: ReturnType<MotionContextSource['next']>, src: Cell, dest: Cell): number =>
+    new ParkourMove(src, dest).cost(ctx)
+
+  it('rejects a parkour takeoff with a solid third cell', () => {
+    const world = flatWorld()
+    world.blocks.set('0,66,0', rawBlock('stone', FULL_CUBE))
+    const ctx = contextFor(world, { allowParkour: true }).next()
+    expect(parkour(ctx, { x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 2 })).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('rejects a parkour landing with a solid third cell', () => {
+    const world = flatWorld()
+    world.blocks.set('0,66,2', rawBlock('stone', FULL_CUBE))
+    const ctx = contextFor(world, { allowParkour: true }).next()
+    expect(parkour(ctx, { x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 2 })).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('rejects a parkour arc whose middle column has a solid third cell', () => {
+    const world = flatWorld()
+    world.blocks.set('0,66,1', rawBlock('stone', FULL_CUBE))
+    const ctx = contextFor(world, { allowParkour: true }).next()
+    expect(parkour(ctx, { x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 2 })).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('shares the same clearance set between cost and toBreak', () => {
+    const world = flatWorld()
+    world.blocks.set('0,66,0', { ...rawBlock('stone', FULL_CUBE), hardness: 1.5, diggable: true })
+    const ctx = contextFor(world, {
+      allowParkour: true,
+      allowBreak: true,
+      breakTargets: [{ x: 0, y: 66, z: 0, name: 'stone' }],
+    }).next()
+    const move = new ParkourMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 2 })
+    expect(move.cost(ctx)).toBeLessThan(Number.POSITIVE_INFINITY)
+    expect(move.toBreak(ctx)).toEqual([{ x: 0, y: 66, z: 0 }])
+  })
+
+  it('keeps a 3-high corridor jumpable for a +1 step', () => {
+    const world = flatWorld()
+    // The step itself, with src+3 solid: the apex body only clips it above the
+    // required +1 rise, so the jump is still feasible.
+    world.blocks.set('0,64,1', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,67,0', rawBlock('stone', FULL_CUBE))
+    const ctx = contextFor(world).next()
+    expect(new AscendMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 1 }).cost(ctx))
+      .toBeLessThan(Number.POSITIVE_INFINITY)
   })
 })
 

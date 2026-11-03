@@ -1,5 +1,5 @@
 import { distance2d } from './geometry.ts'
-import { cellOf, PLAYER_HALF_WIDTH } from '../model/block.ts'
+import { cellOf, PLAYER_HALF_WIDTH, PLAYER_HEIGHT } from '../model/block.ts'
 import type {
   Cell,
   Move,
@@ -218,6 +218,58 @@ function bodyCells(cell: Cell): Cell[] {
   return [cell, { x: cell.x, y: cell.y + 1, z: cell.z }]
 }
 
+/**
+ * Cells the body enters near the jump apex, derived from the real feet height
+ * and the vanilla peak instead of a hard-coded "third cell". Cells the apex
+ * body only clips (less than 0.1 block) are not required, matching Baritone's
+ * `src.above(2)` behaviour and keeping a +1 step jumpable in a 3-high corridor.
+ */
+function jumpClearance(ctx: MoveContext, src: Cell, columns: readonly Cell[] = [src]): Cell[] {
+  const info = ctx.rules.standInfo(src)
+  const feet = info.state === 'yes' ? info.feetY : src.y
+  const first = Math.floor(feet + JUMP_PEAK + 0.1)
+  const last = Math.floor(feet + JUMP_PEAK + PLAYER_HEIGHT - 0.1)
+  const cells: Cell[] = []
+  for (const column of columns) {
+    for (let y = first; y <= last; y += 1) cells.push({ x: column.x, y, z: column.z })
+  }
+  return cells
+}
+
+/** Clearance set for a +1 step: the destination body plus the takeoff apex. */
+function ascendClearance(ctx: MoveContext, src: Cell, dest: Cell): Cell[] {
+  return uniqueCells([...bodyCells(dest), ...jumpClearance(ctx, src)])
+}
+
+/** Stepping down also needs the head cell two above the destination. */
+function descendClearance(dest: Cell): Cell[] {
+  return uniqueCells([...bodyCells(dest), { x: dest.x, y: dest.y + 2, z: dest.z }])
+}
+
+/** Every intermediate pillar level must have its own apex clearance. */
+function pillarClearance(ctx: MoveContext, src: Cell, dest: Cell): Cell[] {
+  const cells = bodyCells(dest)
+  for (let y = src.y; y < dest.y; y += 1) {
+    const level = { x: src.x, y, z: src.z }
+    cells.push(...jumpClearance(ctx, level))
+  }
+  return uniqueCells(cells)
+}
+
+/** Parkour clearance: takeoff, gap and landing columns up to the apex. */
+function parkourClearance(ctx: MoveContext, src: Cell, dest: Cell): Cell[] {
+  const gap = {
+    x: Math.floor((src.x + dest.x) / 2),
+    y: src.y,
+    z: Math.floor((src.z + dest.z) / 2),
+  }
+  return uniqueCells([
+    ...bodyCells(dest),
+    ...bodyCells(gap),
+    ...jumpClearance(ctx, src, [src, gap, dest]),
+  ])
+}
+
 function uniqueCells(cells: readonly Cell[]): Cell[] {
   const result: Cell[] = []
   for (const cell of cells) {
@@ -365,7 +417,7 @@ export class AscendMove extends BaseMove {
     // whether the nominal +1 step is jumpable.
     const srcInfo = ctx.rules.standInfo(this.src)
     if (srcInfo.state !== 'yes') return COST_INF
-    const cells = bodyCells(this.dest)
+    const cells = ascendClearance(ctx, this.src, this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     const stand = standInfoWithBreaks(ctx, this.dest, cells)
     if (stand.state !== 'yes') return COST_INF
@@ -378,7 +430,7 @@ export class AscendMove extends BaseMove {
   }
 
   toBreak(ctx: MoveContext): readonly Cell[] {
-    return breakableCells(ctx, bodyCells(this.dest))
+    return breakableCells(ctx, ascendClearance(ctx, this.src, this.dest))
   }
 
   validPositions(): readonly Cell[] {
@@ -447,14 +499,14 @@ export class DescendMove extends BaseMove {
 
   cost(ctx: MoveContext): number {
     if (this.dest.y !== this.src.y - 1 || !adjacent(this.src, this.dest)) return COST_INF
-    const cells = bodyCells(this.dest)
+    const cells = descendClearance(this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
     return 1.1 + breakCostOf(ctx, cells)
   }
 
   toBreak(ctx: MoveContext): readonly Cell[] {
-    return breakableCells(ctx, bodyCells(this.dest))
+    return breakableCells(ctx, descendClearance(this.dest))
   }
 
   validPositions(): readonly Cell[] {
@@ -727,7 +779,7 @@ export class PillarMove extends BaseMove {
     // edge from a transient snapshot between place and block-update.
     if (this.placed <= this.level
       && ctx.rules.standInfo(this.columnCell(this.currentY())).state !== 'yes') return COST_INF
-    const cells = bodyCells(this.dest)
+    const cells = pillarClearance(ctx, this.src, this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     if (ctx.rules.canPlaceAgainst(this.columnCell(this.src.y - 1)) !== 'yes') return COST_INF
     // Skip the blocks this move already placed; a mid-pillar revalidation must
@@ -751,7 +803,7 @@ export class PillarMove extends BaseMove {
   }
 
   toBreak(ctx: MoveContext): readonly Cell[] {
-    return breakableCells(ctx, bodyCells(this.dest))
+    return breakableCells(ctx, pillarClearance(ctx, this.src, this.dest))
   }
 
   reset(): void {
@@ -917,16 +969,14 @@ export class ParkourMove extends BaseMove {
       return COST_INF
     }
     if (ctx.rules.isClimbable(this.src) === 'yes') return COST_INF
-    const cells = bodyCells(this.dest)
+    const cells = parkourClearance(ctx, this.src, this.dest)
     if (!passableOrBreakable(ctx, cells)) return COST_INF
     if (standInfoWithBreaks(ctx, this.dest, cells).state !== 'yes') return COST_INF
-    const gap = { x: Math.floor((this.src.x + this.dest.x) / 2), y: this.src.y, z: Math.floor((this.src.z + this.dest.z) / 2) }
-    if (ctx.rules.canWalkThrough(gap) !== 'yes') return COST_INF
     return 2.5 + breakCostOf(ctx, cells)
   }
 
   toBreak(ctx: MoveContext): readonly Cell[] {
-    return breakableCells(ctx, bodyCells(this.dest))
+    return breakableCells(ctx, parkourClearance(ctx, this.src, this.dest))
   }
 
   validPositions(): readonly Cell[] {
