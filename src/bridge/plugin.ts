@@ -506,7 +506,7 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
           epoch: result.epoch,
           target: formatTarget(parsed.target),
         })
-        return { action, ...result, status: await bodyStatus(manager) }
+        return { action, ...result, target: formatTarget(parsed.target), status: await bodyStatus(manager) }
       }
       if (action === 'restart') {
         assertBodyOwner(manager, agent.session.id)

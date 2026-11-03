@@ -5,6 +5,7 @@ import { BodyServer } from '../src/body/server.ts'
 import { BodyManager } from '../src/bridge/process-manager.ts'
 import type { BodyFault, BodyHandle, RestartInfo } from '../src/bridge/process-manager.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
+import type { ToolDefinition } from '../src/bridge/tools.ts'
 import {
   PROTOCOL_VERSION,
   bodyManifestDigest,
@@ -257,6 +258,46 @@ describe('body watchdog', () => {
     expect(harness.spawns).toBe(1)
     expect(harness.manager.currentState).toBe('faulted')
     expect(harness.faults[0]).toMatchObject({ autoRestart: 'disabled' })
+  })
+
+  it('starts the body with an explicit p2_body target', async () => {
+    const bodies = [createFakeBody('epoch-1')]
+    let spawns = 0
+    const tools = new Map<string, ToolDefinition>()
+    const ctx = {
+      commands: { register: () => () => {} },
+      tools: {
+        register: (definition: ToolDefinition) => {
+          tools.set(definition.name, definition)
+          return () => tools.delete(definition.name)
+        },
+      },
+      agents: { get: () => undefined },
+      effect: (callback: () => unknown) => {
+        callback()
+        return () => {}
+      },
+    }
+    const plugin = createP2Plugin({
+      bodyEntry: 'unused-body.mjs',
+      heartbeatMs: 10,
+      requestTimeoutMs: 20,
+      devBodyControl: true,
+      spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
+      log: () => {},
+    })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const bodyTool = tools.get('p2_body')
+    if (bodyTool === undefined) throw new Error('p2_body was not registered')
+    const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    const started = await bodyTool.execute(
+      { action: 'start', host: '127.0.0.1', port: 25575 },
+      { agent },
+    ) as { state?: string; target?: string; status?: { target?: string } }
+    expect(started.state).toBe('active')
+    expect(started.target).toBe('127.0.0.1:25575')
+    expect(started.status?.target).toBe('127.0.0.1:25575')
+    await bodyTool.execute({ action: 'stop' }, { agent })
   })
 
   it('wakes the owner with fault and restart messages', async () => {
