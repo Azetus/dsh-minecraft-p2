@@ -159,6 +159,21 @@ describe('MotionRun: BODY_OVERLAP fail-fast', () => {
     expect(result.state).toBe('running')
     run.stop()
   })
+
+  it('waits for a landing before failing an exact goal with an empty path', () => {
+    const bot = embeddedBot({ x: 0.5, y: 64, z: 0.5 }, false)
+    ;(bot.entity as unknown as { onGround: boolean }).onGround = false
+    const run = new MotionRun(bot, { x: 0, y: 64, z: 0 }, 0, 30_000, { arrival: { kind: 'exact' } })
+    run.start()
+    expect(run.tick(Date.now()).state).toBe('running')
+
+    ;(bot.entity as unknown as { onGround: boolean }).onGround = true
+    let result = run.tick(Date.now())
+    for (let index = 0; index < 5 && result.state === 'running'; index += 1) {
+      result = run.tick(Date.now() + index * 50)
+    }
+    expect(result.state).toBe('succeeded')
+  })
 })
 
 describe('MotionRun: exact goal standability', () => {

@@ -71,6 +71,8 @@ export class MotionRun {
   private search: MotionSearch | undefined
   private searchedSafeFall = false
   private safeFallPass = false
+  /** Consecutive empty-goal searches while the body is still landing. */
+  private emptyGoalWaits = 0
   private executor: PathExecutor | undefined
   private pathStatus = 'pending'
   private path: Cell[] = []
@@ -323,10 +325,23 @@ export class MotionRun {
     }
     if (result.status === 'success') {
       if (result.moves.length === 0) {
-        if (this.arrived()) this.succeed(this.report())
-        else this.fail('GOTO_NO_PATH', 'empty-path')
+        if (this.arrived()) {
+          this.succeed(this.report())
+          return
+        }
+        // A pillar/scaffold can finish with the feet already in the target
+        // cell but still airborne for a tick. Do not turn that transient into
+        // GOTO_NO_PATH; re-plan a few times so `arrived` can observe onGround.
+        if (this.emptyGoalWaits < 20) {
+          this.emptyGoalWaits += 1
+          this.search = undefined
+          this.phase = 'planning'
+          return
+        }
+        this.fail('GOTO_NO_PATH', 'empty-path')
         return
       }
+      this.emptyGoalWaits = 0
       this.startExecutor(result.moves)
       return
     }
