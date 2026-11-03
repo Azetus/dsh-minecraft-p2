@@ -26,6 +26,18 @@ type ConnectedProvider = {
 }
 
 async function main(): Promise<void> {
+  // Before BodyServer owns stdin, a bridge crash/close must not leave this
+  // process stuck inside provider connect. Once the server is ready its
+  // onClose path performs the provider dispose.
+  let serverReady = false
+  const exitBeforeServer = (): void => {
+    if (!serverReady) process.exit(0)
+  }
+  process.stdin.once('end', exitBeforeServer)
+  process.stdin.once('close', exitBeforeServer)
+  process.once('SIGINT', exitBeforeServer)
+  process.once('SIGTERM', exitBeforeServer)
+
   let body: BodyInfo
   try {
     body = await loadBodyInfo(import.meta.url)
@@ -84,6 +96,7 @@ async function main(): Promise<void> {
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   server.start()
+  serverReady = true
 }
 
 function startHome(port: MineflayerClientPort): Vec3 | undefined {
