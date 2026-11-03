@@ -247,6 +247,20 @@ interface DriverHandle {
 }
 ```
 
+#### 4.7.1 结果语义（driver 边界）
+
+三层语义必须分开：
+
+| 层 | 成功含义 |
+|---|---|
+| `ClientPort` / provider | `ActResult.state='ok'` 只表示动作效果被观测到（或服务端接受），是证据，不是 order 完成 |
+| Driver | `DriverResult.state='succeeded'` 表示该 verb 的可验证后置条件已成立；`failed` 表示无法确认结果 |
+| JobTracker / metrics | 只把 driver 的 `succeeded` 计为 job/order 完成 |
+
+`failed` 不是“动作未执行”的同义词：动作可能已经生效（方块挖掉、合成已产出、放置已被接受），但完整后置条件没有达成，或效果未知。driver 必须保留同一份 `observed` 证据（如 `partial`、`dug`、`crafted`、`effect`、`pathStatus`），并在需要时用 `failure` 说明“卡在哪、为什么”。Verifier 的 `confirmed / refuted / insufficient` 是独立的只读验证轴，不与 driver 的 `succeeded / failed` 混用。
+
+每个 driver 的 `succeeded` 判据见 [CONTRACTS.md §5](../CONTRACTS.md#5-driver)。
+
 toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → readback → progress`。
 
 **读回要求**：`place` 读目标方块两次（间隔 200ms）；`dig` 读空气，`harvest` 还走到掉落物处并读背包增量；`craft` 读背包增量；`smelt` 读输出槽。读回是**稳定性观察**，不是“服务端已接受”的证明；需要强证据时走独立观测路径。

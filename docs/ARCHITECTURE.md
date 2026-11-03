@@ -39,6 +39,23 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 | Driver | 执行一个已定目标、读回、收尾 | 选目标、改计划 |
 | Verifier | 三态验证（只读观测） | 抢交互、改世界 |
 
+### 2.1 结果语义分层
+
+`ClientPort`、driver、tracker/metrics 回答的是三个不同问题，不能混用同一个“成功”：
+
+| 层 | 回答的问题 | “成功”的含义 |
+|---|---|---|
+| `ClientPort` / provider | 动作有没有被发出、有没有回执或效果观测 | `ActResult.state='ok'`：动作效果被观测到；**不是** order 目标完成 |
+| Driver | 这个 verb 的可验证后置条件有没有成立 | `DriverResult.state='succeeded'`：后置条件已确认；`failed`：无法确认结果 |
+| JobTracker / metrics | 这个 job/order 是否算完成 | 只把 driver 的 `succeeded` 计为完成 |
+
+因此：
+
+- driver 不得因为 provider 返回 `ok` 就直接 `succeeded`；必须完成该 verb 的读回/确认。
+- `failed` **不等于**“什么都没发生”。动作可能已生效、只完成一部分，或效果未知；用 `observed.partial`、`dug`、`crafted`、`effect` 等证据区分。
+- Verifier 的 `confirmed / refuted / insufficient` 是另一条只读验证轴，不与 driver 的 `succeeded / failed` 混用。
+- 每个 driver 的成功定义见 [CONTRACTS.md §5](CONTRACTS.md#5-driver)。
+
 ## 3. 接入
 
 ```text

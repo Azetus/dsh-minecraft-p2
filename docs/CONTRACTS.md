@@ -17,6 +17,18 @@
 3. **进度可重建**：能从世界重建的优先重建；不能重建的写意图日志。
 4. **树不产坐标**：树只选 giver；目标由 giver 选；driver 不得自行推导目标。
 
+### 1.1 结果语义分层
+
+| 层 | 成功含义 | 失败含义 |
+|---|---|---|
+| `ClientPort` / provider | `ActResult.state='ok'`：动作效果被观测到，只是证据 | `failed`/`unknown`：动作未成功或效果未知 |
+| Driver | `DriverResult.state='succeeded'`：该 verb 的可验证后置条件已成立 | `failed`：无法确认结果；**动作可能已生效或只完成一部分** |
+| JobTracker / metrics | 只把 driver 的 `succeeded` 计为完成 | `failed` 计入失败；按失败键重试/blocked |
+
+- driver **不得**因为 provider 返回 `ok` 就直接 `succeeded`；必须完成该 verb 的读回/确认。
+- `failed` 不等于“什么都没发生”。动作已生效、部分完成、效果未知都要用同一份 `observed` 证据（`partial`、`dug`、`crafted`、`effect` 等）表达。
+- Verifier 的 `confirmed / refuted / insufficient` 是独立的只读验证轴，不与 driver 的 `succeeded / failed` 混用。
+
 ## 2. ClientPort
 
 ```ts
@@ -208,6 +220,34 @@ interface DriverHandle {
 - `tick()` 必须有界；异步动作以句柄表示，**未结束不得重复启动**。
 - `requestStop()` 后进入 `stopping`；`unconfirmed` 超过阈值 → tracker 记 `fault`。
 - 读回是稳定性观察，不是服务端接受的证明；强证据走独立观测。
+
+### 5.1 Driver 成功定义
+
+`state:'succeeded'` 只表示下表的后置条件已确认；`state:'failed'` 表示无法确认结果（动作可能已生效、部分完成或效果未知），必须保留同一份 `observed` 证据。
+
+| driver / 分支 | `succeeded` 的后置条件 | `failed` 时必须保留的证据 |
+|---|---|---|
+| `move`（`prepare`/`enter` 复用） | 实际到达有效站位；`arrival` + `standingCell`/`onGround` 读回成立 | `pathStatus`、`bestReachable`、`blockedBy`、`bodyOverlap`、`failure.facts.snapshot` |
+| `place` | 目标格（含 `cells` 多格）全部读回为期望方块 | `attempts`、`target`、`adjacent`、`supports`、`suggestedCells` |
+| `dig` 单格 `clear` | 目标格连续两次读回空气 | `block`/`target`、`standQuery`、`blockedBy` |
+| `dig` 单格 `harvest` | 目标格为空气，且该分支约定的掉落/背包增量已确认 | `dropDelta`、`pickup`、`standQuery.requiredDig`、`partial`（若有） |
+| `dig` `box`/`line` | 所有计划格清除；部分完成只能是 `DIG_PARTIAL` | `dug`、`planned`、`skipped`、`stoppedAt`、`partial` |
+| `dig` `tunnel` | 所有计划格清除且到达终点、`returnable:true` | `path`、`dug/planned`、`stoppedAt`、`reason`、`partial` |
+| `craft` | `produced >= requested`（不是 `crafted` 操作次数） | `attempted`、`crafted`、`produced`、`before/after`、`CRAFT_INCOMPLETE` |
+| `traverse` bridge/scaffold | 到达目标站位（`moveTo` 的 arrival 成立） | `observed.result`、motion `failure`/`snapshot` |
+| `equip` | 目标物品实际为当前手持物 | `EQUIP_NO_ITEM`、`item`、provider observed |
+| `check` | 查询完成并拿到容器/熔炉结果 | `kind:"container"`、provider error/observed |
+| `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
+| `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
+| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`ATTACK_TARGET_LOST` |
+| `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
+| `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
+
+实现偏差（需后续修）：
+
+- `craft` 当前仍按 `crafted`（合成操作次数）与请求数比较；应改为 `produced >= requested`。本轮实机 `birch_planks count=20` 已产出 20 却报 `CRAFT_INCOMPLETE`。
+- `equip` 当前只信 provider 的 `ok`，尚未读回 `heldItem`；`container` 也仍以 provider `ok` 为成功证据。按本表应补一次读回。
+- 任何 `state:'unknown'` 的动作只能以 `failed + ACT_UNCONFIRMED` 收尾，不得升格为 `succeeded`。
 
 ## 6. JobTracker
 
