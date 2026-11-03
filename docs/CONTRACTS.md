@@ -300,7 +300,7 @@ type WorkState =
 {"at": 1793..., "kind": "order.terminal", "orderId": "...", "state": "succeeded", "evidence": {...}}
 ```
 
-恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；版本不匹配拒绝恢复。
+恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；重启时 **queued order 与 active hold** 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复；版本不匹配拒绝恢复。
 
 ## 10. 错误码
 

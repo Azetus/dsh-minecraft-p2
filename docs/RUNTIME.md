@@ -98,6 +98,7 @@
 | 意图日志尾部半行 | 丢弃 |
 | `action.pending` 未结算 | 只对账（必要时 `check` Job），不重放 |
 | order 已取消 | 恢复后保持取消，plan 不复活 |
+| 重启时 queued order / active hold | 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复 |
 | 世界/角色/模板/定义版本不匹配 | 拒绝恢复，上报 |
 | 能从世界重建的进度（已建方块） | 重建，不依赖内存 |
 

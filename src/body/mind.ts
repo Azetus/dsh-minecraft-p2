@@ -258,6 +258,14 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
   })
   orders.restore()
+  // A new epoch does not continue the previous queue: restored queued orders
+  // and an active hold barrier are abandoned. A restored active non-hold order
+  // may still be reconciled from the world by the normal recovery path.
+  const restoredOrders = new Map(orders.all().map(record => [
+    record.order.id,
+    { verb: record.order.verb, state: record.state },
+  ]))
+  abandonRestoredOrders()
   const restoredDuty = duty.restore(options.port.inventory(), now())
   if (restoredDuty !== undefined) {
     events.push('duty.restored', now(), restoredDuty as unknown as JsonValue)
@@ -905,6 +913,23 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
     loopRef?.invalidate()
     events.push('mind.resumed', at, { pausedMs })
+  }
+
+  /** Abandon restored queue entries and barriers; keep active work for recovery. */
+  function abandonRestoredOrders(): void {
+    for (const record of [...orders.all()]) {
+      const restored = restoredOrders.get(record.order.id)
+      if (restored === undefined) continue
+      const drop = restored.state === 'queued'
+        || (restored.state === 'active' && restored.verb === 'hold')
+      if (!drop) continue
+      if (record.state !== 'active' && record.state !== 'queued') continue
+      try {
+        orders.complete(record.order.id, 'abandoned', { reason: 'RESTART' })
+      } catch {
+        // Another path made it terminal during recovery.
+      }
+    }
   }
 
   /**

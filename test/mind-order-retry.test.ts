@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
+import { OrderStore } from '../src/mind/orders.ts'
 import type { ClientPort, SelfInfo } from '../src/port/index.ts'
 
 /**
@@ -89,6 +90,32 @@ function makeMindAt(port: ClientPort, journalPath: string) {
 }
 
 describe('primitive order retry policy', () => {
+  it('abandons restored orders on a new epoch instead of reviving the queue', () => {
+    const journalPath = tempJournal()
+    const seed = new OrderStore({ journalPath })
+    seed.enqueue({ id: 'old-hold', verb: 'hold' })
+    seed.enqueue({ id: 'old-go', verb: 'go', params: { x: 1, y: 64, z: 0 } })
+
+    const mind = createMind({
+      port: fakePort([{ state: 'ok' }]).port,
+      home: { x: 0, y: 64, z: 0 },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath,
+    })
+    mind.tick()
+
+    expect(mind.orders.get('old-hold')?.state).toBe('abandoned')
+    expect(mind.orders.get('old-go')?.state).toBe('abandoned')
+    expect(mind.listOrders().active).toBeNull()
+    expect(mind.listOrders().queued).toHaveLength(0)
+    const terminals = [...mind.events.since(0)]
+      .filter(event => event.kind === 'order.terminal')
+      .map(event => event.data as { state?: string; observed?: { reason?: string } })
+    expect(terminals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'abandoned', observed: { reason: 'RESTART' } }),
+    ]))
+  })
+
   it('reports a hold barrier and the orders queued behind it', () => {
     const fake = fakePort([{ state: 'ok' }])
     const mind = makeMind(fake.port)
