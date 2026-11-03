@@ -200,10 +200,14 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     if (record === undefined) return
     const debug = orderDiagnostics.get(orderId)
     const params = record.order.params
-    const target = params !== undefined
-      && typeof params.x === 'number' && typeof params.y === 'number' && typeof params.z === 'number'
-      ? { x: params.x, y: params.y, z: params.z }
-      : null
+    const pointOf = (value: JsonValue | undefined): { x: number; y: number; z: number } | null => {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+      const record = value as Record<string, JsonValue>
+      return typeof record.x === 'number' && typeof record.y === 'number' && typeof record.z === 'number'
+        ? { x: record.x, y: record.y, z: record.z }
+        : null
+    }
+    const target = pointOf(params) ?? pointOf(params?.from) ?? null
     const line = {
       at: now(),
       orderId,
