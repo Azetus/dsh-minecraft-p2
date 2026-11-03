@@ -40,5 +40,21 @@ async function equip(ctx: DriverCtx, params: EquipParams): Promise<DriverResult>
   if (!available) return { state: 'failed', code: 'EQUIP_ITEM_MISSING' }
   const result = await ctx.port.equip(params.item)
   if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'EQUIP_FAILED' }
-  return { state: 'succeeded', observed: { kind: 'equip', item: params.item } }
+  const observed = result.observed
+  const held = isRecord(observed) && typeof observed.held === 'string' ? observed.held : undefined
+  if (held === undefined) {
+    return { state: 'failed', code: 'EQUIP_READBACK_UNKNOWN', observed: observed ?? { kind: 'equip', item: params.item } }
+  }
+  if (held !== params.item) {
+    return {
+      state: 'failed',
+      code: 'EQUIP_READBACK_MISMATCH',
+      observed: observed ?? { kind: 'equip', item: params.item },
+    }
+  }
+  return { state: 'succeeded', observed: { kind: 'equip', item: params.item, held } }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

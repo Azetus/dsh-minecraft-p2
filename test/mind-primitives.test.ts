@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { createContainerDriver } from '../src/mind/drivers/container.ts'
 import { createCraftDriver } from '../src/mind/drivers/craft.ts'
 import { createEquipDriver } from '../src/mind/drivers/equip.ts'
 import { createUseDriver } from '../src/mind/drivers/use.ts'
@@ -84,7 +85,10 @@ describe('finite primitive orders', () => {
     const calls: string[] = []
     const port = {
       inventory: () => [{ slot: 36, name: 'stone_pickaxe', count: 1 }],
-      equip: async (item: string) => { calls.push(item); return { state: 'ok' as const, elapsedMs: 1 } },
+      equip: async (item: string) => {
+        calls.push(item)
+        return { state: 'ok' as const, elapsedMs: 1, observed: { item, held: item } }
+      },
     } as unknown as ClientPort
     const result = await driverResult(createEquipDriver(), port,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job)
@@ -95,6 +99,65 @@ describe('finite primitive orders', () => {
     expect(await driverResult(createEquipDriver(), missing,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
       .toMatchObject({ state: 'failed', code: 'EQUIP_ITEM_MISSING' })
+  })
+
+  it('does not succeed on equip provider ok without a held-item readback', async () => {
+    const base = { inventory: () => [{ slot: 36, name: 'stone_pickaxe', count: 1 }] }
+    const unknown = {
+      ...base,
+      equip: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    expect(await driverResult(createEquipDriver(), unknown,
+      { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
+      .toMatchObject({ state: 'failed', code: 'EQUIP_READBACK_UNKNOWN' })
+
+    const mismatch = {
+      ...base,
+      equip: async () => ({ state: 'ok' as const, elapsedMs: 1, observed: { held: 'dirt' } }),
+    } as unknown as ClientPort
+    expect(await driverResult(createEquipDriver(), mismatch,
+      { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
+      .toMatchObject({ state: 'failed', code: 'EQUIP_READBACK_MISMATCH' })
+  })
+
+  it('requires player/container movement before a transfer succeeds', async () => {
+    const success = {
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      containerTransfer: async () => ({
+        state: 'ok' as const,
+        elapsedMs: 1,
+        observed: { playerBefore: 2, playerAfter: 1, containerBefore: 0, containerAfter: 1 },
+      }),
+    } as unknown as ClientPort
+    expect(await driverResult(createContainerDriver(), success, {
+      driverId: 'container',
+      params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
+    } as unknown as Job)).toMatchObject({
+      state: 'succeeded',
+      observed: { playerMoved: 1, containerMoved: 1 },
+    })
+
+    const incomplete = {
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      containerTransfer: async () => ({
+        state: 'ok' as const,
+        elapsedMs: 1,
+        observed: { playerBefore: 2, playerAfter: 2, containerBefore: 0, containerAfter: 0 },
+      }),
+    } as unknown as ClientPort
+    expect(await driverResult(createContainerDriver(), incomplete, {
+      driverId: 'container',
+      params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
+    } as unknown as Job)).toMatchObject({ state: 'failed', code: 'CONTAINER_INCOMPLETE' })
+
+    const unknown = {
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      containerTransfer: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    expect(await driverResult(createContainerDriver(), unknown, {
+      driverId: 'container',
+      params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
+    } as unknown as Job)).toMatchObject({ state: 'failed', code: 'CONTAINER_READBACK_UNKNOWN' })
   })
 
   it('crafts a bounded batch and verifies the inventory readback', async () => {
@@ -109,16 +172,45 @@ describe('finite primitive orders', () => {
     expect(count).toBe(4)
   })
 
+  it('accepts a provider CRAFT_INCOMPLETE when the produced amount meets the request', async () => {
+    let inventory: Array<{ slot: number; name: string; count: number }> = []
+    const port = {
+      inventory: () => inventory,
+      craft: async () => {
+        inventory = [{ slot: 36, name: 'birch_planks', count: 20 }]
+        return {
+          state: 'failed' as const,
+          code: 'CRAFT_INCOMPLETE',
+          observed: {
+            item: 'birch_planks',
+            requested: 20,
+            neededCrafts: 5,
+            crafted: 5,
+            produced: 20,
+            expected: 20,
+          },
+          elapsedMs: 1,
+        }
+      },
+    } as unknown as ClientPort
+    const result = await driverResult(createCraftDriver(), port,
+      { driverId: 'craft', params: { item: 'birch_planks', count: 20 } } as unknown as Job)
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'craft', item: 'birch_planks', attempted: 20, produced: 20, before: 0, after: 20 },
+    })
+  })
+
   it('reports a partial craft with crafted/attempted instead of a bare failure', async () => {
     let inventory = [{ slot: 36, name: 'stick', count: 3 }]
     const port = {
       inventory: () => inventory,
       craft: async () => {
-        inventory = [{ slot: 36, name: 'stick', count: 15 }]
+        inventory = [{ slot: 36, name: 'stick', count: 5 }]
         return {
           state: 'failed' as const,
           code: 'CRAFT_INCOMPLETE',
-          observed: { item: 'stick', requested: 3, crafted: 1, produced: 4, expected: 12 },
+          observed: { item: 'stick', requested: 3, crafted: 1, produced: 2, expected: 4 },
           elapsedMs: 1,
         }
       },
@@ -133,9 +225,9 @@ describe('finite primitive orders', () => {
         item: 'stick',
         attempted: 3,
         crafted: 1,
-        produced: 4,
+        produced: 2,
         before: 3,
-        after: 15,
+        after: 5,
       },
     })
   })

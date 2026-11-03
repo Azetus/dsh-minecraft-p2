@@ -248,6 +248,24 @@ function openContainerWindow(bot: Bot, block: Parameters<Bot['openFurnace']>[0])
   return bot.openContainer(block) as unknown as Promise<AnyWindow>
 }
 
+/** Count one item in the container section; undefined when the window cannot tell. */
+function countContainerItems(window: AnyWindow, name: string): number | undefined {
+  if (typeof window.containerItems === 'function') {
+    return window.containerItems()
+      .filter(item => item.name === name)
+      .reduce((sum, item) => sum + item.count, 0)
+  }
+  if (Array.isArray(window.slots)) {
+    const inventoryStart = typeof window.inventoryStart === 'number' ? window.inventoryStart : window.slots.length
+    return window.slots
+      .slice(0, inventoryStart)
+      .filter((item): item is { slot?: number; name: string; count: number } => item !== null && item !== undefined)
+      .filter(item => item.name === name)
+      .reduce((sum, item) => sum + item.count, 0)
+  }
+  return undefined
+}
+
 async function closeWindowQuietly(window: AnyWindow | null | undefined): Promise<void> {
   try {
     await window?.close?.()
@@ -2134,9 +2152,11 @@ class MineflayerActHandle implements ActHandle {
       await this.syncInventoryWindow()
       this.ensureNotStopped()
       const before = this.inventoryCountOfType(itemType)
+      const perCraft = recipe.result?.count ?? 1
+      const neededCrafts = Math.max(1, Math.ceil(requested / perCraft))
       let crafted = 0
       let lastError: unknown
-      for (let attempt = 0; attempt < requested; attempt += 1) {
+      for (let attempt = 0; attempt < neededCrafts; attempt += 1) {
         this.ensureNotStopped()
         // A craft fired immediately after the previous one is silently dropped by
         // the server; give the window a moment to settle and wait for the result
@@ -2170,20 +2190,20 @@ class MineflayerActHandle implements ActHandle {
       }
       this.ensureNotStopped()
       const produced = this.inventoryCountOfType(itemType) - before
-      const expected = (recipe.result?.count ?? 1) * crafted
-      if (crafted < requested || produced < expected) {
+      const expected = perCraft * crafted
+      if (produced < requested || produced < expected) {
         throw Object.assign(
           new Error(
-            `crafted ${crafted}/${requested} of ${name} (produced ${produced}, expected ${expected})`
+            `crafted ${crafted}/${neededCrafts} operations of ${name} (produced ${produced}, requested ${requested})`
             + (lastError === undefined ? '' : `: ${errorMessage(lastError)}`),
           ),
           {
             code: 'CRAFT_INCOMPLETE',
-            details: { item: name, requested, crafted, produced, expected },
+            details: { item: name, requested, neededCrafts, crafted, produced, expected },
           },
         )
       }
-      return { item: name, requested, crafted, produced }
+      return { item: name, requested, neededCrafts, crafted, produced }
     } finally {
       this.craftRunning = false
     }
@@ -2238,10 +2258,13 @@ class MineflayerActHandle implements ActHandle {
     const name = typeof this.args.item === 'string' ? this.args.item.replace(/^minecraft:/u, '') : ''
     const count = typeof this.args.count === 'number' ? Math.max(1, Math.floor(this.args.count)) : null
     const itemType = name.length === 0 ? undefined : this.itemTypeId(name)
-    if (name.length > 0 && itemType === undefined) {
+    if (itemType === undefined) {
       throw Object.assign(new Error(`unknown item: ${name}`), { code: 'CONTAINER_NO_ITEM' })
     }
     const window = await openContainerWindow(this.bot, block)
+    const playerBefore = this.inventoryCountOfType(itemType)
+    const containerBefore = countContainerItems(window, name)
+    let containerAfter: number | undefined
     try {
       switch (action) {
         case 'deposit':
@@ -2268,10 +2291,26 @@ class MineflayerActHandle implements ActHandle {
         default:
           throw Object.assign(new Error(`unsupported container action: ${action}`), { code: 'CONTAINER_UNSUPPORTED' })
       }
+      // Window slot updates are asynchronous; give the server one bounded tick
+      // before taking the container-side readback.
+      await this.waitAbortable(150)
+      containerAfter = countContainerItems(window, name)
     } finally {
       await closeWindowQuietly(window)
     }
-    return { action, kind: block.name, item: name.length === 0 ? null : name, count }
+    // The player inventory model converges after the window closes.
+    await this.syncInventoryWindow()
+    const playerAfter = this.inventoryCountOfType(itemType)
+    return {
+      action,
+      kind: block.name,
+      item: name.length === 0 ? null : name,
+      count,
+      playerBefore,
+      playerAfter,
+      containerBefore: containerBefore ?? null,
+      containerAfter: containerAfter ?? null,
+    }
   }
 }
 

@@ -243,10 +243,11 @@ interface DriverHandle {
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 
-实现偏差（需后续修）：
+实现状态：
 
-- `craft` 当前仍按 `crafted`（合成操作次数）与请求数比较；应改为 `produced >= requested`。本轮实机 `birch_planks count=20` 已产出 20 却报 `CRAFT_INCOMPLETE`。
-- `equip` 当前只信 provider 的 `ok`，尚未读回 `heldItem`；`container` 也仍以 provider `ok` 为成功证据。按本表应补一次读回。
+- `craft` 已改为 `produced >= requested`；provider 按配方产出数计算所需操作次数，driver 也接受 provider 早停但产出已足够的 `CRAFT_INCOMPLETE`。
+- `equip` 已读 provider 的 `held` 回执；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。
+- `container` 已读玩家/容器前后计数；缺失计数报 `CONTAINER_READBACK_UNKNOWN`，计数未移动/未达请求量报 `CONTAINER_INCOMPLETE`。
 - 任何 `state:'unknown'` 的动作只能以 `failed + ACT_UNCONFIRMED` 收尾，不得升格为 `succeeded`。
 
 ## 6. JobTracker
@@ -364,10 +365,14 @@ type WorkState =
 | `DEFINITION_ERROR` | 树/模板/注册表定义错误 |
 | `INSUFFICIENT_EVIDENCE` | 验证证据不足（不等于失败） |
 | `TOOL_INSUFFICIENT` | `harvest` 没有可用工具 |
+| `EQUIP_READBACK_UNKNOWN` | provider 报告 equip 成功，但没有当前手持物读回；按结果契约不得算成功 |
+| `EQUIP_READBACK_MISMATCH` | provider 报告 equip 成功，但读回的手持物不是请求物品 |
+| `CONTAINER_READBACK_UNKNOWN` | provider 完成传输但没给玩家/容器前后计数；不得算成功 |
+| `CONTAINER_INCOMPLETE` | 传输动作已执行，但玩家/容器计数未达到请求数量 |
 | `BLOCK_UNBREAKABLE` | 方块不可破坏 |
 | `DIG_NO_BLOCK` | 目标是空气/没有方块 |
 | `PICKUP_UNREACHABLE` | 掉落物存在但无法走到 |
-| `CRAFT_INCOMPLETE` | 合成已开始但未达到请求数量；`observed.crafted/attempted` 如实记录 |
+| `CRAFT_INCOMPLETE` | 合成已开始但 `produced < requested`；`observed.crafted/attempted/produced` 如实记录 |
 | `DIG_PARTIAL` | 体积挖掘部分完成；`observed.dug/skipped/partial` 如实记录，不自动重试 |
 | `DIG_VOLUME_TOO_LARGE` | 体积超过 `maxBlocks`，未开始挖掘 |
 | `GOAL_NOT_STANDABLE` | `exact` 目标格不可站；带 `reason/blockedBy` |

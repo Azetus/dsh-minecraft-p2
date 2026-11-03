@@ -70,10 +70,16 @@ async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult>
   }
   const after = countItem(ctx.port.inventory(), params.item)
   const evidence = craftEvidence(result.observed, params.item, count, before, after)
-  if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'CRAFT_FAILED', observed: evidence }
   // The provider proves how many crafts ran and how many items it produced;
   // prefer that over a driver-side guess so a partial batch is never silent.
   const produced = numericField(result.observed, 'produced') ?? (after - before)
+  if (result.state !== 'ok') {
+    // A provider may stop its loop early (e.g. a recipe yields >1 item) yet
+    // still have produced the requested result. The result contract is about
+    // the postcondition, not the provider's operation count.
+    if (result.state === 'failed' && produced >= count) return { state: 'succeeded', observed: evidence }
+    return { state: 'failed', code: result.code ?? 'CRAFT_FAILED', observed: evidence }
+  }
   if (produced < count) return { state: 'failed', code: 'CRAFT_INCOMPLETE', observed: evidence }
   return { state: 'succeeded', observed: evidence }
 }
@@ -98,6 +104,7 @@ function craftEvidence(
     before,
     after,
     crafted: numericField(upstream, 'crafted') ?? (after - before),
+    produced: numericField(upstream, 'produced') ?? (after - before),
   }
   for (const key of ['produced', 'requested', 'usedTable', 'requiresTable', 'recipeCount'] as const) {
     const value = field(upstream, key)

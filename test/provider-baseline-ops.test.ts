@@ -312,6 +312,43 @@ describe('baseline query operations', () => {
     })
   })
 
+  it('reports player/container counts before and after a transfer', async () => {
+    const blocks = new Map<string, string>([['2,63,0', 'chest']])
+    const { bot, raw } = fakeBot({ blocks, inventory: [{ name: 'stone', count: 2 }] })
+    let container = 0
+    const items = (raw.inventory as unknown as { items: () => Array<FakeItem> }).items
+    const window = {
+      slots: [],
+      containerItems: () => (container > 0 ? [{ name: 'stone', count: container }] : []),
+      inventoryStart: 27,
+      deposit: async (_itemType: number, _metadata: unknown, count: number) => {
+        const stack = items().find(item => item.name === 'stone')
+        if (stack === undefined) return
+        stack.count -= count
+        container += count
+      },
+      close: async () => {},
+    }
+    ;(raw as unknown as { openContainer: unknown }).openContainer = async () => window
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('container-transfer', {
+      x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1,
+    }))
+
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      result: {
+        action: 'deposit',
+        item: 'stone',
+        count: 1,
+        playerBefore: 2,
+        playerAfter: 1,
+        containerBefore: 0,
+        containerAfter: 1,
+      },
+    })
+  })
+
   it('reports weather state', () => {
     const { bot } = fakeBot()
     const provider = new MineflayerProvider(bot)
@@ -371,9 +408,22 @@ describe('baseline control operations', () => {
     await new Promise(resolve => setTimeout(resolve, 1200))
     expect(handle.poll()).toMatchObject({
       status: 'succeeded',
-      result: { item: 'oak_planks', requested: 2, crafted: 2, produced: 8 },
+      result: { item: 'oak_planks', requested: 2, neededCrafts: 1, crafted: 1, produced: 4 },
     })
-    expect(calls.filter(call => call.name === 'craft')).toHaveLength(2)
+    expect(calls.filter(call => call.name === 'craft')).toHaveLength(1)
+  })
+
+  it('crafts only the operations needed for a multi-output batch', async () => {
+    const recipes = [{ result: { id: 5, count: 4 }, requiresTable: false, delta: [{ id: 17, count: -1 }] }]
+    const { bot, calls } = fakeBot({ inventory: [{ name: 'oak_log', count: 5 }], recipes })
+    const provider = new MineflayerProvider(bot, { serverIdleMs: 10_000 })
+    const handle = provider.start('craft', { item: 'oak_planks', count: 20 })
+    const result = await settleAct(handle, 5_000)
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      result: { item: 'oak_planks', requested: 20, neededCrafts: 5, crafted: 5, produced: 20 },
+    })
+    expect(calls.filter(call => call.name === 'craft')).toHaveLength(5)
   })
 
   it('reports CRAFT_INCOMPLETE when the window transaction never completes', async () => {

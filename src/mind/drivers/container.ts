@@ -65,21 +65,74 @@ async function transfer(ctx: DriverCtx, params: ContainerParams): Promise<Driver
   const chest = { x: params.x, y: params.y, z: params.z }
   const moved = await ctx.port.moveTo(chest, { range: 2, timeoutMs: 20_000 })
   if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'CONTAINER_MOVE_FAILED' }
+  const requested = params.count ?? 1
   const result = await ctx.port.containerTransfer(
     chest,
     params.action,
     params.item,
-    params.count ?? 1,
+    requested,
   )
   if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'CONTAINER_TRANSFER_FAILED' }
+  const observed = result.observed
+  const playerBefore = numberField(observed, 'playerBefore')
+  const playerAfter = numberField(observed, 'playerAfter')
+  const containerBefore = numberField(observed, 'containerBefore')
+  const containerAfter = numberField(observed, 'containerAfter')
+  const base = {
+    kind: 'container-transfer',
+    action: params.action,
+    item: params.item,
+    count: requested,
+    chest,
+    ...(isRecord(observed) ? { transfer: observed } : {}),
+  }
+  if (playerBefore === undefined || playerAfter === undefined
+    || containerBefore === undefined || containerAfter === undefined) {
+    return { state: 'failed', code: 'CONTAINER_READBACK_UNKNOWN', observed: base }
+  }
+  const inbound = params.action === 'deposit'
+    || params.action === 'load-input'
+    || params.action === 'load-fuel'
+  const playerMoved = inbound ? playerBefore - playerAfter : playerAfter - playerBefore
+  const containerMoved = inbound ? containerAfter - containerBefore : containerBefore - containerAfter
+  // take-* has no count parameter; any positive movement is the postcondition.
+  const required = params.action.startsWith('take-') ? 1 : requested
+  if (playerMoved < required || containerMoved < required) {
+    return {
+      state: 'failed',
+      code: 'CONTAINER_INCOMPLETE',
+      observed: {
+        ...base,
+        playerBefore,
+        playerAfter,
+        containerBefore,
+        containerAfter,
+        playerMoved,
+        containerMoved,
+        required,
+      },
+    }
+  }
   return {
     state: 'succeeded',
     observed: {
-      kind: 'container-transfer',
-      action: params.action,
-      item: params.item,
-      count: params.count ?? 1,
-      chest,
+      ...base,
+      playerBefore,
+      playerAfter,
+      containerBefore,
+      containerAfter,
+      playerMoved,
+      containerMoved,
     },
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function numberField(value: unknown, key: string): number | undefined {
+  if (!isRecord(value)) return undefined
+  const field = value[key]
+  return typeof field === 'number' && Number.isFinite(field) ? field : undefined
 }
