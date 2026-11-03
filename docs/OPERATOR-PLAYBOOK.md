@@ -6,7 +6,7 @@
 ## 1. 启动
 
 1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
-2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。
+2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。若 `locks` 显示该 target 已被别的 session/进程占用，`/p2 start` 会直接拒绝；先让 owner `/p2 stop`，不要重复启动抢 username。
 3. `p2_observe`：确认进服、维度、位置与周围方块。
 
 ## 2. 下 order
@@ -41,8 +41,9 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 |---|---|
 | `p2_cancel {id}` | 取消 order；结束其当前 job（等待停止确认） |
 | `p2_order` 新一条 | 排队；替换类命令走立即替换语义 |
-| `p2_body stop` | 唯一“关闭”：冻结 dispatch → 等停止 → 落盘 → 退出 body 进程 |
+| `p2_body stop` | 唯一“关闭”：冻结 dispatch → 等停止 → 超时 SIGTERM/killTree → 退出 body 进程并释放锁 |
 | `p2_body restart` | 停止并用上次 target 重启；可传新 `host`/`port` 换服。新 epoch，队列不恢复 |
+| `p2_body status` | 显示 `target`/`lock`/`lastDisconnect`；body inactive 时 `locks` 显示其他 session 的占用 |
 
 ## 5. 异常处理
 
@@ -59,6 +60,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(APPROACH_NO_STAND)` | 目标方块周围没有可站立格；换目标面或先清理/接近 |
 | `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
+| `P2 body is already running at <target>` | 同 target 已有 body（锁或同进程 owner）；先让 owner `/p2 stop`，不要重复 `/p2 start` |
+| `providerState.lastDisconnect` | provider 断开原因（`kick`/`error`/`end`/`reset`）；`kick` 常见是 `duplicate_login`，不要 auto-restart 互踢 |
 | `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |
 | `failed(ACT_TIMEOUT)` | 预算内无终态但动作可安全重试；重试仍失败就换目标/方案 |
 | `failed(ACTION_DENIED)` | 服务端消息明确拒绝；换位置/权限/目标，不要重试 |
