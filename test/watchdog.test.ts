@@ -10,6 +10,7 @@ import type { BodyFault, BodyHandle, RestartInfo } from '../src/bridge/process-m
 import { BodyLockConflictError } from '../src/bridge/body-lock.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
 import type { ToolDefinition } from '../src/bridge/tools.ts'
+import type { ProviderRuntimeStatus } from '../src/contracts/protocol.ts'
 import {
   PROTOCOL_VERSION,
   bodyManifestDigest,
@@ -56,9 +57,17 @@ type FakeBody = {
 
 function createFakeBody(
   epoch: string,
-  options: { ignoreKill?: boolean; ignoreKillTree?: boolean } = {},
+  options: {
+    ignoreKill?: boolean
+    ignoreKillTree?: boolean
+    providerStatus?: () => ProviderRuntimeStatus
+  } = {},
 ): FakeBody {
-  const runtime = new BodyRuntime({ body, newEpoch: () => epoch })
+  const runtime = new BodyRuntime({
+    body,
+    newEpoch: () => epoch,
+    ...(options.providerStatus === undefined ? {} : { providerStatus: options.providerStatus }),
+  })
   const [client, serverTransport] = createMemoryTransportPair()
   const server = new BodyServer(runtime, serverTransport)
   server.start()
@@ -192,6 +201,37 @@ describe('body watchdog', () => {
     await second.manager.start(owner, target)
     expect(second.spawns).toBe(1)
     await second.manager.stop()
+  })
+
+  it('does not auto-restart after a duplicate_login kick', async () => {
+    const providerStatus = (): ProviderRuntimeStatus => ({
+      connected: false,
+      paused: false,
+      serverAge: 1,
+      idleMs: 0,
+      lastDisconnect: {
+        at: 1,
+        kind: 'kick',
+        reason: 'multiplayer.disconnect.duplicate_login',
+        eventLoopLagMs: 0,
+        serverAge: 1,
+        paused: false,
+        ageIdleMs: 0,
+      },
+    })
+    const bodies = [createFakeBody('epoch-1', { providerStatus })]
+    const harness = createManager(bodies)
+    await harness.manager.start(owner, { host: 'localhost', port: 25575 })
+    await wait(120)
+
+    expect(harness.spawns).toBe(1)
+    expect(bodies[0]!.killTreeCalls).toBe(1)
+    expect(harness.faults.at(-1)).toMatchObject({
+      reason: 'provider-disconnected',
+      autoRestart: 'disabled',
+    })
+    expect(harness.manager.lockInfo).toBeUndefined()
+    await harness.manager.stop()
   })
 
   it('restarts a hung body with a new epoch and reports the fault', async () => {

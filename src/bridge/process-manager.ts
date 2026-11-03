@@ -18,6 +18,7 @@ import {
   type BodyLockHandle,
   type BodyLockInfo,
 } from './body-lock.ts'
+import { isDuplicateLoginKick } from './provider-disconnect.ts'
 import type { McTarget } from './target.ts'
 
 export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
@@ -498,8 +499,12 @@ export class BodyManager {
         const detail = last === undefined
           ? 'provider connection lost for two status polls'
           : `provider connection lost (${last.kind}: ${last.reason})`
-        this.log(`provider disconnected; restarting body (${last?.kind ?? 'unknown'}: ${last?.reason ?? 'no reason'})`)
-        void this.fault('provider-disconnected', detail)
+        const suppress = isDuplicateLoginKick(last)
+        this.log(
+          `provider disconnected; ${suppress ? 'not restarting (duplicate login)' : 'restarting body'} `
+          + `(${last?.kind ?? 'unknown'}: ${last?.reason ?? 'no reason'})`,
+        )
+        void this.fault('provider-disconnected', detail, { allowRestart: !suppress })
       }
     } else {
       this.providerDisconnectPolls = 0
@@ -529,7 +534,11 @@ export class BodyManager {
    * fault, then restart within the development budget. Stopping or manual stop
    * already changed the state, so neither schedules a restart.
    */
-  private async fault(reason: BodyFaultReason, detail?: string): Promise<void> {
+  private async fault(
+    reason: BodyFaultReason,
+    detail?: string,
+    options: { allowRestart?: boolean } = {},
+  ): Promise<void> {
     if (this.state !== 'active' && this.state !== 'starting') return
     this.state = 'faulted'
     this.stopHeartbeat()
@@ -557,7 +566,7 @@ export class BodyManager {
       exited = await this.waitForExit(handle, this.faultExitTimeoutMs)
     }
     this.bodyExitConfirmed = exited
-    fault.autoRestart = this.planRestart()
+    fault.autoRestart = options.allowRestart === false ? 'disabled' : this.planRestart()
     if (!exited && fault.autoRestart === 'scheduled') {
       // Never spawn a replacement while the previous body may still hold the
       // MC connection; keep the lock and let the owner clean it up.
