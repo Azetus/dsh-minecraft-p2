@@ -52,6 +52,7 @@ interface ClientPort {
   self(): { pos: Vec3; yaw: number; pitch: number; health: number; food: number; onGround: boolean; inWater: boolean; inLava: boolean }
   blockAt(p: Vec3): BlockInfo | null           // null = 未加载
   blocksIn(box: { min: Vec3; max: Vec3 }, filter?: string[]): BlockInfo[]
+  findBlocks(query: { near: Vec3; radius: number; names: string[]; count: number }): BlockInfo[]
   inventory(): Item[]
   entities(box: { min: Vec3; max: Vec3 }): EntityInfo[]
   screen(): ScreenInfo | null                  // 未支持时 null + capability 缺失
@@ -93,6 +94,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 **语义**
 
 - `blockAt` 返回 `null` 表示未加载，**不等于空气**。
+- `findBlocks` 只返回已加载方块，未加载区块跳过且不折成空气；按 `near` 到 cell 的欧氏距离返回最近 `count` 个匹配，未知方块名返回空数组。它是只读查询，不取写令牌、不产生 job，也不判断可达性。
 - `BlockInfo.harvestTools` 是适配器给出的“可掉落工具”名称列表；`[]` 表示手即可。缺省表示适配器不知道，不能当作“需要任何工具”。
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
   - 单格：`{x,y,z}` 保持旧语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；

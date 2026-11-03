@@ -14,6 +14,8 @@ import type { WriteToken } from '../../src/port/index.ts'
 
 export type FakeBlock = {
   name: string
+  /** Mineflayer block type id, used by findBlocks. */
+  type?: number
   material?: string
   diggable?: boolean
   hardness?: number
@@ -47,6 +49,11 @@ export class FakeBot extends EventEmitter {
       '820': { name: 'wooden_pickaxe' },
       '825': { name: 'stone_pickaxe' },
     } as Record<string, { name: string }>,
+    blocksByName: {
+      stone: { id: 1 },
+      crafting_table: { id: 182 },
+      oak_door: { id: 64 },
+    } as Record<string, { id: number }>,
   }
   heldItem: { name: string; count: number } | null = { name: 'stone', count: 1 }
   time: { timeOfDay: number | bigint; age: number | bigint } = { timeOfDay: 6000n, age: 1234n }
@@ -58,6 +65,12 @@ export class FakeBot extends EventEmitter {
 
   readonly blocks = new Map<string, FakeBlock>()
   readonly chats: string[] = []
+  readonly findCalls: Array<{
+    point?: { x: number; y: number; z: number }
+    matching: number | number[]
+    maxDistance?: number
+    count?: number
+  }> = []
 
   inventory = {
     items: (): Array<{ slot?: number; name: string; count: number }> => [
@@ -67,6 +80,31 @@ export class FakeBot extends EventEmitter {
 
   blockAt(position: { x: number; y: number; z: number }): FakeBlock | null {
     return this.blocks.get(`${position.x},${position.y},${position.z}`) ?? null
+  }
+
+  /** Minimal stand-in for mineflayer's id-array/section-palette search. */
+  findBlocks(options: {
+    point?: { x: number; y: number; z: number }
+    matching: number | number[]
+    maxDistance?: number
+    count?: number
+  }): Array<{ x: number; y: number; z: number }> {
+    this.findCalls.push({ ...options })
+    const point = options.point ?? this.entity?.position
+    if (point === undefined) return []
+    const ids = Array.isArray(options.matching) ? options.matching : [options.matching]
+    const maxDistance = options.maxDistance ?? 16
+    const count = options.count ?? 1
+    const found: Array<{ x: number; y: number; z: number; distance: number }> = []
+    for (const [key, block] of this.blocks) {
+      if (block.type === undefined || !ids.includes(block.type)) continue
+      const [x, y, z] = key.split(',').map(Number) as [number, number, number]
+      const distance = Math.hypot(x - point.x, y - point.y, z - point.z)
+      if (distance > maxDistance) continue
+      found.push({ x, y, z, distance })
+    }
+    found.sort((left, right) => left.distance - right.distance)
+    return found.slice(0, count).map(({ x, y, z }) => ({ x, y, z }))
   }
 
   chat(text: string): void {

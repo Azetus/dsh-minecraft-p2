@@ -1,4 +1,7 @@
 import {
+  OBSERVE_FIND_MAX_LIMIT,
+  OBSERVE_FIND_MAX_RADIUS,
+  OBSERVE_FIND_TOTAL_CAP,
   OBSERVE_MAX_AXIS,
   OBSERVE_MAX_BLOCKS,
   isRecord,
@@ -6,6 +9,7 @@ import {
 } from '../contracts/protocol.ts'
 import type {
   ObserveVec3,
+  WorldFoundBlock,
   WorldObserveBlock,
   WorldObserveCounts,
   WorldObserveResult,
@@ -51,15 +55,94 @@ export function observeWorld(
     biome: port.biomeAt(self.pos),
   }
 
-  if (params.points !== undefined) {
-    return observePoints(port, params, common)
+  const mode = readMode(params.mode)
+  if (mode === 'find' || (mode === undefined && params.near !== undefined)) {
+    return observeFind(port, params, common, mode)
   }
-  return observeBox(port, params, common)
+  if (mode === 'points' || (mode === undefined && params.points !== undefined)) {
+    return observePoints(port, params, common, mode)
+  }
+  return observeBox(port, params, common, mode)
 }
 
 type Common = Pick<WorldObserveResult, 'at' | 'self' | 'inventory' | 'time' | 'biome'>
 
-function observePoints(port: ClientPort, params: Record<string, unknown>, common: Common): WorldObserveResult {
+function observeFind(
+  port: ClientPort,
+  params: Record<string, unknown>,
+  common: Common,
+  mode: 'find' | undefined,
+): WorldObserveResult {
+  if (mode !== undefined && mode !== 'find') {
+    throw observeError('mode find requires a near query')
+  }
+  if (params.min !== undefined || params.max !== undefined) {
+    throw observeError('find does not accept min/max')
+  }
+  if (params.points !== undefined) {
+    throw observeError('find does not accept points')
+  }
+  if (params.detail !== undefined || params.excludeAir !== undefined || params.includeEntities !== undefined) {
+    throw observeError('find only accepts near, radius, only and limit')
+  }
+  const near = params.near === undefined ? floorVec(common.self.pos) : readVec(params.near, 'near')
+  const radius = readBoundedInt(params.radius, 'radius', 16, 1, OBSERVE_FIND_MAX_RADIUS, 'maxRadius')
+  const limit = readBoundedInt(params.limit, 'limit', 5, 1, OBSERVE_FIND_MAX_LIMIT, 'maxLimit')
+  const only = readFindOnly(params.only)
+  const wanted = new Set(only)
+  const raw = port.findBlocks({
+    near,
+    radius,
+    names: only,
+    count: OBSERVE_FIND_TOTAL_CAP + 1,
+  })
+  const matches: Array<{ cell: ObserveVec3; name: string; sort: number }> = []
+  const radiusSquared = radius * radius
+  for (const block of raw) {
+    if (!block.loaded || block.pos === undefined) continue
+    if (!wanted.has(block.name)) continue
+    const cell = { x: block.pos.x, y: block.pos.y, z: block.pos.z }
+    const sort = squaredDistance(near, cell)
+    if (sort > radiusSquared) continue
+    matches.push({ cell, name: block.name, sort })
+  }
+  matches.sort((left, right) =>
+    left.sort - right.sort
+    || left.cell.x - right.cell.x
+    || left.cell.y - right.cell.y
+    || left.cell.z - right.cell.z)
+  const total = Math.min(matches.length, OBSERVE_FIND_TOTAL_CAP)
+  const truncated = matches.length > OBSERVE_FIND_TOTAL_CAP
+  const blocks: WorldFoundBlock[] = matches.slice(0, limit).map(match => ({
+    cell: match.cell,
+    name: match.name,
+    distance: Math.round(Math.sqrt(match.sort) * 100) / 100,
+  }))
+  return {
+    ...common,
+    mode: 'find',
+    detail: 'find',
+    near,
+    radius,
+    only,
+    total,
+    truncated,
+    blocks,
+  }
+}
+
+function observePoints(
+  port: ClientPort,
+  params: Record<string, unknown>,
+  common: Common,
+  mode: 'points' | undefined,
+): WorldObserveResult {
+  if (mode !== undefined && mode !== 'points') {
+    throw observeError('mode points requires a points query')
+  }
+  if (params.near !== undefined || params.radius !== undefined || params.limit !== undefined) {
+    throw observeError('near/radius/limit apply to find, not points')
+  }
   if (!Array.isArray(params.points) || params.points.length === 0) {
     throw observeError('points must be a non-empty array')
   }
@@ -97,7 +180,21 @@ function observePoints(port: ClientPort, params: Record<string, unknown>, common
   return { ...common, mode: 'points', detail: 'points', blocks }
 }
 
-function observeBox(port: ClientPort, params: Record<string, unknown>, common: Common): WorldObserveResult {
+function observeBox(
+  port: ClientPort,
+  params: Record<string, unknown>,
+  common: Common,
+  mode: 'box' | undefined,
+): WorldObserveResult {
+  if (mode !== undefined && mode !== 'box') {
+    throw observeError('mode box requires min/max')
+  }
+  if (params.points !== undefined) {
+    throw observeError('a box query does not accept points')
+  }
+  if (params.near !== undefined || params.radius !== undefined || params.limit !== undefined) {
+    throw observeError('near/radius/limit apply to find, not box')
+  }
   const min = readVec(params.min, 'min')
   const max = readVec(params.max, 'max')
   if (min.x > max.x || min.y > max.y || min.z > max.z) {
@@ -246,6 +343,56 @@ function readVec(value: unknown, label: string): ObserveVec3 {
   const y = readInt(value.y, `${label}.y`)
   const z = readInt(value.z, `${label}.z`)
   return { x, y, z }
+}
+
+function floorVec(value: ObserveVec3): ObserveVec3 {
+  return { x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) }
+}
+
+function squaredDistance(left: ObserveVec3, right: ObserveVec3): number {
+  return (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
+}
+
+function readMode(value: unknown): 'box' | 'points' | 'find' | undefined {
+  if (value === undefined) return undefined
+  if (value === 'box' || value === 'points' || value === 'find') return value
+  throw observeError('mode must be box, points or find')
+}
+
+function readBoundedInt(
+  value: unknown,
+  label: string,
+  fallback: number,
+  min: number,
+  max: number,
+  capKey?: string,
+): number {
+  if (value === undefined) return fallback
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw observeError(`${label} must be an integer`)
+  }
+  if (value < min || value > max) {
+    throw observeError(
+      `${label} must be between ${min} and ${max}`,
+      capKey === undefined ? undefined : { [capKey]: max },
+    )
+  }
+  return value
+}
+
+function readFindOnly(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw observeError('find requires a non-empty only array')
+  }
+  if (value.some(entry => typeof entry !== 'string' || entry.trim().length === 0)) {
+    throw observeError('only must be an array of non-empty block names')
+  }
+  if (value.length > 32) throw observeError('only exceeds 32 block names', { maxNames: 32 })
+  const names = (value as string[]).map(entry => entry.trim().replace(/^minecraft:/u, ''))
+  if (names.some(name => name.length === 0)) {
+    throw observeError('only must be an array of non-empty block names')
+  }
+  return [...new Set(names)]
 }
 
 function readInt(value: unknown, label: string): number {

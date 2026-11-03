@@ -225,6 +225,34 @@ describe('mind operator tools', () => {
     expect(manager.orders).toHaveLength(0)
   })
 
+  it('exposes and forwards the find observation mode', async () => {
+    const { definitions, manager, agent } = harness()
+    const definition = definitions.get('p2_observe')
+    expect(definition?.description).toMatch(/find/i)
+    expect(definition?.description).toMatch(/go\/craft/i)
+    const properties = (definition?.parameters as {
+      properties?: Record<string, unknown>
+    }).properties ?? {}
+    expect(properties).toMatchObject({
+      mode: { enum: ['box', 'points', 'find'] },
+      near: { required: ['x', 'y', 'z'] },
+      radius: { minimum: 1, maximum: 32 },
+      limit: { minimum: 1, maximum: 10 },
+    })
+
+    const args = {
+      mode: 'find',
+      near: { x: 0, y: 64, z: 0 },
+      radius: 16,
+      only: ['crafting_table'],
+      limit: 5,
+    }
+    const value = await definition?.execute(args, { agent })
+    expect(value).toEqual({ blocks: [], at: 1 })
+    expect(manager.observes).toEqual([args])
+    expect(manager.orders).toHaveLength(0)
+  })
+
   it('passes an entity query through, without acting', async () => {
     const { definitions, manager, agent } = harness()
     const args = { radius: 64, names: ['item'] }

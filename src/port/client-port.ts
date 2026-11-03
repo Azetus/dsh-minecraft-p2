@@ -9,6 +9,7 @@ import type {
   ContainerCheckResult,
   EntityInfo,
   Face,
+  FindBlocksQuery,
   Item,
   Landmark,
   ScreenInfo,
@@ -101,6 +102,12 @@ export interface ClientPort {
   blockAt(p: Vec3): BlockInfo | null
   biomeAt(p: Vec3): BiomeInfo | null
   blocksIn(box: Box, filter?: string[]): BlockInfo[]
+  /**
+   * Nearest loaded blocks whose name is in `names`, within Euclidean `radius`
+   * of `near`. Returns at most `count` entries, nearest first. Unloaded cells
+   * are skipped, never treated as air. Read-only: no write token is taken.
+   */
+  findBlocks(query: FindBlocksQuery): BlockInfo[]
   inventory(): Item[]
   entities(box: Box): EntityInfo[]
   screen(): Promise<ScreenInfo | null>

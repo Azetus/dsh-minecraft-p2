@@ -20,7 +20,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 
 1. 人类 `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`），或开发时 `p2_body {action:"start", host, port}`；body 启动后才会注册本 skill 和 P2 工具。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
 2. `p2_status` 确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。若 `locks` 显示 target 已被其他 session 占用，`/p2 start` 会拒绝；先让 owner `/p2 stop`，不要重复启动抢 username。
-3. `p2_observe` 一次，确认维度、位置、周围方块；不要用它反复扫描。
+3. `p2_observe` 一次，确认维度、位置、周围方块；找方块用 `{mode:"find", only:["crafting_table"], radius:16}`，拿到最近坐标后先 `go` 再 `craft`/`dig`。find 只返回已加载方块，不判断可达、不移动；不要用它反复扫描。
 
 ## 2. 下单
 

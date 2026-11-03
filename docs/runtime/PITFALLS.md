@@ -27,6 +27,7 @@
 - **现象**：一次查找几秒，body 心跳被拖死。
 - **机理**：函数匹配器会逐段扫 4096 格；传 block id 数组才走调色板快路径。
 - **规则**：只用 id 数组；半径与交互距离匹配（见 1.9）。
+- **当前实现**：`p2_observe {mode:"find"}` 走 `bot.findBlocks` + block id 数组 + section palette 跳过；不要退回 `blocksIn` 整盒逐格扫描。
 
 ### 1.6 legacy pathfinder `goto()`（已移除）
 - 历史问题：`stop()` 之后 promise 不 resolve；`path_update` + 空路径时“伪成功”。

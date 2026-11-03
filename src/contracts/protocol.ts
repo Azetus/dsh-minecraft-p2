@@ -217,19 +217,32 @@ export type HeartbeatResult = { seq: number; alive: true }
 
 export const OBSERVE_MAX_BLOCKS = 4096
 export const OBSERVE_MAX_AXIS = 64
+/** `find` is a bounded nearest-block query, not a volume scan. */
+export const OBSERVE_FIND_MAX_RADIUS = 32
+export const OBSERVE_FIND_MAX_LIMIT = 10
+/** Matches are counted up to this cap; beyond it the result is truncated. */
+export const OBSERVE_FIND_TOTAL_CAP = 256
 
 export type ObserveVec3 = { x: number; y: number; z: number }
 
 export type WorldObserveParams = {
+  /** Query shape; inferred from the provided fields when omitted. */
+  mode?: 'box' | 'points' | 'find'
   /** Box query; provide min+max, or `points` instead. */
   min?: ObserveVec3
   max?: ObserveVec3
   /** Targeted query (1..256 unique points); no box, no entities. */
   points?: ObserveVec3[]
+  /** find: search center cell; defaults to the body position. */
+  near?: ObserveVec3
+  /** find: max Euclidean cell distance, 1..32. */
+  radius?: number
+  /** find: max returned blocks, 1..10. */
+  limit?: number
   includeEntities?: boolean
   /** Box detail level; ignored for a points query. */
   detail?: 'blocks' | 'counts' | 'surface'
-  /** Block names to include in the blocks view; unknown cells stay visible. */
+  /** Block names to include in the blocks view; required for find. */
   only?: string[]
   /** Omit loaded air from the blocks view. */
   excludeAir?: boolean
@@ -244,6 +257,14 @@ export type WorldObserveBlock = {
   /** Provider collision hint; undefined when the adapter cannot tell. */
   solid?: boolean
   state?: Record<string, string>
+}
+
+/** One nearest-block match from a find query. */
+export type WorldFoundBlock = {
+  cell: ObserveVec3
+  name: string
+  /** Euclidean cell distance from `near`, rounded to 2 decimals. */
+  distance: number
 }
 
 export type WorldObserveCounts = {
@@ -268,8 +289,8 @@ export type WorldObserveSurface = {
 
 export type WorldObserveResult = {
   at: number
-  mode: 'box' | 'points'
-  detail: 'blocks' | 'counts' | 'surface' | 'points'
+  mode: 'box' | 'points' | 'find'
+  detail: 'blocks' | 'counts' | 'surface' | 'points' | 'find'
   box?: { min: ObserveVec3; max: ObserveVec3 }
   self: {
     pos: ObserveVec3
@@ -285,11 +306,21 @@ export type WorldObserveResult = {
   time: { timeOfDay: number; worldAge: number }
   /** Biome at the body position; null when the adapter cannot tell. */
   biome?: { id: number; name: string } | null
-  /** Present for detail=blocks / points; includes loaded:false cells. */
-  blocks?: WorldObserveBlock[]
+  /** Present for detail=blocks / points / find. */
+  blocks?: WorldObserveBlock[] | WorldFoundBlock[]
   counts?: WorldObserveCounts
   surface?: WorldObserveSurface[]
   entities?: Array<{ id: string; name: string; position: ObserveVec3 }>
+  /** find: centered cell actually searched. */
+  near?: ObserveVec3
+  /** find: requested Euclidean radius. */
+  radius?: number
+  /** find: normalized block names actually searched. */
+  only?: string[]
+  /** find: matches inside the radius, capped at OBSERVE_FIND_TOTAL_CAP. */
+  total?: number
+  /** find: more matches exist than `total` reports. */
+  truncated?: boolean
 }
 
 export const ENTITIES_MAX_RADIUS = 160

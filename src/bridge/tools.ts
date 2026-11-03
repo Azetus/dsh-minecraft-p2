@@ -57,19 +57,37 @@ export function registerP2Tools(
     }),
     tools.register({
       name: 'p2_observe',
-      description: 'Read-only world observation. Box query (min+max, max 4096 blocks) or targeted points (max 256); detail blocks/counts/surface. Unloaded cells are loaded=false, never air. Does not act on the world.',
+      description: 'Read-only world observation. find returns the nearest loaded blocks by name within a radius, sorted by distance; it never chooses a target or moves, so use it first and then issue p2_order go/craft. Only loaded blocks are returned; absence is not proof the block does not exist. Box (min+max) and targeted points queries remain available.',
       parameters: {
         type: 'object',
         properties: {
-          min: vecSchema('Box minimum corner, inclusive'),
-          max: vecSchema('Box maximum corner, inclusive'),
+          mode: {
+            type: 'string',
+            enum: ['box', 'points', 'find'],
+            description: 'Defaults to box, or points when points is given, find when near is given',
+          },
+          min: vecSchema('Box minimum corner, inclusive; box mode'),
+          max: vecSchema('Box maximum corner, inclusive; box mode'),
           points: {
             type: 'array',
             description: 'Targeted query instead of a box; max 256 unique points',
             items: vecSchema('Point'),
             maxItems: 256,
           },
-          includeEntities: { type: 'boolean', description: 'Defaults to true for box queries' },
+          near: vecSchema('Find center cell; defaults to the body position'),
+          radius: {
+            type: 'number',
+            minimum: 1,
+            maximum: 32,
+            description: 'Find radius in blocks; defaults to 16',
+          },
+          limit: {
+            type: 'number',
+            minimum: 1,
+            maximum: 10,
+            description: 'Maximum find results; defaults to 5',
+          },
+          includeEntities: { type: 'boolean', description: 'Box queries only; defaults to true' },
           detail: {
             type: 'string',
             enum: ['blocks', 'counts', 'surface'],
@@ -77,11 +95,11 @@ export function registerP2Tools(
           },
           only: {
             type: 'array',
-            description: 'Block names to include in a blocks view',
+            description: 'Block names to include; required for find (1-32 names)',
             items: { type: 'string' },
             maxItems: 32,
           },
-          excludeAir: { type: 'boolean', description: 'Omit loaded air from a blocks view' },
+          excludeAir: { type: 'boolean', description: 'Omit loaded air from a box blocks view' },
         },
         additionalProperties: false,
       },

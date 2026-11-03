@@ -18,6 +18,7 @@ P2Mind 把角色交给常驻 NPC AI：agent 只下**目标级 order**，NPC 自�
 /p2 setup
 /p2 start 127.0.0.1:25575          # 启动 body 并连接该 MC 服务器
 p2_status                      # 当前 order / job / 预算 / 最近偏差
+p2_observe {mode:"find",only:["crafting_table"],radius:16}  # 只读：最近已加载方块，先 find 再 go/craft
 p2_observe {min,max,detail}    # 只读观测：方块/计数/表面，或 points 定向查询
 p2_entities {radius,names}     # 实体/掉落物观测
 p2_order {verb, params?, blueprint?, policy?}

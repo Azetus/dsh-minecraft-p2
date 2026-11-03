@@ -34,6 +34,17 @@ export type BlockInfo = {
 
 export type Item = { slot: number; name: string; count: number }
 
+/**
+ * Read-only nearest-block query. The adapter searches only loaded chunks and
+ * returns at most `count` loaded matches, nearest first.
+ */
+export type FindBlocksQuery = {
+  near: Vec3
+  radius: number
+  names: string[]
+  count: number
+}
+
 export type EntityInfo = {
   id: string
   name: string

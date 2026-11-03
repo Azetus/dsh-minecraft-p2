@@ -17,6 +17,7 @@ import type {
   ContainerCheckResult,
   EntityInfo,
   Face,
+  FindBlocksQuery,
   Item,
   Landmark,
   ScreenInfo,
@@ -323,6 +324,49 @@ export class MineflayerClientPort implements ClientPort {
       }
     }
     return result
+  }
+
+  /**
+   * Use mineflayer's own section-palette search: it skips loaded sections whose
+   * palette cannot contain the target, uses block-id matching (not a function
+   * matcher), and stops once `count` matches are found. `blocksIn` would scan a
+   * whole cube and materialize every match, which is the wrong shape for find.
+   */
+  findBlocks(query: FindBlocksQuery): BlockInfo[] {
+    const names = new Set(query.names.map(name => name.replace(/^minecraft:/u, '')))
+    const registry = (this.bot.registry as unknown as {
+      blocksByName?: Record<string, { id: number } | undefined>
+    }).blocksByName ?? {}
+    const ids = [...names]
+      .map(name => registry[name]?.id)
+      .filter((id): id is number => typeof id === 'number')
+    // An all-unknown name list must not degrade into "match every block".
+    if (ids.length === 0) return []
+    const count = Math.min(1024, Math.max(1, Math.floor(query.count)))
+    const radius = Math.max(0, query.radius)
+    const found = this.bot.findBlocks({
+      point: new Vec3Class(query.near.x, query.near.y, query.near.z),
+      matching: ids,
+      maxDistance: radius,
+      count,
+    })
+    const result: BlockInfo[] = []
+    for (const point of found) {
+      const block = this.bot.blockAt(new Vec3Class(point.x, point.y, point.z)) as unknown as BlockLike | null
+      if (block === null || !names.has(block.name)) continue
+      const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
+      result.push({
+        ...blockInfo(block, this.bot.registry, serverTags),
+        pos: { x: point.x, y: point.y, z: point.z },
+      })
+    }
+    return result.sort((left, right) => {
+      const a = left.pos!
+      const b = right.pos!
+      const da = squaredDistance(query.near, a)
+      const db = squaredDistance(query.near, b)
+      return da - db || a.x - b.x || a.y - b.y || a.z - b.z
+    })
   }
 
   inventory(): Item[] {
@@ -864,6 +908,10 @@ function numberOrUndefined(value: number | bigint | undefined): number | undefin
   if (typeof value === 'number') return value
   if (typeof value === 'bigint') return Number(value)
   return undefined
+}
+
+function squaredDistance(left: Vec3, right: Vec3): number {
+  return (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
 }
 
 function errorCode(error: unknown): string {

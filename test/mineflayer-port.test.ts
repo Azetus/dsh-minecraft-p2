@@ -310,6 +310,51 @@ describe('mineflayer port reads', () => {
     ])
   })
 
+  it('finds nearest loaded blocks by name through the id-array fast path', () => {
+    const { port, bot } = createPort()
+    bot.blocks.set('4,64,0', { name: 'crafting_table', type: 182 })
+    bot.blocks.set('1,64,0', { name: 'stone', type: 1 })
+    bot.blocks.set('3,64,0', { name: 'stone', type: 1 })
+
+    const stone = port.findBlocks({
+      near: { x: 0, y: 64, z: 0 },
+      radius: 8,
+      names: ['stone'],
+      count: 5,
+    })
+    expect(stone.map(block => block.pos)).toEqual([
+      { x: 1, y: 64, z: 0 },
+      { x: 3, y: 64, z: 0 },
+    ])
+    expect(bot.findCalls.at(-1)).toMatchObject({
+      point: { x: 0, y: 64, z: 0 },
+      matching: [1],
+      maxDistance: 8,
+      count: 5,
+    })
+
+    const table = port.findBlocks({
+      near: { x: 0, y: 64, z: 0 },
+      radius: 8,
+      names: ['minecraft:crafting_table'],
+      count: 5,
+    })
+    expect(table).toMatchObject([{
+      name: 'crafting_table',
+      loaded: true,
+      pos: { x: 4, y: 64, z: 0 },
+    }])
+
+    const before = bot.findCalls.length
+    expect(port.findBlocks({
+      near: { x: 0, y: 64, z: 0 },
+      radius: 8,
+      names: ['not_a_block'],
+      count: 5,
+    })).toEqual([])
+    expect(bot.findCalls.length).toBe(before)
+  })
+
   it('has no screen capability yet', async () => {
     const { port } = createPort()
     await expect(port.screen()).resolves.toBeNull()
