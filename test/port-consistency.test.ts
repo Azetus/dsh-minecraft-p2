@@ -61,12 +61,12 @@ describe('ClientPort adapter consistency A', () => {
     })
   })
 
-  it('5. reports a timeout as unknown, not failed', async () => {
+  it('5. reports a non-idempotent timeout as unknown ACT_UNCONFIRMED, not failed', async () => {
     const source = new FakeActSource()
     const { port } = createPort(source, new FakeBot(), { timeouts: { dig: 20 } })
     source.mode = 'running'
     const result = await port.dig({ x: 1, y: 64, z: 0 })
-    expect(result).toMatchObject({ state: 'unknown', code: 'CLIENT_TIMEOUT' })
+    expect(result).toMatchObject({ state: 'unknown', code: 'ACT_UNCONFIRMED' })
   })
 
   it('6. sends no writes from the cancelled run in the following second', async () => {

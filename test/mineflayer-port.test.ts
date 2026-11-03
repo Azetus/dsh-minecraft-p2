@@ -123,13 +123,22 @@ describe('mineflayer port actions', () => {
 })
 
 describe('mineflayer port timeout and authority', () => {
-  it('returns unknown on timeout and asks the act to stop', async () => {
+  it('returns ACT_UNCONFIRMED on a non-idempotent timeout and asks the act to stop', async () => {
     const source = new FakeActSource()
     const { port } = createPort(source, new FakeBot(), { timeouts: { dig: 20 } })
     source.mode = 'running'
     const result = await port.dig({ x: 1, y: 64, z: 1 })
     expect(result.state).toBe('unknown')
-    expect(result.code).toBe('CLIENT_TIMEOUT')
+    expect(result.code).toBe('ACT_UNCONFIRMED')
+    expect(source.handles[0]?.stopped).toBe(true)
+  })
+
+  it('returns ACT_TIMEOUT for a retry-safe move timeout', async () => {
+    const source = new FakeActSource()
+    const { port } = createPort(source, new FakeBot(), { timeouts: { moveTo: 20 } })
+    source.mode = 'running'
+    const result = await port.moveTo({ x: 1, y: 64, z: 1 }, { timeoutMs: 20 })
+    expect(result).toMatchObject({ state: 'unknown', code: 'ACT_TIMEOUT' })
     expect(source.handles[0]?.stopped).toBe(true)
   })
 
@@ -142,12 +151,33 @@ describe('mineflayer port timeout and authority', () => {
       layer: 'port',
       actId: 'dig',
       epoch: 1,
+      effect: 'unknown',
+      retrySafe: false,
       lastPoll: 'cancelled',
       providerCode: null,
       controlState: 'idle',
       controlRelease: 'confirmed',
     })
     expect((result.observed as { elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('marks a move timeout retry-safe in evidence', async () => {
+    const source = new FakeActSource()
+    const { port } = createPort(source, new FakeBot(), { timeouts: { moveTo: 20 } })
+    source.mode = 'running'
+    const result = await port.moveTo({ x: 1, y: 64, z: 1 }, { timeoutMs: 20 })
+    expect(result.observed).toMatchObject({ actId: 'motion-goto', effect: 'unknown', retrySafe: true })
+  })
+
+  it('normalizes a provider ACT_TIMEOUT on a non-move act to unconfirmed', async () => {
+    const source = new FakeActSource()
+    const { port } = createPort(source, new FakeBot())
+    source.mode = 'fail'
+    source.failCode = 'ACT_TIMEOUT'
+    expect(await port.dig({ x: 1, y: 64, z: 1 })).toMatchObject({
+      state: 'unknown',
+      code: 'ACT_UNCONFIRMED',
+    })
   })
 
   it('reports STOP_UNCONFIRMED when a non-move stop is not proven released', async () => {

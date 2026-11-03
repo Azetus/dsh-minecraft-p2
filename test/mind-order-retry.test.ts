@@ -122,6 +122,19 @@ describe('primitive order retry policy', () => {
     expect(terminal.at(-1)?.retry).not.toBe(true)
   })
 
+  it('does not retry an unconfirmed action timeout', async () => {
+    const fake = fakePort([{ state: 'failed', code: 'ACT_UNCONFIRMED' }])
+    const mind = makeMind(fake.port)
+    mind.enqueueOrder({ id: 'ord-unconfirmed', verb: 'go', params: { x: 1, y: 64, z: 0 } })
+    await runUntilTerminal(mind, 'ord-unconfirmed')
+
+    expect(mind.orders.get('ord-unconfirmed')?.state).toBe('failed')
+    expect(fake.attempts()).toBe(1)
+    const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
+    expect(terminals).toHaveLength(1)
+    expect((terminals[0]?.data as { retry?: boolean }).retry).not.toBe(true)
+  })
+
   it('does not retry a one-shot equip failure', async () => {
     const fake = fakePort([{ state: 'failed', code: 'EQUIP_ITEM_MISSING' }])
     const mind = makeMind(fake.port)

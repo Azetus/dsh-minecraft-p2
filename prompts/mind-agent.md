@@ -58,6 +58,8 @@ p2_body    {action: start|stop|restart|status}
 | `SITE_NOT_FOUND` | 换区域（`within` 换 anchor/半径）或换模板变体（flat/slope/dig-in） |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位；换模板或换点，不要重复同一条 order |
 | `UNREACHABLE` | 检查 anchor 与路径；必要时先 `go` 到开阔处 |
+| `ACT_UNCONFIRMED` | 动作可能已生效但无终态；先读回/观察，不要原样重下 |
+| `ACT_TIMEOUT` | 预算内无终态但动作可安全重试；仍失败则换方案 |
 | `STOP_UNCONFIRMED` | 不要继续下 order；`p2_body restart`，再看意图日志 |
 | `DEFINITION_ERROR` | 修 JSON 或回滚到上一版模板/树；不要半加载 |
 | `INSUFFICIENT_EVIDENCE` | 不算完成；发 `check` 类 order 或等待，不要当成失败重试 |

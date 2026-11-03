@@ -68,7 +68,7 @@ export function actFailure(
 ): DriverResult {
   return {
     state: 'failed',
-    code: result.code ?? (result.state === 'unknown' ? 'CLIENT_TIMEOUT' : fallback),
+    code: result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : fallback),
     ...(result.observed === undefined ? {} : { observed: result.observed }),
   }
 }

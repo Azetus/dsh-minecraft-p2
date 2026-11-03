@@ -128,13 +128,14 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     // A bounded action can time out while core is still advancing a prefix or
     // waiting for a slow server tick. Retry a few segments; never treat an
     // unknown/stop-unconfirmed result as success.
-    if ((result.code === 'CLIENT_TIMEOUT' || result.code === 'GOTO_TIMEOUT') && timeoutRetries < 3) {
+    if ((result.code === 'ACT_TIMEOUT' || result.code === 'GOTO_TIMEOUT' || result.code === 'CLIENT_TIMEOUT')
+      && timeoutRetries < 3) {
       timeoutRetries += 1
       continue
     }
     return {
       state: 'failed',
-      code: result.code ?? (result.state === 'unknown' ? 'CLIENT_TIMEOUT' : 'GOTO_NO_PATH'),
+      code: result.code ?? (result.state === 'unknown' ? 'ACT_UNCONFIRMED' : 'GOTO_NO_PATH'),
       ...(result.observed === undefined ? {} : { observed: result.observed }),
     }
   }

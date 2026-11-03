@@ -93,6 +93,21 @@ export type SelfInfo = {
 export const PortErrorCodes = {
   CAPABILITY_MISSING: 'CAPABILITY_MISSING',
   STALE_WRITE: 'STALE_WRITE',
+  /**
+   * Timeout after the action was stopped and release was confirmed. The action
+   * either never produced an effect or is safe to repeat (move/look/equip).
+   */
+  ACT_TIMEOUT: 'ACT_TIMEOUT',
+  /**
+   * Timeout after the action may have reached the server. The effect is
+   * unknown: never replay it; re-observe and decide from the world.
+   */
+  ACT_UNCONFIRMED: 'ACT_UNCONFIRMED',
+  /**
+   * Legacy wire code from before the ACT_TIMEOUT/ACT_UNCONFIRMED split.
+   * Never emitted by the current port; kept so saved sessions and old metrics
+   * still map to the new semantics.
+   */
   CLIENT_TIMEOUT: 'CLIENT_TIMEOUT',
 } as const
 

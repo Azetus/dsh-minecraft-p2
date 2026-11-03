@@ -58,6 +58,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
+| `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |
+| `failed(ACT_TIMEOUT)` | 预算内无终态但动作可安全重试；重试仍失败就换目标/方案 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |
 | `OBSERVATION_STALE` | 检查连接；恢复后自动继续，不重放 pending |
 | `mind.hold(NO_SAFE_TARGET)` | 常驻树找不到安全格；先人工确认环境/改任务，不要重复下同一 order |

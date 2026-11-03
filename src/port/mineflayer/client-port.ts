@@ -61,6 +61,22 @@ const ACTION_TIMEOUTS = {
   containerTransfer: 10_000,
 } as const
 
+/**
+ * Act names whose timeout is safe to retry after release is confirmed. Every
+ * other act may already have changed the world; its timeout is
+ * ACT_UNCONFIRMED and must be reconciled by readback instead of replayed.
+ */
+const RETRY_SAFE_TIMEOUT_ACTS: ReadonlySet<string> = new Set([
+  'motion-goto',
+  'look',
+  'lookAt',
+  'equip',
+])
+
+function timeoutCode(name: string): typeof PortErrorCodes.ACT_TIMEOUT | typeof PortErrorCodes.ACT_UNCONFIRMED {
+  return RETRY_SAFE_TIMEOUT_ACTS.has(name) ? PortErrorCodes.ACT_TIMEOUT : PortErrorCodes.ACT_UNCONFIRMED
+}
+
 type BlockLike = {
   type?: number
   name: string
@@ -87,7 +103,13 @@ type EntityLike = {
 
 type WaitResult =
   | { kind: 'done'; poll: ActPoll }
-  | { kind: 'timeout'; released: boolean; observed?: JsonValue }
+  | {
+      kind: 'timeout'
+      released: boolean
+      /** Only meaningful when `released`; unreleased timeouts are STOP_UNCONFIRMED. */
+      code: typeof PortErrorCodes.ACT_TIMEOUT | typeof PortErrorCodes.ACT_UNCONFIRMED
+      observed?: JsonValue
+    }
 
 /**
  * ClientPort over one mineflayer bot. Reads come from the live bot; writes go
@@ -560,8 +582,8 @@ export class MineflayerClientPort implements ClientPort {
       // A result produced after the authority moved on is stale, not success.
       if (!this.gate.isCurrent(epoch)) return actFailed(PortErrorCodes.STALE_WRITE, this.now() - startedAt)
       if (waited.kind === 'timeout') {
-        if (isMove) this.emit('move.finished', { epoch, state: 'unknown', code: 'CLIENT_TIMEOUT', observed: waited.observed ?? null })
-        return actUnknown(PortErrorCodes.CLIENT_TIMEOUT, this.now() - startedAt, waited.observed)
+        if (isMove) this.emit('move.finished', { epoch, state: 'unknown', code: waited.code, observed: waited.observed ?? null })
+        return actUnknown(waited.code, this.now() - startedAt, waited.observed)
       }
 
       const poll = waited.poll
@@ -579,6 +601,12 @@ export class MineflayerClientPort implements ClientPort {
         }
         if (isMove && /TIMEOUT|SEARCH_LIMIT|STOP_UNCONFIRMED/u.test(poll.error.code)) {
           return actUnknown(poll.error.code, this.now() - startedAt, poll.error.details)
+        }
+        // The provider's own action budget is a backstop for non-move acts. A
+        // provider timeout means the effect may have landed even when the act
+        // was released, so it is unconfirmed, never a retryable ACT_TIMEOUT.
+        if (!isMove && (poll.error.code === 'ACT_TIMEOUT' || poll.error.code === 'ACT_UNCONFIRMED')) {
+          return actUnknown(PortErrorCodes.ACT_UNCONFIRMED, this.now() - startedAt, poll.error.details)
         }
         return actFailed(poll.error.code, this.now() - startedAt, poll.error.details)
       }
@@ -636,6 +664,7 @@ export class MineflayerClientPort implements ClientPort {
         return {
           kind: 'timeout',
           released,
+          code: timeoutCode(name),
           observed: this.timeoutEvidence(handle, name, after, epoch, poll.progress, startedAt),
         }
       }
@@ -661,6 +690,8 @@ export class MineflayerClientPort implements ClientPort {
       actId: name,
       epoch: epoch ?? null,
       elapsedMs: this.now() - startedAt,
+      effect: 'unknown',
+      retrySafe: RETRY_SAFE_TIMEOUT_ACTS.has(name),
       lastPoll: after.status,
       providerCode: after.status === 'failed' ? after.error.code : null,
       controlState: handle.controlState?.() ?? null,

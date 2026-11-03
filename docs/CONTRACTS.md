@@ -101,7 +101,11 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - body 重启时只恢复 `state=active`、identity 匹配、deadline 未过的 duty；`collected` 从当前背包重算，`jobs` 从文件恢复。completed/blocked/stopped 不复活。
   - 过期 duty 恢复为 `blocked`，`lastError=DUTY_DEADLINE`，不自动继续；恢复后由主树继续工作，显式 order/plan 仍优先。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
-- 超时（`CLIENT_TIMEOUT`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。
+- 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
+  - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。
+  - `ACT_UNCONFIRMED`：动作可能已到达服务端，效果未知；不得重放，driver 必须先读回/观察，再由上层决定；不自动重试。
+  - `STOP_UNCONFIRMED`：停止/释放无法确认，保持 tracker fault。
+  - `CLIENT_TIMEOUT`：旧码，仅用于历史会话/metrics 映射，当前端口不再发出。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 
 ### 2.1 移动与站位
@@ -295,7 +299,9 @@ type WorkState =
 |---|---|
 | `CAPABILITY_MISSING` | 端口不具备所需能力 |
 | `STALE_WRITE` | 写令牌不匹配（旧实例） |
-| `CLIENT_TIMEOUT` | 动作超时，效果未确认 |
+| `ACT_TIMEOUT` | 动作在预算内无终态，释放已确认，且动作可安全重试（move/look/equip） |
+| `ACT_UNCONFIRMED` | 动作可能已生效但无终态；不重放，先读回/观察 |
+| `CLIENT_TIMEOUT` | 旧码，当前端口不再发出；仅历史数据映射 |
 | `NO_MATERIAL` / `NO_SUPPORT` / `NO_STAND` / `UNREACHABLE` / `CONFLICT` | 工作项不可执行 |
 | `DRIVER_FAULT` | driver 内部错误 |
 | `STOP_UNCONFIRMED` | 停止无法确认 → tracker fault |
