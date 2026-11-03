@@ -175,4 +175,30 @@ describe('failure projection', () => {
       facts: { pathStatus: 'noPath', driverId: 'move' },
     })
   })
+
+  it('keeps budget exhaustion evidence on the budget layer', () => {
+    const observed = ensureFailureObserved({
+      budget: { maxTicks: 100, maxWallMs: 1_000 },
+      elapsedMs: 2_000,
+      elapsedGameAge: 240,
+    } as unknown as JsonValue, 'BUDGET_EXCEEDED', 'move')
+    const failure = readFailure(observed)
+    expect(failure).toMatchObject({
+      layer: 'budget',
+      phase: 'execute',
+      code: 'BUDGET_EXCEEDED',
+      diagnosis: 'UNKNOWN',
+      cause: { kind: 'budget', code: 'BUDGET_EXCEEDED' },
+      recovery: 'reobserve',
+      facts: {
+        budget: { maxTicks: 100, maxWallMs: 1_000 },
+        elapsedMs: 2_000,
+        elapsedGameAge: 240,
+        driverId: 'move',
+      },
+    })
+    const serialized = JSON.stringify(failure)
+    expect(serialized).not.toContain('"action"')
+    expect(serialized).not.toContain('"params"')
+  })
 })

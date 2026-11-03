@@ -7,6 +7,7 @@ import { BodyManager } from '../src/bridge/process-manager.ts'
 import type { BodyHandle } from '../src/bridge/process-manager.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
 import { CompletionFeed, formatCompletionWake } from '../src/bridge/completion-wake.ts'
+import { ensureFailureObserved } from '../src/mind/failure.ts'
 import {
   PROTOCOL_VERSION,
   bodyManifestDigest,
@@ -129,6 +130,46 @@ function createCompletionFeedTest(): void {
           code: 'NO_PATH',
           blocked: false,
           reason: 'NO_PATH',
+        },
+      })
+    })
+
+    it('keeps budget exhaustion facts on the failed order wake', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const observed = ensureFailureObserved({
+        budget: { maxTicks: 100, maxWallMs: 1_000 },
+        elapsedMs: 2_000,
+        elapsedGameAge: 240,
+      } as unknown as JsonValue, 'BUDGET_EXCEEDED', 'move')
+      const items = feed.accept([
+        event(1, 'order.accepted', { kind: 'order.accepted', orderId: 'ord-budget' }),
+        event(2, 'job.terminal', {
+          kind: 'job.terminal',
+          runId: 'run-budget',
+          driverId: 'move',
+          state: 'failed',
+          code: 'BUDGET_EXCEEDED',
+          blocked: false,
+          observed,
+        }),
+        event(3, 'order.terminal', { kind: 'order.terminal', orderId: 'ord-budget', state: 'failed' }),
+      ])
+
+      expect(items).toHaveLength(1)
+      expect(items[0]?.payload).toMatchObject({
+        kind: 'order.terminal',
+        orderId: 'ord-budget',
+        state: 'failed',
+        failure: {
+          layer: 'budget',
+          code: 'BUDGET_EXCEEDED',
+          cause: { kind: 'budget' },
+          facts: {
+            budget: { maxTicks: 100, maxWallMs: 1_000 },
+            elapsedMs: 2_000,
+            elapsedGameAge: 240,
+          },
         },
       })
     })

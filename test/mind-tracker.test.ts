@@ -331,7 +331,35 @@ describe('job tracker', () => {
     expect(tracker.state()).toBe('stopping')
     tracker.tick(2_001)
     expect(tracker.state()).toBe('idle')
-    expect(events.at(-1)).toMatchObject({ kind: 'job.terminal', code: 'BUDGET_EXCEEDED' })
+    expect(events.at(-1)).toMatchObject({
+      kind: 'job.terminal',
+      code: 'BUDGET_EXCEEDED',
+      observed: {
+        budget: { maxTicks: 100, maxWallMs: 1_000 },
+        elapsedMs: 2_000,
+      },
+    })
+  })
+
+  it('fails a job that exceeds its game-tick budget with the elapsed age', () => {
+    const { tracker, driver, events } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick(0, 0)
+    ;(driver.handles[0] as FakeHandle).stopState = 'stopped'
+    tracker.tick(10, 500)
+
+    expect(tracker.state()).toBe('stopping')
+    tracker.tick(11, 500)
+    expect(tracker.state()).toBe('idle')
+    expect(events.at(-1)).toMatchObject({
+      kind: 'job.terminal',
+      code: 'BUDGET_EXCEEDED',
+      observed: {
+        budget: { maxTicks: 100, maxWallMs: 1_000 },
+        elapsedMs: 10,
+        elapsedGameAge: 500,
+      },
+    })
   })
 
   it('suspends the running job without counting a failure or blocking the key', () => {

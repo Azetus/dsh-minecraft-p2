@@ -147,6 +147,9 @@ const FACT_KEYS = new Set([
   'snapshot',
   'supports',
   'suggestedCells',
+  'budget',
+  'elapsedMs',
+  'elapsedGameAge',
 ])
 
 const MAX_FACT_ARRAY = 8
@@ -408,6 +411,9 @@ export function ensureFailureObserved(
   if (readFailure(observed) !== undefined) return observed as JsonValue
   const resolved = code ?? 'DRIVER_FAILED'
   const category = classifyFailure(resolved).category
+  // Budget exhaustion is a tracker-level stop, not a driver result: keep that
+  // distinction visible even when the driver never attached a failure body.
+  const budgetExhausted = resolved === 'BUDGET_EXCEEDED'
   const kind = category === 'safety'
     ? 'authority'
     : category === 'budget'
@@ -416,8 +422,8 @@ export function ensureFailureObserved(
         ? 'unknown'
         : 'world'
   return withFailure(observed, failureBody({
-    layer: 'driver',
-    phase: 'unknown',
+    layer: budgetExhausted ? 'budget' : 'driver',
+    phase: budgetExhausted ? 'execute' : 'unknown',
     code: resolved,
     observed,
     facts: driverId === undefined ? undefined : { driverId },

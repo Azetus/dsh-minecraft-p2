@@ -1,3 +1,4 @@
+import type { JsonValue } from '../contracts/types.ts'
 import type { ClientPort, WriteToken } from '../port/index.ts'
 import { validateParams } from './schema.ts'
 import type {
@@ -219,13 +220,21 @@ export class JobTracker {
       return
     }
     if (now - current.job.issuedAt > current.job.budget.maxWallMs) {
-      this.beginStop(now, { state: 'failed', code: 'BUDGET_EXCEEDED' })
+      this.beginStop(now, {
+        state: 'failed',
+        code: 'BUDGET_EXCEEDED',
+        observed: budgetFailureObserved(current, now, gameAge),
+      })
       return
     }
     if (gameAge !== undefined) {
       if (current.startAge === undefined) current.startAge = gameAge
       else if (gameAge - current.startAge > current.job.budget.maxTicks) {
-        this.beginStop(now, { state: 'failed', code: 'BUDGET_EXCEEDED' })
+        this.beginStop(now, {
+          state: 'failed',
+          code: 'BUDGET_EXCEEDED',
+          observed: budgetFailureObserved(current, now, gameAge),
+        })
         return
       }
     }
@@ -421,6 +430,21 @@ export class JobTracker {
 
   private emit(event: TrackerEvent): void {
     this.onEvent?.(event)
+  }
+}
+
+/**
+ * Evidence for a tracker-level budget stop. The body folds this into
+ * `failure.facts`; it stays bounded and never copies path/candidate data.
+ */
+function budgetFailureObserved(current: Current, now: number, gameAge?: number): JsonValue {
+  const { maxTicks, maxWallMs } = current.job.budget
+  return {
+    budget: { maxTicks, maxWallMs },
+    elapsedMs: now - current.job.issuedAt,
+    ...(gameAge === undefined || current.startAge === undefined
+      ? {}
+      : { elapsedGameAge: gameAge - current.startAge }),
   }
 }
 
