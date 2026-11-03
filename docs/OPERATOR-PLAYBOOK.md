@@ -50,18 +50,27 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 |---|---|
 | `blocked(NO_MATERIAL)` | 补材料 order，或改 `materialPolicy` 允许自动补给 |
 | `failed(TOOL_INSUFFICIENT)` | 先装备/合成合适工具；只想清掉方块时用 `dig purpose:"clear"` |
+| `failed(PLACE_FAILED)` | 放置尝试后未读回目标方块；读 `failure.facts` 的 `target/face/supports/attempts/providerCode/providerMessage` 与 `diagnosis`。`START_EMBEDDED` 按 `adjacent` 换站位；`SUPPORT_MISSING` 先补/换支撑面；`DENIED` 换位置/权限；其余先观察再决定。不要原样重下同一条 place |
+| `failed(PLACE_UNSUPPORTED)` / `failed(NO_SUPPORT)` | 目标周围没有可用支撑面；读 `supports`/`suggestedCells`，换候选格或先补支撑 |
+| `failed(PLACE_BLOCKED_BY_SELF)` | 目标格落在身体里；按 `adjacent` 换站位，不要反复同一条 place |
+| `failed(CRAFT_INCOMPLETE)` | 合成已开始但 `produced < requested`；读 `facts.count/attempted/crafted/produced`，只补差额 |
+| `failed(DIG_PARTIAL)` | 体积/隧道挖掘部分完成；读 `facts.stoppedAt/reason/causeCode/skipped/path`，只补剩余格，不重试整批 |
 | `hold(GO_NO_STAND)` | 目标 2 格内没有可站立格；换坐标，或先整理/确认目标高度 |
 | `failed(APPROACH_NO_STAND)` | 目标方块周围没有可站立格；换目标面或先清理/接近 |
-| `failed(PICKUP_UNREACHABLE)` | 掉落物不可达；换落点、先整理地形，或接受掉落损失 |
+| `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
+| `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |
+| `failed(ACT_TIMEOUT)` | 预算内无终态但动作可安全重试；重试仍失败就换目标/方案 |
+| `failed(ACTION_DENIED)` | 服务端消息明确拒绝；换位置/权限/目标，不要重试 |
+| `failed(BUDGET_EXCEEDED)` | job 超出 `maxWallMs`/`maxTicks`；看 `failure.layer="budget"` 与 `facts.budget/elapsedMs/elapsedGameAge`。不可原样重试；缩小/拆分任务或换目标后重新规划 |
+| `failed(ERR_ASSERTION)` | driver 内部断言/定义错误（`cause.kind="definition"`，`recovery="none"`）；不要重试，改参数/目标或上报定义问题 |
+| `failed(EQUIP_READBACK_UNKNOWN)` / `failed(EQUIP_READBACK_MISMATCH)` | provider 报 equip 成功但手持物缺失或不是请求物品；按未装备处理，先读背包/手持物再决定 |
+| `failed(CONTAINER_READBACK_UNKNOWN)` / `failed(CONTAINER_INCOMPLETE)` | provider 完成传输但前后计数缺失/未达请求；重新打开容器核对，不要当成功 |
 | `failed(ATTACK_TARGET_LOST)` | 目标已离开 32 格/消失；重新获取 entityId 并确认，不要盲目追击 |
 | `failed(ATTACK_TARGET_PROTECTED)` | 玩家/中立目标未授权；换目标或显式 `allowPassive`（玩家永不允许） |
 | `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |
-| `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |
-| `failed(ACT_TIMEOUT)` | 预算内无终态但动作可安全重试；重试仍失败就换目标/方案 |
-| `failed(ACTION_DENIED)` | 服务端消息明确拒绝；换位置/权限/目标，不要重试 |
 | `tracker.fault(STOP_UNCONFIRMED)` | 不要继续下 order；先重启 body，再看意图日志 |
 | `OBSERVATION_STALE` | 检查连接；恢复后自动继续，不重放 pending |
 | `mind.hold(NO_SAFE_TARGET)` | 常驻树找不到安全格；先人工确认环境/改任务，不要重复下同一 order |
