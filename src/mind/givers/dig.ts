@@ -21,6 +21,24 @@ export function createDigOrderGiver(active: () => OrderView | undefined): WorkGi
       if (current === undefined || current.order.verb !== 'dig') return null
       const params = current.order.params
       const purpose = params?.purpose
+      if (params?.shape === 'tunnel') {
+        const to = position(params.to as Record<string, JsonValue> | undefined)
+        if (to === undefined) return null
+        return {
+          driverId: 'dig',
+          target: { kind: 'point', pos: to },
+          params: {
+            shape: 'tunnel',
+            to,
+            ...(purpose === 'clear' || purpose === 'harvest' ? { purpose } : {}),
+            ...(typeof params.height === 'number' ? { height: params.height } : {}),
+            ...(typeof params.preserveFloor === 'boolean' ? { preserveFloor: params.preserveFloor } : {}),
+            ...(typeof params.maxBlocks === 'number' ? { maxBlocks: params.maxBlocks } : {}),
+          },
+          keys: `order.dig:${current.order.id}`,
+          orderId: current.order.id,
+        }
+      }
       if (params?.shape === 'box' || params?.shape === 'line') {
         const from = position(params.from as Record<string, JsonValue> | undefined)
         if (from === undefined) return null

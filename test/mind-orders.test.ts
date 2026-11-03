@@ -107,6 +107,13 @@ describe('order store', () => {
     expect(errorCode(() => store.enqueue({ id: 'dig-volume-big', verb: 'dig',
       params: { shape: 'box', from: { x: 0, y: 64, z: 0 }, to: { x: 1, y: 64, z: 1 }, maxBlocks: 65 } })))
       .toBe('INVALID_ORDER')
+    expect(store.enqueue({ id: 'dig-tunnel', verb: 'dig',
+      params: { shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 2, maxBlocks: 8 } }).state)
+      .toBe('queued')
+    expect(errorCode(() => store.enqueue({ id: 'dig-tunnel-no-to', verb: 'dig',
+      params: { shape: 'tunnel' } }))).toBe('INVALID_ORDER')
+    expect(errorCode(() => store.enqueue({ id: 'dig-tunnel-high', verb: 'dig',
+      params: { shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 4 } }))).toBe('INVALID_ORDER')
   })
 
   it('validates per-order hazard permissions and the traverse verb', () => {

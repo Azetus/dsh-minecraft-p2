@@ -270,6 +270,35 @@ describe('order and traverse givers', () => {
     })
   })
 
+  it('passes a bounded dig tunnel through with its target and bounds', () => {
+    const dig = createDigOrderGiver(() => ({
+      order: {
+        id: 'd-t',
+        verb: 'dig',
+        params: {
+          shape: 'tunnel',
+          to: { x: 4, y: 64, z: 0 },
+          height: 2,
+          preserveFloor: true,
+          maxBlocks: 12,
+          purpose: 'clear',
+        },
+      },
+    }))
+    expect(dig.find(ctx, flatWorld())).toMatchObject({
+      driverId: 'dig',
+      target: { kind: 'point', pos: { x: 4, y: 64, z: 0 } },
+      params: {
+        shape: 'tunnel',
+        to: { x: 4, y: 64, z: 0 },
+        height: 2,
+        preserveFloor: true,
+        maxBlocks: 12,
+        purpose: 'clear',
+      },
+    })
+  })
+
   it('passes a bounded dig volume through with its filters', () => {
     const dig = createDigOrderGiver(() => ({
       order: {

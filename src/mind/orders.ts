@@ -431,9 +431,26 @@ function validateDigParams(params: JsonValue | undefined): void {
   if (params.purpose !== undefined && params.purpose !== 'clear' && params.purpose !== 'harvest') {
     throw orderError('INVALID_ORDER', 'dig.purpose must be clear or harvest')
   }
+  if (params.shape === 'tunnel') {
+    volumePoint(params.to, 'dig.to')
+    if (params.height !== undefined
+      && (typeof params.height !== 'number' || !Number.isInteger(params.height)
+        || params.height < 1 || params.height > 3)) {
+      throw orderError('INVALID_ORDER', 'dig tunnel height must be an integer between 1 and 3')
+    }
+    if (params.preserveFloor !== undefined && typeof params.preserveFloor !== 'boolean') {
+      throw orderError('INVALID_ORDER', 'dig.preserveFloor must be a boolean')
+    }
+    if (params.maxBlocks !== undefined
+      && (typeof params.maxBlocks !== 'number' || !Number.isInteger(params.maxBlocks)
+        || params.maxBlocks < 1 || params.maxBlocks > 64)) {
+      throw orderError('INVALID_ORDER', 'dig.maxBlocks must be an integer between 1 and 64')
+    }
+    return
+  }
   if (params.shape !== undefined) {
     if (params.shape !== 'box' && params.shape !== 'line') {
-      throw orderError('INVALID_ORDER', 'dig.shape must be box or line')
+      throw orderError('INVALID_ORDER', 'dig.shape must be box, line or tunnel')
     }
     const from = volumePoint(params.from, 'dig.from')
     const to = volumePoint(params.to, 'dig.to')
