@@ -19,7 +19,7 @@ const DIG_SCHEMA: SchemaNode = {
     y: { type: 'number' },
     z: { type: 'number' },
     purpose: { type: 'string', enum: ['clear', 'harvest'] },
-    shape: { type: 'string', enum: ['box', 'line'] },
+    shape: { type: 'string', enum: ['box', 'line', 'tunnel'] },
     from: {
       type: 'object',
       properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
@@ -47,7 +47,7 @@ type DigParams = {
   y?: number
   z?: number
   purpose?: DigPurpose
-  shape?: 'box' | 'line'
+  shape?: 'box' | 'line' | 'tunnel'
   from?: DigCell
   to?: DigCell
   only?: string[]
@@ -79,6 +79,18 @@ export function createDigDriver(): Driver {
       if (params.purpose !== undefined && params.purpose !== 'clear' && params.purpose !== 'harvest') {
         return { ok: false, code: 'BAD_ARGS' }
       }
+      if (params.shape === 'tunnel') {
+        if (!isCell(params.to)) return { ok: false, code: 'BAD_ARGS' }
+        if (params.height !== undefined
+          && (!Number.isInteger(params.height) || params.height < 1 || params.height > 3)) {
+          return { ok: false, code: 'BAD_ARGS' }
+        }
+        if (params.maxBlocks !== undefined
+          && (!Number.isInteger(params.maxBlocks) || params.maxBlocks < 1 || params.maxBlocks > HARD_MAX_BLOCKS)) {
+          return { ok: false, code: 'BAD_ARGS' }
+        }
+        return { ok: true }
+      }
       if (params.shape !== undefined) {
         if (params.shape !== 'box' && params.shape !== 'line') return { ok: false, code: 'BAD_ARGS' }
         if (!isCell(params.from) || !isCell(params.to)) return { ok: false, code: 'BAD_ARGS' }
@@ -101,10 +113,14 @@ export function createDigDriver(): Driver {
       const params = job.params as unknown as DigParams
       const key = params.shape === undefined
         ? `dig:${params.x},${params.y},${params.z}:${params.purpose ?? 'harvest'}`
-        : `dig.volume:${params.shape}:${params.from?.x},${params.from?.y},${params.from?.z}:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
+        : params.shape === 'tunnel'
+          ? `dig.tunnel:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
+          : `dig.volume:${params.shape}:${params.from?.x},${params.from?.y},${params.from?.z}:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
       return new AsyncDriverHandle(key, (params.shape === undefined
         ? digOne(ctx, { x: params.x as number, y: params.y as number, z: params.z as number }, params.purpose ?? 'harvest')
-        : digVolume(ctx, params)).then(result => attachDigFailure(result, params)))
+        : params.shape === 'tunnel'
+          ? digTunnel(ctx, params)
+          : digVolume(ctx, params)).then(result => attachDigFailure(result, params)))
     },
   }
 }
@@ -301,6 +317,260 @@ async function digVolume(ctx: DriverCtx, params: DigParams): Promise<DriverResul
   return { state: 'succeeded', observed }
 }
 
+type TunnelPlan = {
+  start: DigCell
+  end: DigCell
+  axis: 'x' | 'z'
+  direction: DigCell
+  height: number
+  preserveFloor: boolean
+  path: DigCell[]
+  cells: DigCell[]
+  maxBlocks: number
+}
+
+/**
+ * A tunnel is one horizontal cardinal corridor with at most one y-step at the
+ * far end. The start is the current standing cell; `to` is the final feet cell.
+ * Cells are ordered from the current body outward, so the return path is the
+ * same list in reverse.
+ */
+async function digTunnel(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
+  const planned = planTunnel(ctx.port, params)
+  if ('error' in planned) {
+    return { state: 'failed', code: planned.code, observed: planned.observed }
+  }
+  const plan = planned.plan
+  const purpose = params.purpose ?? 'harvest'
+  const inventoryBefore = totalCount(ctx.port.inventory())
+  let dug = 0
+  let alreadyAir = 0
+  let stoppedAt: DigCell | null = null
+  let reason: string | undefined
+  let causeCode: string | undefined
+  let equipped: string | undefined
+
+  outer: for (let index = 1; index < plan.path.length; index += 1) {
+    const cell = plan.path[index]!
+    for (let layer = 0; layer < plan.height; layer += 1) {
+      const block = { x: cell.x, y: cell.y + layer, z: cell.z }
+      const check = inspectTunnelBlock(ctx.port, block, plan.direction, plan.preserveFloor)
+      if (check.stop === true) {
+        stoppedAt = block
+        reason = check.reason
+        causeCode = check.code
+        break outer
+      }
+      if (check.air === true) {
+        alreadyAir += 1
+        continue
+      }
+      const choice = chooseTool(check.block!, ctx.port.inventory(), purpose)
+      if (choice.error !== undefined) {
+        stoppedAt = block
+        reason = choice.error === 'BLOCK_UNBREAKABLE' ? 'unbreakable' : 'tool'
+        causeCode = choice.error
+        break outer
+      }
+      if (choice.item !== undefined && choice.item !== equipped) {
+        const result = await ctx.port.equip(choice.item)
+        if (result.state !== 'ok') {
+          stoppedAt = block
+          reason = 'equip'
+          causeCode = result.code ?? 'EQUIP_FAILED'
+          break outer
+        }
+        equipped = choice.item
+      }
+      const result = await ctx.port.dig(block)
+      if (result.state !== 'ok') {
+        stoppedAt = block
+        reason = 'dig'
+        causeCode = result.code ?? 'DIG_FAILED'
+        break outer
+      }
+      const first = ctx.port.blockAt(block)
+      await sleep(120)
+      const second = ctx.port.blockAt(block)
+      if (!isAirBlock(first) || !isAirBlock(second)) {
+        stoppedAt = block
+        reason = 'readback'
+        causeCode = 'DIG_READBACK_UNSTABLE'
+        break outer
+      }
+      dug += 1
+    }
+    const moved = await ctx.port.moveTo(cell, { range: 0, timeoutMs: 15_000 })
+    if (moved.state !== 'ok') {
+      stoppedAt = cell
+      reason = 'move'
+      causeCode = moved.code ?? 'DIG_TUNNEL_MOVE_FAILED'
+      break
+    }
+  }
+
+  const returnable = reason === undefined && tunnelReturnable(ctx.port, plan.path, plan.height)
+  const pickup = purpose === 'harvest' && dug > 0
+    ? await pickupNearby(ctx.port, tunnelCenter(plan.path), { delayTicks: 8 })
+    : undefined
+  const inventoryAfter = totalCount(ctx.port.inventory())
+  const observed: Record<string, JsonValue> = {
+    kind: 'dig.tunnel',
+    shape: 'tunnel',
+    from: plan.start,
+    to: plan.end,
+    height: plan.height,
+    preserveFloor: plan.preserveFloor,
+    purpose,
+    planned: plan.cells.length,
+    dug,
+    alreadyAir,
+    path: plan.path as unknown as JsonValue,
+    returnable,
+    stoppedAt,
+    inventoryBefore,
+    inventoryAfter,
+    dropDelta: inventoryAfter - inventoryBefore,
+    ...(pickup === undefined ? {} : { pickup: pickup.observed }),
+  }
+  if (reason !== undefined) {
+    return {
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: {
+        ...observed,
+        reason,
+        ...(causeCode === undefined ? {} : { causeCode }),
+        partial: {
+          dug,
+          planned: plan.cells.length,
+          stoppedAt,
+          reason,
+          ...(causeCode === undefined ? {} : { causeCode }),
+        },
+      },
+    }
+  }
+  return { state: 'succeeded', observed }
+}
+
+function planTunnel(
+  port: DriverCtx['port'],
+  params: DigParams,
+): { plan: TunnelPlan } | { error: true; code: string; observed: JsonValue } {
+  const to = params.to
+  if (!isCell(to)) return { error: true, code: 'BAD_ARGS', observed: { detail: 'tunnel requires integer to' } }
+  const self = port.self().pos
+  const start = { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) }
+  const dx = to.x - start.x
+  const dz = to.z - start.z
+  const dy = to.y - start.y
+  if ((dx === 0 && dz === 0) || (dx !== 0 && dz !== 0)) {
+    return {
+      error: true,
+      code: 'BAD_ARGS',
+      observed: { detail: 'tunnel requires exactly one horizontal direction', from: start, to },
+    }
+  }
+  if (Math.abs(dy) > 1) {
+    return {
+      error: true,
+      code: 'BAD_ARGS',
+      observed: { detail: 'tunnel allows at most one y-step', from: start, to },
+    }
+  }
+  const axis = dx === 0 ? 'z' : 'x'
+  const step = Math.sign(axis === 'x' ? dx : dz)
+  const length = Math.abs(dx) + Math.abs(dz)
+  const height = params.height ?? 2
+  const maxBlocks = Math.min(HARD_MAX_BLOCKS, params.maxBlocks ?? DEFAULT_MAX_BLOCKS)
+  const path: DigCell[] = [start]
+  for (let index = 1; index <= length; index += 1) {
+    path.push({
+      x: start.x + (axis === 'x' ? step * index : 0),
+      y: index === length ? to.y : start.y,
+      z: start.z + (axis === 'z' ? step * index : 0),
+    })
+  }
+  const cells: DigCell[] = []
+  for (const cell of path.slice(1)) {
+    for (let layer = 0; layer < height; layer += 1) {
+      cells.push({ x: cell.x, y: cell.y + layer, z: cell.z })
+    }
+  }
+  if (cells.length > maxBlocks) {
+    return {
+      error: true,
+      code: 'DIG_VOLUME_TOO_LARGE',
+      observed: { planned: cells.length, maxBlocks, kind: 'dig.tunnel' },
+    }
+  }
+  return {
+    plan: {
+      start,
+      end: to,
+      axis,
+      direction: axis === 'x' ? { x: step, y: 0, z: 0 } : { x: 0, y: 0, z: step },
+      height,
+      preserveFloor: params.preserveFloor !== false,
+      path,
+      cells,
+      maxBlocks,
+    },
+  }
+}
+
+function inspectTunnelBlock(
+  port: DriverCtx['port'],
+  block: DigCell,
+  direction: DigCell,
+  preserveFloor: boolean,
+): { stop: true; reason: string; code?: string } | { stop?: false; air: true } | { stop?: false; air?: false; block: BlockInfo } {
+  const before = port.blockAt(block)
+  if (before === null || !before.loaded) return { stop: true, reason: 'unloaded' }
+  if (isFluidName(before.name)) return { stop: true, reason: 'fluid', code: before.name }
+  if (preserveFloor && selfCovers(port.self().pos, block)) return { stop: true, reason: 'preserve-floor' }
+  const behind = port.blockAt({
+    x: block.x - direction.x,
+    y: block.y,
+    z: block.z - direction.z,
+  })
+  if (behind === null || !behind.loaded) return { stop: true, reason: 'unloaded' }
+  if (isFluidName(behind.name)) return { stop: true, reason: 'fluid', code: behind.name }
+  if (isAirName(before.name)) return { air: true }
+  if (before.diggable === false) return { stop: true, reason: 'unbreakable', code: 'BLOCK_UNBREAKABLE' }
+  return { block: before }
+}
+
+function tunnelReturnable(
+  port: DriverCtx['port'],
+  path: readonly DigCell[],
+  height: number,
+): boolean {
+  if (height < 2) return false
+  for (const cell of path) {
+    const feet = port.blockAt(cell)
+    const head = port.blockAt({ x: cell.x, y: cell.y + 1, z: cell.z })
+    const support = port.blockAt({ x: cell.x, y: cell.y - 1, z: cell.z })
+    if (feet === null || head === null || support === null) return false
+    if (!feet.loaded || !head.loaded || !support.loaded) return false
+    if (!isAirName(feet.name) || !isAirName(head.name)) return false
+    if (isFluidName(feet.name) || isFluidName(head.name) || isFluidName(support.name)) return false
+    if (isAirName(support.name)) return false
+  }
+  return true
+}
+
+function tunnelCenter(path: readonly DigCell[]): DigCell {
+  const first = path[0]!
+  const last = path.at(-1)!
+  return {
+    x: Math.floor((first.x + last.x) / 2),
+    y: Math.floor((first.y + last.y) / 2),
+    z: Math.floor((first.z + last.z) / 2),
+  }
+}
+
 function volumeCells(params: DigParams): { cells: DigCell[] } | { error: string } {
   const from = params.from
   const to = params.to
@@ -367,6 +637,10 @@ function isAirName(name: string): boolean {
   return name === 'air' || name === 'cave_air' || name === 'void_air'
 }
 
+function isFluidName(name: string): boolean {
+  return name === 'water' || name === 'lava' || name === 'bubble_column'
+}
+
 function isAirBlock(block: BlockInfo | null): boolean {
   return block !== null && block.loaded && isAirName(block.name)
 }
@@ -382,6 +656,8 @@ function attachDigFailure(result: DriverResult, params: DigParams): DriverResult
   const single = { x: params.x, y: params.y, z: params.z }
   if (params.shape === undefined && isCell(single)) {
     facts.target = { x: single.x, y: single.y, z: single.z }
+  } else if (params.shape === 'tunnel' && isCell(params.to)) {
+    facts.target = { to: params.to } as unknown as JsonValue
   } else if (isCell(params.from) && isCell(params.to)) {
     facts.target = { from: params.from, to: params.to } as unknown as JsonValue
   }

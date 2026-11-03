@@ -31,15 +31,17 @@ function portWith(options: {
   inventory?: Item[]
   drops?: Item[]
   moveFails?: boolean
+  start?: Vec3
 } = {}): { port: ClientPort; digs: () => number; equips: string[]; blocks: Map<string, BlockInfo> } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set(key(target), options.block ?? stone())
   const items = [...(options.inventory ?? [])]
   const drops = options.drops ?? []
   const equips: string[] = []
+  let self = options.start ?? { x: 1.5, y: 64, z: 0.5 }
   let digs = 0
   const port = {
-    self: () => ({ pos: { x: 1.5, y: 64, z: 0.5 } }),
+    self: () => ({ pos: { ...self } }),
     blockAt: (p: Vec3): BlockInfo | null => {
       const block = blocks.get(key(p))
       if (block !== undefined) return { ...block, pos: p }
@@ -47,9 +49,11 @@ function portWith(options: {
     },
     inventory: () => items,
     entities: () => [],
-    moveTo: async () => (options.moveFails === true
-      ? { state: 'failed' as const, code: 'GOTO_NO_PATH', elapsedMs: 1 }
-      : { state: 'ok' as const, elapsedMs: 1 }),
+    moveTo: async (p: Vec3) => {
+      if (options.moveFails === true) return { state: 'failed' as const, code: 'GOTO_NO_PATH', elapsedMs: 1 }
+      self = { x: p.x + 0.5, y: p.y, z: p.z + 0.5 }
+      return { state: 'ok' as const, elapsedMs: 1 }
+    },
     equip: async (item: string) => { equips.push(item); return { state: 'ok' as const, elapsedMs: 1 } },
     dig: async (p: Vec3) => {
       digs += 1
@@ -164,6 +168,135 @@ describe('dig driver tool handling', () => {
     expect(result).toMatchObject({ state: 'failed', code: 'CLIENT_TIMEOUT', observed: evidence })
     expect((result.observed as { failure?: unknown }).failure)
       .toMatchObject({ layer: 'port', code: 'CLIENT_TIMEOUT', cause: { kind: 'provider' } })
+  })
+})
+
+type TunnelFake = ReturnType<typeof portWith>
+
+function tunnelCorridor(
+  fake: TunnelFake,
+  options: { from: number; to: number; y: number; height: number; stepTo?: number },
+): void {
+  const start = options.from
+  const end = options.to
+  // Starting body column.
+  fake.blocks.set(`${start},${options.y - 1},0`, stone())
+  fake.blocks.set(`${start},${options.y},0`, { name: 'air', loaded: true })
+  fake.blocks.set(`${start},${options.y + 1},0`, { name: 'air', loaded: true })
+  const direction = Math.sign(end - start)
+  for (let x = start + direction; x !== end + direction; x += direction) {
+    const feet = x === end && options.stepTo !== undefined ? options.stepTo : options.y
+    fake.blocks.set(`${x},${feet - 1},0`, stone())
+    for (let layer = 0; layer < options.height; layer += 1) {
+      fake.blocks.set(`${x},${feet + layer},0`, stone())
+    }
+  }
+}
+
+describe('dig tunnel', () => {
+  it('digs a three-cell horizontal 1x2 corridor and reports a return path', async () => {
+    const fake = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    tunnelCorridor(fake, { from: 0, to: 3, y: 64, height: 2 })
+    const result = await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 2, purpose: 'clear',
+    })
+
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: {
+        kind: 'dig.tunnel',
+        shape: 'tunnel',
+        planned: 6,
+        dug: 6,
+        alreadyAir: 0,
+        returnable: true,
+        path: [
+          { x: 0, y: 64, z: 0 },
+          { x: 1, y: 64, z: 0 },
+          { x: 2, y: 64, z: 0 },
+          { x: 3, y: 64, z: 0 },
+        ],
+        stoppedAt: null,
+      },
+    })
+    expect(fake.digs()).toBe(6)
+    expect(fake.blocks.get('1,63,0')?.name).toBe('stone')
+  })
+
+  it('digs a one-block step down and a one-block step up', async () => {
+    const down = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    tunnelCorridor(down, { from: 0, to: 2, y: 64, height: 2, stepTo: 63 })
+    const downResult = await runJob(down.port, {
+      shape: 'tunnel', to: { x: 2, y: 63, z: 0 }, height: 2, purpose: 'clear',
+    })
+    expect(downResult).toMatchObject({ state: 'succeeded', observed: { dug: 4, returnable: true } })
+
+    const up = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    tunnelCorridor(up, { from: 0, to: 2, y: 64, height: 2, stepTo: 65 })
+    // The cell above the previous tunnel cell must be observable; it is not
+    // part of the step body but is the "behind" fluid probe for the head layer.
+    up.blocks.set('1,66,0', { name: 'air', loaded: true })
+    const upResult = await runJob(up.port, {
+      shape: 'tunnel', to: { x: 2, y: 65, z: 0 }, height: 2, purpose: 'clear',
+    })
+    expect(upResult).toMatchObject({ state: 'succeeded', observed: { dug: 4, returnable: true } })
+  })
+
+  it('stops before a fluid target with DIG_PARTIAL and does not dig it', async () => {
+    const fake = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    tunnelCorridor(fake, { from: 0, to: 3, y: 64, height: 2 })
+    fake.blocks.set('2,64,0', { name: 'water', loaded: true })
+    const result = await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 2, purpose: 'clear',
+    })
+
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: {
+        dug: 2,
+        returnable: false,
+        stoppedAt: { x: 2, y: 64, z: 0 },
+        reason: 'fluid',
+        partial: { dug: 2, planned: 6, reason: 'fluid' },
+      },
+    })
+    expect(fake.blocks.get('2,64,0')?.name).toBe('water')
+  })
+
+  it('stops at an unloaded cell instead of guessing through it', async () => {
+    const fake = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    tunnelCorridor(fake, { from: 0, to: 3, y: 64, height: 2 })
+    fake.blocks.delete('2,64,0')
+    const result = await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 2, purpose: 'clear',
+    })
+
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: { stoppedAt: { x: 2, y: 64, z: 0 }, reason: 'unloaded' },
+    })
+  })
+
+  it('rejects a tunnel above maxBlocks without digging', async () => {
+    const fake = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    const result = await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 4, y: 64, z: 0 }, height: 2, maxBlocks: 6, purpose: 'clear',
+    })
+
+    expect(result).toMatchObject({ state: 'failed', code: 'DIG_VOLUME_TOO_LARGE' })
+    expect(fake.digs()).toBe(0)
+  })
+
+  it('rejects diagonal and multi-step tunnel targets', async () => {
+    const fake = portWith({ start: { x: 0.5, y: 64, z: 0.5 } })
+    expect(await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 2, y: 64, z: 1 }, purpose: 'clear',
+    })).toMatchObject({ state: 'failed', code: 'BAD_ARGS' })
+    expect(await runJob(fake.port, {
+      shape: 'tunnel', to: { x: 2, y: 66, z: 0 }, purpose: 'clear',
+    })).toMatchObject({ state: 'failed', code: 'BAD_ARGS' })
   })
 })
 

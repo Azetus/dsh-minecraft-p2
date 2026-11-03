@@ -85,6 +85,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
   - 单格：`{x,y,z}` 保持旧语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
   - 体积：`{shape:"box"|"line", from:{x,y,z}, to:{x,y,z}, height? 1–8, only?:string[], preserveFloor? 默认 true, maxBlocks? 1–64 默认 24}`。`line` 要求恰好一个轴不同；超过 `maxBlocks` 直接 `DIG_VOLUME_TOO_LARGE`，不静默截断；
+  - 隧道：`{shape:"tunnel", to:{x,y,z}, height? 1–3 默认 2, preserveFloor? 默认 true, maxBlocks? 默认 24/上限 64}`。起点是当前脚格，`to` 只允许一个水平轴向、至多一次 y±1 台阶，不做竖井；逐格清脚/头、前进、两次读回，返回 `path`（含起点）与 `returnable`。每挖一格前检查目标格和行进方向后一格，遇水/岩浆、未加载或不可破坏立即停止，返回 `failed DIG_PARTIAL` + `stoppedAt` + `reason`（`fluid`/`unloaded`/`unbreakable`/`tool`/`dig`/`readback`/`move`/`equip`），不挖穿、不猜；
   - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
   - `harvest` 在整批结束后统一拾取一次（中心点）；单格 `harvest` 仍在挖后立即拾取；
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`。
