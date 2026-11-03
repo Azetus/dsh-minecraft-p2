@@ -31,6 +31,7 @@ export type SkillRegistration = {
   name: string
   description: string
   content: string
+  source?: 'runtime'
   resourceBase?: { kind: 'directory'; path: string }
   invocation?: { modelInvocable: boolean; userInvocable: boolean }
 }
@@ -70,6 +71,7 @@ export function registerOperatorSkill(
       name: OPERATOR_SKILL_NAME,
       description: OPERATOR_SKILL_DESCRIPTION,
       content: source.content,
+      source: 'runtime',
       resourceBase: { kind: 'directory', path: source.dir },
       invocation: { modelInvocable: true, userInvocable: true },
     })

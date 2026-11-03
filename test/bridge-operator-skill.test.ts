@@ -48,6 +48,7 @@ describe('packaged operator skill', () => {
     expect(registered[0]).toMatchObject({
       name: OPERATOR_SKILL_NAME,
       description: OPERATOR_SKILL_DESCRIPTION,
+      source: 'runtime',
       resourceBase: { kind: 'directory', path: join(process.cwd(), 'skills', 'p2-operator') },
       invocation: { modelInvocable: true, userInvocable: true },
     })
