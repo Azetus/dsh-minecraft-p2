@@ -127,4 +127,28 @@ describe('primitive order retry policy', () => {
     expect(mind.orders.get('ord-equip')?.state).toBe('failed')
     expect(fake.equips()).toBe(0)
   })
+
+  it('does not retry a placement whose target is inside the body', async () => {
+    const port = {
+      on: () => {},
+      self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 }, yaw: 0, pitch: 0, health: 20, food: 20,
+        onGround: true, inWater: false, inLava: false }),
+      time: () => ({ timeOfDay: 1000, worldAge: 1 }),
+      blockAt: (p: { x: number; y: number; z: number }) => ({ name: 'air', loaded: true, pos: p }),
+      blocksIn: () => [],
+      entities: () => [],
+      inventory: () => [],
+      beginWrite: () => {},
+      endWrite: () => {},
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+      place: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    const mind = makeMind(port)
+    mind.enqueueOrder({ id: 'ord-self', verb: 'place', params: { x: 0, y: 64, z: 0, item: 'dirt' } })
+    await runUntilTerminal(mind, 'ord-self')
+
+    expect(mind.orders.get('ord-self')?.state).toBe('failed')
+    const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
+    expect(terminals).toHaveLength(1)
+  })
 })
