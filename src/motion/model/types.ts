@@ -268,13 +268,22 @@ export function createGoal(target: Cell, arrival: ArrivalPolicy = { kind: 'near'
 
 export type DoorState = 'open' | 'closed' | 'locked' | 'none' | 'unknown'
 
+/** A block that prevents standing, with the body layer it occupies. */
+export type StandBlock = {
+  layer: 'support' | 'feet' | 'head'
+  cell: Cell
+  name: string
+}
+
 /**
  * Result of a standing check. `feetY` is the continuous feet height derived
  * from the support's real collision top (0.5 for a bottom slab, 1 for a cube).
+ * `blockedBy` is evidence only on `no`: the blocks that would have to change
+ * before this cell could be stood on.
  */
 export type StandInfo =
   | { state: 'yes'; feetY: number }
-  | { state: 'no'; reason: string }
+  | { state: 'no'; reason: string; blockedBy?: StandBlock[] }
   | { state: 'unknown'; reason: string }
 
 /**

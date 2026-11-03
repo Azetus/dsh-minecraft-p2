@@ -1,4 +1,5 @@
-import { cellOf } from '../motion/model/index.ts'
+import { standingCell } from '../motion/execute/index.ts'
+import { createRules, defaultConstraints, type StandBlock } from '../motion/model/index.ts'
 import { standCells, type StandCell, type StandResult } from '../motion/search/index.ts'
 import { createReadOnlyMotionWorld } from './standing.ts'
 import type { Box, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
@@ -35,6 +36,20 @@ export type PickupMoveView = {
   actual?: Vec3
 }
 
+export type PickupStandView = {
+  reason: string | null
+  coverage: string
+  scanned: number
+  unknown: number
+  candidates: number
+  /** Why no movement was possible; absent when a cell was reached. */
+  unreachableReason?: 'path-blocked' | 'reachability-unknown' | 'no-stand-cell' | 'unloaded-window' | 'positioning-failed'
+  /** Blocks that currently prevent standing where the drop is. */
+  requiredDig?: Array<{ x: number; y: number; z: number; layer: 'support' | 'feet' | 'head'; name: string }>
+  /** Every candidate with its reachability verdict, for diagnosis. */
+  candidateCells?: Array<{ x: number; y: number; z: number; reachable: string; steps?: number }>
+}
+
 export type PickupResult = {
   drops: number
   picked: number
@@ -62,13 +77,7 @@ export type PickupResult = {
     moves: PickupMoveView[]
     items: PickupItemView[]
     /** Last core stand query that chose pickup cells, when one ran. */
-    standQuery?: {
-      reason: string | null
-      coverage: string
-      scanned: number
-      unknown: number
-      candidates: number
-    }
+    standQuery?: PickupStandView
   }
 }
 
@@ -110,7 +119,7 @@ export async function pickupNearby(
   let full = 0
   let merged = 0
   let partial = 0
-  let pickupQuery: StandResult | undefined
+  let standView: PickupStandView | undefined
 
   for (let index = 0; index < initial.length; index += 1) {
     const drop = initial[index]!
@@ -118,54 +127,63 @@ export async function pickupNearby(
     const currentSelf = port.self()
     let pickedDuringMove = false
     if (!canPickupFrom(currentSelf, drop)) {
-      let reached = false
-      const direct = await port.moveTo(drop.position, {
-        range: 1,
-        intent: 'interact',
-        timeoutMs: MOVE_TIMEOUT_MS,
-      })
-      moves.push({
-        target: { ...drop.position },
-        state: direct.state,
-        ...(direct.code === undefined ? {} : { code: direct.code }),
-        ...(direct.state === 'ok' ? { actual: { ...port.self().pos } } : {}),
-      })
-      const afterDirect = totalCount(port.inventory())
-      if (afterDirect > before) {
-        picked += afterDirect - before
-        before = afterDirect
-        pickedDuringMove = true
-        reached = true
-      } else if (direct.state === 'ok' && canPickupFrom(port.self(), drop)) {
-        reached = true
+      // P1: never walk to the item's position (an item is not a stand cell).
+      // The core query supplies real stand cells plus their feet height; a cell
+      // already inside the pickup AABB is the only thing worth moving to.
+      const found = findPickupCells(port, drop, port.self())
+      standView = {
+        reason: found.query.reason ?? null,
+        coverage: found.query.coverage,
+        scanned: found.query.scanned,
+        unknown: found.query.unknown,
+        candidates: found.query.cells.length,
+        ...(found.blocked.length === 0
+          ? {}
+          : {
+              requiredDig: found.blocked.map(block => ({
+                x: block.cell.x,
+                y: block.cell.y,
+                z: block.cell.z,
+                layer: block.layer,
+                name: block.name,
+              })),
+            }),
+        ...(found.query.cells.length === 0
+          ? {}
+          : {
+              candidateCells: found.query.cells.map(candidate => ({
+                x: candidate.cell.x,
+                y: candidate.cell.y,
+                z: candidate.cell.z,
+                reachable: candidate.reachable,
+                ...(candidate.steps === undefined ? {} : { steps: candidate.steps }),
+              })),
+            }),
       }
-      if (!reached) {
-        const found = findPickupCells(port, drop, port.self())
-        pickupQuery = found.query
-        for (const cell of found.cells) {
-          const moved = await port.moveTo(cell, {
-            range: 1,
-            intent: 'interact',
-            timeoutMs: MOVE_TIMEOUT_MS,
-          })
-          moves.push({
-            target: cell,
-            state: moved.state,
-            ...(moved.code === undefined ? {} : { code: moved.code }),
-            ...(moved.state === 'ok' ? { actual: { ...port.self().pos } } : {}),
-          })
-          const afterMove = totalCount(port.inventory())
-          if (afterMove > before) {
-            picked += afterMove - before
-            before = afterMove
-            pickedDuringMove = true
-            reached = true
-            break
-          }
-          if (moved.state === 'ok' && canPickupFrom(port.self(), drop)) {
-            reached = true
-            break
-          }
+      let reached = false
+      for (const cell of found.cells) {
+        const moved = await port.moveTo(cell, {
+          range: 0,
+          intent: 'interact',
+          timeoutMs: MOVE_TIMEOUT_MS,
+        })
+        moves.push({
+          target: cell,
+          state: moved.state,
+          ...(moved.code === undefined ? {} : { code: moved.code }),
+          ...(moved.state === 'ok' ? { actual: { ...port.self().pos } } : {}),
+        })
+        const afterMove = totalCount(port.inventory())
+        if (afterMove > before) {
+          picked += afterMove - before
+          before = afterMove
+          pickedDuringMove = true
+          reached = true
+          break
+        }
+        if (moved.state === 'ok' && canPickupFrom(port.self(), drop)) {
+          reached = true
+          break
         }
       }
       if (pickedDuringMove) {
@@ -175,6 +193,7 @@ export async function pickupNearby(
       }
       if (!reached) {
         unreachable += 1
+        standView.unreachableReason = standUnreachableReason(found)
         await requeryItem(port, requery, drop, view, center)
         continue
       }
@@ -257,17 +276,7 @@ export async function pickupNearby(
       },
       moves,
       items,
-      ...(pickupQuery === undefined
-        ? {}
-        : {
-            standQuery: {
-              reason: pickupQuery.reason ?? null,
-              coverage: pickupQuery.coverage,
-              scanned: pickupQuery.scanned,
-              unknown: pickupQuery.unknown,
-              candidates: pickupQuery.cells.length,
-            },
-          }),
+      ...(standView === undefined ? {} : { standQuery: standView }),
     },
   }
 }
@@ -304,16 +313,22 @@ function findPickupCells(
   port: ClientPort,
   item: EntityInfo,
   self: SelfInfo,
-): { cells: Vec3[]; query: StandResult } {
+): { cells: Vec3[]; query: StandResult; blocked: StandBlock[] } {
   const base = {
     x: Math.floor(item.position.x),
     y: Math.floor(item.position.y),
     z: Math.floor(item.position.z),
   }
+  const world = createReadOnlyMotionWorld(point => port.blockAt(point))
+  const rules = createRules(world, defaultConstraints())
+  // Evidence for the no-cell branch: which blocks make the drop's own cell
+  // unstandable. The query itself only returns verdicts.
+  const info = rules.standInfo(base)
+  const blocked = info.state === 'no' && info.blockedBy !== undefined ? info.blockedBy : []
   // The AABB stays here: the core query only supplies standable cells and their
   // real feet height (a drop on a bottom slab sits at y-0.5, not y).
   const query = standCells(
-    createReadOnlyMotionWorld(point => port.blockAt(point)),
+    world,
     {
       near: base,
       reach: { horizontal: 3, vertical: 2 },
@@ -321,12 +336,15 @@ function findPickupCells(
     },
     // A drop floating on water is a real pickup target: keep water cells
     // eligible here, unlike reflex/escape queries which must stand dry.
-    { from: cellOf(self.pos), dry: false },
+    { from: standingCell(rules, self.pos), dry: false },
   )
   const rank = (candidate: StandCell): number => candidate.reachable === 'yes'
     ? 0
     : candidate.reachable === 'unknown' ? 1 : 2
   const cells = [...query.cells]
+    // A proven-unreachable candidate is evidence, not a move target: walking
+    // to it only produces a second GOTO_NO_PATH for the same cell.
+    .filter(candidate => candidate.reachable !== 'no')
     .sort((left, right) => rank(left) - rank(right)
       || (left.steps ?? Number.MAX_SAFE_INTEGER) - (right.steps ?? Number.MAX_SAFE_INTEGER)
       || left.distance - right.distance
@@ -335,7 +353,15 @@ function findPickupCells(
       || left.cell.z - right.cell.z)
     .slice(0, 8)
     .map(candidate => candidate.cell)
-  return { cells, query }
+  return { cells, query, blocked }
+}
+
+function standUnreachableReason(found: { cells: Vec3[]; query: StandResult }): NonNullable<PickupStandView['unreachableReason']> {
+  if (found.cells.length > 0) return 'positioning-failed'
+  if (found.query.cells.length > 0) {
+    return found.query.coverage === 'complete' ? 'path-blocked' : 'reachability-unknown'
+  }
+  return found.query.reason === 'unloaded-window' ? 'unloaded-window' : 'no-stand-cell'
 }
 
 function itemView(port: ClientPort, entity: EntityInfo, self: SelfInfo): PickupItemView {

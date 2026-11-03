@@ -57,7 +57,7 @@ describe('pickup', () => {
     expect(Math.hypot(moves[0]!.x - 1, moves[0]!.z)).toBeLessThanOrEqual(3)
   })
 
-  it('reports an unreachable drop instead of claiming a pickup', async () => {
+  it('reports an unreachable drop without walking to the item position', async () => {
     let moves = 0
     const port = {
       self: () => selfAt(),
@@ -70,7 +70,60 @@ describe('pickup', () => {
     const result = await pickupNearby(port, target)
 
     expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 1 })
-    expect(moves).toBe(1)
+    // P1: an item position is not a stand cell, so a dead window means no move.
+    expect(moves).toBe(0)
+    expect(result.observed.standQuery).toMatchObject({
+      reason: 'unloaded-window',
+      unreachableReason: 'unloaded-window',
+      candidates: 0,
+    })
+  })
+
+  it('points at the head/feet cells when the drop has no stand cell', async () => {
+    const solid = { name: 'stone', loaded: true, solid: true }
+    const port = {
+      self: () => selfAt(-2.5),
+      inventory: () => [],
+      entities: () => [drop({ x: 0.5, y: 64, z: 0.5 })],
+      blockAt: () => solid,
+      moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
+
+    expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 1 })
+    const stand = result.observed.standQuery
+    expect(stand).toMatchObject({ unreachableReason: 'no-stand-cell', candidates: 0 })
+    expect(stand?.requiredDig).toEqual(expect.arrayContaining([
+      { x: 0, y: 64, z: 0, layer: 'feet', name: 'stone' },
+      { x: 0, y: 65, z: 0, layer: 'head', name: 'stone' },
+    ]))
+  })
+
+  it('reports path-blocked with candidates instead of moving to proven-unreachable cells', async () => {
+    const floor = (p: Vec3): BlockInfo | null => {
+      if (p.y === 63 && p.x >= -4 && p.x <= 4
+        && ((p.z >= 0 && p.z <= 1) || (p.z >= 4 && p.z <= 6))) {
+        return { name: 'stone', loaded: true, solid: true }
+      }
+      return { name: 'air', loaded: true }
+    }
+    let moves = 0
+    const port = {
+      self: () => selfAt(0.5),
+      inventory: () => [],
+      entities: () => [drop({ x: 0.5, y: 64, z: 5.5 })],
+      blockAt: floor,
+      moveTo: async () => { moves += 1; return { state: 'ok', elapsedMs: 1 } },
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
+
+    expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 1 })
+    expect(moves).toBe(0)
+    const stand = result.observed.standQuery
+    expect(stand).toMatchObject({ coverage: 'complete', unreachableReason: 'path-blocked' })
+    expect(stand?.candidateCells?.some(candidate => candidate.reachable === 'no')).toBe(true)
   })
 
   it('counts an automatic pickup even when the move reports failure', async () => {

@@ -88,7 +88,11 @@ describe('motion rules: collision comes from block state', () => {
     const world = new FixtureWorld()
     world.blocks.set('0,63,0', rawBlock('fence', [[0.375, 0, 0.375, 0.625, 1.5, 0.625]]))
     const rules = rulesFor(world)
-    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({ state: 'no', reason: 'support-too-high' })
+    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({
+      state: 'no',
+      reason: 'support-too-high',
+      blockedBy: [{ layer: 'support', cell: { x: 0, y: 63, z: 0 }, name: 'fence' }],
+    })
     expect(rules.canWalkOn({ x: 0, y: 63, z: 0 })).toBe('no')
   })
 })
@@ -104,7 +108,11 @@ describe('motion rules: body clearance', () => {
 
     world.blocks.set('0,64,0', rawBlock('stone', FULL_CUBE))
     rules.invalidate()
-    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({ state: 'no', reason: 'body-collision' })
+    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({
+      state: 'no',
+      reason: 'body-collision',
+      blockedBy: [{ layer: 'feet', cell: { x: 0, y: 64, z: 0 }, name: 'stone' }],
+    })
   })
 
   it('rejects a head-height collision', () => {
@@ -113,7 +121,11 @@ describe('motion rules: body clearance', () => {
     world.blocks.set('0,64,0', rawBlock('air', []))
     world.blocks.set('0,65,0', rawBlock('stone', FULL_CUBE))
     const rules = rulesFor(world)
-    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({ state: 'no', reason: 'body-collision' })
+    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({
+      state: 'no',
+      reason: 'body-collision',
+      blockedBy: [{ layer: 'head', cell: { x: 0, y: 65, z: 0 }, name: 'stone' }],
+    })
   })
 
   it("does not let a slab's own top count as a wall", () => {
@@ -179,7 +191,11 @@ describe('motion rules: classifier is the only name-aware layer', () => {
     const hazardAll: BlockClassifier = { classify: () => ['hazard'] }
     const rules = rulesFor(world, {}, { classifier: hazardAll })
     expect(rules.isHazard({ x: 0, y: 63, z: 0 })).toBe('yes')
-    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({ state: 'no', reason: 'hazard-support' })
+    expect(rules.standInfo({ x: 0, y: 64, z: 0 })).toEqual({
+      state: 'no',
+      reason: 'hazard-support',
+      blockedBy: [{ layer: 'support', cell: { x: 0, y: 63, z: 0 }, name: 'mystery_block' }],
+    })
   })
 
   it('vanilla tags lava as hazard and distinguishes wooden from iron doors', () => {

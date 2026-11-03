@@ -335,6 +335,8 @@ interface Move {
   - 可达性用 `reachFrom`：与 A* 相同的 `motionNeighbors` + `Rules`，BFS 按步数；`complete=false`（节点预算耗尽）时未覆盖的格是 `unknown`，**预算不当作不可达**。未加载格与 A* 一样视为阻挡，因此 `complete` 的否定结论与执行器一致。
   - `approach` 用它选站位：无候选 → `APPROACH_NO_STAND`；有候选但全部证明不可达 → `APPROACH_NO_PATH`；窗口未加载 → `APPROACH_UNKNOWN`（可重试）。
   - `pickup` 用它选拾取格，AABB/可拾取/合并/过期仍留在 pickup 层；谓词拿到真实 `feetY`，半砖上的掉落物不再按格底算。
+  - `pickup` **不再把 item 位置当移动目标**：只走 core 证明可站/未知的候选格；已证明不可达的格只作为证据。无候选时 `observed.standQuery.requiredDig` 给出 `Rules.standInfo` 的 `blockedBy`（`support/feet/head` + 方块名）；有候选但全部不可达时给 `unreachableReason:"path-blocked"` + `candidateCells`，不再逐格重试 `GOTO_NO_PATH`。
+  - `Rules.standInfo` 的 `no` 结果带可选 `blockedBy`（支撑/脚/头格 + 方块名），供 approach/pickup/place 直接给出“清哪格”。
   - `givers/common.nearestStandable/farthestStandable`、`escape.nearestCoveredStandable` 也走同一查询。
 - `moveTo` 始终走运动执行器；显式 `unstickDig` 作为 core break 白名单，不再回落到 legacy `goto`。
 - `MotionRun` 接管未加载目标：沿直线推进最多 16 格到已加载可站前缀（`activeTarget`），执行前缀后重新解析；最终目标仍由 `finalGoal` 判定。

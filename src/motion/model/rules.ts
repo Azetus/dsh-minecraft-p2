@@ -21,6 +21,7 @@ import {
   type MotionConstraints,
   type MotionWorld,
   type Rules,
+  type StandBlock,
   type StandInfo,
   type Tri,
   type Vec3,
@@ -265,10 +266,14 @@ export class RuleSet implements Rules {
     const supportCell = offset(cell, 0, -1, 0)
     const support = this.read(supportCell)
     if (support === null || !support.loaded) return { state: 'unknown', reason: 'support-unloaded' }
-    if (this.isHazard(supportCell) === 'yes') return { state: 'no', reason: 'hazard-support' }
-    if (hasTag(support, 'lava')) return { state: 'no', reason: 'lava-support' }
+    if (this.isHazard(supportCell) === 'yes') {
+      return { state: 'no', reason: 'hazard-support', blockedBy: [{ layer: 'support', cell: supportCell, name: support.name }] }
+    }
+    if (hasTag(support, 'lava')) {
+      return { state: 'no', reason: 'lava-support', blockedBy: [{ layer: 'support', cell: supportCell, name: support.name }] }
+    }
     if (hasTag(support, 'water') && !this.constraints.assumeWalkOnWater) {
-      return { state: 'no', reason: 'water-support' }
+      return { state: 'no', reason: 'water-support', blockedBy: [{ layer: 'support', cell: supportCell, name: support.name }] }
     }
     if (hasTag(support, 'water') && this.constraints.assumeWalkOnWater) {
       return { state: 'yes', feetY: cell.y }
@@ -276,7 +281,9 @@ export class RuleSet implements Rules {
     const top = supportTopAt(support)
     if (top === undefined) return { state: 'unknown', reason: 'collision-unknown' }
     if (top <= 0) return { state: 'no', reason: 'no-support' }
-    if (top > 1) return { state: 'no', reason: 'support-too-high' }
+    if (top > 1) {
+      return { state: 'no', reason: 'support-too-high', blockedBy: [{ layer: 'support', cell: supportCell, name: support.name }] }
+    }
     return { state: 'yes', feetY: cell.y - 1 + top }
   }
 
@@ -370,22 +377,39 @@ export class RuleSet implements Rules {
     const maxY = feetY + PLAYER_HEIGHT - EPSILON
     const first = Math.floor(minY)
     const last = Math.floor(maxY)
+    const blockedBy: StandBlock[] = []
+    let reason: string | undefined
     for (let y = first; y <= last; y += 1) {
       const at = { x: cell.x, y, z: cell.z }
       if (ignoreBody.some(ignored => cellKey(ignored) === cellKey(at))) continue
       const block = this.read(at)
       if (block === null || !block.loaded) return { state: 'unknown', reason: 'body-unloaded' }
-      if (this.isHazard(at) === 'yes') return { state: 'no', reason: 'hazard-body' }
-      if (hasTag(block, 'lava')) return { state: 'no', reason: 'lava-body' }
+      const layer = y === cell.y ? 'feet' as const : 'head' as const
+      if (this.isHazard(at) === 'yes') {
+        blockedBy.push({ layer, cell: at, name: block.name })
+        reason ??= 'hazard-body'
+        continue
+      }
+      if (hasTag(block, 'lava')) {
+        blockedBy.push({ layer, cell: at, name: block.name })
+        reason ??= 'lava-body'
+        continue
+      }
       if (hasTag(block, 'water')) {
-        if (!this.wadeBodyCell(cell, y)) return { state: 'no', reason: 'fluid-body' }
+        if (!this.wadeBodyCell(cell, y)) {
+          blockedBy.push({ layer, cell: at, name: block.name })
+          reason ??= 'fluid-body'
+        }
         continue
       }
       const overlap = bodyOverlap(block, at, feetY)
       if (overlap === undefined) return { state: 'unknown', reason: 'collision-unknown' }
-      if (overlap) return { state: 'no', reason: 'body-collision' }
+      if (overlap) {
+        blockedBy.push({ layer, cell: at, name: block.name })
+        reason ??= 'body-collision'
+      }
     }
-    return { state: 'yes', feetY }
+    return reason === undefined ? { state: 'yes', feetY } : { state: 'no', reason, blockedBy }
   }
 
   /**
