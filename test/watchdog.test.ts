@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { BodyServer } from '../src/body/server.ts'
 import { BodyManager } from '../src/bridge/process-manager.ts'
 import type { BodyFault, BodyHandle, RestartInfo } from '../src/bridge/process-manager.ts'
+import { BodyLockConflictError } from '../src/bridge/body-lock.ts'
 import { createP2Plugin } from '../src/bridge/plugin.ts'
 import type { ToolDefinition } from '../src/bridge/tools.ts'
 import {
@@ -30,6 +34,17 @@ const body: BodyInfo = {
 }
 
 const owner = { sessionId: 'session-1', agentId: 'agent-1', cwd: process.cwd() }
+const lockDirs: string[] = []
+
+afterEach(() => {
+  for (const dir of lockDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+function tempLockDir(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watchdog-lock-'))
+  lockDirs.push(dir)
+  return dir
+}
 
 type FakeBody = {
   handle: BodyHandle
@@ -89,7 +104,7 @@ type ManagerHarness = {
 
 function createManager(
   bodies: FakeBody[],
-  options: { autoRestart?: boolean; maxRestarts?: number; windowMs?: number } = {},
+  options: { autoRestart?: boolean; maxRestarts?: number; windowMs?: number; lockDir?: string } = {},
 ): ManagerHarness {
   const faults: BodyFault[] = []
   const restarts: RestartInfo[] = []
@@ -105,6 +120,7 @@ function createManager(
     heartbeatMs: 10,
     requestTimeoutMs: 20,
     stopTimeoutMs: 50,
+    lockDir: options.lockDir ?? tempLockDir(),
     autoRestart: {
       enabled: options.autoRestart ?? true,
       maxRestarts: options.maxRestarts ?? 3,
@@ -157,6 +173,22 @@ describe('body watchdog', () => {
       .rejects.toThrow(/different target/)
     expect(harness.spawns).toBe(1)
     await harness.manager.stop()
+  })
+
+  it('rejects a second manager claiming the same target', async () => {
+    const dir = tempLockDir()
+    const first = createManager([createFakeBody('epoch-a')], { lockDir: dir })
+    const second = createManager([createFakeBody('epoch-b')], { lockDir: dir })
+    const target = { host: 'localhost', port: 25575 }
+
+    await first.manager.start(owner, target)
+    await expect(second.manager.start(owner, target)).rejects.toBeInstanceOf(BodyLockConflictError)
+    expect(second.spawns).toBe(0)
+
+    await first.manager.stop()
+    await second.manager.start(owner, target)
+    expect(second.spawns).toBe(1)
+    await second.manager.stop()
   })
 
   it('restarts a hung body with a new epoch and reports the fault', async () => {
@@ -298,6 +330,7 @@ describe('body watchdog', () => {
       heartbeatMs: 10,
       requestTimeoutMs: 20,
       devBodyControl: true,
+      lockDir: tempLockDir(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })
@@ -347,6 +380,7 @@ describe('body watchdog', () => {
       requestTimeoutMs: 20,
       devAutoRestart: true,
       restartBackoffMs: [0, 0, 0],
+      lockDir: tempLockDir(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })

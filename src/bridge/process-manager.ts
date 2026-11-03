@@ -12,6 +12,12 @@ import type {
   StatusResult,
 } from '../contracts/index.ts'
 import { BodyClient } from './body-client.ts'
+import {
+  BodyLockConflictError,
+  BodyLockStore,
+  type BodyLockHandle,
+  type BodyLockInfo,
+} from './body-lock.ts'
 import type { McTarget } from './target.ts'
 
 export type BodyExit = { code: number | null; signal: NodeJS.Signals | null }
@@ -73,6 +79,11 @@ export type BodyManagerOptions = {
   startTimeoutMs?: number
   /** How long a fault waits for the old body process to exit before restarting. */
   faultExitTimeoutMs?: number
+  /** Cross-process single-body lock; tests inject a temp directory/store. */
+  lockStore?: BodyLockStore
+  lockDir?: string
+  lockStaleMs?: number
+  lockHeartbeatMs?: number
   autoRestart?: AutoRestartOptions
   onFault?: (fault: BodyFault) => void
   onRestart?: (info: RestartInfo) => void
@@ -114,6 +125,10 @@ export class BodyManager {
   private readonly startTimeoutMs: number
   private readonly faultExitTimeoutMs: number
   private readonly livenessMs: number
+  private readonly lockStore: BodyLockStore
+  private readonly lockHeartbeatMs: number
+  private lockHandle: BodyLockHandle | undefined
+  private lockTimer: ReturnType<typeof setInterval> | undefined
   private readonly autoRestart: { enabled: boolean; maxRestarts: number; windowMs: number; backoffMs: number[] }
   private readonly restartTimes: number[] = []
   private readonly delay: (ms: number) => Promise<void>
@@ -133,6 +148,12 @@ export class BodyManager {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5000
     this.startTimeoutMs = options.startTimeoutMs ?? 20_000
     this.faultExitTimeoutMs = options.faultExitTimeoutMs ?? 2000
+    this.lockStore = options.lockStore ?? new BodyLockStore({
+      ...(options.lockDir === undefined ? {} : { dir: options.lockDir }),
+      ...(options.lockStaleMs === undefined ? {} : { staleMs: options.lockStaleMs }),
+      now: () => this.now(),
+    })
+    this.lockHeartbeatMs = options.lockHeartbeatMs ?? 5000
     this.livenessMs = this.heartbeatMs * 3
     this.log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`))
     const auto = options.autoRestart
@@ -166,6 +187,16 @@ export class BodyManager {
     return this.lastTargetValue
   }
 
+  /** This manager's current cross-process claim, if any. */
+  get lockInfo(): BodyLockInfo | undefined {
+    return this.lockHandle?.info
+  }
+
+  /** All readable claims, including other sessions/processes. */
+  async locks(): Promise<BodyLockInfo[]> {
+    return await this.lockStore.list()
+  }
+
   async start(owner: OwnerContext, target?: McTarget): Promise<StartResult> {
     if (this.state === 'active' && this.epoch !== undefined) {
       if (target !== undefined && !sameTarget(target, this.lastTargetValue)) {
@@ -175,6 +206,21 @@ export class BodyManager {
     }
     if (this.state !== 'inactive' && this.state !== 'faulted') {
       throw new Error(`body is ${this.state}`)
+    }
+
+    if (target !== undefined && this.lockHandle === undefined) {
+      const acquired = await this.lockStore.acquire(target, {
+        ownerSessionId: owner.sessionId,
+        agentId: owner.agentId,
+        bridgePid: process.pid,
+      })
+      if ('conflict' in acquired) throw new BodyLockConflictError(acquired.conflict)
+      this.lockHandle = acquired.handle
+      this.startLockHeartbeat()
+    }
+    if (target !== undefined && this.lockHandle !== undefined
+      && !sameTarget(target, this.lockHandle.info)) {
+      throw new Error('P2 body lock is held for a different target; stop the old body first')
     }
 
     this.state = 'starting'
@@ -197,6 +243,12 @@ export class BodyManager {
       }
       this.epoch = hello.bodyEpoch
       this.lastTargetValue = target
+      if (this.lockHandle !== undefined) {
+        await this.lockHandle.update({
+          ...(handle.pid === undefined ? {} : { bodyPid: handle.pid }),
+          bodyEpoch: this.epoch,
+        })
+      }
       this.state = 'active'
       this.lastContactAt = this.now()
       this.startHeartbeat()
@@ -206,6 +258,7 @@ export class BodyManager {
     } catch (error) {
       await this.cleanup(handle)
       this.state = 'inactive'
+      await this.releaseLock()
       throw error
     }
   }
@@ -295,9 +348,13 @@ export class BodyManager {
   }
 
   async stop(): Promise<StopResult> {
-    if (this.state === 'inactive') return { state: 'inactive' }
+    if (this.state === 'inactive') {
+      await this.releaseLock()
+      return { state: 'inactive' }
+    }
     if (this.state === 'faulted') {
       await this.cleanup(this.handle)
+      await this.releaseLock()
       return { state: 'faulted' }
     }
 
@@ -338,6 +395,7 @@ export class BodyManager {
         ...(shutdownError === undefined ? {} : { error: shutdownError }),
       }
     }
+    await this.releaseLock()
     this.state = 'inactive'
     return {
       state: 'inactive',
@@ -367,6 +425,26 @@ export class BodyManager {
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
     this.heartbeatInFlight = false
+  }
+
+  private startLockHeartbeat(): void {
+    this.stopLockHeartbeat()
+    this.lockTimer = setInterval(() => {
+      void this.lockHandle?.heartbeat()
+    }, this.lockHeartbeatMs)
+    this.lockTimer.unref?.()
+  }
+
+  private stopLockHeartbeat(): void {
+    if (this.lockTimer !== undefined) clearInterval(this.lockTimer)
+    this.lockTimer = undefined
+  }
+
+  private async releaseLock(): Promise<void> {
+    this.stopLockHeartbeat()
+    const handle = this.lockHandle
+    this.lockHandle = undefined
+    await handle?.release()
   }
 
   /** Three consecutive missing heartbeat intervals count as a fault. */
@@ -458,6 +536,7 @@ export class BodyManager {
     this.client = undefined
     this.handle = undefined
     this.epoch = undefined
+    let exited = handle === undefined
     if (handle !== undefined) {
       try {
         if (handle.killTree !== undefined) handle.killTree()
@@ -465,12 +544,15 @@ export class BodyManager {
       } catch {
         // The tree may already be gone; the fault is still recorded.
       }
-      await this.waitForExit(handle, this.faultExitTimeoutMs)
+      exited = await this.waitForExit(handle, this.faultExitTimeoutMs)
     }
     fault.autoRestart = this.planRestart()
     this.lastFaultValue = fault
     this.safeCallback(this.options.onFault, fault)
-    if (fault.autoRestart !== 'scheduled') return
+    if (fault.autoRestart !== 'scheduled') {
+      if (exited) await this.releaseLock()
+      return
+    }
     const index = Math.min(this.restartTimes.length - 1, this.autoRestart.backoffMs.length - 1)
     await this.delay(this.autoRestart.backoffMs[index] ?? 0)
     await this.restart(fault)

@@ -77,6 +77,14 @@ export type P2PluginOptions = {
   stopTimeoutMs?: number
   /** Timeout for one body request; tests use a short value for fast faults. */
   requestTimeoutMs?: number
+  /** The body connects the MC provider before hello; give start its own budget. */
+  startTimeoutMs?: number
+  /** How long a fault waits for the old body process to exit before restarting. */
+  faultExitTimeoutMs?: number
+  /** Cross-process single-body lock directory; tests inject a temp directory. */
+  lockDir?: string
+  lockStaleMs?: number
+  lockHeartbeatMs?: number
   log?: (line: string) => void
   /**
    * Development-only: register the global `p2_body` start/stop/status tool.
@@ -102,6 +110,11 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     ...(options.heartbeatMs === undefined ? {} : { heartbeatMs: options.heartbeatMs }),
     ...(options.stopTimeoutMs === undefined ? {} : { stopTimeoutMs: options.stopTimeoutMs }),
     ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
+    ...(options.startTimeoutMs === undefined ? {} : { startTimeoutMs: options.startTimeoutMs }),
+    ...(options.faultExitTimeoutMs === undefined ? {} : { faultExitTimeoutMs: options.faultExitTimeoutMs }),
+    ...(options.lockDir === undefined ? {} : { lockDir: options.lockDir }),
+    ...(options.lockStaleMs === undefined ? {} : { lockStaleMs: options.lockStaleMs }),
+    ...(options.lockHeartbeatMs === undefined ? {} : { lockHeartbeatMs: options.lockHeartbeatMs }),
     ...(options.log === undefined ? {} : { log: options.log }),
     autoRestart: {
       enabled: options.devAutoRestart === true,

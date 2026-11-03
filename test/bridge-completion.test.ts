@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { BodyServer } from '../src/body/server.ts'
@@ -33,6 +36,17 @@ const body: BodyInfo = {
 }
 
 const owner = { sessionId: 'session-1', agentId: 'agent-1', cwd: process.cwd() }
+const lockDirs: string[] = []
+
+afterEach(() => {
+  for (const dir of lockDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+function tempLockDir(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-completion-lock-'))
+  lockDirs.push(dir)
+  return dir
+}
 
 type MindEvent = MindEventsResult['events'][number]
 
@@ -449,6 +463,7 @@ function createHarness(
     bodyEntry: 'unused-body.mjs',
     heartbeatMs: 20,
     requestTimeoutMs: 200,
+    lockDir: tempLockDir(),
     devAutoRestart: options.devAutoRestart === true,
     ...(options.restartBackoffMs === undefined ? {} : { restartBackoffMs: options.restartBackoffMs }),
     spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
