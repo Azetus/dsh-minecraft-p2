@@ -145,8 +145,13 @@ describe('mind integration', () => {
     mind.orders.enqueue({ id: 'ord-2', verb: 'check', params: { x: 0, y: 64, z: 0 } })
     expect(mind.status().activeOrder).toEqual({ id: 'ord-1', verb: 'hold' })
     expect(mind.status().queuedOrders).toBe(1)
+    expect(mind.listOrders().queueBlockedBy).toEqual({ id: 'ord-1', verb: 'hold' })
     mind.orders.cancel('ord-1')
     expect(mind.status().activeOrder).toEqual({ id: 'ord-2', verb: 'check' })
+    expect(mind.listOrders().queueBlockedBy).toBeNull()
+    const cancelled = mind.cancelAll()
+    expect(cancelled.cancelled).toBe(1)
+    expect(mind.status().activeOrder).toBeNull()
   })
 
   it('runs the mind from BodyRuntime.tick and reports it in status', () => {
@@ -179,12 +184,13 @@ describe('mind integration', () => {
         report: () => null,
         enqueueOrder: () => ({ id: 'ord-1', state: 'active' }),
         cancelOrder: id => ({ id, state: 'cancelled' }),
+        cancelAll: () => ({ cancelled: 0 }),
         startDuty: () => ({
           id: 'duty-1', kind: 'gather', item: 'dirt', quota: 1, collected: 0, jobs: 0,
           state: 'active', startedAt: 0,
         }),
         stopDuty: () => null,
-        listOrders: () => ({ active: null, queued: [] }),
+        listOrders: () => ({ active: null, queued: [], queueBlockedBy: null }),
         sinceEvents: () => ({ events: [], seq: 0 }),
         watchedBlock: () => undefined,
         orders: {} as never,

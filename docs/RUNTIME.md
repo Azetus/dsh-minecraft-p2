@@ -63,6 +63,7 @@
 
 - `nowork`：让出选择，继续看后续分支。
 - `hold`：保留意图，不产生 job，停止下降；order/plan 保持 active。
+  - `hold` **order** 不会自己结束，会占住唯一的 active 位并堵住队列；`p2_orders` 的 `queueBlockedBy` 指出这个 barrier，取消用 `p2_cancel {id}` 或 `p2_cancel {all:true}`（取消全部 queued/active）。
 - `blocked`：`hold` + 明确 reason + 上报；不自动换任务。
 - `cancel`：终态，不自动恢复。
 

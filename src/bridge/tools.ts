@@ -204,7 +204,7 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_orders',
-      description: 'Active and queued orders. Read-only.',
+      description: 'Active and queued orders. Read-only. queueBlockedBy names a barrier order (such as hold) that is occupying the single active slot and keeping the queue from starting.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: output(),
       execute: async () => {
@@ -214,17 +214,20 @@ export function registerP2Tools(agent: AgentLike, manager: BodyManager, tools: T
     }),
     tools.register({
       name: 'p2_cancel',
-      description: 'Cancel one order by id. A cancelled order never revives.',
+      description: 'Cancel one order by id, or every queued/active order with all:true. A hold order blocks the whole queue until cancelled; a cancelled order never revives.',
       parameters: {
         type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
+        properties: {
+          id: { type: 'string', description: 'Order id; required unless all is true' },
+          all: { type: 'boolean', description: 'Cancel every queued and active order' },
+        },
         additionalProperties: false,
       },
       output: output(),
       execute: async args => {
         requireActiveOwner(manager, agent)
-        if (typeof args.id !== 'string' || args.id.length === 0) throw new Error('p2_cancel requires an order id')
+        if (args.all === true) return await manager.mindCancel('*', true)
+        if (typeof args.id !== 'string' || args.id.length === 0) throw new Error('p2_cancel requires an order id or all:true')
         return await manager.mindCancel(args.id)
       },
     }),

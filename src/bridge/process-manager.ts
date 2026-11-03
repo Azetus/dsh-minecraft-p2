@@ -248,8 +248,8 @@ export class BodyManager {
     return this.activeClient().request('mind.orders', {})
   }
 
-  mindCancel(id: string): Promise<JsonValue> {
-    return this.activeClient().request('mind.cancel', { id })
+  mindCancel(id: string, all = false): Promise<JsonValue> {
+    return this.activeClient().request('mind.cancel', all ? { all: true } : { id })
   }
 
   mindReport(): Promise<JsonValue> {

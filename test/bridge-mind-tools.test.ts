@@ -67,12 +67,12 @@ class FakeManager {
   }
 
   async mindOrders(): Promise<unknown> {
-    return { active: null, queued: [] }
+    return { active: null, queued: [], queueBlockedBy: null }
   }
 
-  async mindCancel(id: string): Promise<unknown> {
-    this.cancels.push(id)
-    return { id, state: 'cancelled' }
+  async mindCancel(id: string, all = false): Promise<unknown> {
+    this.cancels.push(all ? `all:${id}` : id)
+    return all ? { id: '*', state: 'cancelled', cancelled: 2 } : { id, state: 'cancelled' }
   }
 
   async mindReport(): Promise<unknown> {
@@ -186,6 +186,15 @@ describe('mind operator tools', () => {
     expect(manager.cancels).toEqual(['ord-1'])
     const events = await definitions.get('p2_events')?.execute({ sinceSeq: 4 }, { agent })
     expect(events).toEqual({ events: [], seq: 0 })
+  })
+
+  it('cancels every order with all:true and exposes the queue barrier', async () => {
+    const { definitions, manager, agent } = harness()
+    const orders = await definitions.get('p2_orders')?.execute({}, { agent })
+    expect(orders).toMatchObject({ queueBlockedBy: null })
+    const result = await definitions.get('p2_cancel')?.execute({ all: true }, { agent })
+    expect(result).toEqual({ id: '*', state: 'cancelled', cancelled: 2 })
+    expect(manager.cancels).toEqual(['all:*'])
   })
 
   it('rejects a tool call from a non-owner session', async () => {

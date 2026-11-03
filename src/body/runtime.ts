@@ -475,8 +475,12 @@ export class BodyRuntime {
 
   private mindCancel(params: Record<string, JsonValue>): MindCancelResult {
     this.requireOwner()
+    if (params.all === true) {
+      const result = this.requireMind().cancelAll()
+      return { id: '*', state: 'cancelled', cancelled: result.cancelled }
+    }
     if (typeof params.id !== 'string' || params.id.length === 0) {
-      throw p2Error('INVALID_MESSAGE', 'validation', 'mind.cancel requires an order id', { module: 'body.runtime' })
+      throw p2Error('INVALID_MESSAGE', 'validation', 'mind.cancel requires an order id or all:true', { module: 'body.runtime' })
     }
     return this.requireMind().cancelOrder(params.id)
   }

@@ -325,9 +325,11 @@ export type MindOrderResult = { id: string; state: string }
 export type MindOrdersResult = {
   active: MindOrderView | null
   queued: MindOrderView[]
+  /** Set when the active order is a barrier that never finishes by itself. */
+  queueBlockedBy: { id: string; verb: string } | null
 }
 
-export type MindCancelResult = { id: string; state: string }
+export type MindCancelResult = { id: string; state: string; cancelled?: number }
 
 export type MindReportResult = { report: JsonValue | null }
 

@@ -86,9 +86,15 @@ export type MindRuntime = {
   report(): JsonValue | null
   enqueueOrder(input: unknown): { id: string; state: string }
   cancelOrder(id: string): { id: string; state: string }
+  /** Cancel every queued/active order (hold barriers included). */
+  cancelAll(): { cancelled: number }
   startDuty(input: unknown): DutyStatusView
   stopDuty(): DutyStatusView | null
-  listOrders(): { active: MindOrderView | null; queued: MindOrderView[] }
+  listOrders(): {
+    active: MindOrderView | null
+    queued: MindOrderView[]
+    queueBlockedBy: { id: string; verb: string } | null
+  }
   sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number }
   /** Expected block name at a watched plan position, if any. */
   watchedBlock(p: Vec3): string | undefined
@@ -1025,12 +1031,31 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       return view ?? null
     },
-    listOrders(): { active: MindOrderView | null; queued: MindOrderView[] } {
+    listOrders(): { active: MindOrderView | null; queued: MindOrderView[]; queueBlockedBy: { id: string; verb: string } | null } {
       const active = orders.active()
       return {
         active: active === undefined ? null : viewOf(active),
         queued: orders.queued().map(viewOf),
+        queueBlockedBy: active !== undefined && active.order.verb === 'hold'
+          ? { id: active.order.id, verb: active.order.verb }
+          : null,
       }
+    },
+    cancelAll(): { cancelled: number } {
+      const targets = orders.all().filter(record => record.state === 'queued' || record.state === 'active')
+      let cancelled = 0
+      for (const record of targets) {
+        try {
+          orders.cancel(record.order.id)
+          cancelled += 1
+        } catch {
+          // A record that became terminal between the snapshot and the cancel is
+          // already what the caller asked for.
+        }
+      }
+      tracker.abort()
+      finishPlan()
+      return { cancelled }
     },
     sinceEvents(seq: number, limit?: number): { events: MindEvent[]; seq: number } {
       return {
