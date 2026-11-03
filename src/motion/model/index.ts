@@ -3,6 +3,7 @@ export {
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_HALF_WIDTH,
+  WAYPOINT_TOLERANCE,
   FOOTPRINT_SAMPLES,
   bodyOverlap,
   cellCenter,

@@ -73,6 +73,10 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
       const exact = current.order.params?.exact === true
       const allowPlace = current.order.params?.allowPlace === true
       const risky = current.order.params?.risky === true
+      const requestedRange = typeof current.order.params?.range === 'number'
+        && Number.isFinite(current.order.params.range)
+        ? Math.min(8, Math.max(0, Math.floor(current.order.params.range)))
+        : 1
       // Risky mode produces its own goal (vanilla snapping + accuracy 0), so the
       // safe standability check must not pre-empt it.
       const pos = risky || exact || allowPlace
@@ -87,7 +91,7 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
       return {
         driverId: 'move',
         target: { kind: 'point', pos },
-        params: { x: pos.x, y: pos.y, z: pos.z, range: 1, timeoutMs: 120_000,
+        params: { x: pos.x, y: pos.y, z: pos.z, range: requestedRange, timeoutMs: 120_000,
           approach: true,
           ...(current.order.params?.exact === undefined ? {} : { exact: current.order.params.exact }),
           ...(current.order.params?.unstickDig === undefined ? {} : { unstickDig: current.order.params.unstickDig }),

@@ -109,6 +109,18 @@ describe('MotionRun standing identity', () => {
   it('accepts a slab start as already at an exact target cell', () => {
     const run = new MotionRun(slabBot(), { x: 0, y: 64, z: 0 }, 1, 30_000, { arrival: { kind: 'exact' } })
     run.start()
-    expect(run.tick(Date.now()).state).toBe('succeeded')
+    const result = run.tick(Date.now())
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: {
+        arrival: {
+          kind: 'exact',
+          to: { x: 0, y: 64, z: 0 },
+          cell: { x: 0, y: 64, z: 0 },
+          feetY: 63.5,
+          movedDistance: 0,
+        },
+      },
+    })
   })
 })

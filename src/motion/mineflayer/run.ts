@@ -2,6 +2,7 @@ import type { Bot } from 'mineflayer'
 
 import type { JsonValue } from '../../contracts/types.ts'
 import { PathExecutor, standingCell } from '../execute/index.ts'
+import { WAYPOINT_TOLERANCE } from '../model/block.ts'
 import {
   defaultConstraints,
   createGoal,
@@ -72,6 +73,7 @@ export class MotionRun {
   private replans = 0
   private readonly startedAt: number
   private readonly healthBefore: number
+  private readonly startPos: { x: number; y: number; z: number }
 
   constructor(
     private readonly bot: Bot,
@@ -100,6 +102,7 @@ export class MotionRun {
     this.maxReplans = options.maxReplans ?? 64
     this.startedAt = Date.now()
     this.healthBefore = this.world.self().health
+    this.startPos = { ...this.world.self().pos }
   }
 
   start(): void {
@@ -201,6 +204,12 @@ export class MotionRun {
       planner: 'astar',
       swim: this.activeConstraints.waterProfile === 'swim',
       waterProfile: this.activeConstraints.waterProfile,
+      arrivalKind: this.finalArrival.kind,
+      movedDistance: Math.hypot(
+        self.pos.x - this.startPos.x,
+        self.pos.y - this.startPos.y,
+        self.pos.z - this.startPos.z,
+      ),
       elapsedMs: Date.now() - this.startedAt,
     }
   }
@@ -345,30 +354,16 @@ export class MotionRun {
   private arrived(): boolean {
     const self = this.world.self()
     const rules = this.context.next().rules
-    // A floating body's cellOf() lands one below the swim node, so the planner's
-    // identity (standingCell) is what the goal must be compared against.
+    // The planner's identity is the feet cell derived from the real feet height;
+    // a loose "inside the target column" fallback could accept one cell below.
     const cell = standingCell(rules, self.pos)
-    if (this.finalGoal.isEnd(cell)) {
-      if (self.onGround) return true
-      // A water-cell goal is reached while floating (the head stays dry); a
-      // land goal still needs onGround or the exact column below it.
-      if (rules.isWater(cell) === 'yes') return true
-      // Landing lag: the move already proved a standing position, but the physics
-      // flag can trail one tick. Accept only at the exact requested column.
-      return this.insideTarget(self.pos)
-    }
-    // A wading body floats around the half-cell boundary, so the feet cell can
-    // flip to the cell above while the body is still in the target column.
-    // Accept that column within one cell of the goal height instead of
-    // re-planning between two cells forever.
-    if (!this.insideTarget(self.pos)) return false
-    if (self.pos.y < this.target.y - 0.05 || self.pos.y > this.target.y + 1.05) return false
-    return this.finalGoal.isEnd({ x: this.target.x, y: this.target.y, z: this.target.z })
-  }
-
-  private insideTarget(pos: { x: number; z: number }): boolean {
-    return pos.x > this.target.x && pos.x < this.target.x + 1
-      && pos.z > this.target.z && pos.z < this.target.z + 1
+    if (!this.finalGoal.isEnd(cell)) return false
+    // A water-surface goal is reached while floating; a land goal needs the
+    // physics flag and the support height the node promised.
+    if (rules.isWater(cell) === 'yes') return true
+    if (!self.onGround) return false
+    const info = rules.standInfo(cell)
+    return info.state === 'yes' && Math.abs(info.feetY - self.pos.y) <= WAYPOINT_TOLERANCE
   }
 
   private bodyOverlap(): BodyOverlap | undefined {
@@ -397,6 +392,10 @@ export class MotionRun {
   private succeed(observed?: JsonValue): void {
     // Arriving inside a block is not a usable standing position.
     if (this.failOnBodyOverlap('arrived-embedded')) return
+    const self = this.world.self()
+    const rules = this.context.next().rules
+    const cell = standingCell(rules, self.pos)
+    const info = rules.standInfo(cell)
     this.active = false
     this.phase = 'done'
     this.world.releaseAll()
@@ -404,6 +403,21 @@ export class MotionRun {
       state: 'succeeded',
       observed: {
         executor: observed ?? null,
+        arrival: {
+          kind: this.finalArrival.kind,
+          policy: this.finalArrival,
+          from: { ...this.startPos },
+          to: { ...this.target },
+          cell,
+          feetY: info.state === 'yes' ? info.feetY : null,
+          at: { ...self.pos },
+          movedDistance: Math.hypot(
+            self.pos.x - this.startPos.x,
+            self.pos.y - this.startPos.y,
+            self.pos.z - this.startPos.z,
+          ),
+          elapsedMs: Date.now() - this.startedAt,
+        },
         run: this.safeReport(),
       },
     }

@@ -16,6 +16,7 @@ import {
   JUMP_MARGIN,
   JUMP_PEAK,
   ParkourMove,
+  reached,
 } from '../src/motion/execute/index.ts'
 import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
 import { defaultConstraints, resolveConstraints, type Cell, type MotionConstraints } from '../src/motion/model/index.ts'
@@ -94,6 +95,13 @@ describe('buildMoves: only implemented edges become a path', () => {
 })
 
 describe('move state machines', () => {
+  it('uses the vanilla 0.45 horizontal waypoint tolerance', () => {
+    const world = flatWorld()
+    const ctx = contextFor(world).next()
+    expect(reached({ x: 0.9, y: 64, z: 0.5 }, { x: 0, y: 64, z: 0 }, ctx)).toBe(true)
+    expect(reached({ x: 1.0, y: 64, z: 0.5 }, { x: 0, y: 64, z: 0 }, ctx)).toBe(false)
+  })
+
   it('traverses by looking and holding forward, then releases on arrival', () => {
     const world = flatWorld()
     const source = contextFor(world)

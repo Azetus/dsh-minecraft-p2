@@ -4,6 +4,11 @@ import type { BlockTag, Box, Cell, ClassifiedBlock, CollisionBox, Vec3 } from '.
 export const PLAYER_WIDTH = 0.6
 export const PLAYER_HEIGHT = 1.8
 export const PLAYER_HALF_WIDTH = PLAYER_WIDTH / 2
+/**
+ * Vanilla waypoint tolerance (`0.75 - bbWidth / 2`, so 0.45 for a player):
+ * arrival is judged on the horizontal distance to the node centre.
+ */
+export const WAYPOINT_TOLERANCE = 0.75 - PLAYER_WIDTH / 2
 const EPSILON = 0.001
 
 export function cellKey(cell: Cell): string {

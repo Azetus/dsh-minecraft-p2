@@ -1,5 +1,5 @@
 import { distance2d } from './geometry.ts'
-import { cellOf, PLAYER_HALF_WIDTH, PLAYER_HEIGHT } from '../model/block.ts'
+import { cellOf, PLAYER_HALF_WIDTH, PLAYER_HEIGHT, WAYPOINT_TOLERANCE } from '../model/block.ts'
 import type {
   Cell,
   Move,
@@ -27,7 +27,7 @@ export const PLACE_CLEARANCE = 1.01
  * Does the body occupy `cell` at its derived feet height? Uses the same rules
  * as the planner, including slab/carpet feet offsets.
  */
-export function reached(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = 0.55): boolean {
+export function reached(pos: Vec3, cell: Cell, ctx: MoveContext, tolerance = WAYPOINT_TOLERANCE): boolean {
   const info = ctx.rules.standInfo(cell)
   if (info.state !== 'yes') return false
   // A swimming body floats around the cell base and bobs, so the vertical

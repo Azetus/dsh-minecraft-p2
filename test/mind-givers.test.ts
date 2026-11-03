@@ -228,6 +228,12 @@ describe('order and traverse givers', () => {
       params: { x: 6, y: 64, z: 0, exact: true, unstickDig } } }))
     expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { approach: true, exact: true, unstickDig } })
   })
+
+  it("honours the order's explicit range instead of always using 1", () => {
+    const giver = createGoOrderGiver(() => ({ order: { id: 'go-r', verb: 'go',
+      params: { x: 6, y: 64, z: 0, range: 0 } } }))
+    expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { range: 0 } })
+  })
   it('routes an explicitly allowed lethal fall to the Agent fatal driver', () => {
     const go = createGoOrderGiver(() => ({ order: { id: 'go-lf', verb: 'go',
       params: { x: 6, y: 60, z: 0 },

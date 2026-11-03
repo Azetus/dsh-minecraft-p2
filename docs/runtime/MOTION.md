@@ -287,6 +287,7 @@ interface Move {
 - 当前脚位不在 `validPositions`：在整个剩余路径上向前扫描，再向回扫描，命中即重同步（不再只容忍 ±4 条边）；`Ascend` 的合法位置含 `src.above`/后方上一格，`Descend` 含 `dest.above`，`Fall/Downward` 含整段下落列。
 - 真实 0.6×1.8 身体 AABB 与已加载方块的碰撞相交（半嵌、1 格高小窝）：规划前与到达后各检查一次，直接失败 `BODY_OVERLAP`，`observed.blockedBy` 列出 `{x,y,z,name}`；不再对“从身体内部出发”的边反复规划。未加载/未知碰撞只进 `unknown`，不算 overlap。
 - 精确到达（`arrival.kind === 'exact'`）的目标格必须可站；不可站直接 `GOAL_NOT_STANDABLE`（带 `reason`/`blockedBy`），不悄悄结束在下一层。
+- 到达容差：干地水平 **0.45**（`0.75 − bbWidth/2`），水面 1.0；`arrived` 以 `standingCell` 的脚格 + `standInfo.feetY` 判定，不再接受“目标列内、下一层”的宽松回退。成功体带 `arrival{kind,policy,from,to,cell,feetY,at,movedDistance,elapsedMs}`。
 - 当前 Move 的 `cost` 重新计算变成 `COST_INF`：中止 `UNREACHABLE`。
 - 当前 Move 耗时超过“原代价 + 宽限”：中止 `TIMEOUT`。
 - 无位移超过 `stallMs` 或离路径太远：中止 `STUCK`。
