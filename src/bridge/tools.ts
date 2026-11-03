@@ -334,7 +334,11 @@ function requireActiveOwner(manager: BodyManager, agent: AgentLike): void {
   if (manager.currentState !== 'active') throw new Error('P2 body is not active')
   const owner = manager.currentOwner
   if (owner !== undefined && owner.sessionId !== agent.session.id) {
-    throw new Error('P2 body is owned by a different session')
+    const target = manager.target === undefined ? 'unknown target' : formatTarget(manager.target)
+    throw new Error(
+      `P2 body is owned by a different session (session ${owner.sessionId}, agent ${owner.agentId}, ${target}); `
+      + 'ask that owner to stop it first',
+    )
   }
 }
 
