@@ -54,7 +54,10 @@ type FakeBody = {
   readonly killTreeCalls: number
 }
 
-function createFakeBody(epoch: string, options: { ignoreKill?: boolean } = {}): FakeBody {
+function createFakeBody(
+  epoch: string,
+  options: { ignoreKill?: boolean; ignoreKillTree?: boolean } = {},
+): FakeBody {
   const runtime = new BodyRuntime({ body, newEpoch: () => epoch })
   const [client, serverTransport] = createMemoryTransportPair()
   const server = new BodyServer(runtime, serverTransport)
@@ -87,7 +90,7 @@ function createFakeBody(epoch: string, options: { ignoreKill?: boolean } = {}): 
       },
       killTree: () => {
         killTreeCalls += 1
-        server.stop()
+        if (options.ignoreKillTree !== true) server.stop()
       },
       waitForExit: () => exit,
     },
@@ -258,6 +261,18 @@ describe('body watchdog', () => {
     expect(bodies[0]!.killTreeCalls).toBe(1)
     expect(result.state).toBe('inactive')
     expect(harness.manager.currentState).toBe('inactive')
+  })
+
+  it('does not start a replacement when the old process never exits', async () => {
+    const bodies = [createFakeBody('epoch-1', { ignoreKill: true, ignoreKillTree: true })]
+    const harness = createManager(bodies)
+    await harness.manager.start(owner)
+    bodies[0]!.setSilent(true)
+
+    const stopped = await harness.manager.stop()
+    expect(stopped.state).toBe('faulted')
+    await expect(harness.manager.start(owner)).rejects.toThrow(/has not exited/)
+    expect(harness.spawns).toBe(1)
   })
 
   it('does not restart after a manual stop', async () => {

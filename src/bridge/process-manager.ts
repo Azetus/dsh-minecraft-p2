@@ -134,6 +134,8 @@ export class BodyManager {
   private readonly delay: (ms: number) => Promise<void>
   private readonly now: () => number
   private lastFaultValue: BodyFault | undefined
+  /** False when a stop/fault could not confirm the old body process exited. */
+  private bodyExitConfirmed = true
   private lastContactAt = 0
   private heartbeatInFlight = false
   /** Last target used by a successful start; auto-restart reuses it. */
@@ -206,6 +208,9 @@ export class BodyManager {
     }
     if (this.state !== 'inactive' && this.state !== 'faulted') {
       throw new Error(`body is ${this.state}`)
+    }
+    if (this.state === 'faulted' && !this.bodyExitConfirmed) {
+      throw new Error('the previous body process has not exited; refusing to start another body')
     }
 
     if (target !== undefined && this.lockHandle === undefined) {
@@ -354,7 +359,7 @@ export class BodyManager {
     }
     if (this.state === 'faulted') {
       await this.cleanup(this.handle)
-      await this.releaseLock()
+      if (this.bodyExitConfirmed) await this.releaseLock()
       return { state: 'faulted' }
     }
 
@@ -388,6 +393,7 @@ export class BodyManager {
     this.handle = undefined
     this.owner = undefined
     this.epoch = undefined
+    this.bodyExitConfirmed = exited
     if (!exited) {
       this.state = 'faulted'
       return {
@@ -546,7 +552,14 @@ export class BodyManager {
       }
       exited = await this.waitForExit(handle, this.faultExitTimeoutMs)
     }
+    this.bodyExitConfirmed = exited
     fault.autoRestart = this.planRestart()
+    if (!exited && fault.autoRestart === 'scheduled') {
+      // Never spawn a replacement while the previous body may still hold the
+      // MC connection; keep the lock and let the owner clean it up.
+      fault.autoRestart = 'exhausted'
+      this.log('body process did not exit after killTree; auto-restart suppressed')
+    }
     this.lastFaultValue = fault
     this.safeCallback(this.options.onFault, fault)
     if (fault.autoRestart !== 'scheduled') {
