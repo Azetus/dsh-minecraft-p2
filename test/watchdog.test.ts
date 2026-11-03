@@ -39,7 +39,7 @@ type FakeBody = {
   readonly killTreeCalls: number
 }
 
-function createFakeBody(epoch: string): FakeBody {
+function createFakeBody(epoch: string, options: { ignoreKill?: boolean } = {}): FakeBody {
   const runtime = new BodyRuntime({ body, newEpoch: () => epoch })
   const [client, serverTransport] = createMemoryTransportPair()
   const server = new BodyServer(runtime, serverTransport)
@@ -67,7 +67,9 @@ function createFakeBody(epoch: string): FakeBody {
     get killTreeCalls() { return killTreeCalls },
     handle: {
       transport,
-      kill: () => server.stop(),
+      kill: () => {
+        if (options.ignoreKill !== true) server.stop()
+      },
       killTree: () => {
         killTreeCalls += 1
         server.stop()
@@ -211,6 +213,19 @@ describe('body watchdog', () => {
     const status = await harness.manager.status()
     expect(status.state).toBe('faulted')
     if (status.state === 'faulted') expect(status.fault?.autoRestart).toBe('exhausted')
+  })
+
+  it('force-kills the body tree when a graceful stop does not exit', async () => {
+    const bodies = [createFakeBody('epoch-1', { ignoreKill: true })]
+    const harness = createManager(bodies)
+    await harness.manager.start(owner)
+    bodies[0]!.setSilent(true)
+
+    const result = await harness.manager.stop()
+
+    expect(bodies[0]!.killTreeCalls).toBe(1)
+    expect(result.state).toBe('inactive')
+    expect(harness.manager.currentState).toBe('inactive')
   })
 
   it('does not restart after a manual stop', async () => {

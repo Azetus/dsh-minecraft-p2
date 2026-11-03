@@ -317,6 +317,14 @@ export class BodyManager {
       handle.kill('SIGTERM')
       exited = await this.waitForExit(handle, 500)
     }
+    if (!exited && handle !== undefined) {
+      // SIGTERM is not guaranteed to run a handler in a blocked child; force
+      // the whole tree down instead of leaving an orphan body behind.
+      if (handle.killTree !== undefined) handle.killTree()
+      else handle.kill('SIGKILL')
+      exited = await this.waitForExit(handle, 500)
+      if (!exited) this.log('body did not exit after killTree')
+    }
     this.stopHeartbeat()
     this.client?.close()
     this.client = undefined
