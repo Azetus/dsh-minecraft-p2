@@ -106,6 +106,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
   - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。
   - `ACT_UNCONFIRMED`：动作可能已到达服务端，效果未知；不得重放，driver 必须先读回/观察，再由上层决定；不自动重试。
+  - `ACTION_DENIED`：仅当同一 act 窗口内的服务端聊天/系统消息明确拒绝（权限、保护、adventure）时使用；`observed.serverMessages` 保留原文，`observed.denial` 指向命中项；没有命中就不猜。
   - `STOP_UNCONFIRMED`：停止/释放无法确认，保持 tracker fault。
   - `CLIENT_TIMEOUT`：旧码，仅用于历史会话/metrics 映射，当前端口不再发出。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
@@ -309,6 +310,7 @@ type WorkState =
 | `STALE_WRITE` | 写令牌不匹配（旧实例） |
 | `ACT_TIMEOUT` | 动作在预算内无终态，释放已确认，且动作可安全重试（move/look/equip） |
 | `ACT_UNCONFIRMED` | 动作可能已生效但无终态；不重放，先读回/观察 |
+| `ACTION_DENIED` | 同一 act 窗口内有服务端消息明确拒绝（权限/保护/adventure）；带 `serverMessages`/`denial` 证据 |
 | `CLIENT_TIMEOUT` | 旧码，当前端口不再发出；仅历史数据映射 |
 | `NO_MATERIAL` / `NO_SUPPORT` / `NO_STAND` / `UNREACHABLE` / `CONFLICT` | 工作项不可执行 |
 | `DRIVER_FAULT` | driver 内部错误 |

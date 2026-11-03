@@ -104,6 +104,11 @@ export const PortErrorCodes = {
    */
   ACT_UNCONFIRMED: 'ACT_UNCONFIRMED',
   /**
+   * A server chat/system message in the act window explicitly refused the
+   * action (permission/protection/adventure mode). Definitive failure.
+   */
+  ACTION_DENIED: 'ACTION_DENIED',
+  /**
    * Legacy wire code from before the ACT_TIMEOUT/ACT_UNCONFIRMED split.
    * Never emitted by the current port; kept so saved sessions and old metrics
    * still map to the new semantics.

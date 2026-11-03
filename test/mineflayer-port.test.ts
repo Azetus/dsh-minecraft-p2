@@ -180,6 +180,34 @@ describe('mineflayer port timeout and authority', () => {
     })
   })
 
+  it('reports ACTION_DENIED only when a server denial is in the act window', async () => {
+    const source = new FakeActSource()
+    const bot = new FakeBot()
+    const { port } = createPort(source, bot, { timeouts: { dig: 20 } })
+    source.mode = 'running'
+    const pending = port.dig({ x: 1, y: 64, z: 1 })
+    bot.emit('messagestr', 'You do not have permission to do that')
+    const result = await pending
+    expect(result).toMatchObject({ state: 'failed', code: 'ACTION_DENIED' })
+    expect(result.observed).toMatchObject({
+      layer: 'port',
+      actId: 'dig',
+      denial: { text: 'You do not have permission to do that' },
+      serverMessages: [{ text: 'You do not have permission to do that' }],
+    })
+    expect(source.handles[0]?.stopped).toBe(true)
+  })
+
+  it('does not classify an unrelated server message as denial', async () => {
+    const source = new FakeActSource()
+    const bot = new FakeBot()
+    const { port } = createPort(source, bot, { timeouts: { dig: 20 } })
+    source.mode = 'running'
+    const pending = port.dig({ x: 1, y: 64, z: 1 })
+    bot.emit('messagestr', 'Welcome to the server')
+    expect(await pending).toMatchObject({ state: 'unknown', code: 'ACT_UNCONFIRMED' })
+  })
+
   it('reports STOP_UNCONFIRMED when a non-move stop is not proven released', async () => {
     const source = new FakeActSource()
     const { port } = createPort(source, new FakeBot(), { timeouts: { dig: 20 } })

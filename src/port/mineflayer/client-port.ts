@@ -77,6 +77,24 @@ function timeoutCode(name: string): typeof PortErrorCodes.ACT_TIMEOUT | typeof P
   return RETRY_SAFE_TIMEOUT_ACTS.has(name) ? PortErrorCodes.ACT_TIMEOUT : PortErrorCodes.ACT_UNCONFIRMED
 }
 
+/**
+ * A denial is only classified when a server message in the act window matches
+ * one of these explicit refusals. Anything else remains ACT_UNCONFIRMED; the
+ * raw messages are still attached to the timeout evidence.
+ */
+const DENIAL_PATTERNS: readonly RegExp[] = [
+  /you do not have permission/i,
+  /you don't have permission/i,
+  /you are not allowed/i,
+  /you can't (?:use|place|break|do)/i,
+  /cannot (?:place|break|use)/i,
+  /this area is protected/i,
+  /protected area/i,
+  /adventure mode/i,
+  /你没有权限/u,
+  /无法(?:放置|破坏|使用)/u,
+]
+
 type BlockLike = {
   type?: number
   name: string
@@ -108,6 +126,8 @@ type WaitResult =
       released: boolean
       /** Only meaningful when `released`; unreleased timeouts are STOP_UNCONFIRMED. */
       code: typeof PortErrorCodes.ACT_TIMEOUT | typeof PortErrorCodes.ACT_UNCONFIRMED
+      /** Set only when a server message in the act window explicitly denied it. */
+      denial?: { at: number; text: string }
       observed?: JsonValue
     }
 
@@ -120,6 +140,8 @@ export class MineflayerClientPort implements ClientPort {
   private readonly gate = new WriteGate()
   private readonly running = new Set<{ handle: ActHandle; epoch: number }>()
   private readonly listeners = new Map<ClientEvent, Set<(payload: JsonValue) => void>>()
+  /** Bounded server messages used as timeout/denial evidence. */
+  private readonly serverMessages: Array<{ at: number; text: string }> = []
   private readonly capabilityList: Capability[]
   private readonly timeouts: Record<ClientAction, number>
   private readonly now: () => number
@@ -582,6 +604,18 @@ export class MineflayerClientPort implements ClientPort {
       // A result produced after the authority moved on is stale, not success.
       if (!this.gate.isCurrent(epoch)) return actFailed(PortErrorCodes.STALE_WRITE, this.now() - startedAt)
       if (waited.kind === 'timeout') {
+        const denial = waited.denial
+        const observed = denial === undefined
+          ? waited.observed
+          : waited.observed !== null && typeof waited.observed === 'object' && !Array.isArray(waited.observed)
+            ? { ...(waited.observed as Record<string, JsonValue>), denial } as unknown as JsonValue
+            : { denial } as JsonValue
+        if (denial !== undefined) {
+          if (isMove && this.gate.isCurrent(epoch)) {
+            this.emit('move.finished', { epoch, state: 'failed', code: PortErrorCodes.ACTION_DENIED, observed: observed ?? null })
+          }
+          return actFailed(PortErrorCodes.ACTION_DENIED, this.now() - startedAt, observed)
+        }
         if (isMove) this.emit('move.finished', { epoch, state: 'unknown', code: waited.code, observed: waited.observed ?? null })
         return actUnknown(waited.code, this.now() - startedAt, waited.observed)
       }
@@ -661,10 +695,12 @@ export class MineflayerClientPort implements ClientPort {
         const after = handle.poll()
         const controlState = handle.controlState?.() ?? null
         const released = after.status === 'cancelled' || controlState === 'idle'
+        const denial = released ? this.denialSince(startedAt) : undefined
         return {
           kind: 'timeout',
           released,
           code: timeoutCode(name),
+          ...(denial === undefined ? {} : { denial }),
           observed: this.timeoutEvidence(handle, name, after, epoch, poll.progress, startedAt),
         }
       }
@@ -696,7 +732,25 @@ export class MineflayerClientPort implements ClientPort {
       providerCode: after.status === 'failed' ? after.error.code : null,
       controlState: handle.controlState?.() ?? null,
       controlRelease: handle.controlRelease?.() ?? null,
+      serverMessages: this.serverMessagesSince(startedAt),
     }
+  }
+
+  private noteServerMessage(text: string): void {
+    if (text.length === 0) return
+    this.serverMessages.push({ at: this.now(), text: text.slice(0, 200) })
+    if (this.serverMessages.length > 32) this.serverMessages.splice(0, this.serverMessages.length - 32)
+  }
+
+  private serverMessagesSince(startedAt: number): Array<{ at: number; text: string }> {
+    return this.serverMessages.filter(message => message.at >= startedAt).slice(-8)
+  }
+
+  private denialSince(startedAt: number): { at: number; text: string } | undefined {
+    for (const message of this.serverMessagesSince(startedAt)) {
+      if (DENIAL_PATTERNS.some(pattern => pattern.test(message.text))) return message
+    }
+    return undefined
   }
 
   private stopHandle(handle: ActHandle): void {
@@ -709,6 +763,7 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   private wireEvents(): void {
+    this.bot.on('messagestr', message => this.noteServerMessage(message))
     this.bot.on('chat', (username, message) => {
       if (username === this.bot.username) return
       this.emit('chat', { username, message })

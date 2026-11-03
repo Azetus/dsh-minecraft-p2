@@ -60,6 +60,7 @@ p2_body    {action: start|stop|restart|status}
 | `UNREACHABLE` | 检查 anchor 与路径；必要时先 `go` 到开阔处 |
 | `ACT_UNCONFIRMED` | 动作可能已生效但无终态；先读回/观察，不要原样重下 |
 | `ACT_TIMEOUT` | 预算内无终态但动作可安全重试；仍失败则换方案 |
+| `ACTION_DENIED` | 服务端有消息明确拒绝；换位置/权限/目标，不要重试 |
 | `STOP_UNCONFIRMED` | 不要继续下 order；`p2_body restart`，再看意图日志 |
 | `DEFINITION_ERROR` | 修 JSON 或回滚到上一版模板/树；不要半加载 |
 | `INSUFFICIENT_EVIDENCE` | 不算完成；发 `check` 类 order 或等待，不要当成失败重试 |
