@@ -7,11 +7,12 @@
 
 1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
 2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。若 `locks` 显示该 target 已被别的 session/进程占用，`/p2 start` 会直接拒绝；先让 owner `/p2 stop`，不要重复启动抢 username。
-3. `p2_observe`：确认进服、维度、位置与周围方块。
+3. `p2_observe`：确认进服、维度、位置与周围方块。找方块用 `p2_observe {mode:"find", only:["crafting_table"], radius:16}`；find 只返回已加载方块，不判断可达、不移动，拿到坐标后先 `go` 再 `craft`/`dig`。
 
 ## 2. 下 order
 
 ```text
+p2_observe {mode:"find", only:["crafting_table"], radius:16}
 p2_order {verb:"go", params:{x:48,y:64,z:30}}
 p2_order {verb:"build", blueprint:{blocks:[...]}, policy:{conflict:{mode:"clear"}, materials:{mode:"auto-gather"}}}
 p2_order {verb:"equip", params:{item:"stone_pickaxe"}}
@@ -50,14 +51,18 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | 现象 | 处理 |
 |---|---|
 | `blocked(NO_MATERIAL)` | 补材料 order，或改 `materialPolicy` 允许自动补给 |
-| `failed(TOOL_INSUFFICIENT)` | 先装备/合成合适工具；只想清掉方块时用 `dig purpose:"clear"` |
+| `failed(TOOL_INSUFFICIENT)` / `failed(EQUIP_NO_ITEM)` | 先装备/合成合适工具或物品；只想清掉方块时用 `dig purpose:"clear"` |
+| `failed(GOTO_NO_PATH)` | 当前已加载世界/策略下无路；先看 `failure.diagnosis` / `facts.snapshot`，再换路线/清格；不能推断整个世界不可达 |
+| `failed(GOTO_STUCK)` | 位移看门狗/恢复失败；读 `facts.snapshot`/`blockedBy`/`probe`，先清阻挡或换路线 |
+| `failed(GOAL_NOT_STANDABLE)` | exact 目标不可站；换可站格或先清目标格；`traverse scaffold` 由 driver 传 `allowUnsupportedGoal` |
+| `failed(BODY_OVERLAP)` | 身体 AABB 与方块相交；用 `facts.snapshot.bodyOverlap`/`blockedBy` 清格；用 `go {unstickDig}` 显式授权 |
 | `failed(PLACE_FAILED)` | 放置尝试后未读回目标方块；读 `failure.facts` 的 `target/face/supports/attempts/providerCode/providerMessage` 与 `diagnosis`。`START_EMBEDDED` 按 `adjacent` 换站位；`SUPPORT_MISSING` 先补/换支撑面；`DENIED` 换位置/权限；其余先观察再决定。不要原样重下同一条 place |
 | `failed(PLACE_UNSUPPORTED)` / `failed(NO_SUPPORT)` | 目标周围没有可用支撑面；读 `supports`/`suggestedCells`，换候选格或先补支撑 |
 | `failed(PLACE_BLOCKED_BY_SELF)` | 目标格落在身体里；按 `adjacent` 换站位，不要反复同一条 place |
 | `failed(CRAFT_INCOMPLETE)` | 合成已开始但 `produced < requested`；读 `facts.count/attempted/crafted/produced`，只补差额 |
 | `failed(DIG_PARTIAL)` | 体积/隧道挖掘部分完成；读 `facts.stoppedAt/reason/causeCode/skipped/path`，只补剩余格，不重试整批 |
 | `hold(GO_NO_STAND)` | 目标 2 格内没有可站立格；换坐标，或先整理/确认目标高度 |
-| `failed(APPROACH_NO_STAND)` | 目标方块周围没有可站立格；换目标面或先清理/接近 |
+| `failed(APPROACH_NO_STAND)` / `failed(APPROACH_NO_PATH)` | 目标方块周围没有可站立/可接近格；换目标面或先清理/接近 |
 | `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
 | `P2 body is already running at <target>` | 同 target 已有 body（锁或同进程 owner）；先让 owner `/p2 stop`，不要重复 `/p2 start` |

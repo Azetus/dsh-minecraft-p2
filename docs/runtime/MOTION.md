@@ -1,6 +1,6 @@
 # 运动模块（Motion）
 
-> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵；方块语义优先读服务端 block tags。
+> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵（26.1 为历史证据；Phase E 本轮不跑 26.1）。方块语义优先读服务端 block tags；D1 水+梯子上岸已覆盖，D2 脚手架按缩窄边界收口（顶面/上下台阶/旁边通过，柱内攀爬与侧穿 deferred）。
 > 范围是**原版兼容环境**：不安装、不依赖任何客户端 mod；P2 通过当前唯一适配器接入，执行基线为原版移动与战斗规则。
 > 本文只描述运动模块自身的契约与实现边界，不记录外部参考项目的名称或代码。
 
@@ -361,10 +361,11 @@ interface Move {
 - **当前证据（P4）**：真实服务端 + 当前适配器，锁定目标在 `entityHurt`/`entityDead` 证据后报 `killed`；被移出查询范围的目标报 `targetLost` 且 `killed=false`。
 - **当前证据（tags）**：1.21.1 实机 `tagsReady=true`，184 个 block tag、1003 个方块；26.1 实机 `tagsReady=true`，248 个 tag、1104 个方块。`oak_door`/`pale_oak_door` 带 `doors/mob_interactable_doors/wooden_doors`，`iron_door` 只有 `doors`，`oak_fence_gate` 带 `fence_gates`，`ladder` 带 `climbable`。
 - **26.1 实机**：同一套矩阵在 26.1 服务端通过 P1/P2、P3、P4；`pale_oak_door` 由 tags 自动识别，未使用名字特判。26.1 世界种子不同，但矩阵自建场地，几何结论不依赖原世界生成。
-- **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。新增 `motion-stand-query`（最近可站查询：不可站目标/门后/缺口/未加载/半砖 feetY/预算/可达优先）、`motion-swim`（水面语义与 `SwimMove`）与 `motion-boundary`（32 行边界矩阵按 guards/climb/wade/swim 四阶段重放）。当前 `npm run check`：650 passed / 1 skipped（651）。
+- **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。新增 `motion-stand-query`（最近可站查询：不可站目标/门后/缺口/未加载/半砖 feetY/预算/可达优先）、`motion-swim`（水面语义与 `SwimMove`）与 `motion-boundary`（38 行边界矩阵按 guards/climb/wade/swim 四阶段重放）。当前 `npm run check`：815 passed / 1 skipped（816）。
 - **任务 A 实机（1.21.1）**：`motion-query-accept` 7/7 —— 目标块不可站、门后目标（门被打开）、跨 3 格缺口 `APPROACH_NO_PATH`、同层/半砖/坑内拾取全部收集、柱顶掉落物保留且移动 `GOTO_NO_PATH`。证据 `.m5-runs/motion-query/`。
 - **任务 B 实机（1.21.1）**：`motion-boundary-accept`（旧 `BOUNDARY_STAGE=water`，现拆为 `wade`/`swim`）25/25 —— 1 深水穿行与 2 格落水成功、2 深水与水+梯子 no path、waterlogged 半砖可走、梯子上下成功且旁边普通移动不受影响、梯顶 +1 no path、脚手架站立/放置成功且横穿 no path、叠放 GOTO_STUCK、半砖/楼梯上下成功、从下半砖跳整方块/垫脚/落半砖/起跳 no path、下半砖→下半砖成功、岩浆旁半砖可走/踏入岩浆 no path。证据 `.m5-runs/motion-boundary/`。
 - **水面游泳实机（1.21.1，2026-11-02）**：`motion-boundary-accept`（`BOUNDARY_STAGE=swim`）32/32 —— 4 行定向（`water-deep-2`、`water-fall-2`、`swim-lake-5wide`、`swim-fall-2deep`）全通过，随后全量 32 行通过；`water-deep-2`/`water-fall-2` 在 `wade` 下仍为 no path（纯测试），`swim` 下成功；5 格湖面横渡不再被 `escape:water` 抢占。证据 `accept-boundary-swim-2026-11-02T15-05-51-510Z.json`（4 行）、`accept-boundary-swim-2026-11-02T15-06-54-066Z.json`（32 行，均在 `.m5-runs/motion-boundary/`）。
+- **D1/D2 实机（1.21.1，2026-11-03）**：定向 boundary 10/10 —— 旧 `water-ladder` 负向 `GOTO_NO_PATH`；`water-ladder-exit` / `water-ladder-shallow` 成功；`water-ladder-no-ladder` 仍 no path；`scaffold-stand` / `scaffold-step-over` / `scaffold-top-down` / `scaffold-beside` 成功；`scaffold-through` 仍 no path。risky 2/2（`risky-river-2deep`、`risky-water-ladder`）。证据 `.m5-runs/motion-boundary/accept-boundary-swim-2026-11-03T16-48-40-640Z.json`、`.m5-runs/motion-risky/report-2026-11-03T16-50-14-098Z.json`。
 - **同 build 回归**：P1/P2、P3、capabilities（unstick / safe fall）全部通过。
 - **26.1 复跑（2026-11-02，ping 报 protocol 775）**：`motion-boundary-accept` 28/28、P1/P2、P3、capabilities、`motion-query-accept` 7/7、P4、`traverse`（bridge/scaffold）、`lethal_fall`（`died=true`）全部通过。证据 `accept-boundary-water-2026-11-02T10-06-23-229Z.json`、`accept-p1-2026-11-02T10-09-01-054Z.json`、`accept-p3-2026-11-02T10-09-32-632Z.json`、`accept-capabilities-2026-11-02T10-10-00-217Z.json`、`accept-query-2026-11-02T10-13-02-055Z.json`、`accept-p4-2026-11-02T10-12-10-333Z.json`、`accept-traverse-2026-11-02T10-15-26-947Z.json`、`accept-lethal-2026-11-02T10-15-42-428Z.json`（均在 `.m5-runs/` 下）。
 - 26.1 与 1.21.1 的差异只体现在数据面（协议 775、方块/状态集合），本轮阈值与几何判据不依赖版本。

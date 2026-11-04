@@ -52,16 +52,18 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `ACTION_DENIED` | 服务端明确拒绝（有消息证据时） | 换位置/权限/目标；不要重试 |
 | `BUDGET_EXCEEDED` | job 超出 wall/ticks 预算（`layer=budget`） | 读 `failure.facts.budget/elapsedMs/elapsedGameAge`；不可原样重试，缩小/拆分任务或换目标 |
 | `ERR_ASSERTION` | driver 内部断言/定义错误 | `cause.kind="definition"`、`recovery="none"`；不要重试，改参数/目标或上报 |
+| `NO_MATERIAL` | 缺材料且不能自动补给 | 补材料或改材料策略；不要原样重下同一 order |
 | `GOTO_NO_PATH` | 当前已加载世界/策略下无路 | 先看 `failure.diagnosis` / `facts.snapshot`：头顶被挡、缺支撑还是目标未加载，再换路线/清格 |
 | `GOTO_STUCK` | 位移看门狗/恢复失败 | 看 `failure.facts.snapshot`/`blockedBy/probe`；先清阻挡或换路线 |
 | `GOAL_NOT_STANDABLE` | exact 目标不可站 | 换可站格或先清目标格；`traverse scaffold` 由 driver 传 `allowUnsupportedGoal` |
+| `GO_NO_STAND` | 目标 2 格内没有可站格（hold） | 换坐标或先整理/确认目标高度；不要反复下同一坐标 |
 | `BODY_OVERLAP` | 身体 AABB 与方块相交 | 用 `failure.facts.snapshot.bodyOverlap`/`blockedBy` 清格；用 `go {unstickDig}` 显式授权 |
 | `APPROACH_NO_STAND` / `APPROACH_NO_PATH` | 目标周围没有可站/可接近格 | 换目标面、先清理或先接近 |
 | `PICKUP_UNREACHABLE` | 掉落物存在但走不到 | 看 `failure.facts.requiredDig` 与 `unreachableDrops`；清阻挡、换落点或接受损失，不要自动追 |
 | `PICKUP_NOT_COLLECTED` | 已到附近但背包没增加 | 检查背包空间/服务端延迟；不要重复同一 dig |
 | `PLACE_FAILED` | 放置后未读回目标方块 | 读 `failure.facts` 的 `face/supports/attempts/adjacent/providerCode` 与 `diagnosis`；START_EMBEDDED 换站位、SUPPORT_MISSING 换/补支撑、DENIED 换位置；不要原样重下 |
 | `PLACE_BLOCKED_BY_SELF` | 目标格落在自己身体里 | 用 `failure.facts.adjacent` 换站位，不要反复同一条 place |
-| `PLACE_UNSUPPORTED` | 目标周围没有可用支撑面 | 看 `failure.facts.supports` 与 `suggestedCells`；provider 已会扫六面，若仍失败就换候选格/先补支撑 |
+| `PLACE_UNSUPPORTED` / `NO_SUPPORT` | 目标周围没有可用支撑面 | 看 `failure.facts.supports` 与 `suggestedCells`；provider 已会扫六面，若仍失败就换候选格/先补支撑 |
 | `DIG_PARTIAL` | 体积/隧道挖掘部分完成 | 读 `dug/planned/skipped/stoppedAt/reason/causeCode/path`；只补必要格，不自动重试整批 |
 | `TOOL_INSUFFICIENT` / `EQUIP_NO_ITEM` | 缺工具/物品 | 先装备/合成；clear 可用手时显式 `purpose:"clear"` |
 | `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH` | provider 报成功但手持物缺失/错物 | 按未装备处理；先读背包/手持物，不要当成功 |
@@ -69,6 +71,10 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `CRAFT_INCOMPLETE` | 合成开始但 `produced < requested` | 读 `count/attempted/crafted/produced`；只补差额 |
 | `ATTACK_TARGET_LOST` | 目标离开/消失 | 重新获取 entityId；消失不等于 killed |
 | `ATTACK_TARGET_PROTECTED` | 玩家/未授权被动目标 | 换目标；玩家永不攻击 |
+| `ATTACK_NOT_KILLED` | 24 次攻击/40s 内未击杀 | 检查武器/目标类型，重新下令；不要盲目追击 |
+| `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项被支撑或站位卡住 | 换区域、换蓝图变体或换点；不要原样重下 |
+| `OBSERVATION_STALE` | 长期无观测更新 | 检查连接；恢复后自动继续，不重放 pending |
+| `HOLD_ORDER` / `mind.hold(...)` | 已知等待/常驻树无法安全行动 | 读 `p2_orders.queueBlockedBy` 或 hold reason；取消/改任务，不要重复下同一 order |
 
 `failure.diagnosis` 只取 `HEAD_BLOCKED` / `SUPPORT_MISSING` / `TARGET_UNLOADED` / `START_EMBEDDED` / `NO_STAND_CELL` / `EFFECT_UNCONFIRMED` / `RELEASE_UNCONFIRMED` / `TOOL_MISSING` / `DENIED` / `UNKNOWN` 之一，事实不足就是 `UNKNOWN`。先对照 `facts.snapshot` 决定清哪格/换哪条路；不要再向 P2 要“下一步动作参数”。
 

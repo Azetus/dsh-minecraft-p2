@@ -120,7 +120,7 @@
 ### 6.3 消失不等于死亡
 - **规则**：战斗只有 `entityDead` 才报 `killed`；目标离开查询范围报 `targetLost`，并等待短窗口收迟到死亡事件。
 
-## 7. 服务端 block tags（P2Motion，1.21.1 / 26.1 实测）
+## 7. 服务端 block tags（P2Motion，1.21.1 实测；26.1 为历史实测）
 
 ### 7.1 tags 包的时序与映射
 - **现象**：`tags` 可能在 spawn/registry 就绪之前到达；监听晚了就拿不到。
