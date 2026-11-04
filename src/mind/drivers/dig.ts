@@ -118,16 +118,17 @@ export function createDigDriver(): Driver {
         : params.shape === 'tunnel'
           ? `dig.tunnel:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
           : `dig.volume:${params.shape}:${params.from?.x},${params.from?.y},${params.from?.z}:${params.to?.x},${params.to?.y},${params.to?.z}:${params.purpose ?? 'harvest'}`
+      const autoEquip = ctx.allowAutoEquip?.() ?? true
       return new AsyncDriverHandle(key, (params.shape === undefined
-        ? digOne(ctx, { x: params.x as number, y: params.y as number, z: params.z as number }, params.purpose ?? 'harvest')
+        ? digOne(ctx, { x: params.x as number, y: params.y as number, z: params.z as number }, params.purpose ?? 'harvest', autoEquip)
         : params.shape === 'tunnel'
-          ? digTunnel(ctx, params)
-          : digVolume(ctx, params)).then(result => attachDigFailure(result, params)))
+          ? digTunnel(ctx, params, autoEquip)
+          : digVolume(ctx, params, autoEquip)).then(result => attachDigFailure(result, params)))
     },
   }
 }
 
-async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose): Promise<DriverResult> {
+async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, autoEquip: boolean): Promise<DriverResult> {
   const before = ctx.port.blockAt(target)
   if (before === null || !before.loaded) return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
   if (isAirName(before.name)) {
@@ -152,7 +153,7 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose): Pro
       ...(approach.observed === undefined ? {} : { observed: approach.observed }),
     }
   }
-  if (choice.item !== undefined) {
+  if (choice.item !== undefined && autoEquip) {
     const equipped = await ctx.port.equip(choice.item)
     if (equipped.state !== 'ok') return actFailure(equipped, 'EQUIP_FAILED')
   }
@@ -204,7 +205,7 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose): Pro
  * `preserveFloor` (default true) never removes the support under the body or
  * the body's own feet/head cells.
  */
-async function digVolume(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
+async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean): Promise<DriverResult> {
   const purpose = params.purpose ?? 'harvest'
   const expansion = volumeCells(params)
   if ('error' in expansion) return { state: 'failed', code: 'BAD_ARGS', observed: { detail: expansion.error } }
@@ -257,7 +258,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams): Promise<DriverResul
       skipped.push({ ...cell, reason: 'unreachable', code: approach.code })
       continue
     }
-    if (choice.item !== undefined) {
+    if (choice.item !== undefined && autoEquip) {
       const equipped = await ctx.port.equip(choice.item)
       if (equipped.state !== 'ok') {
         skipped.push({ ...cell, reason: 'equip', code: equipped.code ?? 'EQUIP_FAILED' })
@@ -341,7 +342,7 @@ type TunnelPlan = {
  * Cells are ordered from the current body outward, so the return path is the
  * same list in reverse.
  */
-async function digTunnel(ctx: DriverCtx, params: DigParams): Promise<DriverResult> {
+async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean): Promise<DriverResult> {
   const planned = planTunnel(ctx.port, params)
   if ('error' in planned) {
     return { state: 'failed', code: planned.code, observed: planned.observed }
@@ -377,7 +378,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams): Promise<DriverResul
         causeCode = choice.error
         break outer
       }
-      if (choice.item !== undefined && choice.item !== equipped) {
+      if (autoEquip && choice.item !== undefined && choice.item !== equipped) {
         const result = await ctx.port.equip(choice.item)
         if (result.state !== 'ok') {
           stoppedAt = block

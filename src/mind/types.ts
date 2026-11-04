@@ -151,6 +151,12 @@ export type DriverValidation = { ok: true } | { ok: false; code: string }
 export type DriverCtx = {
   port: ClientPort
   now: () => number
+  /**
+   * Called once by dig/clear/attack before automatic tool selection. Returns
+   * false when an explicit equip should be respected for this action; the
+   * callback consumes the one-action override.
+   */
+  allowAutoEquip?: () => boolean
 }
 
 export interface Driver {

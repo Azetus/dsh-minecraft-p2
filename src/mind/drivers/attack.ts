@@ -11,6 +11,7 @@ import {
 } from '../../motion/combat/index.ts'
 import { AsyncDriverHandle } from './handle.ts'
 import { failureBody, readFailure, withFailure } from '../failure.ts'
+import { chooseWeapon } from '../tools.ts'
 
 export const ATTACK_DRIVER_ID = 'attack'
 
@@ -68,12 +69,26 @@ export function createAttackDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as AttackParams
       const key = params.continuationKey ?? `attack:${params.entityId}`
-      return new AsyncDriverHandle(key, attack(ctx.port, params).then(result => attachAttackFailure(result, params)))
+      const autoEquip = ctx.allowAutoEquip?.() ?? true
+      return new AsyncDriverHandle(key, attack(ctx.port, params, autoEquip).then(result => attachAttackFailure(result, params)))
     },
   }
 }
 
-async function attack(port: ClientPort, params: AttackParams): Promise<DriverResult> {
+async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean): Promise<DriverResult> {
+  if (autoEquip) {
+    const weapon = chooseWeapon(port.inventory())
+    if (weapon !== undefined) {
+      const equipped = await port.equip(weapon)
+      if (equipped.state !== 'ok') {
+        return {
+          state: 'failed',
+          code: equipped.code ?? 'EQUIP_FAILED',
+          observed: (equipped.observed ?? { kind: 'equip', item: weapon }) as unknown as JsonValue,
+        }
+      }
+    }
+  }
   const result = await runMeleeCombat(combatPort(port, params.locateRadius ?? 32), params.entityId, {
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
     ...(params.allowAny === true ? { allowAny: true } : {}),

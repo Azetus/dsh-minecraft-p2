@@ -41,11 +41,22 @@ type FakePort = {
   port: ClientPort
   moves: Array<{ x: number; y: number; z: number }>
   pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void>
+  equips: string[]
 }
 
-function fakePort(items: Item[] = [], options: { emptyBlocks?: boolean } = {}): FakePort {
+function fakePort(
+  items: Item[] = [],
+  options: {
+    emptyBlocks?: boolean
+    autoMove?: boolean
+    blocks?: Map<string, { name: string; loaded: boolean; pos: { x: number; y: number; z: number } }>
+  } = {},
+): FakePort {
   const moves: Array<{ x: number; y: number; z: number }> = []
   const pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void> = []
+  const equips: string[] = []
+  const blocks = options.blocks ?? new Map()
+  const key = (p: { x: number; y: number; z: number }): string => `${p.x},${p.y},${p.z}`
   const blocksIn = (box: Box): Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> => {
     const blocks: Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> = []
     if (options.emptyBlocks === true) return blocks
@@ -63,16 +74,26 @@ function fakePort(items: Item[] = [], options: { emptyBlocks?: boolean } = {}): 
     self: () => self,
     time: () => ({ timeOfDay: 1000, worldAge: 100 }),
     blocksIn,
+    blockAt: (p: { x: number; y: number; z: number }) => blocks.get(key(p)) ?? null,
     entities: () => [],
     inventory: () => items,
+    equip: async (item: string) => {
+      equips.push(item)
+      return { state: 'ok' as const, observed: { kind: 'equip', item, held: item }, elapsedMs: 1 }
+    },
+    dig: async (p: { x: number; y: number; z: number }) => {
+      blocks.set(key(p), { name: 'air', loaded: true, pos: { ...p } })
+      return { state: 'ok' as const, elapsedMs: 1 }
+    },
     beginWrite: () => {},
     endWrite: () => {},
     moveTo: (target: { x: number; y: number; z: number }) => {
       moves.push({ x: target.x, y: target.y, z: target.z })
+      if (options.autoMove === true) return Promise.resolve({ state: 'ok' as const, elapsedMs: 1 })
       return new Promise<{ state: 'ok'; elapsedMs: number }>(resolve => { pending.push(resolve) })
     },
   } as unknown as ClientPort
-  return { port, moves, pending }
+  return { port, moves, pending, equips }
 }
 
 describe('mind integration', () => {
@@ -239,6 +260,40 @@ describe('mind integration', () => {
     })
     expect(second.status().reaction).toMatchObject({ source: 'default', mode: 'flee', fight: null })
     expect(first.resetReactionPolicy()).toMatchObject({ source: 'default', mode: 'flee' })
+  })
+
+  it('honors an explicit equip for the next dig action', async () => {
+    const target = { x: 1, y: 64, z: 0 }
+    const blocks = new Map([
+      [`${target.x},${target.y},${target.z}`, { name: 'stone', loaded: true, pos: target }],
+    ])
+    const fake = fakePort([{ slot: 36, name: 'stone_pickaxe', count: 1 }], { autoMove: true, blocks })
+    const mind = createMind({
+      port: fake.port,
+      baseActivity: { kind: 'idle' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+
+    mind.enqueueOrder({ verb: 'equip', params: { item: 'stone_pickaxe' } })
+    mind.tick()
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      mind.tick()
+      if (mind.status().activeOrder === null) break
+    }
+    expect(fake.equips).toEqual(['stone_pickaxe'])
+
+    mind.enqueueOrder({ verb: 'dig', params: target })
+    mind.tick()
+    for (let index = 0; index < 40; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      mind.tick()
+      if (mind.status().activeOrder === null) break
+    }
+    expect(fake.equips).toEqual(['stone_pickaxe'])
+    expect(mind.status().activeOrder).toBeNull()
   })
 
   it('selects, starts and finishes one go job', async () => {

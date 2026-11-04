@@ -38,6 +38,8 @@ export type JobTrackerOptions = {
   maxFailures?: number
   /** Write the pending intent before the driver performs its first action. */
   beforeStart?: (candidate: Candidate, job: Job) => void
+  /** One-action explicit-equip override checked by auto-equipping drivers. */
+  allowAutoEquip?: () => boolean
   onEvent?: (event: TrackerEvent) => void
 }
 
@@ -75,6 +77,7 @@ export class JobTracker {
   private readonly stopTimeoutMs: number
   private readonly maxFailures: number
   private readonly beforeStart: ((candidate: Candidate, job: Job) => void) | undefined
+  private readonly allowAutoEquip: (() => boolean) | undefined
   private readonly onEvent: ((event: TrackerEvent) => void) | undefined
   private stateValue: TrackerState = 'idle'
   private currentValue: Current | undefined
@@ -98,6 +101,7 @@ export class JobTracker {
     this.stopTimeoutMs = options.stopTimeoutMs ?? 2_000
     this.maxFailures = options.maxFailures ?? 3
     this.beforeStart = options.beforeStart
+    this.allowAutoEquip = options.allowAutoEquip
     this.onEvent = options.onEvent
   }
 
@@ -342,7 +346,11 @@ export class JobTracker {
 
     let handle: DriverHandle
     try {
-      handle = driver.start(job, { port: this.port, now: this.now })
+      handle = driver.start(job, {
+        port: this.port,
+        now: this.now,
+        ...(this.allowAutoEquip === undefined ? {} : { allowAutoEquip: this.allowAutoEquip }),
+      })
     } catch (error) {
       try { this.port.endWrite(token) } catch { /* best effort */ }
       this.reject(candidate, { state: 'failed', code: errorCode(error, 'DRIVER_FAULT') }, now)

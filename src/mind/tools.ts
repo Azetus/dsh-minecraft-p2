@@ -29,6 +29,28 @@ const MATERIAL_TOOL: Record<string, string> = {
 }
 
 /**
+ * Pick the strongest held-item weapon for melee. Swords beat axes at the same
+ * tier; bows/crossbows are not selected because the attack driver only swings.
+ */
+export function chooseWeapon(inventory: Item[]): string | undefined {
+  let best: string | undefined
+  let bestScore = -1
+  for (const item of inventory) {
+    const name = normalize(item.name)
+    const weaponClass = name.endsWith('_sword')
+      ? 3
+      : name.endsWith('_axe') ? 2 : undefined
+    if (weaponClass === undefined) continue
+    const score = rank(name) * 10 + weaponClass
+    if (score > bestScore) {
+      best = name
+      bestScore = score
+    }
+  }
+  return best
+}
+
+/**
  * Choose a held item for one already-selected block. `harvest` must have an
  * allowed tool when the adapter reports a non-empty harvest set; `clear` may
  * fall back to the hand because it only needs the block gone.

@@ -52,12 +52,20 @@ function combatPort(options: {
   attackSpeed?: () => number
   moveTo?: () => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
   self?: () => { x: number; y: number; z: number }
-}): { port: ClientPort; listeners: Listener[]; times: number[] } {
+  inventory?: Array<{ slot: number; name: string; count: number }>
+  equip?: (item: string) => Promise<{ state: 'ok' | 'failed'; code?: string; elapsedMs: number }>
+}): { port: ClientPort; listeners: Listener[]; times: number[]; equips: string[] } {
   const listeners: Listener[] = []
   const times: number[] = []
+  const equips: string[] = []
   const port = {
     self: () => ({ ...world([]).self, pos: options.self?.() ?? { x: 0.5, y: 64, z: 0.5 } }),
     entities: () => (options.target() === undefined ? [] : [options.target()!]),
+    inventory: () => options.inventory ?? [],
+    equip: async (item: string) => {
+      equips.push(item)
+      return options.equip?.(item) ?? { state: 'ok' as const, elapsedMs: 1 }
+    },
     attack: async () => {
       times.push(Date.now())
       return options.attack(listeners)
@@ -69,7 +77,7 @@ function combatPort(options: {
       listeners.push({ event, cb })
     },
   } as unknown as ClientPort
-  return { port, listeners, times }
+  return { port, listeners, times, equips }
 }
 
 function emit(listeners: Listener[], event: string, entityId: string): void {
@@ -147,6 +155,40 @@ describe('combat ROE', () => {
 })
 
 describe('combat evidence', () => {
+  it('auto-equips the strongest weapon once and respects an explicit-equip override', async () => {
+    let alive = true
+    const fake = combatPort({
+      target: () => (alive ? entity({ id: 'z1', name: 'zombie' }) : undefined),
+      inventory: [
+        { slot: 36, name: 'iron_sword', count: 1 },
+        { slot: 37, name: 'diamond_sword', count: 1 },
+      ],
+      attack: async listeners => {
+        emit(listeners, 'entityHurt', 'z1')
+        emit(listeners, 'entityDead', 'z1')
+        alive = false
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const first = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), {
+      port: fake.port,
+      now: () => 1,
+    })
+    await waitFor(first)
+    expect(first.result()).toMatchObject({ state: 'succeeded', observed: { killed: true } })
+    expect(fake.equips).toEqual(['diamond_sword'])
+
+    alive = true
+    const second = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), {
+      port: fake.port,
+      now: () => 1,
+      allowAutoEquip: () => false,
+    })
+    await waitFor(second)
+    expect(second.result()).toMatchObject({ state: 'succeeded', observed: { killed: true } })
+    expect(fake.equips).toEqual(['diamond_sword'])
+  })
+
   it('allowAny lets an explicit order hit a player while the default guard protects', async () => {
     let alive = true
     const player = entity({ id: 'p1', name: 'Human_Player', type: 'player', kind: 'player' })

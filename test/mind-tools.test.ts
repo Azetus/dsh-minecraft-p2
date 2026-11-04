@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chooseTool } from '../src/mind/tools.ts'
+import { chooseTool, chooseWeapon } from '../src/mind/tools.ts'
 import type { BlockInfo, Item } from '../src/port/index.ts'
 
 const pickaxes: Item[] = [
@@ -20,6 +20,21 @@ function stone(overrides: Partial<BlockInfo> = {}): BlockInfo {
     ...overrides,
   }
 }
+
+describe('weapon selection', () => {
+  it('prefers the highest-tier sword, then axe, and ignores non-melee items', () => {
+    expect(chooseWeapon([
+      { slot: 36, name: 'wooden_sword', count: 1 },
+      { slot: 37, name: 'diamond_axe', count: 1 },
+      { slot: 38, name: 'iron_sword', count: 1 },
+      { slot: 39, name: 'netherite_sword', count: 1 },
+      { slot: 40, name: 'bow', count: 1 },
+    ])).toBe('netherite_sword')
+    expect(chooseWeapon([{ slot: 36, name: 'stone_axe', count: 1 }])).toBe('stone_axe')
+    expect(chooseWeapon([{ slot: 36, name: 'bow', count: 1 }])).toBeUndefined()
+    expect(chooseWeapon([])).toBeUndefined()
+  })
+})
 
 describe('tool selection', () => {
   it('picks the highest-tier allowed tool', () => {

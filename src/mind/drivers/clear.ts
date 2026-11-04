@@ -42,12 +42,13 @@ export function createClearDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as ClearParams
       const key = `clear:${params.x},${params.y},${params.z}`
-      return new AsyncDriverHandle(key, clearCell(ctx.port, params))
+      const autoEquip = ctx.allowAutoEquip?.() ?? true
+      return new AsyncDriverHandle(key, clearCell(ctx.port, params, autoEquip))
     },
   }
 }
 
-async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverResult> {
+async function clearCell(port: ClientPort, params: ClearParams, autoEquip: boolean): Promise<DriverResult> {
   const target = { x: params.x, y: params.y, z: params.z }
   const before = port.blockAt(target)
   if (before === null || !before.loaded) {
@@ -69,7 +70,7 @@ async function clearCell(port: ClientPort, params: ClearParams): Promise<DriverR
       ...(approach.observed === undefined ? {} : { observed: approach.observed }),
     }
   }
-  if (choice.item !== undefined) {
+  if (choice.item !== undefined && autoEquip) {
     const equipped = await port.equip(choice.item)
     if (equipped.state !== 'ok') return actFailure(equipped, 'EQUIP_FAILED')
   }

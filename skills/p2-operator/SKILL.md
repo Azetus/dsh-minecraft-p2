@@ -34,6 +34,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - 默认活动用 `p2_base_activity`：默认 wandering（anchor 半径 8）；`idle` 静止；`escort` 按玩家/实体名跟随，跟丢只报 `TARGET_LOST`，不传送。base **不持久化**，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}`，不要反复 set idle。
 - 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立；policy 不持久化，重启后重设。
 - 显式 `attack` order 由你决定目标，P2 不做玩家/被动/中立保护拦截；显式 attack 期间自动 fight 关闭，只保留致命环境反射。
+- `dig`/`attack` 会自动选工具/武器；显式 `equip` 成功后，紧接着的下一次 `dig`/`attack`/`clear` 保留手动物，不自动切换。
 - 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
 
 ## 3. hold 与队列

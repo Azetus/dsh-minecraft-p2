@@ -71,10 +71,15 @@ function portWith(options: {
 async function runJob(
   port: ClientPort,
   params: Record<string, unknown>,
+  allowAutoEquip?: boolean,
 ): Promise<{ state: string; code?: string; observed?: unknown }> {
   const driver = createDigDriver()
   const job = { driverId: 'dig', params } as unknown as Job
-  const handle = driver.start(job, { port, now: () => 1 })
+  const handle = driver.start(job, {
+    port,
+    now: () => 1,
+    ...(allowAutoEquip === undefined ? {} : { allowAutoEquip: () => allowAutoEquip }),
+  })
   for (let index = 0; index < 2_000 && handle.result().state === 'running'; index += 1) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
@@ -98,6 +103,14 @@ describe('dig driver tool handling', () => {
       observed: { kind: 'dig', purpose: 'harvest', block: 'stone', tool: 'stone_pickaxe', dropDelta: 1 },
     })
     expect(fake.equips).toEqual(['stone_pickaxe'])
+    expect(fake.digs()).toBe(1)
+  })
+
+  it('does not switch tools when an explicit equip override is active', async () => {
+    const fake = portWith({ inventory: [{ slot: 36, name: 'stone_pickaxe', count: 1 }] })
+    const result = await runJob(fake.port, { ...target, purpose: 'harvest' }, false)
+    expect(result).toMatchObject({ state: 'succeeded', observed: { tool: 'stone_pickaxe' } })
+    expect(fake.equips).toEqual([])
     expect(fake.digs()).toBe(1)
   })
 

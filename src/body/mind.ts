@@ -324,6 +324,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let lastActivityKey = ''
   let lastBaseWaiting: string | null = null
   let lastStuckAt: number | undefined
+  let manualEquipPending = false
   const jobWorkItems = new Map<string, { workItemId: string; stands: Vec3[]; orderId?: string }>()
   let planOrderId: string | undefined
   let planBlockedReported = false
@@ -338,6 +339,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     driver: id => registry.driver(id),
     world: () => sensors.read(),
     now,
+    allowAutoEquip: () => {
+      if (!manualEquipPending) return true
+      manualEquipPending = false
+      return false
+    },
     beforeStart: (candidate, job) => {
       if (candidate.keys.startsWith('duty:gather:')) duty.recordJobStart(now())
       if (candidate.workItemId !== undefined) {
@@ -366,6 +372,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
     },
     onEvent: event => {
+      if (event.kind === 'job.terminal' && event.driverId === 'equip' && event.state === 'succeeded') {
+        manualEquipPending = true
+      }
       if (event.kind === 'job.terminal' && event.orderId !== undefined) {
         const debug = orderDiagnostics.get(event.orderId) ?? { attempts: 0 }
         debug.attempts += 1

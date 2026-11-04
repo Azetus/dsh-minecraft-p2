@@ -272,18 +272,17 @@ order 可带 `policy.conflict`：
 - Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
   - `go`：移动到坐标/附近；
   - `place`：放任意方块/床，`item` + 目标；
-  - `dig`：破坏指定方块；
-  - `equip`：切换手持物品/工具；
+  - `dig`：破坏指定方块；driver 按方块自动选择最佳工具；
+  - `equip`：切换手持物品/工具；成功后保护紧接着的下一次 `dig`/`attack`/`clear`，不自动覆盖；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
-  - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测，锁定目标后由 driver 用 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
+  - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测；driver 自动选最强剑/斧，锁定目标后由 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
   - `check`：打开容器/熔炉做三态观测；
   - `container`：容器存取，`withdraw/deposit/load-input/load-fuel/take-*`；
   - `craft`：按配方合成；
   - `build`：执行最终几何 blueprint/Plan；
   - `traverse`：Agent 授权的桥/垫脚移动；
   - `hold`：原地待命。
-- 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `equip` + `dig`；
-  床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
+- 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `dig`（自动选工具，显式 `equip` 可覆盖下一次）；床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
 - 失败上报，不自行消耗食物或改变目标。
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
 - Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；自动 fight 由 `p2_policy` 预授权（默认只 flee）；显式 `attack` order 可指定任何实体，P2 不拦。
