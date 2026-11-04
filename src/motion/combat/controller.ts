@@ -36,6 +36,9 @@ export type CombatPort = {
 
 export type MeleeOptions = {
   targetName?: string
+  /** Explicit Agent order: no P2-side player/passive protection filter. */
+  allowAny?: boolean
+  /** Deprecated compatibility flag for passive/neutral targets. */
   allowPassive?: boolean
   reach?: number
   maxChases?: number
@@ -171,6 +174,7 @@ function targetSeen(port: CombatPort, targetId: string, options: MeleeOptions): 
 }
 
 function guardTarget(target: CombatEntity, options: MeleeOptions): string | undefined {
+  if (options.allowAny === true) return undefined
   if (target.type === 'player') return 'ATTACK_TARGET_PROTECTED'
   if (/passive|neutral|tameable/i.test(target.kind ?? '') && options.allowPassive !== true) {
     return 'ATTACK_TARGET_PROTECTED'

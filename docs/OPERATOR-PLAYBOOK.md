@@ -24,6 +24,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 有限词表：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 - 默认活动用 `p2_base_activity`：默认 `{kind:"wandering"}`，只在 anchor 半径 8 内移动；`{kind:"idle"}` 静止；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 wandering；要完全停住用 `p2_order {verb:"hold"}`。
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
+- 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立。policy 不持久化，重启后要重设。
+- 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - 可带 `blueprint` 表达非标结构；可达性与冲突由 Planner 处理。
@@ -76,7 +78,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(EQUIP_READBACK_UNKNOWN)` / `failed(EQUIP_READBACK_MISMATCH)` | provider 报 equip 成功但手持物缺失或不是请求物品；按未装备处理，先读背包/手持物再决定 |
 | `failed(CONTAINER_READBACK_UNKNOWN)` / `failed(CONTAINER_INCOMPLETE)` | provider 完成传输但前后计数缺失/未达请求；重新打开容器核对，不要当成功 |
 | `failed(ATTACK_TARGET_LOST)` | 目标已离开 32 格/消失；重新获取 entityId 并确认，不要盲目追击 |
-| `failed(ATTACK_TARGET_PROTECTED)` | 玩家/中立目标未授权；换目标或显式 `allowPassive`（玩家永不允许） |
+| `failed(ATTACK_TARGET_PROTECTED)` | 自动 fight/未授权 driver 遇到受保护目标；显式 attack order 不会返回此码，玩家/中立也可由 Agent 明确指定 |
 | `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
 | `WORK_ITEM_BLOCKED` | 通常是支撑/站位问题；换变体或换点 |

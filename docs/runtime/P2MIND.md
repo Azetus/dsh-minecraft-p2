@@ -5,6 +5,7 @@
 > 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
 > 默认活动是 base activity：`idle / wandering / escort`，默认 `wandering`，只做 anchor 半径内的局部移动；不持久化，重启回 wandering。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
+> 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
 
 ## 1. 目标
 
@@ -65,6 +66,7 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 | 对话管线 | chat → 意图 → order/replace/cancel/query/say | 代码 | 无状态 |
 | BaseActivity | 默认活动（idle/wandering/escort）、anchor、等待原因 | 代码 | 进程内，不持久化 |
 | Activity layer | 每 tick 解析生效层与优先级 | 代码 | 无状态 |
+| ReactionPolicy | 自动 fight / selfCare 的 body 级预授权 | 代码 | 进程内，不持久化 |
 | WorkGiver | 扫描并选出一个目标；可返回前置工作或无工作 | 代码 | 无状态 |
 | Job | 数据：driverId + target + params + 归属 + runId | 对象 | 一次尝试 |
 | JobTracker | 续做、切换、停止确认、迟到围栏、fault | 状态机 | 单例 |
@@ -77,6 +79,7 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 - **树只选 giver**：树里不出现坐标、不出现目标、不执行动作。
 - **giver 只选目标**：扫描、可达性、优先级、阻塞物转派；返回候选或“无工作”。
 - **base.work 只选局部移动**：默认活动，位于 `duty.work` 之下；不挖、不放、不攻击、不生成任务。
+- **常驻树顺序**：`threat.fight → escape → self.eat → self.unstuck`。`threat.fight` 只选 policy 允许的 hostile；`escape` 负责致命环境与未授权敌对；显式 `attack` 期间 `threat.fight`/`self.*` 关闭，`escape` 只保留致命环境分支。
 - **activity layer 只做调度**：`constant > order/plan > duty > base`；不改变任何任务状态。
 - **driver 只执行**：拿到已选定的 target；**不得自己推导目标**；只负责 toil 推进、读回、收尾。
 - **tracker 只仲裁**：续做/切换/停止/围栏；不选目标、不执行。
@@ -198,6 +201,8 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `keys` 是续做键：同一个 `keys` 复活不重启 job。
 - 主树顺序：`check → order.* → material.gather → plan.work → duty.work → base.work`；`base.work` 最低，base inactive 时返回 `null`。
 - `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用玩家名/实体名找目标并选目标附近站位，不 teleport；目标丢失只标记 `TARGET_LOST`。
+- `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
+- `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
 
 ### 4.5 Job
 

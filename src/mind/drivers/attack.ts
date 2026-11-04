@@ -20,14 +20,28 @@ const ATTACK_SCHEMA: SchemaNode = {
     entityId: { type: 'string' },
     targetName: { type: 'string' },
     orderId: { type: 'string' },
-    /** Explicit Agent authorization for a named passive target; players stay protected. */
+    /** Explicit Agent order: skip the automatic player/passive guard. */
+    allowAny: { type: 'boolean' },
+    /** Bounded entity lookup box for a far explicit target; default 32. */
+    locateRadius: { type: 'number', minimum: 8, maximum: 64 },
+    /** Internal candidate keys, so a hot constant tree can renew instead of preempt. */
+    continuationKey: { type: 'string' },
+    /** Deprecated compatibility flag; explicit orders now use allowAny. */
     allowPassive: { type: 'boolean' },
   },
   required: ['entityId'],
   additionalProperties: false,
 }
 
-type AttackParams = { entityId: string; targetName?: string; orderId?: string; allowPassive?: boolean }
+type AttackParams = {
+  entityId: string
+  targetName?: string
+  orderId?: string
+  allowAny?: boolean
+  locateRadius?: number
+  continuationKey?: string
+  allowPassive?: boolean
+}
 
 /**
  * One explicit attack order with bounded tracking. The entity id is locked;
@@ -53,14 +67,16 @@ export function createAttackDriver(): Driver {
     },
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as AttackParams
-      return new AsyncDriverHandle(`attack:${params.entityId}`, attack(ctx.port, params).then(result => attachAttackFailure(result, params)))
+      const key = params.continuationKey ?? `attack:${params.entityId}`
+      return new AsyncDriverHandle(key, attack(ctx.port, params).then(result => attachAttackFailure(result, params)))
     },
   }
 }
 
 async function attack(port: ClientPort, params: AttackParams): Promise<DriverResult> {
-  const result = await runMeleeCombat(combatPort(port), params.entityId, {
+  const result = await runMeleeCombat(combatPort(port, params.locateRadius ?? 32), params.entityId, {
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
+    ...(params.allowAny === true ? { allowAny: true } : {}),
     ...(params.allowPassive === true ? { allowPassive: true } : {}),
   })
   return {
@@ -70,14 +86,14 @@ async function attack(port: ClientPort, params: AttackParams): Promise<DriverRes
   }
 }
 
-function combatPort(port: ClientPort): CombatPort {
+function combatPort(port: ClientPort, locateRadius: number): CombatPort {
   return {
     now: () => Date.now(),
     self: () => {
       const self = port.self()
       return { pos: self.pos, health: self.health }
     },
-    entity: id => locate(port, id),
+    entity: id => locate(port, id, locateRadius),
     canSee: id => port.canSee?.(id) ?? true,
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     attack: id => asAction(port.attack(id)),
@@ -107,11 +123,11 @@ function subscribe(port: ClientPort, event: ClientEvent, cb: (entityId: string) 
   }
 }
 
-function locate(port: ClientPort, entityId: string): CombatEntity | undefined {
+function locate(port: ClientPort, entityId: string, locateRadius: number): CombatEntity | undefined {
   const self = port.self().pos
   const entity: EntityInfo | undefined = port.entities({
-    min: { x: self.x - 32, y: self.y - 8, z: self.z - 32 },
-    max: { x: self.x + 32, y: self.y + 8, z: self.z + 32 },
+    min: { x: self.x - locateRadius, y: self.y - 16, z: self.z - locateRadius },
+    max: { x: self.x + locateRadius, y: self.y + 16, z: self.z + locateRadius },
   }).find(candidate => candidate.id === entityId)
   if (entity === undefined) return undefined
   return {

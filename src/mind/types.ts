@@ -99,6 +99,10 @@ export type EvalCtx = {
   observe?: (box: Box) => void
   /** Bounded internal entity observation, used by escort/attack target checks. */
   observeEntities?: (box: Box) => void
+  /** Adapter visibility; absent means the caller may only use distance. */
+  canSee?: (entityId: string) => boolean
+  /** Last observed GOTO_STUCK terminal, for the bounded self-unstuck reflex. */
+  lastStuckAt?: number | undefined
 }
 
 export interface WorkGiver {

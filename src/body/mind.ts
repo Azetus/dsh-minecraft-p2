@@ -8,6 +8,7 @@ import type { SuspensionState } from '../contracts/protocol.ts'
 import type { DutyStatusView } from '../contracts/protocol.ts'
 import type { BaseActivityView } from '../contracts/protocol.ts'
 import type { MindDutyStartResult } from '../contracts/protocol.ts'
+import type { ReactionPolicyView } from '../contracts/protocol.ts'
 import type { MindOrderResult, MindQueueSummary } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
@@ -37,6 +38,9 @@ import { createDutyGiver } from '../mind/givers/duty.ts'
 import { BaseActivityController } from '../mind/base-activity.ts'
 import type { BaseActivitySpec } from '../mind/base-activity.ts'
 import { createBaseActivityGiver } from '../mind/givers/base-activity.ts'
+import { createThreatFightGiver } from '../mind/givers/threat.ts'
+import { createSelfEatGiver, createSelfUnstuckGiver } from '../mind/givers/self-care.ts'
+import { ReactionPolicyState } from '../mind/reaction-policy.ts'
 import { buildActivityView, resolveActivityLayer } from '../mind/activity.ts'
 import type { ActivityLayer, MindActivityView } from '../contracts/protocol.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
@@ -111,6 +115,9 @@ export type MindRuntime = {
   stopDuty(): DutyStatusView | null
   baseActivity(): BaseActivityView
   setBaseActivity(input: unknown): BaseActivityView
+  reactionPolicy(): ReactionPolicyView
+  setReactionPolicy(input: unknown): ReactionPolicyView
+  resetReactionPolicy(): ReactionPolicyView
   listOrders(): {
     active: MindOrderView | null
     queued: MindOrderView[]
@@ -177,6 +184,10 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   })
   const base = new BaseActivityController()
   if (options.baseActivity !== undefined) base.set(options.baseActivity, now())
+  const reaction = new ReactionPolicyState()
+  const fight = createThreatFightGiver(() => reaction.get())
+  const selfEat = createSelfEatGiver(() => reaction.get())
+  const selfUnstuck = createSelfUnstuckGiver(() => reaction.get())
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
@@ -192,6 +203,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver({ ledger: planLedger }) })
   registry.registerGiver({ id: 'duty.work', factory: () => createDutyGiver(duty, areaResources) })
   registry.registerGiver({ id: 'base.work', factory: () => createBaseActivityGiver(base) })
+  registry.registerGiver({ id: 'threat.fight', factory: () => fight })
+  registry.registerGiver({ id: 'self.eat', factory: () => selfEat })
+  registry.registerGiver({ id: 'self.unstuck', factory: () => selfUnstuck })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver(areaResources) })
 
   const loaded = loadTrees(TREE_DEFINITIONS, registry)
@@ -309,6 +323,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let activityView: MindActivityView | undefined
   let lastActivityKey = ''
   let lastBaseWaiting: string | null = null
+  let lastStuckAt: number | undefined
   const jobWorkItems = new Map<string, { workItemId: string; stands: Vec3[]; orderId?: string }>()
   let planOrderId: string | undefined
   let planBlockedReported = false
@@ -384,6 +399,15 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       events.push(event.kind, event.at, data)
       metrics.record(event.kind, data, event.at)
       if (event.kind === 'job.terminal' && typeof event.keys === 'string') {
+        if (event.code === 'GOTO_STUCK') lastStuckAt = event.at
+        if (event.keys.startsWith('threat.fight:')) {
+          fight.noteTerminal({
+            keys: event.keys,
+            at: event.at,
+            state: event.state,
+            ...(event.code === undefined ? {} : { code: event.code }),
+          })
+        }
         if (event.keys.startsWith('base:wander:')) {
           base.noteMoveResult('wandering', event.state === 'succeeded', event.at)
         } else if (event.keys.startsWith('base:escort:')) {
@@ -455,6 +479,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     gatherCount: () => gatherCount,
     observe: box => sensors.observeBox(box),
     observeEntities: box => sensors.observeEntities(box),
+    ...(options.port.canSee === undefined ? {} : { canSee: (id: string) => options.port.canSee!(id) }),
+    lastStuckAt: () => lastStuckAt,
     onEvent: event => {
       metrics.record(event.kind, event.data, event.at)
       events.push(event.kind, event.at, event.data)
@@ -1243,6 +1269,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         duty: duty.view(now()) ?? null,
         baseActivity: base.view(),
         activity: activityView ?? null,
+        reaction: reaction.view(),
         metrics: metrics.view(),
       }
     },
@@ -1351,6 +1378,33 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         tracker.cancelPending()
       }
       events.push('base.activity', now(), view as unknown as JsonValue)
+      loopRef?.invalidate()
+      return view
+    },
+    reactionPolicy(): ReactionPolicyView {
+      return reaction.view()
+    },
+    setReactionPolicy(input: unknown): ReactionPolicyView {
+      const view = reaction.set(input, now())
+      fight.reset()
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('threat.fight:')) {
+        tracker.abort('POLICY_CHANGED')
+        tracker.cancelPending()
+      }
+      events.push('policy.changed', now(), view as unknown as JsonValue)
+      loopRef?.invalidate()
+      return view
+    },
+    resetReactionPolicy(): ReactionPolicyView {
+      const view = reaction.reset(now())
+      fight.reset()
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('threat.fight:')) {
+        tracker.abort('POLICY_CHANGED')
+        tracker.cancelPending()
+      }
+      events.push('policy.changed', now(), view as unknown as JsonValue)
       loopRef?.invalidate()
       return view
     },

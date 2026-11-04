@@ -32,6 +32,8 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - 连续水平通道用 `dig {shape:"tunnel",to:{x,y,z},height? 默认2,maxBlocks? 默认24,preserveFloor?}`：起点是当前脚格，只允许一个水平轴向、至多一次 y±1 台阶，不做竖井。一次 order 清脚/头并前进，返回 `path`/`returnable`；遇到水/岩浆、未加载或不可破坏会 `DIG_PARTIAL` + `stoppedAt` + `reason`，不要继续猜。
 - 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty，返回 `previousDuty/started`。duty 持久化，blocked/failed 后 base 保持 inactive；duty 不会自动复活。
 - 默认活动用 `p2_base_activity`：默认 wandering（anchor 半径 8）；`idle` 静止；`escort` 按玩家/实体名跟随，跟丢只报 `TARGET_LOST`，不传送。base **不持久化**，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}`，不要反复 set idle。
+- 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立；policy 不持久化，重启后重设。
+- 显式 `attack` order 由你决定目标，P2 不做玩家/被动/中立保护拦截；显式 attack 期间自动 fight 关闭，只保留致命环境反射。
 - 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
 
 ## 3. hold 与队列
@@ -71,7 +73,8 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `CONTAINER_READBACK_UNKNOWN` / `CONTAINER_INCOMPLETE` | 传输完成但计数缺失/未达请求 | 重新打开容器核对数量，不要当成功 |
 | `CRAFT_INCOMPLETE` | 合成开始但 `produced < requested` | 读 `count/attempted/crafted/produced`；只补差额 |
 | `ATTACK_TARGET_LOST` | 目标离开/消失 | 重新获取 entityId；消失不等于 killed |
-| `ATTACK_TARGET_PROTECTED` | 玩家/未授权被动目标 | 换目标；玩家永不攻击 |
+| `ATTACK_TARGET_PROTECTED` | 自动 fight/未授权 driver 遇到受保护目标 | 显式 attack order 不返回此码；玩家/中立也可由你明确指定 |
+| `SELF_STUCK` | 卡住且 3 格内没有可站格 | 通知而非自动挖方块；换任务/人工处理 |
 | `ATTACK_NOT_KILLED` | 24 次攻击/40s 内未击杀 | 检查武器/目标类型，重新下令；不要盲目追击 |
 | `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项被支撑或站位卡住 | 换区域、换蓝图变体或换点；不要原样重下 |
 | `OBSERVATION_STALE` | 长期无观测更新 | 检查连接；恢复后自动继续，不重放 pending |

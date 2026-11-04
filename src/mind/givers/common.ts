@@ -113,7 +113,7 @@ export function moveCandidate(target: Vec3, keys: string, timeoutMs = 8_000, ran
   return {
     driverId: 'move',
     target: { kind: 'point', pos: target },
-    params: { x: target.x, y: target.y, z: target.z, range, timeoutMs },
+    params: { x: target.x, y: target.y, z: target.z, range, timeoutMs, continuationKey: keys },
     keys,
   }
 }

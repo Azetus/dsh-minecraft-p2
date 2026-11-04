@@ -310,6 +310,10 @@ export class BodyManager {
     return this.activeClient().request('mind.baseActivity', params)
   }
 
+  mindPolicy(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('mind.policy', params)
+  }
+
   worldObserve(params: JsonValue): Promise<JsonValue> {
     return this.activeClient().request('world.observe', params)
   }

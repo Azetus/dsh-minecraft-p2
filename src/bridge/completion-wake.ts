@@ -88,7 +88,8 @@ export class CompletionFeed {
           // Default base activity, duty work and self-care are background
           // helpers; their per-job failures are not Agent decisions. A duty
           // terminal or a base.waiting event carries the meaningful transition.
-          if (keys.startsWith('base:') || keys.startsWith('duty:') || keys.startsWith('self.')) break
+          if (keys.startsWith('base:') || keys.startsWith('duty:') || keys.startsWith('self.')
+            || keys.startsWith('threat.fight:')) break
           const state = text(data.state)
           const blocked = data.blocked === true
           // A check job reports execution success and carries the three-state

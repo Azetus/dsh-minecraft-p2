@@ -217,6 +217,30 @@ describe('mind integration', () => {
     expect(mind.status().baseActivity?.state).toBe('inactive')
   })
 
+  it('sets and resets the body reaction policy without persistence', () => {
+    const first = createMind({
+      port: fakePort([], { emptyBlocks: true }).port,
+      baseActivity: { kind: 'idle' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    expect(first.status().reaction).toMatchObject({ source: 'default', mode: 'flee', fight: null })
+    const set = first.setReactionPolicy({ fight: { allowedTargets: [] } })
+    expect(set).toMatchObject({ source: 'agent', mode: 'all-hostiles' })
+    expect(first.status().reaction).toMatchObject({ mode: 'all-hostiles' })
+
+    const second = createMind({
+      port: fakePort([], { emptyBlocks: true }).port,
+      baseActivity: { kind: 'idle' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal2.jsonl'),
+      now: () => 2_000,
+    })
+    expect(second.status().reaction).toMatchObject({ source: 'default', mode: 'flee', fight: null })
+    expect(first.resetReactionPolicy()).toMatchObject({ source: 'default', mode: 'flee' })
+  })
+
   it('selects, starts and finishes one go job', async () => {
     const { port, moves, pending } = fakePort()
     const mind = createMind({
@@ -329,6 +353,30 @@ describe('mind integration', () => {
         }),
         setBaseActivity: () => ({
           kind: 'wandering', state: 'inactive', params: { radius: 8 }, waitingReason: null,
+        }),
+        reactionPolicy: () => ({
+          source: 'default', mode: 'flee', fight: null,
+          selfCare: {
+            eat: { enabled: true, foodBelow: 14 },
+            retreat: { enabled: true, healthBelow: 8 },
+            unstuck: { enabled: true },
+          },
+        }),
+        setReactionPolicy: () => ({
+          source: 'agent', mode: 'flee', fight: null,
+          selfCare: {
+            eat: { enabled: true, foodBelow: 14 },
+            retreat: { enabled: true, healthBelow: 8 },
+            unstuck: { enabled: true },
+          },
+        }),
+        resetReactionPolicy: () => ({
+          source: 'default', mode: 'flee', fight: null,
+          selfCare: {
+            eat: { enabled: true, foodBelow: 14 },
+            retreat: { enabled: true, healthBelow: 8 },
+            unstuck: { enabled: true },
+          },
         }),
         listOrders: () => ({ active: null, queued: [], queueBlockedBy: null }),
         sinceEvents: () => ({ events: [], seq: 0 }),

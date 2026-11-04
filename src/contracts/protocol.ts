@@ -27,6 +27,7 @@ export const METHODS = [
   'mind.order',
   'mind.duty',
   'mind.baseActivity',
+  'mind.policy',
   'mind.orders',
   'mind.cancel',
   'mind.report',
@@ -189,6 +190,28 @@ export type MindDutyStartResult = {
   started: DutyStatusView
 }
 
+export type ReactionFightPolicy = {
+  /** Empty means every adapter-classified hostile, minus neutral/auto-avoid names. */
+  allowedTargets: string[]
+  retreatHealth: number
+  radius: number
+  leash: number
+}
+
+export type SelfCarePolicy = {
+  eat: { enabled: boolean; foodBelow: number }
+  retreat: { enabled: boolean; healthBelow: number }
+  unstuck: { enabled: boolean }
+}
+
+export type ReactionPolicyView = {
+  source: 'default' | 'agent'
+  mode: 'flee' | 'allowlist' | 'all-hostiles'
+  fight: ReactionFightPolicy | null
+  selfCare: SelfCarePolicy
+  updatedAt?: number
+}
+
 export type BaseActivityKind = 'idle' | 'wandering' | 'escort'
 
 export type BaseActivityState = 'active' | 'inactive'
@@ -255,6 +278,7 @@ export type MindStatusView = {
   duty?: DutyStatusView | null
   baseActivity?: BaseActivityView | null
   activity?: MindActivityView | null
+  reaction?: ReactionPolicyView | null
   metrics?: MindMetricsView
 }
 

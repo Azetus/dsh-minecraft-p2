@@ -127,6 +127,7 @@ describe('protocol vocabulary', () => {
       'mind.order',
       'mind.duty',
       'mind.baseActivity',
+      'mind.policy',
       'mind.orders',
       'mind.cancel',
       'mind.report',

@@ -147,3 +147,20 @@
 - **规则**：`p2_duty start` 先校验新 spec，再终止旧 duty；旧 job 的停止确认由 tracker 单写者门保证，不能并行启动新 job。
 - **规则**：`blocked`/`failed` 的 duty 不自动复活，base 保持 inactive；`completed`/`cancelled` 才回到 base。`duty.json` 只恢复 active 状态，v1 sidecar 在下次写入时迁移为 v2。
 - **规则**：deadline 只计 active 时间；暂停/宕机时间不计入。quota 用 baseline 增量，不能用背包绝对值（会重复计算任务前已有的物品）。
+
+## 9. 反应策略与显式 attack
+
+### 9.1 policy 不持久化
+- **规则**：`p2_policy` 只存在进程内；body 重启回只 flee。Agent 需要在 restart 后重新设置；`mind.reaction.source` 会显示 `default`。
+- **规则**：`fight.allowedTargets: []` 是“所有非 neutral/auto-avoid 的 hostile”，不是字面所有 `kind=hostile`；neutral 名单和 auto-avoid 永远优先。
+
+### 9.2 自动 fight 的保护
+- **规则**：自动 fight 永不选玩家、被动/中立、neutral 名单（enderman/spider/cave_spider/piglin/zombified_piglin）和 auto-avoid（creeper/wither/ender_dragon/warden）；显式允许列表里写这些名称应校验失败。
+- **规则**：`canSee` 可用时过滤目标；没有时沿用 driver 默认，但不应把“看不见”当成功。
+- **规则**：目标锁定后不换目标；失败后冷却并短期拉黑，避免在多个怪之间抖动。
+
+### 9.3 显式 attack 是 Agent 决策
+- **规则**：显式 `attack` order 不做玩家/被动/中立保护拦截，driver 用 `allowAny:true`；`ATTACK_TARGET_PROTECTED` 只属于自动 fight/未授权调用。
+- **规则**：显式 attack 的 giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius` 定位（显式 64、自动 32）；超过 64 或未加载仍报 `ATTACK_TARGET_LOST`，Agent 先用 `go` 靠近。
+- **规则**：显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射；不要因为敌对、低血、饥饿或卡住而抢占。
+- **规则**：技术失败（目标丢失/无路/看不见/预算）仍然按 driver 契约上报；这不是授权阻拦，不要把它说成“P2 不允许”。

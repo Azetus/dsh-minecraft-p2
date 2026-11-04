@@ -8,7 +8,12 @@ import type { TreeNode } from './tree.ts'
  */
 export const CONSTANT_TREE: TreeNode = {
   type: 'priority',
-  children: [{ type: 'giver', ref: 'escape' }],
+  children: [
+    { type: 'giver', ref: 'threat.fight' },
+    { type: 'giver', ref: 'escape' },
+    { type: 'giver', ref: 'self.eat' },
+    { type: 'giver', ref: 'self.unstuck' },
+  ],
 }
 
 export const MAIN_TREE: TreeNode = {

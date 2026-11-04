@@ -1,5 +1,4 @@
 import type { JsonValue } from '../../contracts/types.ts'
-import type { EntityInfo } from '../../port/index.ts'
 import { boxAround } from '../sensors.ts'
 import type { EvalCtx, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
 
@@ -12,30 +11,32 @@ function activeOrder(active: () => OrderView | undefined, verb: string): OrderVi
   return current?.order.verb === verb ? current : undefined
 }
 
-function isProtected(entity: EntityInfo): boolean {
-  if (entity.type === 'player') return true
-  const kind = entity.kind ?? ''
-  return /passive|neutral|tameable/i.test(kind)
-}
-
-/** Explicit `attack` order: exactly the Agent-named entity, no acquisition. */
+/**
+ * Explicit `attack` order: exactly the Agent-named entity, no acquisition.
+ * P2 never applies its own protection filter here; target choice belongs to
+ * the Agent. The giver performs a bounded targeted entity observation so an
+ * explicitly named target beyond the default 12-block sensor can still be
+ * handed to the melee driver, which owns the approach itself.
+ */
 export function createAttackOrderGiver(active: () => OrderView | undefined): WorkGiver {
+  let lastLookupAt = 0
   return {
     id: 'order.attack',
-    find(_ctx: EvalCtx, world: WorldView): WorkGiverResult {
+    find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
       const current = activeOrder(active, 'attack')
       if (current === undefined) return null
       const entityId = current.order.params?.entityId
       if (typeof entityId !== 'string' || entityId.length === 0) {
         return { kind: 'hold', reason: 'ATTACK_TARGET_INVALID' }
       }
-      const entity = world.entitiesIn(boxAround(world.self.pos, 32, 8))
-        .find(candidate => candidate.id === entityId)
-      const allowPassive = current.order.params?.allowPassive === true
-      if (entity === undefined) return { kind: 'hold', reason: 'ATTACK_TARGET_LOST' }
-      if (entity.type === 'player' || (isProtected(entity) && !allowPassive)) {
-        return { kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' }
+      const box = boxAround(world.self.pos, ATTACK_ACQUIRE_RADIUS, 16)
+      let entity = world.entitiesIn(box).find(candidate => candidate.id === entityId)
+      if (entity === undefined && ctx.observeEntities !== undefined && ctx.now >= lastLookupAt) {
+        lastLookupAt = ctx.now + ATTACK_LOOKUP_INTERVAL_MS
+        ctx.observeEntities(box)
+        entity = world.entitiesIn(box).find(candidate => candidate.id === entityId)
       }
+      if (entity === undefined) return { kind: 'hold', reason: 'ATTACK_TARGET_LOST' }
       return {
         driverId: 'attack',
         target: { kind: 'point', pos: entity.position },
@@ -43,7 +44,9 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
           entityId: entity.id,
           targetName: entity.name,
           orderId: current.order.id,
-          ...(allowPassive ? { allowPassive: true } : {}),
+          allowAny: true,
+          locateRadius: ATTACK_ACQUIRE_RADIUS,
+          continuationKey: `order.attack:${current.order.id}:${entity.id}`,
         },
         keys: `order.attack:${current.order.id}:${entity.id}`,
         orderId: current.order.id,
@@ -51,4 +54,7 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
     },
   }
 }
+
+const ATTACK_ACQUIRE_RADIUS = 64
+const ATTACK_LOOKUP_INTERVAL_MS = 1_000
 

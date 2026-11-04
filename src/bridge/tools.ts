@@ -275,6 +275,33 @@ export function registerP2Tools(
       },
     }),
     tools.register({
+      name: 'p2_policy',
+      description: 'Set, reset, or read the body-level reaction policy. set replaces the whole policy: omit fight for flee-only; fight.allowedTargets [] means every adapter-classified hostile except players, passive/neutral, known neutral names, and auto-avoid (creeper, wither, ender dragon, warden). fight requires allowedTargets explicitly. Auto-fight is disabled while an explicit attack order is active; an explicit attack order may target any entity and P2 does not apply the protection filter. Policy is process-local: a body restart resets to flee-only. selfCare defaults are enabled.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['set', 'reset', 'status'] },
+          reaction: {
+            type: 'object',
+            description: 'Required for set: {fight?:{allowedTargets,retreatHealth?,radius?,leash?}, selfCare?:{eat?,retreat?,unstuck?}}',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        if (args.action !== 'set' && args.action !== 'reset' && args.action !== 'status') {
+          throw new Error('p2_policy action must be set, reset or status')
+        }
+        if (args.action === 'status') return await manager.mindPolicy({ action: 'status' })
+        if (args.action === 'reset') return await manager.mindPolicy({ action: 'reset' })
+        if (args.reaction === undefined) throw new Error('p2_policy set requires reaction')
+        return await manager.mindPolicy({ action: 'set', reaction: args.reaction as JsonValue })
+      },
+    }),
+    tools.register({
       name: 'p2_orders',
       description: 'Active and queued orders. Read-only. queueBlockedBy names a barrier order (such as hold) that is occupying the single active slot and keeping the queue from starting. A timed hold shows expiresAt; an indefinite hold has no expiry and must be cancelled.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createAttackDriver } from '../src/mind/drivers/attack.ts'
 import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
-import type { ClientPort, EntityInfo } from '../src/port/index.ts'
+import type { Box, ClientPort, EntityInfo } from '../src/port/index.ts'
 
 /**
  * Category: data (combat ROE + evidence).
@@ -34,7 +34,12 @@ function world(entities: EntityInfo[]): WorldView {
     inventory: [],
     blockAt: () => null,
     blocksIn: () => [],
-    entitiesIn: () => entities,
+    entitiesIn: (box: Box) => entities.filter(entity => entity.position.x >= box.min.x
+      && entity.position.x <= box.max.x
+      && entity.position.y >= box.min.y
+      && entity.position.y <= box.max.y
+      && entity.position.z >= box.min.z
+      && entity.position.z <= box.max.z),
   } as unknown as WorldView
 }
 
@@ -90,32 +95,80 @@ describe('combat ROE', () => {
     }))
     expect(giver.find({ now: 0 }, world([entity({ id: 'e1', name: 'zombie' })]))).toMatchObject({
       driverId: 'attack',
-      params: { entityId: 'e1' },
+      params: { entityId: 'e1', continuationKey: 'order.attack:ord-a:e1' },
     })
     expect(giver.find({ now: 0 }, world([]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
-  it('requires explicit allowPassive for a named passive target', () => {
+  it('targets an explicit entity up to 64 blocks and observes at most once per second', () => {
+    let observed = 0
+    const giver = createAttackOrderGiver(() => ({
+      order: { id: 'ord-far', verb: 'attack', params: { entityId: 'far' } },
+    }))
+    const empty = world([])
+    expect(giver.find({ now: 0, observeEntities: () => { observed += 1 } }, empty))
+      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+    expect(observed).toBe(1)
+    expect(giver.find({ now: 500, observeEntities: () => { observed += 1 } }, empty))
+      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+    expect(observed).toBe(1)
+    expect(giver.find({ now: 1_000, observeEntities: () => { observed += 1 } }, empty))
+      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+    expect(observed).toBe(2)
+
+    const far = entity({ id: 'far', name: 'zombie', position: { x: 60, y: 64, z: 0.5 } })
+    expect(giver.find({ now: 2_000 }, world([far]))).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 'far', locateRadius: 64 },
+    })
+    const tooFar = entity({ id: 'far', name: 'zombie', position: { x: 70, y: 64, z: 0.5 } })
+    expect(giver.find({ now: 3_000 }, world([tooFar]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+  })
+
+  it('lets an explicit attack order target any entity', () => {
     const sheep = entity({ id: 's1', name: 'sheep', type: 'animal', kind: 'Passive mobs' })
-    const blocked = createAttackOrderGiver(() => ({
+    const sheepGiver = createAttackOrderGiver(() => ({
       order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1' } },
     }))
-    expect(blocked.find({ now: 0 }, world([sheep]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' })
-    const allowed = createAttackOrderGiver(() => ({
-      order: { id: 'ord-s', verb: 'attack', params: { entityId: 's1', allowPassive: true } },
-    }))
-    expect(allowed.find({ now: 0 }, world([sheep]))).toMatchObject({
-      driverId: 'attack', params: { entityId: 's1', allowPassive: true },
+    expect(sheepGiver.find({ now: 0 }, world([sheep]))).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 's1', allowAny: true },
     })
+
     const player = entity({ id: 'p1', name: 'Human_Player', type: 'player', kind: 'player' })
     const playerGiver = createAttackOrderGiver(() => ({
-      order: { id: 'ord-p', verb: 'attack', params: { entityId: 'p1', allowPassive: true } },
+      order: { id: 'ord-p', verb: 'attack', params: { entityId: 'p1' } },
     }))
-    expect(playerGiver.find({ now: 0 }, world([player]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_PROTECTED' })
+    expect(playerGiver.find({ now: 0 }, world([player]))).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 'p1', allowAny: true },
+    })
   })
 })
 
 describe('combat evidence', () => {
+  it('allowAny lets an explicit order hit a player while the default guard protects', async () => {
+    let alive = true
+    const player = entity({ id: 'p1', name: 'Human_Player', type: 'player', kind: 'player' })
+    const { port } = combatPort({
+      target: () => (alive ? player : undefined),
+      attack: async listeners => {
+        emit(listeners, 'entityHurt', 'p1')
+        emit(listeners, 'entityDead', 'p1')
+        alive = false
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const explicit = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player', allowAny: true }), { port, now: () => 1 })
+    await waitFor(explicit)
+    expect(explicit.result()).toMatchObject({ state: 'succeeded', observed: { killed: true } })
+
+    alive = true
+    const guarded = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player' }), { port, now: () => 1 })
+    await waitFor(guarded)
+    expect(guarded.result()).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_PROTECTED' })
+  })
+
   it('reports killed only after an entityDead event', async () => {
     let alive = true
     const { port } = combatPort({

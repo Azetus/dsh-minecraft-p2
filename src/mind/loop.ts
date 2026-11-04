@@ -41,6 +41,10 @@ export type MindLoopOptions = {
   observe?: (box: Box) => void
   /** Bounded internal entity re-read for escort; never an Agent payload. */
   observeEntities?: (box: Box) => void
+  /** Adapter visibility for automatic fight target checks. */
+  canSee?: (entityId: string) => boolean
+  /** Last GOTO_STUCK terminal time. */
+  lastStuckAt?: () => number | undefined
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -69,6 +73,8 @@ export class MindLoop {
   private readonly gatherCount: (() => number) | undefined
   private readonly observe: ((box: Box) => void) | undefined
   private readonly observeEntities: ((box: Box) => void) | undefined
+  private readonly canSee: ((entityId: string) => boolean) | undefined
+  private readonly lastStuckAt: (() => number | undefined) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -95,6 +101,8 @@ export class MindLoop {
     this.gatherCount = options.gatherCount
     this.observe = options.observe
     this.observeEntities = options.observeEntities
+    this.canSee = options.canSee
+    this.lastStuckAt = options.lastStuckAt
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -129,6 +137,8 @@ export class MindLoop {
       isBlocked: key => this.tracker.isBlocked(key),
       ...(this.observe === undefined ? {} : { observe: this.observe }),
       ...(this.observeEntities === undefined ? {} : { observeEntities: this.observeEntities }),
+      ...(this.canSee === undefined ? {} : { canSee: this.canSee }),
+      ...(this.lastStuckAt === undefined ? {} : { lastStuckAt: this.lastStuckAt() }),
     }
 
     try {

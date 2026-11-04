@@ -21,6 +21,7 @@ class FakeManager {
   readonly says: string[] = []
   readonly baseActivities: unknown[] = []
   readonly dutyCalls: unknown[] = []
+  readonly policyCalls: unknown[] = []
   /** Override the next accepted order result (queue summary tests). */
   orderResult: unknown = { id: 'ord-1', state: 'active' }
   locksResult: unknown[] = []
@@ -93,6 +94,20 @@ class FakeManager {
     }
   }
 
+  async mindPolicy(params: unknown): Promise<unknown> {
+    this.policyCalls.push(params)
+    return {
+      source: 'agent',
+      mode: 'allowlist',
+      fight: { allowedTargets: ['zombie'], retreatHealth: 8, radius: 8, leash: 12 },
+      selfCare: {
+        eat: { enabled: true, foodBelow: 14 },
+        retreat: { enabled: true, healthBelow: 8 },
+        unstuck: { enabled: true },
+      },
+    }
+  }
+
   async mindCancel(id: string, all = false): Promise<unknown> {
     this.cancels.push(all ? `all:${id}` : id)
     return all ? { id: '*', state: 'cancelled', cancelled: 2 } : { id, state: 'cancelled' }
@@ -142,6 +157,7 @@ describe('mind operator tools', () => {
       'p2_order',
       'p2_duty',
       'p2_base_activity',
+      'p2_policy',
       'p2_orders',
       'p2_cancel',
       'p2_report',
@@ -347,6 +363,23 @@ describe('mind operator tools', () => {
     expect(result.previousDuty).toBeNull()
     expect(result.started.state).toBe('active')
     expect(manager.dutyCalls).toEqual([{ action: 'start', duty }])
+  })
+
+  it('forwards policy set/status/reset without acting', async () => {
+    const { definitions, manager, agent } = harness()
+    const definition = definitions.get('p2_policy')
+    expect(definition?.description).toMatch(/process-local|restart/i)
+    expect((definition?.parameters as { properties?: Record<string, unknown> }).properties).toMatchObject({
+      action: { enum: ['set', 'reset', 'status'] },
+    })
+    const reaction = { fight: { allowedTargets: ['zombie'] } }
+    await definition?.execute({ action: 'set', reaction }, { agent })
+    expect(manager.policyCalls.at(-1)).toEqual({ action: 'set', reaction })
+    await definition?.execute({ action: 'status' }, { agent })
+    expect(manager.policyCalls.at(-1)).toEqual({ action: 'status' })
+    await definition?.execute({ action: 'reset' }, { agent })
+    expect(manager.policyCalls.at(-1)).toEqual({ action: 'reset' })
+    expect(manager.orders).toHaveLength(0)
   })
 
   it('rejects a tool call from a non-owner session', async () => {

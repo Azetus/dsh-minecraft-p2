@@ -30,6 +30,7 @@ import type {
   PerceptionNotice,
   PerceptionPollResult,
   ProviderRuntimeStatus,
+  ReactionPolicyView,
   RequestEnvelope,
   ResponseEnvelope,
   StatusResult,
@@ -166,6 +167,7 @@ export class BodyRuntime {
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.duty': return this.mindDuty(params) as unknown as JsonValue
       case 'mind.baseActivity': return this.mindBaseActivity(params) as unknown as JsonValue
+      case 'mind.policy': return this.mindPolicy(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
       case 'mind.report': return this.mindReport() as unknown as JsonValue
@@ -278,6 +280,20 @@ export class BodyRuntime {
       return mind.setBaseActivity(input)
     }
     throw p2Error('INVALID_MESSAGE', 'validation', 'mind.baseActivity action must be set or status', {
+      module: 'body.runtime',
+    })
+  }
+
+  private mindPolicy(params: Record<string, JsonValue>): ReactionPolicyView {
+    this.requireOwner()
+    const mind = this.requireMind()
+    if (params.action === 'status') return mind.reactionPolicy()
+    if (params.action === 'reset') return mind.resetReactionPolicy()
+    if (params.action === 'set') {
+      const input = isRecord(params.reaction) ? params.reaction : params
+      return mind.setReactionPolicy(input)
+    }
+    throw p2Error('INVALID_MESSAGE', 'validation', 'mind.policy action must be set, reset or status', {
       module: 'body.runtime',
     })
   }

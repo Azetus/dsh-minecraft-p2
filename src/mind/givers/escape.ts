@@ -61,13 +61,12 @@ export function createEscapeGiver(): WorkGiver {
         return moveCandidate(target, 'escape:water', 6_000)
       }
 
-      // An explicit attack order names its target. The reflex must not flee
-      // from that same entity; it may still flee from an uncovered threat.
-      const attackTarget = ctx.orderVerb === 'attack' && typeof ctx.orderParams?.entityId === 'string'
-        ? ctx.orderParams.entityId
-        : undefined
-      const threat = hostilesNear(world, self.pos, 6)
-        .find(entity => entity.id !== attackTarget)
+      // An explicit attack order owns combat: only lethal environment reflexes
+      // may preempt it. Hostile flee/cover stays out of the way until the order
+      // ends.
+      if (ctx.orderVerb === 'attack') return null
+
+      const threat = hostilesNear(world, self.pos, 6)[0]
       if (threat === undefined) {
         // Sensor snapshots can miss an adjacent mob for a tick. Keep the
         // target through a short gap instead of recomputing a new one.

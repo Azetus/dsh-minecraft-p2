@@ -35,6 +35,8 @@
 
 **常驻树优先级**：常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`。这个门只决定本轮谁来 offer，不改变 order/duty 状态；紧急解除后主树恢复。`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
 
+常驻树顺序：`threat.fight → escape → self.eat → self.unstuck`。自动 fight 只在 `p2_policy.fight` 存在时启用；显式 `attack` order 期间它关闭，`escape` 也只保留致命环境反射。`p2_policy` 是 body 级、process-local、不持久化：重启回只 flee。
+
 **活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `wandering`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
 
 ### 2.1 mineflayer 导航（当前实现）
@@ -85,7 +87,8 @@
 `mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。duty 会持久化到 journal 同目录的 `duty.json` v2：baseline、activeMs、pausedMs、jobs 与状态；body 重启后只恢复未过期且 identity 匹配的 active duty，`collected` 从 baseline+背包重算，`activeMs` 从文件恢复（宕机时间不计入 active 时间）；completed/blocked/failed/cancelled 不复活。duty 被 order/plan/threat 暂停时不消耗 active 时间；blocked/failed 会让 base 保持 inactive，等 Agent 决定。
 `mind.status.baseActivity` 是默认活动视图：`idle / wandering / escort`，只有 `active | inactive`；不持久化，重启回 `wandering`。`wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 切换），固定不随身体漂移；半径默认 8，不接受 center。`escort` 按玩家名/实体名跟随，不 teleport；目标丢失保持 `active` 且 `waitingReason:"TARGET_LOST"`，不自动切换。
 `mind.status.activity` 报告当前生效层：`{layer, kind, state, pausedBy}`；layer 为 `constant / order / duty / base`，state 为 `active / waiting / paused`。order/plan 在跑时 layer=order，duty 被暂停不改变 layer；blocked/failed duty 报 `layer:"duty", state:"waiting"`，base 保持 inactive。
-`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
+`mind.status.reaction` 是 body 级反应策略视图：`{source, mode, fight, selfCare}`。`mode` 为 `flee / allowlist / all-hostiles`；`fight.allowedTargets:[]` 显示 `all-hostiles`，但仍排除玩家/被动/中立、neutral 保护名单和 auto-avoid。策略不持久化，重启后 `source:"default"`、`mode:"flee"`。
+`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/无效返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。显式 `attack` 不做玩家/被动/中立保护拦截；`ATTACK_TARGET_PROTECTED` 只属于自动 fight/未授权 driver 调用。`hold` 不是成功，也不是失败。
 
 ## 5. 工作选择与重试
 
@@ -101,7 +104,7 @@
    - `equip / traverse / check` 是一次性，首次失败即终态；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
    - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED` 也不重试（重试同一目标不会改变结果）；
-   - `ATTACK_TARGET_LOST / ATTACK_TARGET_PROTECTED / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；
+   - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
    - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
 
@@ -137,6 +140,7 @@
 | `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
 | `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
 | `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `wandering`，半径 1–8；`idle` 静止；`escort` 按目标名跟随、不 teleport；不持久化，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}` |
+| `p2_policy {action:"set"\|"reset"\|"status",reaction?}` | body 级反应策略；`set` 全量替换；无 `fight` = 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；玩家/被动/中立永不自动攻击；不持久化；显式 attack 不受它限制 |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | 详细事件审计（order/job/plan/tracker/move）；仅供排查，不是主轮询手段 |
 | 唤醒 | order 终态、plan.blocked、job.terminal failed/blocked、tracker fault、感知 critical、对话 |
@@ -260,16 +264,18 @@ order 可带 `policy.conflict`：
 ### 10.8 idle 边界与执行原语（M4-03 重构）
 
 - 默认无 order：**base activity**，默认 `wandering`，只在 anchor 半径 8 内做局部移动；不采集、不建造、不战斗、不生成新任务。
+- 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；玩家/被动/中立永不自动攻击；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
+- 显式 `attack` order 是 Agent 的目标选择：P2 不做玩家/被动/中立保护拦截；期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
 - base 不持久化：body 重启后回到 `wandering`；Agent 可用 `p2_base_activity` 改为 `idle`/`escort`/调整 `wandering.radius`。
 - 需要完全停住时用 `p2_order {verb:"hold"}`；hold 是占住 active 位的 barrier，不是队列清空。
-- 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击。
+- 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击（除非 `p2_policy.fight` 明确允许）。
 - Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
   - `go`：移动到坐标/附近；
   - `place`：放任意方块/床，`item` + 目标；
   - `dig`：破坏指定方块；
   - `equip`：切换手持物品/工具；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
-  - `attack`：攻击 Agent 明确指定的 entityId，锁定目标做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
+  - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测，锁定目标后由 driver 用 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
   - `check`：打开容器/熔炉做三态观测；
   - `container`：容器存取，`withdraw/deposit/load-input/load-fuel/take-*`；
   - `craft`：按配方合成；
@@ -280,7 +286,7 @@ order 可带 `policy.conflict`：
   床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
 - 失败上报，不自行消耗食物或改变目标。
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
-- Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；当前常驻树只做即时逃生，不自动攻击；显式 `attack` order 只攻击 Agent 指定的目标。
+- Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；自动 fight 由 `p2_policy` 预授权（默认只 flee）；显式 `attack` order 可指定任何实体，P2 不拦。
 
 ### 10.9 感知与唤醒粒度（M4 后）
 
@@ -309,7 +315,7 @@ order 可带 `policy.conflict`：
   - `order.terminal` 的 `failed / blocked / abandoned`；
   - `plan.blocked`；
   - `duty.terminal` 的 `blocked / failed`；
-  - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` 的后台 job 失败不单独唤醒）；check job 的 `succeeded` 只表示观测完成，
+  - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` / `threat.fight:` 的后台 job 失败不单独唤醒）；check job 的 `succeeded` 只表示观测完成，
     若 `observed.state=failed/unknown` 也作为失败 cause 推送；
   - `tracker.fault`，以及直接导致终态的 `plan.material-short / plan.abort /
     plan.verify(refuted) / plan.definition-error / action.unreconciled`。

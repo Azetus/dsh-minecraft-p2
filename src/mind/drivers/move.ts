@@ -34,6 +34,8 @@ const MOVE_SCHEMA: SchemaNode = {
      * break/place, and the result is marked `unvalidated`.
      */
     risky: { type: 'boolean' },
+    /** Internal candidate keys, so a hot constant tree can renew instead of preempt. */
+    continuationKey: { type: 'string' },
     unstickDig: { type: 'array', items: { type: 'object', properties: {
       x: { type: 'integer' }, y: { type: 'integer' }, z: { type: 'integer' }, name: { type: 'string' },
     }, required: ['x', 'y', 'z', 'name'], additionalProperties: false } },
@@ -54,6 +56,7 @@ type MoveParams = {
   allowPlace?: boolean
   material?: string
   risky?: boolean
+  continuationKey?: string
   unstickDig?: MoveOptions['unstickDig']
   intent?: MoveOptions['intent']
 }
@@ -88,7 +91,7 @@ export function createMoveDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as MoveParams
       const keys = `move:${params.x},${params.y},${params.z},${params.range ?? 1}`
-      return new AsyncDriverHandle(keys, move(ctx, params, job))
+      return new AsyncDriverHandle(params.continuationKey ?? keys, move(ctx, params, job))
     },
   }
 }

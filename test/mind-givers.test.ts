@@ -66,6 +66,18 @@ describe('escape giver', () => {
     expect(createEscapeGiver().find(ctx, flatWorld())).toBeNull()
   })
 
+  it('keeps hostile flee out of an explicit attack order but still escapes lava', () => {
+    const hostile = {
+      id: 'z1', name: 'zombie', type: 'hostile', kind: 'Hostile mobs', position: { x: 2.5, y: 64, z: 0.5 },
+    }
+    expect(createEscapeGiver().find({ ...ctx, orderVerb: 'attack' }, flatWorld({ entities: [hostile] })))
+      .toBeNull()
+    expect(createEscapeGiver().find({ ...ctx, orderVerb: 'attack' }, flatWorld({
+      self: { inLava: true },
+      entities: [hostile],
+    }))).toMatchObject({ keys: 'escape:lava' })
+  })
+
   it('escapes lava to a standable neighbour', () => {
     const result = asCandidate(createEscapeGiver().find(ctx, flatWorld({ self: { inLava: true } })))
     expect(result?.driverId).toBe('move')
@@ -157,6 +169,7 @@ describe('escape giver', () => {
     const threat: EntityInfo = { id: 'c1', name: 'creeper', position: { x: 2, y: 64, z: 0 } }
     const result = asCandidate(createEscapeGiver().find(ctx, flatWorld({ entities: [threat] })))
     expect(result?.keys).toBe('escape:hostile:c1')
+    expect(result?.params).toMatchObject({ continuationKey: 'escape:hostile:c1' })
     const target = result?.target
     if (target === undefined || target.kind !== 'point') throw new Error('expected a point')
     expect(Math.hypot(target.pos.x - threat.position.x, target.pos.z - threat.position.z)).toBeGreaterThan(3)
@@ -189,7 +202,7 @@ describe('escape giver', () => {
     expect(createEscapeGiver().find(attackCtx, flatWorld({ entities: [target] }))).toBeNull()
   })
 
-  it('still flees from an uncovered second hostile', () => {
+  it('does not flee from a second hostile during an explicit attack order', () => {
     const target: EntityInfo = { id: 'z1', name: 'zombie', position: { x: 2, y: 64, z: 0 } }
     const other: EntityInfo = { id: 'z2', name: 'zombie', position: { x: 3, y: 64, z: 0 } }
     const attackCtx: EvalCtx = {
@@ -198,8 +211,7 @@ describe('escape giver', () => {
       orderVerb: 'attack',
       orderParams: { entityId: 'z1' },
     }
-    const result = asCandidate(createEscapeGiver().find(attackCtx, flatWorld({ entities: [target, other] })))
-    expect(result.keys).toBe('escape:hostile:z2')
+    expect(createEscapeGiver().find(attackCtx, flatWorld({ entities: [target, other] }))).toBeNull()
   })
 
   it('does not override an explicit lava grant', () => {
