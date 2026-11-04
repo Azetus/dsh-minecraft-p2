@@ -60,6 +60,27 @@ export function materialSources(item: string): string[] {
   return SOURCES[item.replace(/^minecraft:/u, '')] ?? []
 }
 
+/**
+ * Item names a duty may count for a requested material. Most sources drop the
+ * requested item (grass -> dirt, stone -> cobblestone, ore -> raw/coal), but
+ * logs, planks and sand keep their variant names when broken.
+ */
+const DROP_ALIASES: Record<string, string[]> = {
+  oak_log: [
+    'oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log',
+    'oak_wood', 'birch_wood', 'spruce_wood', 'jungle_wood', 'acacia_wood', 'dark_oak_wood',
+  ],
+  oak_planks: [
+    'oak_planks', 'birch_planks', 'spruce_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks',
+  ],
+  sand: ['sand', 'red_sand'],
+}
+
+export function materialDropNames(item: string): string[] {
+  const normalized = item.replace(/^minecraft:/u, '')
+  return [...new Set([normalized, ...(DROP_ALIASES[normalized] ?? [])])]
+}
+
 /** Every block name the area index needs to retain. */
 export function sourceNames(): string[] {
   return [...new Set(Object.values(SOURCES).flat())]

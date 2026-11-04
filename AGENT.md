@@ -53,7 +53,7 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 ### 接入与客户端
 
 - 游戏 I/O 只经 `ClientPort`（纯数据）。不得向树、giver、driver、契约泄漏 mineflayer 的对象、类型、事件或控制句柄。
-- 能力以行为契约表达（`navigate / interact / observe.screen`），不以实现名（如 `baritone`）表达；缺能力时明确 `CAPABILITY_MISSING`，不做静默降级。
+- 能力以行为契约表达（`navigate / interact / observe.screen`），不以具体导航库或实现名表达；缺能力时明确 `CAPABILITY_MISSING`，不做静默降级。
 - 首版 mineflayer 适配器；后续自研轻量客户端 mod 作为第二适配器，同一套一致性测试（20 场景）都要通过。
 - 一个 body、一个角色、一个 owner session。人工 start 创建 body；重启创建新 epoch，不重放旧控制命令。
 

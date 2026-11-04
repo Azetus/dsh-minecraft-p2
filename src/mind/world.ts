@@ -18,12 +18,14 @@ export class SnapshotWorld implements WorldView {
   readonly stale?: boolean
   private readonly blocks = new Map<string, BlockInfo>()
   private readonly entityList: EntityInfo[]
+  private readonly entityIndex = new Map<string, number>()
 
   constructor(data: SnapshotData) {
     this.self = data.self
     this.time = data.time
     this.inventory = data.inventory
     this.entityList = data.entities
+    this.entityList.forEach((entity, index) => this.entityIndex.set(entity.id, index))
     if (data.stale !== undefined) this.stale = data.stale
     for (const block of data.blocks) {
       if (block.pos !== undefined) this.blocks.set(blockKey(block.pos), block)
@@ -55,6 +57,19 @@ export class SnapshotWorld implements WorldView {
 
   entitiesIn(box: Box): EntityInfo[] {
     return this.entityList.filter(entity => inside(entity.position, box))
+  }
+
+  /** Merge a targeted entity observation; updates an existing id in place. */
+  addEntities(entities: EntityInfo[]): void {
+    for (const entity of entities) {
+      const index = this.entityIndex.get(entity.id)
+      if (index === undefined) {
+        this.entityIndex.set(entity.id, this.entityList.length)
+        this.entityList.push(entity)
+      } else {
+        this.entityList[index] = entity
+      }
+    }
   }
 }
 

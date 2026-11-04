@@ -23,6 +23,8 @@ export type MindLoopOptions = {
   plan?: () => PlanInstance | undefined
   /** A standing duty keeps the main tree hot too. */
   dutyActive?: () => boolean
+  /** The default base activity keeps the main tree hot while it is active. */
+  baseActive?: () => boolean
   /** Active order verb, if any. */
   orderVerb?: () => string | undefined
   /** Active order params, if any; the safety reflex reads explicit targets. */
@@ -37,6 +39,8 @@ export type MindLoopOptions = {
   gatherCount?: () => number
   /** Bounded internal re-read for unknown plan cells; never an Agent payload. */
   observe?: (box: Box) => void
+  /** Bounded internal entity re-read for escort; never an Agent payload. */
+  observeEntities?: (box: Box) => void
   /** Idle time between main-tree work offers (standing/fidgeting is allowed). */
   mainIdleDelayMs?: number
   /** Re-evaluate the main tree at least this often while idle. */
@@ -56,6 +60,7 @@ export class MindLoop {
   private readonly home: Vec3 | undefined
   private readonly plan: (() => PlanInstance | undefined) | undefined
   private readonly dutyActive: (() => boolean) | undefined
+  private readonly baseActive: (() => boolean) | undefined
   private readonly orderVerb: (() => string | undefined) | undefined
   private readonly orderParams: (() => Record<string, JsonValue> | undefined) | undefined
   private readonly hazards: (() => HazardPolicy | undefined) | undefined
@@ -63,6 +68,7 @@ export class MindLoop {
   private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
   private readonly gatherCount: (() => number) | undefined
   private readonly observe: ((box: Box) => void) | undefined
+  private readonly observeEntities: ((box: Box) => void) | undefined
   private readonly mainIdleDelayMs: number
   private readonly mainFallbackMs: number
   private readonly onEvent: ((event: LoopEvent) => void) | undefined
@@ -80,6 +86,7 @@ export class MindLoop {
     this.home = options.home
     this.plan = options.plan
     this.dutyActive = options.dutyActive
+    this.baseActive = options.baseActive
     this.orderVerb = options.orderVerb
     this.orderParams = options.orderParams
     this.hazards = options.hazards
@@ -87,6 +94,7 @@ export class MindLoop {
     this.materialPolicy = options.materialPolicy
     this.gatherCount = options.gatherCount
     this.observe = options.observe
+    this.observeEntities = options.observeEntities
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
     this.mainFallbackMs = options.mainFallbackMs ?? 3_000
     this.onEvent = options.onEvent
@@ -120,6 +128,7 @@ export class MindLoop {
       ...(gatherCount === undefined ? {} : { gatherCount }),
       isBlocked: key => this.tracker.isBlocked(key),
       ...(this.observe === undefined ? {} : { observe: this.observe }),
+      ...(this.observeEntities === undefined ? {} : { observeEntities: this.observeEntities }),
     }
 
     try {
@@ -149,7 +158,8 @@ export class MindLoop {
       if (!constantHandled && this.tracker.state() === 'idle') {
         const hasPlan = ctx.plan !== undefined
         const hasDuty = this.dutyActive?.() === true
-        const hot = hasPlan || hasDuty
+        const hasBase = this.baseActive?.() === true
+        const hot = hasPlan || hasDuty || hasBase
         const forced = this.mainDirty
         const due = hot || forced || now - this.lastMainEvalAt >= this.mainFallbackMs
         if (due && (hot || forced || now - this.lastMainOfferAt >= this.mainIdleDelayMs)) {

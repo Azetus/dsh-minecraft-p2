@@ -221,8 +221,8 @@ function bodyCells(cell: Cell): Cell[] {
 /**
  * Cells the body enters near the jump apex, derived from the real feet height
  * and the vanilla peak instead of a hard-coded "third cell". Cells the apex
- * body only clips (less than 0.1 block) are not required, matching Baritone's
- * `src.above(2)` behaviour and keeping a +1 step jumpable in a 3-high corridor.
+ * body only clips (less than 0.1 block) are not required, which keeps a +1
+ * step jumpable in a 3-high corridor.
  */
 function jumpClearance(ctx: MoveContext, src: Cell, columns: readonly Cell[] = [src]): Cell[] {
   const info = ctx.rules.standInfo(src)
@@ -434,8 +434,8 @@ export class AscendMove extends BaseMove {
   }
 
   validPositions(): readonly Cell[] {
-    // Baritone: the source, the source head, the destination, and the cell
-    // behind the source one level up (backplace / sprint ascend).
+    // Reference ascend positions: the source, the source head, the destination,
+    // and the cell behind the source one level up (backplace / sprint ascend).
     const dx = this.dest.x - this.src.x
     const dz = this.dest.z - this.src.z
     const prior = { x: this.src.x - dx, y: this.src.y + 1, z: this.src.z - dz }

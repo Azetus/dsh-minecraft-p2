@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { Sensors } from '../src/mind/sensors.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, ClientPort, EntityInfo, SelfInfo, Vec3 } from '../src/port/index.ts'
 
 /**
  * Category: cross-module contract (B1 observation).
@@ -11,7 +11,11 @@ import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts
 
 const key = (p: Vec3): string => `${p.x},${p.y},${p.z}`
 
-function fakePort(): { port: ClientPort; state: { pos: Vec3 }; blocks: Map<string, BlockInfo> } {
+function fakePort(): {
+  port: ClientPort
+  state: { pos: Vec3; entities: EntityInfo[] }
+  blocks: Map<string, BlockInfo>
+} {
   const blocks = new Map<string, BlockInfo>()
   for (const [x, y, z, name] of [
     [0, 64, 0, 'air'],
@@ -20,7 +24,10 @@ function fakePort(): { port: ClientPort; state: { pos: Vec3 }; blocks: Map<strin
   ] as const) {
     blocks.set(key({ x, y, z }), { name, loaded: true, pos: { x, y, z } })
   }
-  const state = { pos: { x: 0.5, y: 64, z: 0.5 } }
+  const state: { pos: Vec3; entities: EntityInfo[] } = {
+    pos: { x: 0.5, y: 64, z: 0.5 },
+    entities: [],
+  }
   const self = (): SelfInfo => ({
     pos: state.pos,
     yaw: 0,
@@ -39,7 +46,10 @@ function fakePort(): { port: ClientPort; state: { pos: Vec3 }; blocks: Map<strin
       && block.pos.x >= box.min.x && block.pos.x <= box.max.x
       && block.pos.y >= box.min.y && block.pos.y <= box.max.y
       && block.pos.z >= box.min.z && block.pos.z <= box.max.z),
-    entities: () => [],
+    entities: (box: { min: Vec3; max: Vec3 }) => state.entities.filter(entity =>
+      entity.position.x >= box.min.x && entity.position.x <= box.max.x
+      && entity.position.y >= box.min.y && entity.position.y <= box.max.y
+      && entity.position.z >= box.min.z && entity.position.z <= box.max.z),
     inventory: () => [],
   } as unknown as ClientPort
   return { port, state, blocks }
@@ -75,5 +85,26 @@ describe('sensors observation groups', () => {
     state.pos = { x: 5.5, y: 64, z: 5.5 }
     const fresh = sensors.observeBox({ min: { x: -1, y: 63, z: -1 }, max: { x: 1, y: 65, z: 1 } })
     expect(fresh.self.pos).toEqual({ x: 5.5, y: 64, z: 5.5 })
+  })
+
+  it('merges a targeted entity observation and updates an existing id', () => {
+    const { port, state } = fakePort()
+    const sensors = new Sensors({ port, now: () => 0, refreshMs: 1_000 })
+    sensors.read()
+    state.entities = [{
+      id: 'p1', name: 'Alice', username: 'Alice', type: 'player', position: { x: 3.5, y: 64, z: 0.5 },
+    }]
+    const found = sensors.observeEntities({ min: { x: -8, y: 60, z: -8 }, max: { x: 8, y: 68, z: 8 } })
+    expect(found.entitiesIn({ min: { x: 0, y: 60, z: 0 }, max: { x: 8, y: 68, z: 8 } }))
+      .toMatchObject([{ id: 'p1', username: 'Alice' }])
+
+    state.entities = [{
+      id: 'p1', name: 'Alice', username: 'Alice', type: 'player', position: { x: 5.5, y: 64, z: 0.5 },
+    }]
+    sensors.observeEntities({ min: { x: -8, y: 60, z: -8 }, max: { x: 8, y: 68, z: 8 } })
+    expect(found.entitiesIn({ min: { x: 0, y: 60, z: 0 }, max: { x: 8, y: 68, z: 8 } }))
+      .toHaveLength(1)
+    expect(found.entitiesIn({ min: { x: 5, y: 60, z: 0 }, max: { x: 6, y: 68, z: 1 } }))
+      .toMatchObject([{ id: 'p1', position: { x: 5.5, y: 64, z: 0.5 } }])
   })
 })

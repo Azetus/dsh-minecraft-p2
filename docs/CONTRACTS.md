@@ -114,10 +114,16 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失、受保护或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
-- **Duty（D1/D2）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan 时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；`p2_duty stop` → stopped。只支持单物品 gather 配额，不自行选新目标。
-  - D2 将 duty 状态写入 journal 同目录的 `duty.json`（sidecar，含 worldId/characterId）。start、每次 job start、terminal 时落盘。
-  - body 重启时只恢复 `state=active`、identity 匹配、deadline 未过的 duty；`collected` 从当前背包重算，`jobs` 从文件恢复。completed/blocked/stopped 不复活。
-  - 过期 duty 恢复为 `blocked`，`lastError=DUTY_DEADLINE`，不自动继续；恢复后由主树继续工作，显式 order/plan 仍优先。
+- **Duty（gather）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动显式常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan、没有常驻威胁时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；内部定义错误 → failed；`p2_duty stop` → cancelled。只支持单物品 gather 配额，不自行选新目标。
+  - `p2_duty start` 会替换当前 duty：先校验新 spec（失败则旧 duty 不变），再把旧 active duty 置为 `cancelled` + `REPLACED_BY_NEW_DUTY`，停止旧 job，然后启动新 duty；返回 `{previousDuty,started}` 并发出 `duty.terminal`。tracker 的单写者门保证旧 job 停止确认前不会并行启动新 job。
+  - duty 持久化到 journal 同目录的 `duty.json` v2（含 worldId/characterId、baseline、activeMs、pausedMs、jobs、state）。start、暂停/恢复、每次 job start、terminal 时落盘；v1 sidecar 可读一次并在下次写入时迁移。
+  - body 重启时只恢复 `state=active`、identity 匹配的 duty；`collected = max(0, 当前背包 - baseline)`，`activeMs` 从文件恢复（宕机时间不计入 active）；completed/blocked/failed/cancelled 不复活。过期/超出 job 预算的 duty 恢复为 `blocked`（`DUTY_DEADLINE` / `DUTY_JOB_BUDGET`）。
+  - duty 被 order/plan/常驻威胁暂停时 `paused:true`，`activeMs` 不增长；`blocked/failed` 后 base activity 保持 inactive，等 Agent 处理。
+- **Base activity**：`p2_base_activity {action:"set"|"status", activity?:{kind:"idle"|"wandering"|"escort", radius?, target?, distance?}}`。默认 `wandering`，半径 1–8（默认 8），不接受 `center`；escort 的 target 是玩家名/实体名，distance 1–8（默认 3），不 teleport。
+  - `state` 只有 `active | inactive`；escort 目标丢失时保持 `active`，`waitingReason:"TARGET_LOST"`，不自动切换。
+  - **不持久化**：body 重启后回到 `wandering`；Agent 需要重新设置 `idle`/`escort`/半径。
+  - `wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 在 active 时切换），固定不随身体漂移；`duty`/`hold` 暂停 base。
+  - `mind.status.activity` 报告当前生效层：`{layer:"constant"|"order"|"duty"|"base", kind, state:"active"|"waiting"|"paused", pausedBy}`。order/plan 在跑时 layer=order；blocked/failed duty 报 layer=duty、state=waiting；base 被更高层暂停时不改变 activity 的 layer。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
   - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。

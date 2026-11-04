@@ -226,7 +226,7 @@ export function registerP2Tools(
     }),
     tools.register({
       name: 'p2_duty',
-      description: 'Start or stop a standing duty. D1 supports {kind:"gather", item, quota, radius?, maxJobs?, maxWallMs?}. A duty only runs when no explicit order/plan is active; an explicit order preempts it. Read the duty state from p2_status.',
+      description: 'Start or stop a standing duty. D1 supports {kind:"gather", item, quota, radius?, maxJobs?, maxWallMs?}. A duty only runs when no explicit order/plan is active; an explicit order preempts it. Starting a duty replaces the current active duty: the old one is terminal (cancelled, REPLACED_BY_NEW_DUTY), its job is stopped, and the result carries previousDuty + started. Duty state is persisted; base activity is not. Read the duty state from p2_status.',
       parameters: {
         type: 'object',
         properties: {
@@ -246,6 +246,32 @@ export function registerP2Tools(
         if (args.action === 'stop') return await manager.mindDuty({ action: 'stop' })
         if (args.duty === undefined) throw new Error('p2_duty start requires duty')
         return await manager.mindDuty({ action: 'start', duty: args.duty as JsonValue })
+      },
+    }),
+    tools.register({
+      name: 'p2_base_activity',
+      description: 'Set or read the permanent default activity. Default is wandering inside the radius (1-8, default 8) around the anchor recorded when base takes over; idle stands still; escort follows a player/entity name at distance (1-8, default 3) and never teleports. Base activity is NOT persisted: a body restart returns to wandering. escort keeps state active with waitingReason:"TARGET_LOST" when the target is not observable; it does not switch itself. Use p2_order {verb:"hold"} for a hard stop that also keeps duty/base inactive. Read the current view from p2_status or this tool with action:"status".',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['set', 'status'] },
+          activity: {
+            type: 'object',
+            description: 'Required for set: {kind:"idle"} | {kind:"wandering",radius?} | {kind:"escort",target,distance?}',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: output(),
+      execute: async args => {
+        requireActiveOwner(manager, agent)
+        if (args.action !== 'set' && args.action !== 'status') {
+          throw new Error('p2_base_activity action must be set or status')
+        }
+        if (args.action === 'status') return await manager.mindBaseActivity({ action: 'status' })
+        if (args.activity === undefined) throw new Error('p2_base_activity set requires activity')
+        return await manager.mindBaseActivity({ action: 'set', activity: args.activity as JsonValue })
       },
     }),
     tools.register({

@@ -25,6 +25,8 @@ export const METHODS = [
   'chat.say',
   'perception.poll',
   'mind.order',
+  'mind.duty',
+  'mind.baseActivity',
   'mind.orders',
   'mind.cancel',
   'mind.report',
@@ -149,17 +151,74 @@ export type DescribeResult = {
   provider: ProviderSummary | null
 }
 
+export type DutyKind = 'gather'
+
+export type DutyTerminalState = 'completed' | 'blocked' | 'failed' | 'cancelled'
+
+export type DutyState = 'active' | DutyTerminalState
+
 export type DutyStatusView = {
   id: string
-  kind: string
+  kind: DutyKind
   item: string
   quota: number
+  /** Inventory count of `item` when the duty started. */
+  baseline: number
+  /** `max(0, current inventory - baseline)`. */
   collected: number
+  /** `collected / quota`, clamped to 0..1. */
+  progress: number
   jobs: number
-  state: 'active' | 'completed' | 'blocked' | 'stopped'
+  state: DutyState
   startedAt: number
+  /** Wall time spent in `state=active`, excluding pauses and downtime. */
+  activeMs: number
+  /** Time spent paused by a higher activity layer. */
+  pausedMs: number
+  /** Remaining active-time budget; absent for terminal states. */
+  remainingMs?: number
+  /** Wall-clock estimate; moves forward while the duty is paused. */
   deadline?: number
+  /** True while an order/plan/threat keeps the duty paused. */
+  paused?: boolean
   lastError?: string
+}
+
+export type MindDutyStartResult = {
+  previousDuty: DutyStatusView | null
+  started: DutyStatusView
+}
+
+export type BaseActivityKind = 'idle' | 'wandering' | 'escort'
+
+export type BaseActivityState = 'active' | 'inactive'
+
+export type BaseWaitingReason = 'TARGET_LOST'
+
+export type BaseActivityView = {
+  kind: BaseActivityKind
+  state: BaseActivityState
+  params: {
+    radius?: number
+    target?: string
+    distance?: number
+  }
+  /** Set while the activity is active but cannot proceed (escort target lost). */
+  waitingReason: BaseWaitingReason | null
+}
+
+export type ActivityLayer = 'constant' | 'order' | 'duty' | 'base'
+
+export type ActivityState = 'active' | 'waiting' | 'paused'
+
+export type ActivityPausedBy = 'order' | 'plan' | 'duty' | 'threat' | null
+
+/** Effective activity layer, newest-first: constant > order/plan > duty > base. */
+export type MindActivityView = {
+  layer: ActivityLayer
+  kind: string
+  state: ActivityState
+  pausedBy: ActivityPausedBy
 }
 
 export type MindMetricsView = {
@@ -194,6 +253,8 @@ export type MindStatusView = {
     done?: number
   } | null
   duty?: DutyStatusView | null
+  baseActivity?: BaseActivityView | null
+  activity?: MindActivityView | null
   metrics?: MindMetricsView
 }
 

@@ -73,6 +73,21 @@ export class Sensors {
     return this.resample([box])
   }
 
+  /**
+   * Targeted entity observation for a bounded follow/escort check. It merges
+   * into the current snapshot instead of replacing the block sample, so the
+   * caller keeps one evaluation snapshot. Failure leaves the snapshot intact.
+   */
+  observeEntities(box: Box): SnapshotWorld {
+    const current = this.current ?? this.resample()
+    try {
+      current.addEntities(this.port.entities(box))
+    } catch {
+      // A transient entity query failure is not a world verdict.
+    }
+    return current
+  }
+
   read(now = this.now()): SnapshotWorld {
     const targeted = this.targetedBoxes()
     if (this.current !== undefined && targeted.length === 0 && now - this.sampledAt < this.refreshMs) {

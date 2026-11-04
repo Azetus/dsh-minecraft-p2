@@ -261,7 +261,7 @@ describe('PathExecutor', () => {
     expect(executor.tick(200).state).toBe('succeeded')
   })
 
-  it('exposes Baritone-style valid positions for ascend/descend/fall', () => {
+  it('exposes the expected valid positions for ascend/descend/fall', () => {
     const ascend = new AscendMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 1 })
     expect(ascend.validPositions()).toEqual(expect.arrayContaining([
       { x: 0, y: 65, z: 0 },

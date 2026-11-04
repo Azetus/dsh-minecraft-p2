@@ -84,6 +84,28 @@ describe('mind loop', () => {
     expect(tracker.ticks).toBe(2)
   })
 
+  it('keeps the main tree hot while base activity is active', () => {
+    const tracker = fakeTracker()
+    let now = 0
+    let mainCalls = 0
+    const loop = new MindLoop({
+      world: () => world(),
+      evaluate: tree => {
+        if (tree === 'main') mainCalls += 1
+        return { kind: 'nowork' }
+      },
+      tracker: tracker as unknown as JobTracker,
+      now: () => now,
+      baseActive: () => true,
+      mainIdleDelayMs: 20_000,
+      mainFallbackMs: 3_000,
+    })
+    loop.tick()
+    now = 50
+    loop.tick()
+    expect(mainCalls).toBe(2)
+  })
+
   it('does not evaluate the main tree when the constant tree has a candidate', () => {
     const tracker = fakeTracker()
     let mainCalls = 0

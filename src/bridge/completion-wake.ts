@@ -84,6 +84,11 @@ export class CompletionFeed {
           // An intermediate retry is visible in p2_events but is not a wake;
           // only the terminal attempt or the order-blocked result wakes.
           if (data.retry === true) break
+          const keys = text(data.keys) ?? ''
+          // Default base activity, duty work and self-care are background
+          // helpers; their per-job failures are not Agent decisions. A duty
+          // terminal or a base.waiting event carries the meaningful transition.
+          if (keys.startsWith('base:') || keys.startsWith('duty:') || keys.startsWith('self.')) break
           const state = text(data.state)
           const blocked = data.blocked === true
           // A check job reports execution success and carries the three-state
@@ -150,6 +155,46 @@ export class CompletionFeed {
             },
             cause: false,
           })
+          break
+        }
+        case 'duty.terminal': {
+          const state = text(data.state) ?? 'cancelled'
+          // The replacing call already returns previousDuty synchronously.
+          if (state === 'cancelled' && text(data.lastError) === 'REPLACED_BY_NEW_DUTY') break
+          const failure = state === 'blocked' || state === 'failed'
+          pending.push({
+            item: {
+              severity: failure ? 'critical' : 'normal',
+              payload: compact({
+                kind: 'duty.terminal',
+                dutyId: text(data.id) ?? null,
+                dutyKind: text(data.kind) ?? null,
+                item: text(data.item) ?? null,
+                state,
+                collected: data.collected ?? null,
+                quota: data.quota ?? null,
+                ...(data.lastError === undefined ? {} : { reason: text(data.lastError) ?? null }),
+              }),
+            },
+            cause: false,
+          })
+          break
+        }
+        case 'base.waiting': {
+          pending.push({
+            item: {
+              severity: 'normal',
+              payload: compact({
+                kind: 'base.waiting',
+                reason: text(data.reason) ?? 'TARGET_LOST',
+                target: text(data.target) ?? null,
+              }),
+            },
+            cause: false,
+          })
+          break
+        }
+        case 'base.recovered': {
           break
         }
         case 'order.terminal': {

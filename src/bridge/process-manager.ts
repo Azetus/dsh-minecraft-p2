@@ -306,6 +306,10 @@ export class BodyManager {
     return this.activeClient().request('mind.duty', params)
   }
 
+  mindBaseActivity(params: JsonValue): Promise<JsonValue> {
+    return this.activeClient().request('mind.baseActivity', params)
+  }
+
   worldObserve(params: JsonValue): Promise<JsonValue> {
     return this.activeClient().request('world.observe', params)
   }

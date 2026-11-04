@@ -3,7 +3,8 @@
 > 状态：已实现，并在实机中验证有限 order、计划、树、tracker、driver 与 completion wake。
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
 > 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
-> 常驻任务不走 order 面：D1 用 `p2_duty` 启动单物品 gather 配额；显式 order/plan 优先并暂停 duty。D2 将 active duty 持久化到 journal 同目录的 `duty.json`，body 重启后恢复未过期 duty；过期变为 `blocked DUTY_DEADLINE`，终态不复活。
+> 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
+> 默认活动是 base activity：`idle / wandering / escort`，默认 `wandering`，只做 anchor 半径内的局部移动；不持久化，重启回 wandering。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
 
 ## 1. 目标
 
@@ -62,6 +63,8 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 | 常驻树 | 每 tick 的紧急候选 | 代码树 + 求值器 | 无状态 |
 | 主树 | 事件点 + 兜底的常规候选 | 代码树 + 求值器 | 无状态 |
 | 对话管线 | chat → 意图 → order/replace/cancel/query/say | 代码 | 无状态 |
+| BaseActivity | 默认活动（idle/wandering/escort）、anchor、等待原因 | 代码 | 进程内，不持久化 |
+| Activity layer | 每 tick 解析生效层与优先级 | 代码 | 无状态 |
 | WorkGiver | 扫描并选出一个目标；可返回前置工作或无工作 | 代码 | 无状态 |
 | Job | 数据：driverId + target + params + 归属 + runId | 对象 | 一次尝试 |
 | JobTracker | 续做、切换、停止确认、迟到围栏、fault | 状态机 | 单例 |
@@ -73,6 +76,8 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 
 - **树只选 giver**：树里不出现坐标、不出现目标、不执行动作。
 - **giver 只选目标**：扫描、可达性、优先级、阻塞物转派；返回候选或“无工作”。
+- **base.work 只选局部移动**：默认活动，位于 `duty.work` 之下；不挖、不放、不攻击、不生成任务。
+- **activity layer 只做调度**：`constant > order/plan > duty > base`；不改变任何任务状态。
 - **driver 只执行**：拿到已选定的 target；**不得自己推导目标**；只负责 toil 推进、读回、收尾。
 - **tracker 只仲裁**：续做/切换/停止/围栏；不选目标、不执行。
 
@@ -156,7 +161,7 @@ agent 下达的目标，不是动作。
 | 常驻树 | 廉价谓词每 tick；昂贵谓词 10Hz | ≤2ms/次 |
 | 主树 | 事件触发 + 3s 兜底 | ≤10ms/次 |
 
-主树触发事件：新 order / order 取消 / job 终态 / plan 一步完成 / 进入夜晚 / 饥饿跨阈值 / 目标失效 / 冷却到期 / 对话产生 order。
+主树触发事件：新 order / order 取消 / job 终态 / plan 一步完成 / 进入夜晚 / 饥饿跨阈值 / 目标失效 / 冷却到期 / 对话产生 order。base active 时主树保持 hot；giver 自己在 `nextDecisionAt` 前返回 `null`，不每 tick 扫站立格。
 
 节点类型（6 种，定义在 `src/mind/trees.ts`）：
 
@@ -191,6 +196,8 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `Hold` = 保留意图，不产生 job，停止下降；`notify: false` 用于已知的等待。
 - `Handoff` = 先做前置工作（清障 / 补支撑 / 站位），完成后重新 `find`。
 - `keys` 是续做键：同一个 `keys` 复活不重启 job。
+- 主树顺序：`check → order.* → material.gather → plan.work → duty.work → base.work`；`base.work` 最低，base inactive 时返回 `null`。
+- `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用玩家名/实体名找目标并选目标附近站位，不 teleport；目标丢失只标记 `TARGET_LOST`。
 
 ### 4.5 Job
 
@@ -276,12 +283,13 @@ toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → re
 ```
 每 tick (50ms):
   obs = sensors.tick(budget ≤ 2ms)                    // 缓存维护，不做网络查询
+  layer = resolveActivityLayer(obs, order, plan, duty, constant)
   constant = constantTree.evaluate(obs)
   if (constant 是 job) tracker.offer(constant)        // 本轮不再求值主树
   else if (constant 是 need-observation / definition-error) 本轮不再求值主树
-  else if (mainTreeDirty || 3s 兜底) { mainTreeDirty = false; tracker.offer(mainTree.evaluate(obs, orders, plan)) }
+  else if (mainTreeDirty || 3s 兜底 || baseActive) { mainTreeDirty = false; tracker.offer(mainTree.evaluate(obs, orders, plan, layer)) }
   tracker.tick()
-  if (tracker.idle() && 无候选) idleFallback()         // 站立/游荡
+  if (tracker.idle() && 无候选) base.activate/current layer
 ```
 
 - 观测由常驻传感器维护；昂贵判断分批推进，**禁止在 tick 内同步扫世界**。
@@ -327,7 +335,7 @@ ClientPort（纯数据，版本化，能力协商）
 ```
 
 - 四类：`query / act / event / capabilities`；不传库对象（`Vec3/Block/Recipe/Goal`）。
-- 能力是行为契约（`navigate / interact / observe.screen`），不是实现名（不写 `baritone`）。
+- 能力是行为契约（`navigate / interact / observe.screen`），不是实现名（不绑定具体导航库）。
 - 一致性测试：一套 20 场景，两个适配器都要通过；这是“换接入”的验收标准。
 
 ## 9. 扩展点
@@ -362,7 +370,7 @@ ClientPort（纯数据，版本化，能力协商）
 
 ## 12. 术语
 
-| P2Mind | 对应 RimWorld | 说明 |
+| P2Mind | 通用概念 | 说明 |
 |---|---|---|
 | Order | —（玩家/任务） | agent 的目标 |
 | PlanInstance + WorkItem | Blueprint / Frame | 冻结的布局与待完成工作 |
@@ -370,6 +378,8 @@ ClientPort（纯数据，版本化，能力协商）
 | WorkGiver | JobGiver / WorkGiver | 选目标、可转派前置工作 |
 | Job | Job | 一次有界尝试 |
 | Driver + toil | JobDriver / Toil | 执行 |
-| JobTracker | Pawn_JobTracker | 续做/切换/停止/围栏 |
+| JobTracker | Job 调度器 | 续做/切换/停止/围栏 |
+| BaseActivity | Idle / Wander / Follow | 默认活动与 anchor |
+| Activity layer | 调度优先级 | constant / order / duty / base |
 | ClientPort | —（游戏本体） | 接入 |
 | Verifier | —（游戏内施工反馈） | 目标级验证 |

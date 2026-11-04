@@ -30,7 +30,8 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - `dig` 默认 `purpose:"harvest"`；只想清掉方块时显式 `purpose:"clear"`。
 - 体积挖掘用 `dig {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?}`；`maxBlocks` 默认 24、硬上限 64。
 - 连续水平通道用 `dig {shape:"tunnel",to:{x,y,z},height? 默认2,maxBlocks? 默认24,preserveFloor?}`：起点是当前脚格，只允许一个水平轴向、至多一次 y±1 台阶，不做竖井。一次 order 清脚/头并前进，返回 `path`/`returnable`；遇到水/岩浆、未加载或不可破坏会 `DIG_PARTIAL` + `stoppedAt` + `reason`，不要继续猜。
-- 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。
+- 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty，返回 `previousDuty/started`。duty 持久化，blocked/failed 后 base 保持 inactive；duty 不会自动复活。
+- 默认活动用 `p2_base_activity`：默认 wandering（anchor 半径 8）；`idle` 静止；`escort` 按玩家/实体名跟随，跟丢只报 `TARGET_LOST`，不传送。base **不持久化**，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}`，不要反复 set idle。
 - 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
 
 ## 3. hold 与队列
@@ -75,6 +76,9 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项被支撑或站位卡住 | 换区域、换蓝图变体或换点；不要原样重下 |
 | `OBSERVATION_STALE` | 长期无观测更新 | 检查连接；恢复后自动继续，不重放 pending |
 | `HOLD_ORDER` / `mind.hold(...)` | 已知等待/常驻树无法安全行动 | 读 `p2_orders.queueBlockedBy` 或 hold reason；取消/改任务，不要重复下同一 order |
+| `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 找不到来源或工作项被反复阻塞 | duty 变 blocked、base 保持 inactive；换物品/区域后重新 `p2_duty start`，或 stop 后改用 order |
+| `DUTY_DEADLINE` / `DUTY_JOB_BUDGET` | duty active 时间或 job 预算耗尽 | duty 不自动继续；重新评估目标/预算后再 start |
+| `TARGET_LOST` | escort 目标暂时不可观测 | base 保持 escort 原地等；目标回来恢复，不会自动切 idle/wandering |
 
 `failure.diagnosis` 只取 `HEAD_BLOCKED` / `SUPPORT_MISSING` / `TARGET_UNLOADED` / `START_EMBEDDED` / `NO_STAND_CELL` / `EFFECT_UNCONFIRMED` / `RELEASE_UNCONFIRMED` / `TOOL_MISSING` / `DENIED` / `UNKNOWN` 之一，事实不足就是 `UNKNOWN`。先对照 `facts.snapshot` 决定清哪格/换哪条路；不要再向 P2 要“下一步动作参数”。
 
@@ -93,5 +97,5 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 
 - `ACT_UNCONFIRMED`：先读回；如果方块/背包/位置已经变化，按新事实继续，不要重放。
 - `STOP_UNCONFIRMED`：停止未确认，继续下 order 可能叠加副作用；重启 body 是恢复手段，但会丢队列。
-- body 重启 = 新 epoch、事件环清空、队列不恢复；旧 queued order 与 active hold 会以 `abandoned`（`reason:"RESTART"`）结束，不会自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
+- body 重启 = 新 epoch、事件环清空、队列不恢复；base activity 也回默认 wandering，duty 只有未过期且 identity 匹配的 active 状态会恢复。旧 queued order 与 active hold 会以 `abandoned`（`reason:"RESTART"`）结束，不会自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
 - provider 卡死时，`p2_body restart` 通常比连续重试更安全；可带 `host`/`port` 换服，省略则复用上次 target；代价是丢队列和未确认动作。provider 断开原因看 `lastDisconnect`；`kick` 不要立即 restart。

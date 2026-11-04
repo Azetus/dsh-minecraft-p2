@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,7 +20,7 @@ afterEach(() => {
 const identity = { worldId: 'world-1', characterId: 'char-1' }
 
 describe('duty persistence', () => {
-  it('restores an active duty, deadline and job count', () => {
+  it('restores an active duty, active time and job count', () => {
     const path = statePath()
     const first = new DutyController({ statePath: path, identity })
     first.start({ kind: 'gather', item: 'dirt', quota: 8, maxJobs: 20, maxWallMs: 60_000 }, 1_000)
@@ -33,33 +33,63 @@ describe('duty persistence', () => {
       item: 'dirt',
       jobs: 2,
       state: 'active',
-      deadline: 61_000,
+      // The 200 ms already spent active is preserved; downtime is not counted.
+      activeMs: 200,
+      deadline: 61_100,
     })
   })
 
-  it('recomputes collected from inventory and completes at quota', () => {
+  it('recomputes collected from the baseline and inventory', () => {
     const path = statePath()
     const first = new DutyController({ statePath: path, identity })
-    first.start({ kind: 'gather', item: 'dirt', quota: 2 }, 0)
+    first.start({ kind: 'gather', item: 'dirt', quota: 3 }, 0, [{ slot: 36, name: 'dirt', count: 5 }])
 
     const second = new DutyController({ statePath: path, identity })
-    expect(second.restore([{ slot: 36, name: 'dirt', count: 2 }], 100))
-      .toMatchObject({ state: 'completed', collected: 2 })
+    expect(second.restore([{ slot: 36, name: 'dirt', count: 7 }], 100))
+      .toMatchObject({ state: 'active', collected: 2, baseline: 5 })
   })
 
-  it('blocks an expired duty instead of resurrecting it', () => {
+  it('does not count paused time against the deadline', () => {
     const path = statePath()
     const first = new DutyController({ statePath: path, identity })
     first.start({ kind: 'gather', item: 'dirt', quota: 4, maxWallMs: 1_000 }, 0)
+    first.setPaused(true, 100)
+    first.setPaused(false, 1_100)
+    // 100 ms active before the pause, 400 ms active after it.
+    const view = first.refresh([], 1_500)
+    expect(view).toMatchObject({ state: 'active', activeMs: 500, pausedMs: 1_000 })
+  })
+
+  it('migrates a v1 sidecar and blocks an expired deadline', () => {
+    const path = statePath()
+    writeFileSync(path, `${JSON.stringify({
+      v: 1,
+      savedAt: 0,
+      identity,
+      duty: {
+        id: 'duty-old',
+        kind: 'gather',
+        item: 'dirt',
+        quota: 4,
+        radius: 16,
+        maxJobs: 8,
+        maxWallMs: 1_000,
+        state: 'active',
+        jobs: 0,
+        startedAt: 0,
+        deadline: 1_000,
+      },
+    })}\n`, 'utf8')
 
     const second = new DutyController({ statePath: path, identity })
     expect(second.restore([], 2_000)).toMatchObject({ state: 'blocked', lastError: 'DUTY_DEADLINE' })
+    expect(second.takeTerminal()).toMatchObject({ id: 'duty-old', state: 'blocked' })
 
     const third = new DutyController({ statePath: path, identity })
     expect(third.restore([], 2_100)).toBeUndefined()
   })
 
-  it('does not restore stopped or identity-mismatched duties', () => {
+  it('does not restore cancelled or identity-mismatched duties', () => {
     const path = statePath()
     const first = new DutyController({ statePath: path, identity })
     first.start({ kind: 'gather', item: 'dirt', quota: 1 }, 0)

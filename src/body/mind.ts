@@ -6,6 +6,8 @@ import type { MindStatusView } from '../contracts/protocol.ts'
 import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { SuspensionState } from '../contracts/protocol.ts'
 import type { DutyStatusView } from '../contracts/protocol.ts'
+import type { BaseActivityView } from '../contracts/protocol.ts'
+import type { MindDutyStartResult } from '../contracts/protocol.ts'
 import type { MindOrderResult, MindQueueSummary } from '../contracts/protocol.ts'
 import type { JsonValue } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
@@ -32,6 +34,11 @@ import { createCheckGiver, checkPosition } from '../mind/givers/check.ts'
 import { AreaResourceIndex } from '../mind/area.ts'
 import { DutyController } from '../mind/duty.ts'
 import { createDutyGiver } from '../mind/givers/duty.ts'
+import { BaseActivityController } from '../mind/base-activity.ts'
+import type { BaseActivitySpec } from '../mind/base-activity.ts'
+import { createBaseActivityGiver } from '../mind/givers/base-activity.ts'
+import { buildActivityView, resolveActivityLayer } from '../mind/activity.ts'
+import type { ActivityLayer, MindActivityView } from '../contracts/protocol.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
@@ -77,7 +84,7 @@ import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
 import { verifyUsableRoom } from '../mind/verify/usable-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
-import type { ClientPort, Vec3 } from '../port/index.ts'
+import type { ClientPort, Item, Vec3 } from '../port/index.ts'
 
 export type MindOrderView = {
   id: string
@@ -100,8 +107,10 @@ export type MindRuntime = {
   cancelOrder(id: string): { id: string; state: string }
   /** Cancel every queued/active order (hold barriers included). */
   cancelAll(): { cancelled: number }
-  startDuty(input: unknown): DutyStatusView
+  startDuty(input: unknown): MindDutyStartResult
   stopDuty(): DutyStatusView | null
+  baseActivity(): BaseActivityView
+  setBaseActivity(input: unknown): BaseActivityView
   listOrders(): {
     active: MindOrderView | null
     queued: MindOrderView[]
@@ -117,6 +126,8 @@ export type MindRuntime = {
 export type CreateMindOptions = {
   port: ClientPort
   home?: Vec3
+  /** Initial base activity; defaults to wandering and is never persisted. */
+  baseActivity?: BaseActivitySpec
   /** Recovery identity from the provider; defVersion is computed from plans. */
   identity?: { worldId: string; characterId: string; defVersion?: string }
   /** Live provider state, used to record why a pause was reported. */
@@ -164,6 +175,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       ? {}
       : { identity: { worldId: options.identity.worldId, characterId: options.identity.characterId } }),
   })
+  const base = new BaseActivityController()
+  if (options.baseActivity !== undefined) base.set(options.baseActivity, now())
   registry.registerGiver({ id: 'escape', factory: () => createEscapeGiver() })
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
@@ -178,6 +191,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.hold', factory: () => createHoldOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'plan.work', factory: () => createPlanGiver({ ledger: planLedger }) })
   registry.registerGiver({ id: 'duty.work', factory: () => createDutyGiver(duty, areaResources) })
+  registry.registerGiver({ id: 'base.work', factory: () => createBaseActivityGiver(base) })
   registry.registerGiver({ id: 'material.gather', factory: () => createMaterialGiver(areaResources) })
 
   const loaded = loadTrees(TREE_DEFINITIONS, registry)
@@ -269,7 +283,14 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const restoredDuty = duty.restore(options.port.inventory(), now())
   if (restoredDuty !== undefined) {
     events.push('duty.restored', now(), restoredDuty as unknown as JsonValue)
-    if (restoredDuty.state === 'active') loopRef?.invalidate()
+    if (restoredDuty.state === 'active') {
+      loopRef?.invalidate()
+    } else {
+      const terminal = duty.takeTerminal()
+      if (terminal !== undefined) {
+        events.push('duty.terminal', now(), terminal as unknown as JsonValue)
+      }
+    }
   }
   activeOrderLookup = () => orders.active()
 
@@ -285,6 +306,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let suspendedSince = 0
   let pausedMs = 0
   let lastPauseNoticeAt = 0
+  let activityView: MindActivityView | undefined
+  let lastActivityKey = ''
+  let lastBaseWaiting: string | null = null
   const jobWorkItems = new Map<string, { workItemId: string; stands: Vec3[]; orderId?: string }>()
   let planOrderId: string | undefined
   let planBlockedReported = false
@@ -359,6 +383,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       } as unknown as JsonValue
       events.push(event.kind, event.at, data)
       metrics.record(event.kind, data, event.at)
+      if (event.kind === 'job.terminal' && typeof event.keys === 'string') {
+        if (event.keys.startsWith('base:wander:')) {
+          base.noteMoveResult('wandering', event.state === 'succeeded', event.at)
+        } else if (event.keys.startsWith('base:escort:')) {
+          base.noteMoveResult('escort', event.state === 'succeeded', event.at)
+        }
+      }
       if (event.kind === 'job.terminal' && isRecord(event)
         && typeof event.runId === 'string') {
         orders.recordActionSettled(
@@ -415,6 +446,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     ...(options.home === undefined ? {} : { home: options.home }),
     plan: () => activePlan,
     dutyActive: () => duty.view()?.state === 'active',
+    baseActive: () => base.isActive(),
     orderVerb: () => orders.active()?.order.verb,
     orderParams: () => orders.active()?.order.params,
     hazards: () => currentHazardPolicy(),
@@ -422,6 +454,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,
     observe: box => sensors.observeBox(box),
+    observeEntities: box => sensors.observeEntities(box),
     onEvent: event => {
       metrics.record(event.kind, event.data, event.at)
       events.push(event.kind, event.at, event.data)
@@ -953,6 +986,103 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
   }
 
+  /** Quota/deadline are checked every tick, even while a duty job is running. */
+  function refreshDuty(): void {
+    const view = duty.view(now())
+    if (view === undefined || view.state !== 'active') return
+    let inventory
+    try {
+      inventory = sensors.read().inventory
+    } catch {
+      return
+    }
+    const next = duty.refresh(inventory, now())
+    if (next === undefined) return
+    if (next.state === 'blocked' || next.state === 'failed') {
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('duty:')) {
+        tracker.abort(`DUTY_${next.state.toUpperCase()}`)
+        tracker.cancelPending()
+      }
+    }
+  }
+
+  function emitDutyTerminal(): void {
+    const terminal = duty.takeTerminal()
+    if (terminal === undefined) return
+    events.push('duty.terminal', now(), terminal as unknown as JsonValue)
+    loopRef?.invalidate()
+  }
+
+  /**
+   * Recompute the effective activity layer once per tick. Base activation is
+   * the only place a wandering anchor is recorded, so every takeover starts a
+   * fresh fixed anchor.
+   */
+  function updateActivity(): void {
+    const at = now()
+    const current = tracker.current()
+    const keys = current?.keys
+    const threat = keys !== undefined
+      && (keys.startsWith('escape:') || keys.startsWith('threat.') || keys.startsWith('self.'))
+    const threatKind = keys?.startsWith('threat.fight:')
+      ? 'fight'
+      : keys?.startsWith('self.')
+        ? 'selfCare'
+        : keys?.startsWith('escape:')
+          ? 'escape'
+          : undefined
+    const active = orders.active()
+    const dutyView = duty.view(at)
+    const input = {
+      threat,
+      ...(threatKind === undefined ? {} : { threatKind }),
+      ...(active === undefined ? {} : { orderVerb: active.order.verb }),
+      planActive: activePlan !== undefined,
+      ...(dutyView === undefined ? {} : { dutyState: dutyView.state, dutyKind: dutyView.kind }),
+      base: base.view(),
+    }
+    const layer = resolveActivityLayer(input)
+    if (layer === 'base') {
+      let feet: Vec3 | undefined
+      try {
+        feet = sensors.read().self.pos
+      } catch {
+        feet = undefined
+      }
+      if (feet !== undefined && base.activate(at, feet)) {
+        events.push('base.active', at, base.view() as unknown as JsonValue)
+      }
+    } else if (base.deactivate(layer)) {
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('base:')) {
+        tracker.abort('BASE_PREEMPTED')
+        tracker.cancelPending()
+      }
+      events.push('base.inactive', at, { reason: layer })
+    }
+    duty.setPaused(layer !== 'duty', at)
+    const next = buildActivityView({ ...input, base: base.view() })
+    const key = JSON.stringify(next)
+    activityView = next
+    if (key !== lastActivityKey) {
+      lastActivityKey = key
+      events.push('activity.changed', at, next as unknown as JsonValue)
+    }
+    if (layer !== 'base') {
+      lastBaseWaiting = null
+      return
+    }
+    const waiting = base.view().waitingReason
+    if (waiting === lastBaseWaiting) return
+    lastBaseWaiting = waiting
+    const target = base.escortTarget()
+    events.push(waiting === null ? 'base.recovered' : 'base.waiting', at, {
+      ...(waiting === null ? {} : { reason: waiting }),
+      ...(target === undefined ? {} : { target }),
+    })
+  }
+
   const tick = (): void => {
     const suspension = options.port.suspension?.()
     if (suspension?.suspended === true) {
@@ -974,6 +1104,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       pendingReconciled = true
       if (!reconcilePending()) return
     }
+    refreshDuty()
+    emitDutyTerminal()
+    updateActivity()
     loop.tick()
     if (activePlan === undefined) return
     try {
@@ -1107,7 +1240,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         eventsSeq: events.lastSeq(),
         ...(suspended ? { suspended: true } : {}),
         plan: planView,
-        duty: duty.view() ?? null,
+        duty: duty.view(now()) ?? null,
+        baseActivity: base.view(),
+        activity: activityView ?? null,
         metrics: metrics.view(),
       }
     },
@@ -1151,19 +1286,73 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       return { id: record.order.id, state: record.state }
     },
-    startDuty(input: unknown): DutyStatusView {
-      const view = duty.start(input, now())
-      events.push('duty.started', now(), view as unknown as JsonValue)
+    startDuty(input: unknown): MindDutyStartResult {
+      const spec = duty.prepare(input)
+      const at = now()
+      let inventory: Item[]
+      try {
+        inventory = sensors.read().inventory
+      } catch {
+        inventory = []
+      }
+      const previous = duty.view(at) ?? null
+      let previousDuty: DutyStatusView | null = previous
+      if (previous?.state === 'active') {
+        const cancelled = duty.cancel(at, 'REPLACED_BY_NEW_DUTY')
+        if (cancelled !== undefined) {
+          previousDuty = cancelled
+          const terminal = duty.takeTerminal()
+          if (terminal !== undefined) {
+            events.push('duty.terminal', at, terminal as unknown as JsonValue)
+          }
+        }
+      }
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('duty:')) {
+        tracker.abort('DUTY_REPLACED')
+        tracker.cancelPending()
+      }
+      const started = duty.begin(spec, at, inventory)
+      events.push('duty.started', at, started as unknown as JsonValue)
       loopRef?.invalidate()
-      return view
+      return { previousDuty, started }
     },
     stopDuty(): DutyStatusView | null {
-      const view = duty.stop(now())
+      const at = now()
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('duty:')) {
+        tracker.abort('DUTY_CANCELLED')
+        tracker.cancelPending()
+      }
+      const view = duty.stop(at)
       if (view !== undefined) {
-        events.push('duty.stopped', now(), view as unknown as JsonValue)
-        loopRef?.invalidate()
+        const terminal = duty.takeTerminal()
+        if (terminal !== undefined) {
+          events.push('duty.terminal', at, terminal as unknown as JsonValue)
+          loopRef?.invalidate()
+        }
       }
       return view ?? null
+    },
+    baseActivity(): BaseActivityView {
+      return base.view()
+    },
+    setBaseActivity(input: unknown): BaseActivityView {
+      let feet: Vec3 | undefined
+      try {
+        feet = sensors.read().self.pos
+      } catch {
+        feet = undefined
+      }
+      const view = base.set(input, now(), feet)
+      const current = tracker.current()
+      if (current !== null && current.keys.startsWith('base:')) {
+        tracker.abort('BASE_ACTIVITY_CHANGED')
+        tracker.cancelPending()
+      }
+      events.push('base.activity', now(), view as unknown as JsonValue)
+      loopRef?.invalidate()
+      return view
     },
     listOrders(): { active: MindOrderView | null; queued: MindOrderView[]; queueBlockedBy: { id: string; verb: string } | null } {
       const active = orders.active()

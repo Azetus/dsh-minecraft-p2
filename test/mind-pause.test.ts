@@ -93,6 +93,7 @@ describe('pause semantics', () => {
     const mind = createMind({
       port: fakePort(state),
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(root, 'content', 'plans'),
       journalPath: join(dir, 'journal.jsonl'),
     })
@@ -139,6 +140,7 @@ describe('pause semantics', () => {
       port: fakePort(state),
       now: () => clock,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(root, 'content', 'plans'),
       journalPath: join(dir, 'journal2.jsonl'),
     })

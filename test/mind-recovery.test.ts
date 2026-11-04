@@ -87,6 +87,7 @@ function mindWith(port: ClientPort, journal: string) {
   return createMind({
     port,
     home: { x: 1, y: 64, z: 0 },
+    baseActivity: { kind: 'idle' },
     plansDir: join(process.cwd(), 'content', 'plans'),
     journalPath: journal,
   })

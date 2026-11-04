@@ -186,6 +186,38 @@ describe('job tracker', () => {
     expect(tracker.current()?.job.runId).toBe('run-2')
   })
 
+  it('drops a stale pending candidate when the owner changes', () => {
+    const { tracker, driver } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick()
+    tracker.offer(candidate(2))
+    tracker.tick()
+    expect(tracker.state()).toBe('stopping')
+
+    tracker.cancelPending()
+    ;(driver.handles[0] as FakeHandle).stopState = 'stopped'
+    tracker.tick()
+    tracker.tick()
+    expect(tracker.state()).toBe('idle')
+    expect(driver.starts).toHaveLength(1)
+  })
+
+  it('keeps a candidate offered while stopping instead of the captured next', () => {
+    const { tracker, driver } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick()
+    tracker.offer(candidate(2))
+    tracker.tick()
+    expect(tracker.state()).toBe('stopping')
+
+    tracker.offer(candidate(3))
+    ;(driver.handles[0] as FakeHandle).stopState = 'stopped'
+    tracker.tick()
+    tracker.tick()
+    expect(tracker.state()).toBe('running')
+    expect(driver.starts.at(-1)?.params.x).toBe(3)
+  })
+
   it('never preempts a driver whose interrupt policy is never', () => {
     const { tracker, driver } = harness({ interrupt: 'never' })
     tracker.offer(candidate(1))

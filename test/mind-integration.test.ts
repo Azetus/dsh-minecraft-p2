@@ -43,11 +43,12 @@ type FakePort = {
   pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void>
 }
 
-function fakePort(items: Item[] = []): FakePort {
+function fakePort(items: Item[] = [], options: { emptyBlocks?: boolean } = {}): FakePort {
   const moves: Array<{ x: number; y: number; z: number }> = []
   const pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void> = []
   const blocksIn = (box: Box): Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> => {
-    const blocks = []
+    const blocks: Array<{ name: string; loaded: boolean; pos: { x: number; y: number; z: number } }> = []
+    if (options.emptyBlocks === true) return blocks
     for (let x = box.min.x; x <= box.max.x; x += 1) {
       for (let z = box.min.z; z <= box.max.z; z += 1) {
         blocks.push({ name: 'stone', loaded: true, pos: { x, y: 63, z } })
@@ -80,6 +81,7 @@ describe('mind integration', () => {
     const mind = createMind({
       port,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -89,11 +91,138 @@ describe('mind integration', () => {
     expect(moves).toHaveLength(0)
   })
 
+  it('starts in wandering and reports the base layer', () => {
+    const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.tick()
+    expect(mind.status().baseActivity).toMatchObject({
+      kind: 'wandering',
+      state: 'active',
+      params: { radius: 8 },
+    })
+    expect(mind.status().activity).toMatchObject({
+      layer: 'base',
+      kind: 'wandering',
+      state: 'active',
+    })
+  })
+
+  it('lets an order preempt the base activity and restores it afterwards', () => {
+    const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.tick()
+    expect(mind.status().baseActivity?.state).toBe('active')
+
+    mind.enqueueOrder({ verb: 'hold' })
+    mind.tick()
+    expect(mind.status().activity).toMatchObject({ layer: 'order', kind: 'hold', state: 'waiting' })
+    expect(mind.status().baseActivity?.state).toBe('inactive')
+
+    mind.cancelAll()
+    mind.tick()
+    expect(mind.status().baseActivity?.state).toBe('active')
+    expect(mind.status().activity).toMatchObject({ layer: 'base', kind: 'wandering' })
+  })
+
+  it('resets base activity to wandering after a body restart', () => {
+    const journalPath = join(tempDir(), 'journal.jsonl')
+    const first = createMind({
+      port: fakePort([], { emptyBlocks: true }).port,
+      baseActivity: { kind: 'idle' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath,
+      now: () => 1_000,
+    })
+    first.tick()
+    expect(first.status().baseActivity).toMatchObject({ kind: 'idle', state: 'active' })
+
+    const second = createMind({
+      port: fakePort([], { emptyBlocks: true }).port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath,
+      now: () => 2_000,
+    })
+    second.tick()
+    expect(second.status().baseActivity).toMatchObject({ kind: 'wandering', state: 'active' })
+  })
+
+  it('replaces an active duty with a terminal event and starts the new one', () => {
+    const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    const first = mind.startDuty({ kind: 'gather', item: 'dirt', quota: 2 })
+    expect(first.previousDuty).toBeNull()
+    mind.tick()
+
+    const replaced = mind.startDuty({ kind: 'gather', item: 'dirt', quota: 4 })
+    expect(replaced.previousDuty).toMatchObject({
+      state: 'cancelled',
+      lastError: 'REPLACED_BY_NEW_DUTY',
+    })
+    expect(replaced.started).toMatchObject({ quota: 4, state: 'active' })
+    const terminal = [...mind.events.since(0)].find(candidate => candidate.kind === 'duty.terminal')
+    expect(terminal?.data).toMatchObject({ state: 'cancelled', lastError: 'REPLACED_BY_NEW_DUTY' })
+  })
+
+  it('pauses a duty behind an order and keeps base inactive', () => {
+    const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.startDuty({ kind: 'gather', item: 'dirt', quota: 8 })
+    mind.tick()
+    expect(mind.status().activity).toMatchObject({ layer: 'duty', state: 'active' })
+
+    mind.enqueueOrder({ verb: 'hold' })
+    mind.tick()
+    expect(mind.status().activity).toMatchObject({ layer: 'order', kind: 'hold' })
+    expect(mind.status().duty).toMatchObject({ state: 'active', paused: true })
+    expect(mind.status().baseActivity?.state).toBe('inactive')
+
+    mind.cancelAll()
+    mind.tick()
+    expect(mind.status().duty?.paused).not.toBe(true)
+  })
+
+  it('blocks a duty without a source and keeps base inactive', () => {
+    const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    mind.startDuty({ kind: 'gather', item: 'dirt', quota: 1 })
+    for (let index = 0; index < 40; index += 1) mind.tick()
+
+    expect(mind.status().duty).toMatchObject({ state: 'blocked', lastError: 'DUTY_NO_SOURCE' })
+    expect(mind.status().activity).toMatchObject({ layer: 'duty', kind: 'gather', state: 'waiting' })
+    expect(mind.status().baseActivity?.state).toBe('inactive')
+  })
+
   it('selects, starts and finishes one go job', async () => {
     const { port, moves, pending } = fakePort()
     const mind = createMind({
       port,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -117,6 +246,7 @@ describe('mind integration', () => {
     const mind = createMind({
       port,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -137,6 +267,7 @@ describe('mind integration', () => {
     const { port } = fakePort()
     const mind = createMind({
       port,
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -186,10 +317,19 @@ describe('mind integration', () => {
         cancelOrder: id => ({ id, state: 'cancelled' }),
         cancelAll: () => ({ cancelled: 0 }),
         startDuty: () => ({
-          id: 'duty-1', kind: 'gather', item: 'dirt', quota: 1, collected: 0, jobs: 0,
-          state: 'active', startedAt: 0,
+          previousDuty: null,
+          started: {
+            id: 'duty-1', kind: 'gather', item: 'dirt', quota: 1, baseline: 0, collected: 0,
+            progress: 0, activeMs: 0, pausedMs: 0, jobs: 0, state: 'active', startedAt: 0,
+          },
         }),
         stopDuty: () => null,
+        baseActivity: () => ({
+          kind: 'wandering', state: 'inactive', params: { radius: 8 }, waitingReason: null,
+        }),
+        setBaseActivity: () => ({
+          kind: 'wandering', state: 'inactive', params: { radius: 8 }, waitingReason: null,
+        }),
         listOrders: () => ({ active: null, queued: [], queueBlockedBy: null }),
         sinceEvents: () => ({ events: [], seq: 0 }),
         watchedBlock: () => undefined,

@@ -94,6 +94,50 @@ function createCompletionFeedTest(): void {
       expect(items).toHaveLength(0)
     })
 
+    it('wakes on duty terminal but skips a replaced cancellation', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const items = feed.accept([
+        event(1, 'duty.terminal', {
+          id: 'duty-1', kind: 'gather', item: 'dirt', state: 'blocked', collected: 2, quota: 8,
+          lastError: 'DUTY_NO_SOURCE',
+        }),
+        event(2, 'duty.terminal', {
+          id: 'duty-0', kind: 'gather', item: 'dirt', state: 'cancelled',
+          lastError: 'REPLACED_BY_NEW_DUTY',
+        }),
+      ])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.severity).toBe('critical')
+      expect(items[0]?.payload).toMatchObject({
+        kind: 'duty.terminal',
+        dutyId: 'duty-1',
+        state: 'blocked',
+        reason: 'DUTY_NO_SOURCE',
+      })
+    })
+
+    it('reports a lost escort target once and ignores base/duty job noise', () => {
+      const feed = new CompletionFeed()
+      feed.attach('epoch-1')
+      const items = feed.accept([
+        event(1, 'base.waiting', { reason: 'TARGET_LOST', target: 'Alice' }),
+        event(2, 'job.terminal', {
+          keys: 'base:wander:0,64,0:1', driverId: 'move', state: 'failed', code: 'GOTO_NO_PATH', blocked: false,
+        }),
+        event(3, 'job.terminal', {
+          keys: 'duty:gather:dirt:1,64,0', driverId: 'dig', state: 'failed', code: 'DIG_PARTIAL', blocked: false,
+        }),
+      ])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.severity).toBe('normal')
+      expect(items[0]?.payload).toEqual({
+        kind: 'base.waiting',
+        reason: 'TARGET_LOST',
+        target: 'Alice',
+      })
+    })
+
     it('wakes on a critical hold but not on a deliberate silent hold', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')

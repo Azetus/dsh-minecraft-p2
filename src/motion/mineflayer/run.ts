@@ -41,7 +41,7 @@ export type MotionRunOptions = {
    * the Pillar move will make the target standable. Requires `allowPlace`.
    */
   allowUnsupportedGoal?: boolean
-  /** Soft hostile avoidance; defaults to Baritone-like 1.5x within 8 blocks. */
+  /** Soft hostile avoidance; defaults to a 1.5x cost within 8 blocks. */
   avoidance?: { coefficient: number; radius: number }
 }
 

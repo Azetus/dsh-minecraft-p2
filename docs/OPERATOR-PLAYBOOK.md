@@ -22,7 +22,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ```
 
 - 有限词表：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
-- 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。D2 起 duty 会在 body 重启后恢复（未过期且 world/character 匹配）；过期会变成 `blocked DUTY_DEADLINE`，需重新启动。
+- 默认活动用 `p2_base_activity`：默认 `{kind:"wandering"}`，只在 anchor 半径 8 内移动；`{kind:"idle"}` 静止；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 wandering；要完全停住用 `p2_order {verb:"hold"}`。
+- 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - 可带 `blueprint` 表达非标结构；可达性与冲突由 Planner 处理。
@@ -84,6 +85,9 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `mind.hold(NO_SAFE_TARGET)` | 常驻树找不到安全格；先人工确认环境/改任务，不要重复下同一 order |
 | `mind.hold(ATTACK_TARGET_LOST/PROTECTED)` | 目标丢失或受保护；重新指定目标或取消该 order |
 | `HOLD_ORDER` | 已知等待，不需要处理；取消 order 才结束 |
+| `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 找不到来源或工作项被反复阻塞；duty 变 blocked，base 保持 inactive。换物品/区域后重新 `p2_duty start`，或 `p2_duty stop` 后改用 order |
+| `blocked(DUTY_DEADLINE)` / `blocked(DUTY_JOB_BUDGET)` | duty 的 active 时间或 job 预算耗尽；duty 不自动继续，重新评估目标/预算 |
+| `TARGET_LOST` | escort 目标暂时不可观测；base 保持 escort 并原地等，不会自动切 idle/wandering；目标回来即恢复 |
 | 反复同一根因 | 换蓝图、区域或 giver/driver 参数，不要重复下同一条 order |
 
 ## 6. 纪律
@@ -97,7 +101,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ## 7. 安全
 
 - 危险（水/岩浆/着火/敌对贴身）由常驻树处理，**不要**为了任务压掉逃生；只有 order 显式 `hazards.allow` 才允许压过对应反射。
-- 夜间/危险环境由 Agent 决定休息或避险；P2Mind 不做自主睡眠/建造/采集决策，v1 只做 eat/retreat/unstuck。
+- 夜间/危险环境由 Agent 决定休息或避险；P2Mind 不做自主睡眠/建造/采集决策。默认 wandering 只是有界局部移动，不采集/建造/战斗；需要静止用 `p2_base_activity {kind:"idle"}` 或 `hold`。
 - 对话：验收场景可关闭对话；任何情况下都不接受 `/` 开头的请求。
 - 禁止：游戏指令、传送、改模式、改 gamerule、注入物品。
 

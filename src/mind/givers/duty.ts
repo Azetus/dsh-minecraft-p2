@@ -17,10 +17,10 @@ export function createDutyGiver(duty: DutyController, area: AreaResourceIndex): 
       if (!duty.canWork(ctx.orderVerb !== undefined, ctx.plan !== undefined)) return null
       duty.refresh(world.inventory, ctx.now)
       const spec = duty.spec()
-      if (spec === undefined || duty.view()?.state !== 'active') return null
+      if (spec === undefined || duty.view(ctx.now)?.state !== 'active') return null
       if (!duty.canStartJob()) {
-        const view = duty.block('DUTY_JOB_BUDGET')
-        return { kind: 'hold', reason: view?.lastError ?? 'DUTY_JOB_BUDGET', notify: true }
+        duty.block('DUTY_JOB_BUDGET', ctx.now)
+        return null
       }
 
       const self = world.self.pos
@@ -29,8 +29,8 @@ export function createDutyGiver(duty: DutyController, area: AreaResourceIndex): 
       const found = area.nearest(spec.item, self, spec.radius)
       if (found === undefined) {
         if (area.stale) return null
-        const view = duty.block('DUTY_NO_SOURCE')
-        return { kind: 'hold', reason: view?.lastError ?? 'DUTY_NO_SOURCE', notify: true }
+        duty.block('DUTY_NO_SOURCE', ctx.now)
+        return null
       }
 
       const pos: Vec3 = { x: Math.floor(found.pos.x), y: Math.floor(found.pos.y), z: Math.floor(found.pos.z) }
@@ -41,12 +41,18 @@ export function createDutyGiver(duty: DutyController, area: AreaResourceIndex): 
           params: { x: pos.x, y: pos.y, z: pos.z, range: 4, intent: 'interact', timeoutMs: 8_000 },
           reason: `duty gather ${spec.item}`,
         }
-        if (ctx.isBlocked?.(`duty:move:${spec.item}:${pos.x},${pos.y},${pos.z}`) === true) return null
+        if (ctx.isBlocked?.(`duty:move:${spec.item}:${pos.x},${pos.y},${pos.z}`) === true) {
+          duty.block('DUTY_WORK_BLOCKED', ctx.now)
+          return null
+        }
         return handoff
       }
 
       const keys = `duty:gather:${spec.item}:${pos.x},${pos.y},${pos.z}`
-      if (ctx.isBlocked?.(keys) === true) return null
+      if (ctx.isBlocked?.(keys) === true) {
+        duty.block('DUTY_WORK_BLOCKED', ctx.now)
+        return null
+      }
       return {
         driverId: 'dig',
         target: { kind: 'point', pos },

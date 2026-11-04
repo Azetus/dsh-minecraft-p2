@@ -125,6 +125,8 @@ describe('protocol vocabulary', () => {
       'chat.say',
       'perception.poll',
       'mind.order',
+      'mind.duty',
+      'mind.baseActivity',
       'mind.orders',
       'mind.cancel',
       'mind.report',

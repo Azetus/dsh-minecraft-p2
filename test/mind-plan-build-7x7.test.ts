@@ -186,6 +186,7 @@ describe('7x7 build', () => {
       const mind = createMind({
         port: fake.port,
         home: { x: 0, y: 120, z: -4 },
+        baseActivity: { kind: 'idle' },
         plansDir: join(root, 'content', 'plans'),
         journalPath: join(dir, `journal-${height}.jsonl`),
       })

@@ -97,6 +97,8 @@ export type EvalCtx = {
    * snapshot; it never reaches the Agent payload.
    */
   observe?: (box: Box) => void
+  /** Bounded internal entity observation, used by escort/attack target checks. */
+  observeEntities?: (box: Box) => void
 }
 
 export interface WorkGiver {

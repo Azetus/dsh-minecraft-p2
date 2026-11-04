@@ -35,6 +35,8 @@
 
 **常驻树优先级**：常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`。这个门只决定本轮谁来 offer，不改变 order/duty 状态；紧急解除后主树恢复。`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
 
+**活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `wandering`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
+
 ### 2.1 mineflayer 导航（当前实现）
 
 - `MotionRun` 拥有一次 motion 搜索、执行、恢复和清理；上层仍只下一个目标，不等待模型微操。A* 使用 P2 自研 `MotionSearch`，pathfinder 已从 provider/port 删除。
@@ -72,6 +74,7 @@
 - `nowork`：让出选择，继续看后续分支。
 - `hold`：保留意图，不产生 job，停止下降；order/plan 保持 active。
   - `hold` **order** 不会自己结束，会占住唯一的 active 位并堵住队列；`p2_orders` 的 `queueBlockedBy` 指出这个 barrier，取消用 `p2_cancel {id}` 或 `p2_cancel {all:true}`（取消全部 queued/active）。
+  - `hold` order 同时暂停 duty 和 base activity；常驻树的最小生存动作不受影响。
 - `blocked`：`hold` + 明确 reason + 上报；不自动换任务。
 - `cancel`：终态，不自动恢复。
 
@@ -79,7 +82,10 @@
 `material.gather` 用 32 格区域索引找最近来源；索引按 16×16 列分块、每 tick 最多 2 块，`blockUpdated` 直接增删，中心移动/超时重建并标记 stale；不会每 tick 全量扫 32 格。
 `mind.status.metrics` 提供进程内 run metrics：`orders`（accepted/succeeded/failed/blocked/cancelled）、`jobs`（started/succeeded/failed/interrupted/retried/preempted）、`holds`、`holdReasons`、`failureCodes`、`completionRate`、`lastFailure`。`job.terminal` 事件附带 `diagnostic {code,category,hint}`；指标只从事件派生，不读世界。
 `metrics.jsonl`（journal 同目录）在每个 order 终态追加一行：`orderId/verb/state/acceptedAt/durationMs/attempts/lastCode/blockedKeys/target`；写入失败不影响 order。`p2_orders` 的每个视图带 `attempts/lastCode/blockedKeys`。
-`mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。D2 将 active duty 写入 journal 同目录的 `duty.json`：body 重启后，未过期且 identity 匹配的 active duty 自动恢复，`collected` 从背包重算，`jobs` 保留；过期恢复为 `blocked DUTY_DEADLINE`，completed/blocked/stopped 不复活。`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
+`mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。duty 会持久化到 journal 同目录的 `duty.json` v2：baseline、activeMs、pausedMs、jobs 与状态；body 重启后只恢复未过期且 identity 匹配的 active duty，`collected` 从 baseline+背包重算，`activeMs` 从文件恢复（宕机时间不计入 active 时间）；completed/blocked/failed/cancelled 不复活。duty 被 order/plan/threat 暂停时不消耗 active 时间；blocked/failed 会让 base 保持 inactive，等 Agent 决定。
+`mind.status.baseActivity` 是默认活动视图：`idle / wandering / escort`，只有 `active | inactive`；不持久化，重启回 `wandering`。`wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 切换），固定不随身体漂移；半径默认 8，不接受 center。`escort` 按玩家名/实体名跟随，不 teleport；目标丢失保持 `active` 且 `waitingReason:"TARGET_LOST"`，不自动切换。
+`mind.status.activity` 报告当前生效层：`{layer, kind, state, pausedBy}`；layer 为 `constant / order / duty / base`，state 为 `active / waiting / paused`。order/plan 在跑时 layer=order，duty 被暂停不改变 layer；blocked/failed duty 报 `layer:"duty", state:"waiting"`，base 保持 inactive。
+`plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/被保护返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。`hold` 不是成功，也不是失败。
 
 ## 5. 工作选择与重试
 
@@ -107,6 +113,8 @@
 | `action.pending` 未结算 | 只对账（必要时 `check` Job），不重放 |
 | order 已取消 | 恢复后保持取消，plan 不复活 |
 | 重启时 queued order / active hold | 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复 |
+| base activity | **不恢复**；重启回默认 `wandering`，需要 idle/escort 时重新 `p2_base_activity` |
+| active duty | 只恢复 identity 匹配且 `activeMs` 未超预算的 active 状态；collected 从 baseline+背包重算；终态不复活 |
 | 世界/角色/模板/定义版本不匹配 | 拒绝恢复，上报 |
 | 能从世界重建的进度（已建方块） | 重建，不依赖内存 |
 
@@ -121,12 +129,14 @@
 
 | 接口 | 内容 |
 |---|---|
-| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / 最近偏差摘要 |
+| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / `duty` / `baseActivity` / `activity` / 最近偏差摘要 |
 | `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤；附当前 `biome` |
 | `p2_observe {mode:"find",near?,radius?,only,limit?}` | 只读最近方块：只查已加载匹配，按欧氏距离排序返回 `{cell,name,distance}`；`radius` 1–32（默认 16）、`limit` 1–10（默认 5）、`only` 1–32 必填；`total` 为匹配数（上限 256，超出时 `truncated:true`）；不判断可达、不移动、不选目标；先 find 再 go/craft |
 | `p2_entities {center?,radius?,types?,names?,limit?}` | 不移动的实体/掉落物观测：半径 ≤160、limit ≤512、按距离排序；掉落物带 `item.name/count`；只受服务器跟踪范围限制 |
 | `p2_preview_blueprint {blueprint}` | 只读 dry-run：必需/缺料、冲突（当前方块、是否可拆）、未加载格、非法字段；不消耗材料、不清障、不放置 |
 | `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
+| `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
+| `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `wandering`，半径 1–8；`idle` 静止；`escort` 按目标名跟随、不 teleport；不持久化，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}` |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | 详细事件审计（order/job/plan/tracker/move）；仅供排查，不是主轮询手段 |
 | 唤醒 | order 终态、plan.blocked、job.terminal failed/blocked、tracker fault、感知 critical、对话 |
@@ -249,7 +259,9 @@ order 可带 `policy.conflict`：
 
 ### 10.8 idle 边界与执行原语（M4-03 重构）
 
-- 默认无 order：**hold**，不自动选择生活行为。
+- 默认无 order：**base activity**，默认 `wandering`，只在 anchor 半径 8 内做局部移动；不采集、不建造、不战斗、不生成新任务。
+- base 不持久化：body 重启后回到 `wandering`；Agent 可用 `p2_base_activity` 改为 `idle`/`escort`/调整 `wandering.radius`。
+- 需要完全停住时用 `p2_order {verb:"hold"}`；hold 是占住 active 位的 barrier，不是队列清空。
 - 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击。
 - Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
   - `go`：移动到坐标/附近；
@@ -268,8 +280,7 @@ order 可带 `policy.conflict`：
   床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
 - 失败上报，不自行消耗食物或改变目标。
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
-- Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察，
-  FIGHT 仅在已有 combat ROE 时使用，否则默认 FLIGHT。
+- Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；当前常驻树只做即时逃生，不自动攻击；显式 `attack` order 只攻击 Agent 指定的目标。
 
 ### 10.9 感知与唤醒粒度（M4 后）
 
@@ -297,10 +308,12 @@ order 可带 `policy.conflict`：
 - 必推（critical，不等待合并）：
   - `order.terminal` 的 `failed / blocked / abandoned`；
   - `plan.blocked`；
-  - `job.terminal` 的 `failed` 或 `blocked=true`；check job 的 `succeeded` 只表示观测完成，
+  - `duty.terminal` 的 `blocked / failed`；
+  - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` 的后台 job 失败不单独唤醒）；check job 的 `succeeded` 只表示观测完成，
     若 `observed.state=failed/unknown` 也作为失败 cause 推送；
   - `tracker.fault`，以及直接导致终态的 `plan.material-short / plan.abort /
     plan.verify(refuted) / plan.definition-error / action.unreconciled`。
+- 普通结果（合并窗口）：`order.terminal` 成功、`duty.terminal` 的 completed/cancelled、`base.waiting` 的 `TARGET_LOST`；多个结果合成一条 DIGEST。
 - 成功/取消合并：`job.terminal` 成功不单独唤醒；`order.terminal` 成功走 250ms
   合并窗口，一条 DIGEST；多个成功结果合成一条。
 - `order.terminal` 会吸收紧邻的失败 cause（runId/driverId/code/blocked/observed），

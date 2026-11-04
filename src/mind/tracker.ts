@@ -105,9 +105,9 @@ export class JobTracker {
     return this.stateValue
   }
 
-  current(): { job: Job; driverId: string } | null {
+  current(): { job: Job; driverId: string; keys: string } | null {
     const current = this.currentValue
-    return current === undefined ? null : { job: current.job, driverId: current.job.driverId }
+    return current === undefined ? null : { job: current.job, driverId: current.job.driverId, keys: current.keys }
   }
 
   fault(): TrackerFault | null {
@@ -178,6 +178,12 @@ export class JobTracker {
   abort(code = 'CANCELLED'): void {
     if (this.stateValue !== 'running' || this.currentValue === undefined) return
     this.beginStop(this.now(), { state: 'interrupted', code })
+  }
+
+  /** Drop a candidate that a new owner no longer wants, including `next`. */
+  cancelPending(): void {
+    this.pending = undefined
+    if (this.stopInfo !== undefined) delete this.stopInfo.next
   }
 
   /**
@@ -279,7 +285,9 @@ export class JobTracker {
     this.currentValue = undefined
     this.stopInfo = undefined
     this.stateValue = 'idle'
-    this.pending = info.next
+    // A candidate offered while stopping is newer than the one captured at
+    // beginStop; keep it instead of restoring an obsolete work item.
+    this.pending = this.pending ?? info.next
     this.lastRenewedKeys = undefined
   }
 

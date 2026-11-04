@@ -11,6 +11,7 @@ import {
 } from '../contracts/protocol.ts'
 import type {
   BodyInfo,
+  BaseActivityView,
   ChatPollResult,
   ChatSayResult,
   DescribeResult,
@@ -164,6 +165,7 @@ export class BodyRuntime {
       case 'perception.poll': return this.perceptionPoll(params) as unknown as JsonValue
       case 'mind.order': return this.mindOrder(params) as unknown as JsonValue
       case 'mind.duty': return this.mindDuty(params) as unknown as JsonValue
+      case 'mind.baseActivity': return this.mindBaseActivity(params) as unknown as JsonValue
       case 'mind.orders': return this.mindOrders() as unknown as JsonValue
       case 'mind.cancel': return this.mindCancel(params) as unknown as JsonValue
       case 'mind.report': return this.mindReport() as unknown as JsonValue
@@ -265,6 +267,19 @@ export class BodyRuntime {
       return mind.startDuty(input) as unknown as JsonValue
     }
     throw new Error('mind.duty action must be start or stop')
+  }
+
+  private mindBaseActivity(params: Record<string, JsonValue>): BaseActivityView {
+    this.requireOwner()
+    const mind = this.requireMind()
+    if (params.action === 'status') return mind.baseActivity()
+    if (params.action === 'set') {
+      const input = isRecord(params.activity) ? params.activity : params
+      return mind.setBaseActivity(input)
+    }
+    throw p2Error('INVALID_MESSAGE', 'validation', 'mind.baseActivity action must be set or status', {
+      module: 'body.runtime',
+    })
   }
 
   private worldObserve(params: Record<string, JsonValue>): WorldObserveResult {

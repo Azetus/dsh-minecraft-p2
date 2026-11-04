@@ -132,3 +132,18 @@
 - **规则**：`minecraft:replaceable` 只表示“可被放置替换”，不等于“可穿过”；行走仍看 collision。
 - **规则**：`minecraft:doors` 包含铁门；可开用 `mob_interactable_doors`/`wooden_doors`，铁门用 `doors && !openable`。
 - **规则**：没有通用 hazard tag；危险仍需最小名表兜底（lava/cactus/sweet_berry/magma/powder_snow/pointed_dripstone 等）。
+
+## 8. Base activity 与 duty
+
+### 8.1 base 不持久化
+- **规则**：base activity 只存在进程内；body 重启回 `wandering`。Agent 不能把 `idle`/`escort` 当成跨重启设置；需要静止时用 `hold` 或重启后重设。
+- **规则**：`wandering` 的 anchor 只在接管时记录，不随身体漂移；不要用 home 或当前位置每 tick 重算中心。
+
+### 8.2 escort 不传送
+- **规则**：目标不可观测时保持 `escort` + `active`，只报 `waitingReason:"TARGET_LOST"`；不自动切 idle/wandering，也不把目标坐标当 `moveTo` 目标。
+- **规则**：跨维度/超远目标只能等待；不要为了“跟上”放宽成传送或长距离绕路。
+
+### 8.3 duty 替换与终态
+- **规则**：`p2_duty start` 先校验新 spec，再终止旧 duty；旧 job 的停止确认由 tracker 单写者门保证，不能并行启动新 job。
+- **规则**：`blocked`/`failed` 的 duty 不自动复活，base 保持 inactive；`completed`/`cancelled` 才回到 base。`duty.json` 只恢复 active 状态，v1 sidecar 在下次写入时迁移为 v2。
+- **规则**：deadline 只计 active 时间；暂停/宕机时间不计入。quota 用 baseline 增量，不能用背包绝对值（会重复计算任务前已有的物品）。

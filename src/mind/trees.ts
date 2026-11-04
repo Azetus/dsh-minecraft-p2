@@ -28,6 +28,7 @@ export const MAIN_TREE: TreeNode = {
     { type: 'giver', ref: 'material.gather' },
     { type: 'giver', ref: 'plan.work' },
     { type: 'giver', ref: 'duty.work' },
+    { type: 'giver', ref: 'base.work' },
   ],
 }
 

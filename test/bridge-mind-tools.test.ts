@@ -19,6 +19,8 @@ class FakeManager {
   readonly entityQueries: unknown[] = []
   readonly previews: unknown[] = []
   readonly says: string[] = []
+  readonly baseActivities: unknown[] = []
+  readonly dutyCalls: unknown[] = []
   /** Override the next accepted order result (queue summary tests). */
   orderResult: unknown = { id: 'ord-1', state: 'active' }
   locksResult: unknown[] = []
@@ -73,6 +75,24 @@ class FakeManager {
     return { active: null, queued: [], queueBlockedBy: null }
   }
 
+  async mindDuty(params: unknown): Promise<unknown> {
+    this.dutyCalls.push(params)
+    return {
+      previousDuty: null,
+      started: {
+        id: 'duty-1', kind: 'gather', item: 'dirt', quota: 1, baseline: 0, collected: 0,
+        progress: 0, activeMs: 0, pausedMs: 0, jobs: 0, state: 'active', startedAt: 0,
+      },
+    }
+  }
+
+  async mindBaseActivity(params: unknown): Promise<unknown> {
+    this.baseActivities.push(params)
+    return {
+      kind: 'wandering', state: 'active', params: { radius: 8 }, waitingReason: null,
+    }
+  }
+
   async mindCancel(id: string, all = false): Promise<unknown> {
     this.cancels.push(all ? `all:${id}` : id)
     return all ? { id: '*', state: 'cancelled', cancelled: 2 } : { id, state: 'cancelled' }
@@ -121,6 +141,7 @@ describe('mind operator tools', () => {
       'p2_say',
       'p2_order',
       'p2_duty',
+      'p2_base_activity',
       'p2_orders',
       'p2_cancel',
       'p2_report',
@@ -293,6 +314,39 @@ describe('mind operator tools', () => {
     const result = await definitions.get('p2_cancel')?.execute({ all: true }, { agent })
     expect(result).toEqual({ id: '*', state: 'cancelled', cancelled: 2 })
     expect(manager.cancels).toEqual(['all:*'])
+  })
+
+  it('forwards base activity set/status without acting', async () => {
+    const { definitions, manager, agent } = harness()
+    const definition = definitions.get('p2_base_activity')
+    expect(definition?.description).toMatch(/not persisted|NOT persisted/i)
+    expect(definition?.description).toMatch(/restart/i)
+    expect((definition?.parameters as { properties?: Record<string, unknown> }).properties).toMatchObject({
+      action: { enum: ['set', 'status'] },
+    })
+
+    const status = await definition?.execute({ action: 'status' }, { agent })
+    expect(status).toMatchObject({ kind: 'wandering', state: 'active' })
+    expect(manager.baseActivities).toEqual([{ action: 'status' }])
+
+    const activity = { kind: 'escort', target: 'Alice', distance: 3 }
+    await definition?.execute({ action: 'set', activity }, { agent })
+    expect(manager.baseActivities.at(-1)).toEqual({ action: 'set', activity })
+    expect(manager.orders).toHaveLength(0)
+  })
+
+  it('forwards a duty start and exposes replacement result', async () => {
+    const { definitions, manager, agent } = harness()
+    const definition = definitions.get('p2_duty')
+    expect(definition?.description).toMatch(/replace/i)
+    const duty = { kind: 'gather', item: 'dirt', quota: 2 }
+    const result = await definition?.execute({ action: 'start', duty }, { agent }) as {
+      previousDuty: unknown
+      started: { state: string }
+    }
+    expect(result.previousDuty).toBeNull()
+    expect(result.started.state).toBe('active')
+    expect(manager.dutyCalls).toEqual([{ action: 'start', duty }])
   })
 
   it('rejects a tool call from a non-owner session', async () => {

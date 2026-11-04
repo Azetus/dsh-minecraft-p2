@@ -84,6 +84,7 @@ function makeMindAt(port: ClientPort, journalPath: string) {
   return createMind({
     port,
     home: { x: 0, y: 64, z: 0 },
+    baseActivity: { kind: 'idle' },
     plansDir: join(process.cwd(), 'content', 'plans'),
     journalPath,
   })
@@ -99,6 +100,7 @@ describe('primitive order retry policy', () => {
     const mind = createMind({
       port: fakePort([{ state: 'ok' }]).port,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath,
     })
@@ -138,6 +140,7 @@ describe('primitive order retry policy', () => {
     const mind = createMind({
       port: fakePort([{ state: 'ok' }]).port,
       home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: tempJournal(),
       now: () => clock,

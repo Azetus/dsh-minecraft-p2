@@ -60,6 +60,15 @@ describe('duty controller', () => {
     })
   })
 
+  it('counts mapped source drops such as birch_log for oak_log', () => {
+    const duty = new DutyController()
+    duty.start({ kind: 'gather', item: 'oak_log', quota: 2 }, 0, [{ slot: 36, name: 'birch_log', count: 1 }])
+    expect(duty.refresh([{ slot: 36, name: 'birch_log', count: 2 }], 100))
+      .toMatchObject({ collected: 1, state: 'active' })
+    expect(duty.refresh([{ slot: 36, name: 'birch_log', count: 3 }], 200))
+      .toMatchObject({ collected: 2, state: 'completed' })
+  })
+
   it('blocks on a deadline and stops explicitly', () => {
     const duty = new DutyController()
     duty.start({ kind: 'gather', item: 'dirt', quota: 4, maxWallMs: 1_000 }, 0)
@@ -67,7 +76,7 @@ describe('duty controller', () => {
 
     const second = new DutyController()
     second.start({ kind: 'gather', item: 'dirt', quota: 1 }, 10)
-    expect(second.stop(11)).toMatchObject({ state: 'stopped', lastError: 'agent' })
+    expect(second.stop(11)).toMatchObject({ state: 'cancelled', lastError: 'agent' })
   })
 })
 
@@ -110,7 +119,7 @@ describe('duty.work giver', () => {
     for (let now = 0; now < 20 && result === null; now += 1) {
       result = emptyGiver.find({ now }, world())
     }
-    expect(result).toMatchObject({ kind: 'hold', reason: 'DUTY_NO_SOURCE' })
+    expect(result).toBeNull()
     expect(empty.view()?.state).toBe('blocked')
   })
 })
