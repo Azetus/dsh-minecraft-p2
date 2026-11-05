@@ -37,14 +37,22 @@ const body: BodyInfo = {
 
 const owner = { sessionId: 'session-1', agentId: 'agent-1', cwd: process.cwd() }
 const lockDirs: string[] = []
+const workspaceDirs: string[] = []
 
 afterEach(() => {
   for (const dir of lockDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  for (const dir of workspaceDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
 function tempLockDir(): string {
   const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-completion-lock-'))
   lockDirs.push(dir)
+  return dir
+}
+
+function tempWorkspace(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-completion-workspace-'))
+  workspaceDirs.push(dir)
   return dir
 }
 
@@ -453,12 +461,23 @@ type Wake = {
   source: { kind: string }
 }
 
+type OwnerScoped = {
+  tools: Map<string, ToolDefinition>
+  sections: Array<Record<string, unknown>>
+  contexts: Array<Record<string, unknown>>
+  skills: string[]
+  disposedSections: number
+  disposedContexts: number
+  disposedSkills: number
+}
+
 type Harness = {
   bodies: FakeBody[]
   mind: FakeMind
   agent: AgentLike
   state: { status: 'idle' | 'running'; followups: Wake[]; steers: Wake[] }
   tools: Map<string, ToolDefinition>
+  owner?: OwnerScoped
   start(): Promise<void>
   stop(): Promise<void>
 }
@@ -466,6 +485,7 @@ type Harness = {
 type HarnessOptions = {
   devAutoRestart?: boolean
   restartBackoffMs?: number[]
+  ownerScoped?: boolean
 }
 
 function createHarness(
@@ -476,7 +496,46 @@ function createHarness(
   const state: Harness['state'] = { status: 'idle', followups: [], steers: [] }
   const definitions: Array<{ handler: (input: { agent: AgentLike; rawInput: string }) => Promise<{ kind: string }> }> = []
   const tools = new Map<string, ToolDefinition>()
-  const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+  const agent: AgentLike = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+  let ownerScoped: OwnerScoped | undefined
+  if (options.ownerScoped === true) {
+    ownerScoped = {
+      tools: new Map(),
+      sections: [],
+      contexts: [],
+      skills: [],
+      disposedSections: 0,
+      disposedContexts: 0,
+      disposedSkills: 0,
+    }
+    const scoped = ownerScoped
+    const services: Record<string, unknown> = {
+      tools: {
+        register: (definition: ToolDefinition) => {
+          scoped.tools.set(definition.name, definition)
+          return () => scoped.tools.delete(definition.name)
+        },
+      },
+      skills: {
+        register: (skill: Record<string, unknown>) => {
+          scoped.skills.push(String(skill.name))
+          return () => { scoped.disposedSkills += 1 }
+        },
+      },
+      systemPrompt: {
+        section: (section: Record<string, unknown>) => {
+          scoped.sections.push(section)
+          return () => { scoped.disposedSections += 1 }
+        },
+        context: (context: Record<string, unknown>) => {
+          scoped.contexts.push(context)
+          return () => { scoped.disposedContexts += 1 }
+        },
+      },
+      goals: { get: () => undefined },
+    }
+    agent.ctx = { get: (name: string) => services[name] }
+  }
   const agentApi = {
     get status() { return state.status },
     followup: (message: Wake) => { state.followups.push(message) },
@@ -508,6 +567,7 @@ function createHarness(
     heartbeatMs: 20,
     requestTimeoutMs: 200,
     lockDir: tempLockDir(),
+    workspaceDir: tempWorkspace(),
     devAutoRestart: options.devAutoRestart === true,
     ...(options.restartBackoffMs === undefined ? {} : { restartBackoffMs: options.restartBackoffMs }),
     spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
@@ -521,6 +581,7 @@ function createHarness(
     agent,
     state,
     tools,
+    ...(ownerScoped === undefined ? {} : { owner: ownerScoped }),
     async start() {
       const result = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
       expect(result.kind).toBe('success')
@@ -555,6 +616,34 @@ function completionTexts(wakes: Wake[]): string[] {
 
 describe('bridge completion wake', () => {
   createCompletionFeedTest()
+
+  it('registers P2 tools, memory and persona on the owner scope and disposes them', async () => {
+    const harness = createHarness(undefined, { ownerScoped: true })
+    await harness.start()
+    try {
+      expect(harness.owner).toBeDefined()
+      expect(harness.owner!.tools.has('p2_status')).toBe(true)
+      expect(harness.owner!.tools.has('p2_order')).toBe(true)
+      expect(harness.owner!.tools.has('p2_memory')).toBe(true)
+      expect(harness.tools.has('p2_status')).toBe(false)
+      expect(harness.tools.size).toBe(0)
+      expect(harness.owner!.sections).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'p2:persona', order: 100, interpolate: false }),
+      ]))
+      expect(harness.owner!.contexts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'p2:memory', order: 130, interpolate: false }),
+      ]))
+      expect(harness.owner!.skills).toEqual(expect.arrayContaining([
+        'p2-operator', 'p2-persona', 'p2-memory', 'p2-wake', 'p2-subagent',
+      ]))
+    } finally {
+      await harness.stop()
+    }
+    expect(harness.owner!.tools.size).toBe(0)
+    expect(harness.owner!.disposedSections).toBe(1)
+    expect(harness.owner!.disposedContexts).toBe(1)
+    expect(harness.owner!.disposedSkills).toBe(5)
+  })
 
   it('wakes an idle owner once with the failed order, observed and reason', async () => {
     const harness = createHarness()

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,12 +9,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ChatBatcher } from './chat-batcher.ts'
 import { CompletionFeed, formatCompletionWake } from './completion-wake.ts'
 import type { CompletionItem, MindEventView } from './completion-wake.ts'
-import type { JsonValue } from '../contracts/index.ts'
+import type { JsonValue, StatusResult } from '../contracts/index.ts'
 import type { ChatMessage, OwnerContext } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { BodyClientError } from './body-client.ts'
-import { loadOperatorSkill, OPERATOR_CONTRACT, registerOperatorSkill } from './operator-skill.ts'
-import type { OperatorSkillSource } from './operator-skill.ts'
+import { OPERATOR_CONTRACT } from './operator-skill.ts'
 import { annotateCompletion, RepeatTracker } from './repeat.ts'
 import { BodyManager } from './process-manager.ts'
 import type { BodyFault, BodySpawner, RestartInfo, StartResult, StopResult } from './process-manager.ts'
@@ -22,6 +21,21 @@ import { formatTarget, parseTargetArgs, parseTargetFields } from './target.ts'
 import type { McTarget } from './target.ts'
 import { registerP2Tools } from './tools.ts'
 import type { AgentLike, ToolDefinition, ToolsService } from './tools.ts'
+import {
+  ensureWorkspace,
+  loadAutoWakeConfig,
+  memoryFilePath,
+  workspacePaths,
+} from './workspace.ts'
+import type { AutoWakeConfig } from './workspace.ts'
+import { PersonaProvider } from './persona.ts'
+import { MemoryStore } from './memory-store.ts'
+import { registerMemoryTool } from './memory-tools.ts'
+import { AutoWakeScheduler, evaluateAutoWakeGate } from './auto-wake.ts'
+import type { AutoWakeActivity, AutoWakeGateResult, AutoWakeLogEntry } from './auto-wake.ts'
+import { loadPackagedSkills, registerPackagedSkills } from './owner-skills.ts'
+import type { PackagedSkillSource } from './owner-skills.ts'
+import { registerWorkspaceSkills } from './workspace-skills.ts'
 
 type CommandResult = { kind: 'success' | 'error'; text: string }
 
@@ -31,8 +45,9 @@ type CommandInvocation = {
 }
 
 type CommandHooks = {
-  onStarted?: (agent: AgentLike) => void
+  onStarted?: (agent: AgentLike) => void | Promise<void>
   onStopped?: () => void
+  prepareWorkspace?: (cwd: string) => Promise<void>
 }
 
 type CommandsService = {
@@ -44,7 +59,42 @@ type CommandsService = {
   }): () => void
 }
 
-type P2Context = Context & { commands: CommandsService; tools?: ToolsService; agents?: AgentsService }
+type P2Context = Context & {
+  commands: CommandsService
+  tools?: ToolsService
+  agents?: AgentsService
+  get?: (name: string) => unknown
+}
+
+type PromptSection = {
+  name: string
+  order: number
+  text: string | (() => string)
+  interpolate?: boolean
+  complete?: boolean
+}
+
+type PromptContext = {
+  name: string
+  order: number
+  text: string | (() => string)
+  interpolate?: boolean
+  required?: boolean
+}
+
+type SystemPromptService = {
+  section(section: PromptSection): () => void
+  context(context: PromptContext): () => void
+}
+
+type GoalViewLike = {
+  phase?: string
+  activation?: string
+}
+
+type GoalsService = {
+  get(agent: unknown): GoalViewLike | undefined
+}
 
 /**
  * DSH `Agent.followup` takes a complete `UserMessage`, not a bare
@@ -61,6 +111,11 @@ type WakeMessage = {
 
 type AgentsService = {
   get(id: string): {
+    /** Live DSH agent identity; present in real agents, optional in test doubles. */
+    id?: string
+    session?: { id: string; header?: { cwd?: string } }
+    /** Agent-scoped services; absent in older test doubles. */
+    ctx?: { get(name: string): unknown }
     /** Live DSH lifecycle state; absent in older test doubles. */
     status?: 'idle' | 'running'
     followup(message: WakeMessage): void
@@ -95,6 +150,14 @@ export type P2PluginOptions = {
   devAutoRestart?: boolean
   /** Development-only: auto-restart backoff schedule (tests use a zero schedule). */
   restartBackoffMs?: number[]
+  /** Packaged templates copied into a missing workspace; tests may override. */
+  templatesDir?: string
+  /** Test seam: use a temporary P2 workspace instead of the owner session cwd. */
+  workspaceDir?: string
+  /** Test seam: local clock for auto-wake. */
+  now?: () => number
+  /** Test seam: auto-wake local tick interval. */
+  autoWakeTickMs?: number
 }
 
 export function createP2Plugin(options: P2PluginOptions = {}): {
@@ -130,9 +193,14 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     apply(ctx: P2Context): void {
       const repeat = new RepeatTracker()
       const contractSessions = new Set<string>()
-      const skillSource: OperatorSkillSource | undefined = loadOperatorSkill(
-        fileURLToPath(new URL('../skills/p2-operator', import.meta.url)),
-      )
+      const personaInjectedSessions = new Set<string>()
+      const packageRoot = resolvePackageRoot()
+      const templatesDir = options.templatesDir ?? join(packageRoot, 'content', 'templates')
+      const packagedSkills: PackagedSkillSource[] = loadPackagedSkills(packageRoot)
+      let registeredAgent: AgentLike | undefined
+      let registeredKey: string | undefined
+      let registeredWorkspace: string | undefined
+      let autoWakeScheduler: AutoWakeScheduler | undefined
       let chatCursor = 0
       let chatTimer: ReturnType<typeof setInterval> | undefined
       let chatPolling = false
@@ -156,15 +224,17 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         content: [{ type: 'text', text }],
         source: { kind: 'p2-runtime' },
       })
-      const followup = (text: string): void => {
+      const followup = (text: string): boolean => {
         const owner = manager.currentOwner
-        if (owner === undefined) return
+        if (owner === undefined) return false
         const agent = ctx.agents?.get(owner.sessionId)
-        if (agent === undefined) return
+        if (agent === undefined) return false
         try {
           agent.followup(wakeMessage(text))
+          return true
         } catch (cause) {
           options.log?.(`p2 runtime wake failed: ${formatError(cause)}`)
+          return false
         }
       }
       const flushPendingNormal = (): void => {
@@ -237,10 +307,13 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
       }
       const chatBatcher = new ChatBatcher(messages => {
         const lines = messages.map(message => `${message.username}: ${message.message}`).join('\n')
-        deliverWake(`[p2 chat]\n${lines}\n请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`)
+        deliverWake(
+          `[p2 chat]\n${lines}\n用 p2_say 回复；短句、保持人格；只提真正记录过的事，不确定就说不知道。需要改变目标时用 p2_order / p2_cancel。`,
+        )
       })
       notifyBodyFault = fault => {
         stopChatPolling?.()
+        stopAutoWake?.()
         pendingNormal.length = 0
         resetCompletion()
         const owner = manager.currentOwner
@@ -264,6 +337,20 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         const owner = manager.currentOwner
         if (owner !== undefined) repeat.reset(owner.sessionId)
         startChatPolling?.()
+        if (owner !== undefined) {
+          const current = ctx.agents?.get(owner.sessionId)
+          if (current !== undefined) {
+            const agent: AgentLike = {
+              id: current.id ?? owner.agentId,
+              session: current.session ?? { id: owner.sessionId, header: { cwd: owner.cwd } },
+              ...(current.status === undefined ? {} : { status: current.status }),
+              ...(current.ctx === undefined ? {} : { ctx: current.ctx }),
+            }
+            void ensureOwnerSession(agent).catch(error => {
+              options.log?.(`p2 owner session restart failed: ${formatError(error)}`)
+            })
+          }
+        }
         deliverWake(
           `[p2 runtime] body restarted with new epoch ${info.epoch} (attempt ${info.attempt}/${info.maxRestarts} in window). Control state is empty; P2Mind will rebuild it from the world.`,
           'critical',
@@ -402,6 +489,12 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
 
       const globalDisposers: Array<() => void> = []
       const registrations: Array<{ dispose(): void }> = []
+      const personaFallbackText = readPersonaTemplate(templatesDir)
+      const prepareWorkspace = (cwd: string): Promise<void> => ensureWorkspace(
+        options.workspaceDir ?? cwd,
+        templatesDir,
+        options.log,
+      ).then(() => {})
       /** Body start is the only point that adds P2-specific context to a session. */
       const injectOperatorContract = (agent: AgentLike): void => {
         const sessionId = agent.session.id
@@ -415,28 +508,187 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           options.log?.(`p2 operator contract injection failed: ${formatError(cause)}`)
         }
       }
-      const ensureTools = (agent: AgentLike): void => {
-        if (ctx.tools === undefined || registrations.length > 0) return
-        registrations.push(registerP2Tools(agent, manager, ctx.tools, repeat))
-        if (skillSource !== undefined) {
-          const disposeSkill = registerOperatorSkill(agent, skillSource)
-          if (disposeSkill !== undefined) registrations.push({ dispose: disposeSkill })
-          else options.log?.('p2 operator skill was not registered (skills service or agent scope unavailable)')
-        } else {
-          options.log?.('p2 operator skill file was not found in the installed package')
+      const injectPersonaFallback = (agent: AgentLike, text: string): void => {
+        const sessionId = agent.session.id
+        if (personaInjectedSessions.has(sessionId)) return
+        personaInjectedSessions.add(sessionId)
+        const target = agent as AgentLike & { inject?: (message: WakeMessage) => void }
+        if (target.inject === undefined) return
+        try {
+          target.inject(wakeMessage(text))
+        } catch (cause) {
+          options.log?.(`p2 persona fallback injection failed: ${formatError(cause)}`)
         }
-        injectOperatorContract(agent)
+      }
+      const stopAutoWake = (): void => {
+        autoWakeScheduler?.stop()
+        autoWakeScheduler = undefined
       }
       const disposeTools = (): void => {
+        stopAutoWake()
         for (const registration of registrations.splice(0)) registration.dispose()
+        registeredAgent = undefined
+        registeredKey = undefined
+        registeredWorkspace = undefined
+      }
+      const currentAgentStatus = (): 'idle' | 'running' | 'missing' => {
+        const owner = manager.currentOwner
+        if (owner === undefined) return 'missing'
+        const agent = ctx.agents?.get(owner.sessionId)
+        if (agent === undefined) return 'missing'
+        return agent.status ?? 'idle'
+      }
+      const goalIsActive = (agent: unknown): boolean => {
+        const goals = getService<GoalsService>(ctx, 'goals')
+        if (goals === undefined) return false
+        try {
+          const goal = goals.get(agent)
+          return goal?.phase === 'active' && goal.activation === 'armed'
+        } catch {
+          return false
+        }
+      }
+      const startAutoWake = async (agent: AgentLike, workspaceDir: string): Promise<void> => {
+        if (autoWakeScheduler !== undefined) return
+        const config = await loadAutoWakeConfig(workspaceDir, options.log)
+        if (!config.enabled) return
+        const probe = async (lastWake: AutoWakeActivity | undefined): Promise<AutoWakeGateResult> => {
+          const owner = manager.currentOwner
+          if (owner === undefined) return { ok: false, reason: 'no-owner' }
+          const current = ctx.agents?.get(owner.sessionId)
+          if (current === undefined) return { ok: false, reason: 'agent-missing' }
+          const result = await manager.status().catch(() => undefined)
+          const status = result !== undefined && result.state === 'active' ? result.status : undefined
+          const pending = pendingNormal.length > 0
+            || pendingCompletion.length > 0
+            || pendingPerception.length > 0
+          return evaluateAutoWakeGate({
+            now: (options.now ?? Date.now)(),
+            config,
+            bodyState: manager.currentState,
+            agentStatus: current.status ?? 'idle',
+            ownerPresent: true,
+            status,
+            pendingWake: pending,
+            goalActive: goalIsActive(current),
+            lastWake,
+          })
+        }
+        const scheduler = new AutoWakeScheduler({
+          config,
+          ...(options.now === undefined ? {} : { now: options.now }),
+          ...(options.autoWakeTickMs === undefined ? {} : { tickMs: options.autoWakeTickMs }),
+          getAgentStatus: currentAgentStatus,
+          probe,
+          wake: text => followup(text),
+          log: entry => writeWakeLog(workspaceDir, entry, options.log),
+        })
+        autoWakeScheduler = scheduler
+        scheduler.start()
+      }
+      const ensureOwnerSession = async (agent: AgentLike): Promise<void> => {
+        const owner = ownerOf(agent)
+        const workspaceDir = options.workspaceDir ?? owner.cwd
+        try {
+          await ensureWorkspace(workspaceDir, templatesDir, options.log)
+        } catch (error) {
+          options.log?.(`p2 workspace init failed: ${formatError(error)}`)
+        }
+        const result = await manager.status().catch(() => undefined)
+        const status = result !== undefined && result.state === 'active' ? result.status : undefined
+        const identity = status?.mind?.identity
+        const target = manager.target
+        const scope = identity ?? {
+          worldId: target === undefined ? 'unknown' : formatTarget(target),
+          characterId: 'unknown',
+        }
+        if (identity === undefined) {
+          options.log?.('p2 memory scope fallback: mind identity unavailable; using target/unknown')
+        }
+        const key = [
+          agent.session.id,
+          agent.id,
+          owner.cwd,
+          workspaceDir,
+          target === undefined ? 'none' : formatTarget(target),
+          scope.worldId,
+          scope.characterId,
+        ].join('|')
+        if (registeredAgent === agent && registeredKey === key) {
+          await startAutoWake(agent, workspaceDir)
+          return
+        }
+        disposeTools()
+        const ownerTools = getService<ToolsService>(agent.ctx, 'tools')
+        const toolsService = ownerTools ?? ctx.tools
+        if (toolsService === undefined) {
+          options.log?.('p2 tools were not registered (tools service unavailable)')
+          return
+        }
+        const memoryStore = new MemoryStore({
+          path: memoryFilePath(workspaceDir, scope),
+          scope,
+          ...(options.log === undefined ? {} : { log: options.log }),
+        })
+        const persona = new PersonaProvider({
+          path: workspacePaths(workspaceDir).persona,
+          fallbackText: personaFallbackText,
+          onChange: read => {
+            if (read.truncated) options.log?.(`p2 persona truncated to 4096 bytes from ${read.path ?? 'default'}`)
+          },
+        })
+        registrations.push(registerP2Tools(agent, manager, toolsService, repeat))
+        registrations.push({ dispose: registerMemoryTool(agent, toolsService, memoryStore) })
+        const skillDisposers = registerPackagedSkills(agent, packagedSkills)
+        if (skillDisposers.length === 0 && packagedSkills.length > 0) {
+          options.log?.('p2 packaged skills were not registered (skills service unavailable)')
+        }
+        for (const dispose of skillDisposers) registrations.push({ dispose })
+        const workspaceSkills = await registerWorkspaceSkills(
+          agent,
+          workspacePaths(workspaceDir).skillsDir,
+          options.log,
+        )
+        if (!workspaceSkills.hotReload) {
+          options.log?.('p2 workspace skills use a start-only scan (no dynamic provider API)')
+        }
+        registrations.push({ dispose: workspaceSkills.dispose })
+        const systemPrompt = getService<SystemPromptService>(agent.ctx, 'systemPrompt')
+        if (systemPrompt !== undefined) {
+          registrations.push({
+            dispose: systemPrompt.section({
+              name: 'p2:persona',
+              order: 100,
+              text: () => persona.read().text,
+              interpolate: false,
+            }),
+          })
+          registrations.push({
+            dispose: systemPrompt.context({
+              name: 'p2:memory',
+              order: 130,
+              text: () => memoryStore.summary(),
+              interpolate: false,
+            }),
+          })
+        } else {
+          injectPersonaFallback(agent, persona.read().text)
+          options.log?.('p2 systemPrompt unavailable; memory summary is not injected')
+        }
+        injectOperatorContract(agent)
+        registeredAgent = agent
+        registeredKey = key
+        registeredWorkspace = workspaceDir
+        await startAutoWake(agent, workspaceDir)
       }
 
       if (options.devBodyControl === true && ctx.tools !== undefined) {
         globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
-          ensureTools,
+          ensureTools: ensureOwnerSession,
           disposeTools,
           startChatPolling: () => startChatPolling?.(),
           stopChatPolling: () => stopChatPolling?.(),
+          prepareWorkspace: (cwd: string) => prepareWorkspace(cwd),
         })))
       }
 
@@ -446,14 +698,15 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
           description: 'Manage the P2 Minecraft player runtime',
           input: { hint: '<setup|start|status|stop>' },
           handler: invocation => handleP2Command(manager, invocation, {
-            onStarted: agent => {
-              ensureTools(agent)
+            onStarted: async agent => {
+              await ensureOwnerSession(agent)
               startChatPolling?.()
             },
             onStopped: () => {
               stopChatPolling?.()
               disposeTools()
             },
+            prepareWorkspace: (cwd: string) => prepareWorkspace(cwd),
           }),
         }),
         'p2.commands',
@@ -469,16 +722,18 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         },
         'p2.body',
       )
+
     },
   }
 }
 
 /** Development-only global tool; the human `/p2` command remains the shipped path. */
 type BodyToolHooks = {
-  ensureTools: (agent: AgentLike) => void
+  ensureTools: (agent: AgentLike) => Promise<void>
   disposeTools: () => void
   startChatPolling: () => void
   stopChatPolling: () => void
+  prepareWorkspace: (cwd: string) => Promise<void>
 }
 
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
@@ -511,8 +766,10 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         assertBodyOwner(manager, agent.session.id)
         const parsed = parseTargetFields(args.host, args.port)
         if ('error' in parsed) throw new Error(parsed.error)
+        const cwd = agent.session.header?.cwd
+        if (cwd !== undefined) await hooks.prepareWorkspace(cwd)
         const result = await startBody(manager, agent, parsed.target)
-        hooks.ensureTools(agent)
+        await hooks.ensureTools(agent)
         hooks.startChatPolling()
         void auditBodyControl(agent, {
           action,
@@ -536,8 +793,11 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         }
         const stopped = await stopBody(manager)
         if (stopped.state === 'faulted') return { action, ...stopped }
+        hooks.disposeTools()
+        const cwd = agent.session.header?.cwd
+        if (cwd !== undefined) await hooks.prepareWorkspace(cwd)
         const result = await startBody(manager, agent, target)
-        hooks.ensureTools(agent)
+        await hooks.ensureTools(agent)
         hooks.startChatPolling()
         void auditBodyControl(agent, {
           action,
@@ -658,8 +918,10 @@ export async function handleP2Command(
       case 'start': {
         const parsed = parseTargetArgs(rest)
         if ('error' in parsed) return error(parsed.error)
+        const cwd = invocation.agent.session.header?.cwd
+        if (cwd !== undefined) await hooks.prepareWorkspace?.(cwd)
         const result = await startBody(manager, invocation.agent, parsed.target)
-        hooks.onStarted?.(invocation.agent)
+        await hooks.onStarted?.(invocation.agent)
         void auditBodyControl(invocation.agent, {
           action: 'start',
           state: result.state,
@@ -741,6 +1003,48 @@ async function statusText(manager: BodyManager): Promise<string> {
 function boundedText(text: string, max = 300): string {
   const oneLine = text.replace(/\s+/g, ' ').trim()
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}...`
+}
+
+function readPersonaTemplate(templatesDir: string): string {
+  try {
+    return readFileSync(join(templatesDir, 'persona.md'), 'utf8').trim()
+  } catch {
+    return '你是 P2，Minecraft 世界里的第二个玩家。'
+  }
+}
+
+/**
+ * The built bridge lives in `lib/bridge.js`; source tests live in
+ * `src/bridge/plugin.ts`. Prefer the directory that actually contains
+ * `content/templates/` so both layouts find the packaged templates.
+ */
+function resolvePackageRoot(): string {
+  const moduleRoot = fileURLToPath(new URL('..', import.meta.url))
+  if (existsSync(join(moduleRoot, 'content', 'templates'))) return moduleRoot
+  return fileURLToPath(new URL('../../', import.meta.url))
+}
+
+function writeWakeLog(
+  workspaceDir: string,
+  entry: AutoWakeLogEntry,
+  log: ((line: string) => void) | undefined,
+): void {
+  const path = join(workspaceDir, '.p2', 'wake.jsonl')
+  void appendFile(path, `${JSON.stringify(entry)}\n`, 'utf8').catch(error => {
+    log?.(`p2 auto-wake log failed: ${formatError(error)}`)
+  })
+}
+
+function getService<T>(
+  context: { get?: (name: string) => unknown } | undefined,
+  name: string,
+): T | undefined {
+  if (context?.get === undefined) return undefined
+  try {
+    return context.get(name) as T | undefined
+  } catch {
+    return undefined
+  }
 }
 
 function success(text: string): CommandResult {

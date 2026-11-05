@@ -1,0 +1,19 @@
+{
+  "minecraft": {
+    "username": "P2_Bot",
+    "version": "1.21.1",
+    "connectTimeoutMs": 15000,
+    "serverIdleMs": 1500
+  },
+  "autoWake": {
+    "enabled": true,
+    "silenceMs": 1800000,
+    "quietHours": {
+      "start": 0,
+      "end": 8
+    },
+    "dailyCap": 24,
+    "skipActiveWork": false,
+    "noOpBackoff": true
+  }
+}

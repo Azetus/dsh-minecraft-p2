@@ -5,7 +5,7 @@
 
 ## 1. 启动
 
-1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。
+1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。`p2 start` 会先创建 `.p2` 工作区：缺失的 persona/config/skills/memory 说明从 `content/templates/` 复制，已有文件绝不覆盖。
 2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。若 `locks` 显示该 target 已被别的 session/进程占用，`/p2 start` 会直接拒绝；先让 owner `/p2 stop`，不要重复启动抢 username。
 3. `p2_observe`：确认进服、维度、位置与周围方块。找方块用 `p2_observe {mode:"find", only:["crafting_table"], radius:16}`；find 只返回已加载方块，不判断可达、不移动，拿到坐标后先 `go` 再 `craft`/`dig`。
 
@@ -24,8 +24,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 有限词表：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 - 默认活动用 `p2_base_activity`：默认 `{kind:"wandering"}`，只在 anchor 半径 8 内移动；`{kind:"idle"}` 静止；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 wandering；要完全停住用 `p2_order {verb:"hold"}`。
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
-- 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立。policy 不持久化，重启后要重设。
-- 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
+- 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight **默认**不选玩家/被动/中立——这是自动选择的默认值，不是 Agent 的权限上限。policy 不持久化，重启后要重设。
+- 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体（包括玩家）。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
 - `dig`/`clear`/`attack` 会自动选最佳工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换，动作启动后恢复自动。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
@@ -111,3 +111,11 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ## 8. 复盘统计
 
 `node scripts/metrics-summary.mjs` 只读聚合 `.p2/metrics.jsonl`：按状态/verb/code/layer、p50/p95、attempts 统计；`--from/--to` 选时间窗，`--baseline <path>` 做两轮对比，`--json` 输出机器可读结果。它不调用 body、不改 order 状态，也不进生产路径。
+
+## 9. 人格、记忆、自动唤醒与工作区
+
+- **人格**：`.p2/persona.md`，首次由 `content/templates/persona.md` 创建；mtime 动态 section，编辑后下一回合生效。人格定义身份、语气和“人类输入是否当命令”；operator 只管工具语义，不预设服从。文件 ≤4KB。
+- **记忆**：`p2_memory {action:"remember"|"recall"|"forget"}`；`fact`/`state`/`episode`，text ≤500，tags ≤8。summary 只注入 pinned + 最近 fact/state（2KB/20 条）；`state` 使用前必须重新验证。文件在 `.p2/memory/<world>/<character>.jsonl`，按 scope 分文件，追加写 + tombstone。
+- **自动唤醒**：`.p2/config.json` 的 `autoWake` 段控制 `enabled/silenceMs/quietHours/dailyCap/skipActiveWork/noOpBackoff`。runtime 在 owner session 静默后注入一个 turn；它是 runtime 唤醒，不是人类指令，也不是任务目录。Agent 可以行动、说话、等待、拒绝或什么都不做；插件不限制目标选择。决策记录在 `.p2/wake.jsonl`。
+- **工作区 skill**：`.p2/skills/<name>/SKILL.md`，`name/description` frontmatter；运行中新增/修改会热加载。保留名 `p2-operator`/`p2-persona`/`p2-memory`/`p2-wake`/`p2-subagent`。子 agent 不继承这些 skill。
+- **模板**：`content/templates/` 入库；`.p2/` 整体是本机内部内容，不入库。

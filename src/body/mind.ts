@@ -1266,6 +1266,9 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         planView = null
       }
       return {
+        ...(options.identity === undefined
+          ? {}
+          : { identity: { worldId: options.identity.worldId, characterId: options.identity.characterId } }),
         tracker: tracker.state(),
         job: current === null ? null : { runId: current.job.runId, driverId: current.job.driverId },
         fault: fault === null ? null : { code: fault.code, since: fault.since },

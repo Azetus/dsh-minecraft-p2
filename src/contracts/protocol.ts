@@ -256,6 +256,8 @@ export type MindMetricsView = {
 }
 
 export type MindStatusView = {
+  /** Recovery identity bound to this body; absent when the provider had none. */
+  identity?: { worldId: string; characterId: string }
   tracker: 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
   job: { runId: string; driverId: string } | null
   fault: { code: string; since: number } | null

@@ -36,14 +36,22 @@ const body: BodyInfo = {
 
 const owner = { sessionId: 'session-1', agentId: 'agent-1', cwd: process.cwd() }
 const lockDirs: string[] = []
+const workspaceDirs: string[] = []
 
 afterEach(() => {
   for (const dir of lockDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  for (const dir of workspaceDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
 function tempLockDir(): string {
   const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watchdog-lock-'))
   lockDirs.push(dir)
+  return dir
+}
+
+function tempWorkspace(): string {
+  const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-watchdog-workspace-'))
+  workspaceDirs.push(dir)
   return dir
 }
 
@@ -414,6 +422,7 @@ describe('body watchdog', () => {
       devAutoRestart: true,
       restartBackoffMs: [0],
       lockDir: tempLockDir(),
+      workspaceDir: tempWorkspace(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })
@@ -459,6 +468,7 @@ describe('body watchdog', () => {
       requestTimeoutMs: 20,
       devBodyControl: true,
       lockDir: tempLockDir(),
+      workspaceDir: tempWorkspace(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })
@@ -509,6 +519,7 @@ describe('body watchdog', () => {
       devAutoRestart: true,
       restartBackoffMs: [0, 0, 0],
       lockDir: tempLockDir(),
+      workspaceDir: tempWorkspace(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })
@@ -576,6 +587,7 @@ describe('body watchdog', () => {
       devAutoRestart: true,
       restartBackoffMs: [0],
       lockDir: tempLockDir(),
+      workspaceDir: tempWorkspace(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
       log: () => {},
     })

@@ -12,6 +12,8 @@ export type AgentLike = {
     id: string
     header?: { cwd?: string }
   }
+  /** Live DSH lifecycle state; optional in test doubles. */
+  status?: 'idle' | 'running'
   /** Agent-scoped Cordis context; optional in tests. */
   ctx?: {
     get(name: string): unknown

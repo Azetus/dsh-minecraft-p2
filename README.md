@@ -10,7 +10,22 @@ P2Mind 把角色交给常驻 NPC AI：agent 只下**目标级 order**，NPC 自�
 - 常驻树 + 主树 + WorkGiver / JobTracker / Driver
 - 计划、蓝图、材料政策与三态验证
 - 游戏内聊天接入、completion wake、body 重启与意图日志恢复
+- owner-session：persona、简易记忆、workspace skill、自动唤醒
 - mineflayer ClientPort；自研客户端 mod 是后续适配方向
+
+## `.p2` 工作区
+
+`p2 start` 会在启动 P2 的 session 工作区创建 `.p2/`，缺失文件从 `content/templates/` 复制，已有文件不覆盖：
+
+```text
+.p2/
+  persona.md        # 人格，编辑后下一回合生效
+  config.json       # minecraft 连接/角色 + autoWake 配置
+  memory/<world>/<character>.jsonl
+  skills/<name>/SKILL.md   # 工作区 skill，热加载
+```
+
+`.p2/` 是本机内部内容，整体不入库；模板在 `content/templates/` 入库。人格定义“人类输入是否当命令”；operator 只定义工具语义。
 
 ## 运行
 
@@ -26,6 +41,7 @@ p2_orders
 p2_cancel {id}
 p2_report
 p2_say {text}
+p2_memory {action:"remember"|"recall"|"forget", ...}
 ```
 
 `p2_order` 只返回 accepted；终态、blocked 或失败通过 completion wake 推回。Agent 不轮询、不 `Start-Sleep`。

@@ -112,8 +112,22 @@ describe('mind integration', () => {
     expect(moves).toHaveLength(0)
   })
 
-  it('starts in wandering and reports the base layer', () => {
+  it('reports the provider recovery identity in status', () => {
     const { port } = fakePort([], { emptyBlocks: true })
+    const mind = createMind({
+      port,
+      identity: { worldId: 'world:overworld', characterId: 'character-uuid' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    expect(mind.status().identity).toEqual({
+      worldId: 'world:overworld',
+      characterId: 'character-uuid',
+    })
+  })
+
+  it('starts in wandering and reports the base layer', () => {    const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
       port,
       plansDir: join(process.cwd(), 'content', 'plans'),
