@@ -272,8 +272,8 @@ order 可带 `policy.conflict`：
 - Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
   - `go`：移动到坐标/附近；
   - `place`：放任意方块/床，`item` + 目标；
-  - `dig`：破坏指定方块；driver 按方块自动选择最佳工具；
-  - `equip`：切换手持物品/工具；成功后保护紧接着的下一次 `dig`/`attack`/`clear`，不自动覆盖；
+  - `dig`：破坏指定方块；`dig`/`clear` driver 按方块自动选择最佳工具；
+  - `equip`：切换手持物品/工具；成功后保护下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use` 等非装备动作），不自动覆盖；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
   - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测；driver 自动选最强剑/斧，锁定目标后由 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
   - `check`：打开容器/熔炉做三态观测；

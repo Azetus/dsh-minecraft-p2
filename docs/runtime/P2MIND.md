@@ -203,6 +203,7 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用玩家名/实体名找目标并选目标附近站位，不 teleport；目标丢失只标记 `TARGET_LOST`。
 - `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
 - `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
+- `dig`/`clear`/`attack` 启动前做一次自动装备：`dig`/`clear` 用 `chooseTool`，`attack` 用 `chooseWeapon`；最近一次显式 `equip` 成功后，下一次这类动作跳过自动选择，动作启动后恢复自动。
 
 ### 4.5 Job
 

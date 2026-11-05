@@ -26,7 +26,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立。policy 不持久化，重启后要重设。
 - 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
-- `dig`/`attack` 会自动选最佳工具/武器；显式 `equip` 成功后，紧接着的下一次 `dig`/`attack`/`clear` 保留手动物，不自动切换，动作启动后恢复自动。
+- `dig`/`clear`/`attack` 会自动选最佳工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换，动作启动后恢复自动。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - 可带 `blueprint` 表达非标结构；可达性与冲突由 Planner 处理。

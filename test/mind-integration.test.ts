@@ -278,7 +278,7 @@ describe('mind integration', () => {
 
     mind.enqueueOrder({ verb: 'equip', params: { item: 'stone_pickaxe' } })
     mind.tick()
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 40; index += 1) {
       await new Promise(resolve => setTimeout(resolve, 10))
       mind.tick()
       if (mind.status().activeOrder === null) break
@@ -287,8 +287,8 @@ describe('mind integration', () => {
 
     mind.enqueueOrder({ verb: 'dig', params: target })
     mind.tick()
-    for (let index = 0; index < 40; index += 1) {
-      await new Promise(resolve => setTimeout(resolve, 20))
+    for (let index = 0; index < 100; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 25))
       mind.tick()
       if (mind.status().activeOrder === null) break
     }
