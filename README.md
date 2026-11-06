@@ -11,7 +11,7 @@ P2Mind 把角色交给常驻 NPC AI：agent 只下**目标级 order**，NPC 自�
 - 计划、蓝图、材料政策与三态验证
 - 游戏内聊天接入、completion wake、body 重启与意图日志恢复
 - owner-session：persona、简易记忆、workspace skill、自动唤醒
-- mineflayer ClientPort；自研客户端 mod 是后续适配方向
+- mineflayer 是当前唯一适配器；自研客户端 mod 不在当前计划内，保留 `ClientPort` 边界以便未来需要时重新评估
 
 ## `.p2` 工作区
 
@@ -59,5 +59,5 @@ npm run bundle  # bundles/dsh-minecraft-p2-<version>.tgz
 - [P2Mind 设计](docs/runtime/P2MIND.md)
 - [契约](docs/CONTRACTS.md)
 - [运行时](docs/RUNTIME.md)
-- [操作员手册](docs/OPERATOR-PLAYBOOK.md)
+- [P2 运行手册](docs/OPERATOR-PLAYBOOK.md)
 - [文档目录](docs/README.md)

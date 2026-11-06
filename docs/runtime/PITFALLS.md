@@ -155,7 +155,7 @@
 - **规则**：`fight.allowedTargets: []` 是“所有非 neutral/auto-avoid 的 hostile”，不是字面所有 `kind=hostile`；neutral 名单和 auto-avoid 永远优先。
 
 ### 9.2 自动 fight 的保护
-- **规则**：自动 fight 永不选玩家、被动/中立、neutral 名单（enderman/spider/cave_spider/piglin/zombified_piglin）和 auto-avoid（creeper/wither/ender_dragon/warden）；显式允许列表里写这些名称应校验失败。
+- **规则**：自动 fight 默认不选玩家、被动/中立、neutral 名单（enderman/spider/cave_spider/piglin/zombified_piglin）和 auto-avoid（creeper/wither/ender_dragon/warden）；显式允许列表里写这些名称应校验失败。
 - **规则**：`canSee` 可用时过滤目标；没有时沿用 driver 默认，但不应把“看不见”当成功。
 - **规则**：目标锁定后不换目标；失败后冷却并短期拉黑，避免在多个怪之间抖动。
 

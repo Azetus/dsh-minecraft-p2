@@ -129,7 +129,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - `mind.status.activity` 报告当前生效层：`{layer:"constant"|"order"|"duty"|"base", kind, state:"active"|"waiting"|"paused", pausedBy}`。order/plan 在跑时 layer=order；blocked/failed duty 报 layer=duty、state=waiting；base 被更高层暂停时不改变 activity 的 layer。
 - **Reaction policy**：`p2_policy {action:"set"|"reset"|"status", reaction?:{fight?, selfCare?}}`；body 级、process-local、不持久化，重启回只 flee。
   - `fight` 缺省 = 不自动攻击；存在时必须显式写 `allowedTargets`（`[]` = 所有 adapter 判定的 hostile），并支持 `retreatHealth`（0–20，默认 8）、`radius`（1–16，默认 8）、`leash`（1–32，默认 12，且 ≥ radius）。
-  - 自动 fight 永不选玩家、被动/中立、neutral 名单（enderman、spider、cave_spider、piglin、zombified_piglin）和 auto-avoid（creeper、wither、ender_dragon、warden）。`allowedTargets` 显式包含这些名称时校验失败；需要打它们时使用显式 `attack` order。
+  - 自动 fight 默认不选玩家、被动/中立、neutral 名单（enderman、spider、cave_spider、piglin、zombified_piglin）和 auto-avoid（creeper、wither、ender_dragon、warden）。`allowedTargets` 显式包含这些名称时校验失败；需要打它们时使用显式 `attack` order。
   - `mind.status.reaction` 返回 `{source:"default"|"agent", mode:"flee"|"allowlist"|"all-hostiles", fight, selfCare}`。`selfCare` 默认启用 `eat`/`unstuck`，`retreat` 只作为血量门槛。
   - 显式 `attack` order 期间自动 fight 关闭；常驻树只保留岩浆/深水等致命环境反射，不因敌对、低血、饥饿或卡住而打断。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。

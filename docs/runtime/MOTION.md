@@ -1,6 +1,6 @@
 # 运动模块（Motion）
 
-> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵（26.1 为历史证据；Phase E 本轮不跑 26.1）。方块语义优先读服务端 block tags；D1 水+梯子上岸已覆盖，D2 脚手架按缩窄边界收口（顶面/上下台阶/旁边通过，柱内攀爬与侧穿 deferred）。
+> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵（26.1 仅作历史证据，当前不再复跑）。方块语义优先读服务端 block tags；D1 水+梯子上岸已覆盖，D2 脚手架按缩窄边界收口（顶面/上下台阶/旁边通过），柱内攀爬与侧穿不做（需要专门物理层，当前不投入）。
 > 范围是**原版兼容环境**：不安装、不依赖任何客户端 mod；P2 通过当前唯一适配器接入，执行基线为原版移动与战斗规则。
 > 本文只描述运动模块自身的契约与实现边界，不记录外部参考项目的名称或代码。
 
@@ -224,7 +224,7 @@ interface Move {
 
 - **水**：默认是 `swim`（A 档）：`wade` 仍可走 1 深水；水面格（脚在顶层水格、头格干）可站、可规划，任意深度，不潜水、不做 waterline。`SwimMove` 负责水面→水面（同层）和水面→岸（同层/+1）；它始终按住 forward，出水或眼入水时按住 jump。`standingCell` 把浮体的脚格归一化到水面节点，搜索起点和 `arrived()` 都用它；水格目标到达时允许未 `onGround`（浮在水面即算到达），之后 `escape` 仍可能把身体带向岸边（已接受的行为）。执行器对 swim 跳过 `isValid/recover`，湿 move 的停滞只看水平位移，水 move 超时 ×3；只有头部完全没入水（眼格与其上一格都是水）持续 3 s 才报 `STUCK`。`escape` 的水线判定同样只认“头完全没入”，并以 dry 格为目标，避免抢占游泳 order；`standCells` 目标选择默认 dry（`pickup` 显式 `dry:false` 保留水格拾取）。
 - **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`。`ClimbExit` 负责“梯顶再上一格”（含斜向），即标准二层结构里从梯子穿洞上到楼板；反向（从楼板进梯）走 `Climb` 的 dy=−1。水面 `swim` 档可从水面进入梯子，梯顶再经 `ClimbExit` 上岸（矩阵 `water-ladder-exit`）；梯子没有到岸时仍为 no path。
-- **脚手架（Phase D2 缩窄）**：只作为支撑/放置方块；支持顶面站立、单块上/下台阶、旁边通过；**不做柱内攀爬与侧穿**。实机 probe（`.m5-runs/scaffold-probe.mjs`，1.21.1）显示：在 3 高脚手架柱内按住 jump 不上升（ladder 对照从 100 升到 103.15），侧面也进不去——瓶颈在 prismarine-physics 的静态 collision，不在 P2Motion 规则；Vanilla 的 scaffolding collision 是 context-dependent，而 mineflayer 的 `bot.blockAt` 只给静态 shape。因此 `scaffold-through` 仍是 no path，柱内攀爬/侧穿标记为 deferred；只有接受局部 physics collision shim 时才重新打开。
+- **脚手架（Phase D2 缩窄）**：只作为支撑/放置方块；支持顶面站立、单块上/下台阶、旁边通过；**不做柱内攀爬与侧穿**。实机 probe（`.m5-runs/scaffold-probe.mjs`，1.21.1）显示：在 3 高脚手架柱内按住 jump 不上升（ladder 对照从 100 升到 103.15），侧面也进不去——瓶颈在 prismarine-physics 的静态 collision，不在 P2Motion 规则；Vanilla 的 scaffolding collision 是 context-dependent，而 mineflayer 的 `bot.blockAt` 只给静态 shape。因此 `scaffold-through` 仍是 no path；柱内攀爬/侧穿**不做**，除非未来专门实现物理层，当前不投入。
 - **半砖/楼梯**：collision + footprint 支撑；从下半砖起跳整方块、从下半砖垫脚、落半砖默认拒绝（物理不可行或落点高度歧义）；下半砖→下半砖允许。
 - **跳跃预算**：两条"物理不可能"用真实脚高与 1.2522 的跳跃峰值比较，而不是"支撑是不是整方块"——
   - `Ascend`：`destFeet − srcFeet > 1.2522 − 0.15` 才拒绝。所以 farmland/dirt_path（0.9375 → 抬升 1.0625）允许，箱子/灵魂沙（1.125）按余量拒绝，下半砖（1.5）拒绝。
@@ -360,8 +360,8 @@ interface Move {
 - **当前证据（P3）**：真实服务端 + 当前适配器，1 格缺口（Parkour）、2 格搭桥（放置读回）、2 级垫脚、对角移动通过；搭桥/垫脚的放置格读回为授权材料。
 - **当前证据（P4）**：真实服务端 + 当前适配器，锁定目标在 `entityHurt`/`entityDead` 证据后报 `killed`；被移出查询范围的目标报 `targetLost` 且 `killed=false`。
 - **当前证据（tags）**：1.21.1 实机 `tagsReady=true`，184 个 block tag、1003 个方块；26.1 实机 `tagsReady=true`，248 个 tag、1104 个方块。`oak_door`/`pale_oak_door` 带 `doors/mob_interactable_doors/wooden_doors`，`iron_door` 只有 `doors`，`oak_fence_gate` 带 `fence_gates`，`ladder` 带 `climbable`。
-- **26.1 实机**：同一套矩阵在 26.1 服务端通过 P1/P2、P3、P4；`pale_oak_door` 由 tags 自动识别，未使用名字特判。26.1 世界种子不同，但矩阵自建场地，几何结论不依赖原世界生成。
-- **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。新增 `motion-stand-query`（最近可站查询：不可站目标/门后/缺口/未加载/半砖 feetY/预算/可达优先）、`motion-swim`（水面语义与 `SwimMove`）与 `motion-boundary`（38 行边界矩阵按 guards/climb/wade/swim 四阶段重放）。当前 `npm run check`：815 passed / 1 skipped（816）。
+- **26.1 实机**：同一套矩阵在 26.1 服务端通过 P1/P2、P3、P4；`pale_oak_door` 由 tags 自动识别，未使用名字特判。26.1 世界种子不同，但矩阵自建场地，几何结论不依赖原世界生成。**这是历史证据，当前不再复跑 26.1。**
+- **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。新增 `motion-stand-query`（最近可站查询：不可站目标/门后/缺口/未加载/半砖 feetY/预算/可达优先）、`motion-swim`（水面语义与 `SwimMove`）与 `motion-boundary`（38 行边界矩阵按 guards/climb/wade/swim 四阶段重放）。当前 `npm run check`（0.1.5）：909 passed / 1 skipped（910）。
 - **任务 A 实机（1.21.1）**：`motion-query-accept` 7/7 —— 目标块不可站、门后目标（门被打开）、跨 3 格缺口 `APPROACH_NO_PATH`、同层/半砖/坑内拾取全部收集、柱顶掉落物保留且移动 `GOTO_NO_PATH`。证据 `.m5-runs/motion-query/`。
 - **任务 B 实机（1.21.1）**：`motion-boundary-accept`（旧 `BOUNDARY_STAGE=water`，现拆为 `wade`/`swim`）25/25 —— 1 深水穿行与 2 格落水成功、2 深水与水+梯子 no path、waterlogged 半砖可走、梯子上下成功且旁边普通移动不受影响、梯顶 +1 no path、脚手架站立/放置成功且横穿 no path、叠放 GOTO_STUCK、半砖/楼梯上下成功、从下半砖跳整方块/垫脚/落半砖/起跳 no path、下半砖→下半砖成功、岩浆旁半砖可走/踏入岩浆 no path。证据 `.m5-runs/motion-boundary/`。
 - **水面游泳实机（1.21.1，2026-11-02）**：`motion-boundary-accept`（`BOUNDARY_STAGE=swim`）32/32 —— 4 行定向（`water-deep-2`、`water-fall-2`、`swim-lake-5wide`、`swim-fall-2deep`）全通过，随后全量 32 行通过；`water-deep-2`/`water-fall-2` 在 `wade` 下仍为 no path（纯测试），`swim` 下成功；5 格湖面横渡不再被 `escape:water` 抢占。证据 `accept-boundary-swim-2026-11-02T15-05-51-510Z.json`（4 行）、`accept-boundary-swim-2026-11-02T15-06-54-066Z.json`（32 行，均在 `.m5-runs/motion-boundary/`）。

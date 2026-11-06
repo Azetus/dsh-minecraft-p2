@@ -12,7 +12,7 @@
    - 需要撤离：`p2_order {verb:"go", params:{x,y,z}}` 或 `p2_cancel`；
    - 如果 `p2_policy` 已授权自动 fight，P2 可能已经在应战；不要重复下发同一目标。
 2. 没有 `p2_policy` 的 fight 授权时，P2 **默认 flee**，不会自动攻击。
-3. 自动 fight 永不选择玩家、被动/中立生物、creeper/boss；显式 `attack` order 不受此限制。
+3. 自动 fight 默认不选择玩家、被动/中立生物、creeper/boss；显式 `attack` order 不受此限制。
 4. 行动之后才允许 `p2_status` / `p2_observe` 验证。
 5. 一次 IMMEDIATE 只做一个第一动作，不并发多个相反指令。
 
@@ -102,4 +102,4 @@ p2_order { "verb": "go", "params": { "x": -8, "y": 69, "z": -4 } }
 p2_cancel { "id": "ord-..." }
 ```
 
-`p2_policy` 不持久化；body 重启后回到只 flee。自动 fight 永不攻击玩家/中立；显式 attack 由 Agent 决定。
+`p2_policy` 不持久化；body 重启后回到只 flee。自动 fight 默认不攻击玩家/中立；显式 attack 由 Agent 决定。

@@ -60,19 +60,18 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 - body start 时 bridge 在 owner agent scope 注册：五个包内 skill、`.p2/skills` workspace provider、persona section、memory context、P2 工具 + `p2_memory`、auto-wake。stop 时全部 dispose；fault 只停 auto-wake，保留只读工具供检查。
 - 工具和 skill 注册在 owner agent scope，子 agent/其他 session 看不到；`p2_body` 仍是全局开发工具并做 owner 检查。
 - `.p2/` 是本机内部内容，由 `p2 start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有用户编辑。persona、config、memory、workspace skills 都在这里；`.p2` 不入库。
-- auto-wake 是 bridge 的调度能力，不进入 P2Mind：它只在 owner session 静默后注入一个 turn，不生成 order/duty，也不限制 Agent 的目标选择。
+- auto-wake 是 bridge 的调度能力，不进入 P2Mind：它只在 owner session 静默后注入一个 turn，不生成 order/duty，也不限制 Agent 的目标选择。默认 `skipActiveWork:false`；设为 `true` 才按 active order/plan/duty/armed goal 跳过唤醒，这是调度偏好，不是授权门。
 
 ## 3. 接入
 
 ```text
 ClientPort（query / act / event / capabilities，纯数据）
-  ├─ MineflayerAdapter   现在：进程内调用
-  └─ ModAdapter          将来：WebSocket 到自研客户端 mod
+  └─ MineflayerAdapter   现在：进程内调用；当前唯一投入的适配器
 ```
 
 - 换接入不换 AI：树、giver、plan、driver 都只依赖 ClientPort。
 - 能力是行为契约（`navigate / interact / observe.screen`），缺能力时 driver 声明 `requires` 并降级或报不支持。
-- 一致性测试（20 场景）是两个适配器的共同验收标准。
+- 一致性测试保留为 ClientPort 契约测试；当前只对 mineflayer 适配器执行。自研 mod 适配器不在当前计划内，保留 `ClientPort` 边界以便未来需要时重新评估。
 
 ## 4. 目录
 
@@ -86,6 +85,7 @@ src/
   mind/verify/     验证器
   mind/journal/    意图日志与恢复
   contracts/       协议、framing、通用类型
+skills/            owner-session 运行提示（p2-operator/persona/memory/wake/subagent）
 content/
   plans/           结构模板 JSON
   templates/       .p2 工作区模板（persona/config/skills/memory 说明）

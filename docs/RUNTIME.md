@@ -2,12 +2,13 @@
 
 ## 1. body 生命周期
 
-1. `p2_body start`（或 `/p2 start <host>:<port>`）→ bridge 启动 body 子进程，并把 MC target 注入子进程环境。
+1. `p2_body start`（或 `/p2 start <host>:<port>`）→ bridge 先确保 `.p2` 工作区（缺失文件从 `content/templates/` 复制，不覆盖），再启动 body 子进程，并把 MC target 注入子进程环境。
 2. body 连接 provider（ClientPort 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。target 来自启动参数，不来自 `.p2/config.json`。
-3. 进入 tick 循环（50ms）。
-4. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出；超时先 SIGTERM，再 killTree。
-5. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**；auto-restart 复用上次 target。
-6. 同一 MC target 只允许一个 body：跨进程锁记录 owner/target/heartbeat；stale 锁自动清理，孤儿 body 先要求退出。DSH 退出时插件 dispose 会 stop body；异常退出由 stdin EOF 兜底。
+3. body active → bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、skill/persona/memory/auto-wake。
+4. 进入 tick 循环（50ms）。
+5. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出；超时先 SIGTERM，再 killTree。bridge 停止 auto-wake 并 dispose owner 注册。
+6. body 重启：epoch 变化；P2Mind 从意图日志 + 世界重建，**不重放 pending 动作**；auto-restart 复用上次 target，bridge 重新读取 auto-wake 配置并恢复 owner 注册。
+7. 同一 MC target 只允许一个 body：跨进程锁记录 owner/target/heartbeat；stale 锁自动清理，孤儿 body 先要求退出。DSH 退出时插件 dispose 会 stop body；异常退出由 stdin EOF 兜底。
 
 ### 1.1 provider 断开
 
@@ -134,7 +135,7 @@
 
 | 接口 | 内容 |
 |---|---|
-| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / `duty` / `baseActivity` / `activity` / 最近偏差摘要 |
+| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / `duty` / `baseActivity` / `activity` / `identity`（若 provider 提供）/ 最近偏差摘要 |
 | `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤；附当前 `biome` |
 | `p2_observe {mode:"find",near?,radius?,only,limit?}` | 只读最近方块：只查已加载匹配，按欧氏距离排序返回 `{cell,name,distance}`；`radius` 1–32（默认 16）、`limit` 1–10（默认 5）、`only` 1–32 必填；`total` 为匹配数（上限 256，超出时 `truncated:true`）；不判断可达、不移动、不选目标；先 find 再 go/craft |
 | `p2_entities {center?,radius?,types?,names?,limit?}` | 不移动的实体/掉落物观测：半径 ≤160、limit ≤512、按距离排序；掉落物带 `item.name/count`；只受服务器跟踪范围限制 |
@@ -142,10 +143,10 @@
 | `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
 | `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
 | `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `wandering`，半径 1–8；`idle` 静止；`escort` 按目标名跟随、不 teleport；不持久化，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}` |
-| `p2_policy {action:"set"\|"reset"\|"status",reaction?}` | body 级反应策略；`set` 全量替换；无 `fight` = 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；玩家/被动/中立永不自动攻击；不持久化；显式 attack 不受它限制 |
+| `p2_policy {action:"set"\|"reset"\|"status",reaction?}` | body 级反应策略；`set` 全量替换；无 `fight` = 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立；不持久化；显式 attack 不受它限制 |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | 详细事件审计（order/job/plan/tracker/move）；仅供排查，不是主轮询手段 |
-| 唤醒 | order 终态、plan.blocked、job.terminal failed/blocked、tracker fault、感知 critical、对话 |
+| 唤醒 | order 终态、plan.blocked、job.terminal failed/blocked、tracker fault、感知 critical、对话、auto-wake |
 
 `surface` 每列同时给出最高非空气块（`y/name`）与最高实心块（`solidY/solidName`）：草、花等不计入实心面；适配器无法判断时 `solid` 省略，按非空气处理。
 
@@ -250,8 +251,9 @@ order 可带 `policy.conflict`：
   - 单条等待 1s 防抖后推送；
   - 连续聊天最多 3s 强制合并推送一次，避免高频聊天反复打断 Agent。
 - 合并后通过 DSH `Agent.followup/steer` 作为一条 user 消息推送：
-  `[p2 chat] ... 请用 p2_say 回复；需要改变目标时用 p2_order / p2_cancel。`
-- Agent 用 `p2_say` 回复；body 不解析语言、不自动创建 order。
+  `[p2 chat] ... 用 p2_say 回复；短句、保持人格；只提真正记录过的事，不确定就说不知道。需要改变目标时用 p2_order / p2_cancel。`
+- Agent 用 `p2_say` 回复；body 不解析语言、不自动创建 order。bridge **不做自动 ack**；Agent running 时 chat 进入 normal 队列，等 idle 后回复，不 `steer`。
+- 只有 critical completion/perception 会 `steer`；game chat 始终是不可信输入，不按聊天关键词解析“停/危险”。
 - bot 自己的聊天回显在 provider 层忽略，避免自回环。
 - 只有 active body 的 owner 会收到 wake；重启后 cursor 归零。
 
@@ -266,7 +268,7 @@ order 可带 `policy.conflict`：
 ### 10.8 idle 边界与执行原语（M4-03 重构）
 
 - 默认无 order：**base activity**，默认 `wandering`，只在 anchor 半径 8 内做局部移动；不采集、不建造、不战斗、不生成新任务。
-- 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；玩家/被动/中立永不自动攻击；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
+- 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；自动 fight 默认不选玩家/被动/中立；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
 - 显式 `attack` order 是 Agent 的目标选择：P2 不做玩家/被动/中立保护拦截；期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
 - base 不持久化：body 重启后回到 `wandering`；Agent 可用 `p2_base_activity` 改为 `idle`/`escort`/调整 `wandering.radius`。
 - 需要完全停住时用 `p2_order {verb:"hold"}`；hold 是占住 active 位的 barrier，不是队列清空。
@@ -303,7 +305,7 @@ order 可带 `policy.conflict`：
   - `followup` → `next-turn`，当前轮结束后开新轮；
   - `steer` → `next-step`，下一步插话，影响当前轮；
   - `inject` → `next-step`，不唤醒；本轮继续时才被看到。
-- 策略：普通 digest/chat 在 Agent running 时由 P2 本地挂起，等 idle 后只 `followup` 一次；
+- 策略：普通 digest/chat 在 Agent running 时由 bridge 本地挂起，等 idle 后只 `followup` 一次；
   只有本地无法处理/需要改变目标的 critical 才 `steer`。
 - 世界全量变化仍只在观测层/Verifier；不进入感知通知。
 
@@ -330,3 +332,11 @@ order 可带 `policy.conflict`：
 - `p2_order` 只等 accepted；`p2_events` 保留为详细审计，不是主轮询手段。
 - body 重启产生新 epoch 与空事件环，从 seq 1 开始；bridge 按 epoch 重置 cursor，
   不会把旧 epoch 的终态当成新结果重复推送。
+
+### 10.11 Owner session、persona、memory 与 auto-wake（bridge）
+
+- body start 时 bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、五个 `p2-*` skill、`.p2/skills` provider、persona section、memory context 和 auto-wake；stop 时 dispose，fault 只停 auto-wake。
+- `.p2/` 由 `p2 start`/`p2_body start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有编辑；`.p2` 整体不入库。
+- persona 是 `.p2/persona.md` 的 mtime 缓存 section（≤4KB，`interpolate:false`，order 100）；memory 是 `.p2/memory/<world>/<character>.jsonl`，按 `mind.status.identity` 分 scope，summary 只注入 pinned + 最近 fact/state（2KB/20 条）。
+- auto-wake 只看 owner agent 的 idle 静默，不检查“是否正在跑 order”作为触发条件；默认 `skipActiveWork:false`，active order/plan/duty/armed goal 不会阻止唤醒。设为 `true` 才在调度层跳过这些 active work。
+- auto-wake 的 wake 与进入门控后的 skip 写 `.p2/wake.jsonl`；silence pending/agent-running 的轮询不写。wake 只是注入一个 turn，不生成 order/duty，也不限制 Agent 的目标选择。

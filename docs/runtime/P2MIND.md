@@ -5,7 +5,7 @@
 > 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
 > 默认活动是 base activity：`idle / wandering / escort`，默认 `wandering`，只做 anchor 半径内的局部移动；不持久化，重启回 wandering。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
-> 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 永不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
+> 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
 
 ## 1. 目标
 
@@ -19,7 +19,7 @@
 | 可验收 | 每个 order 有独立可复核的终态证据；证据不足不算成功 |
 | 可扩展 | 新结构 = 新计划模板；新策略 = 代码树节点；新原语才写 driver/giver |
 | 可对话 | 能接收游戏内对话并作出符合身份的回应，且不阻塞身体执行 |
-| 解耦接入 | 同一套 AI 可跑在 mineflayer（现在）与自研客户端 mod（将来）上 |
+| 解耦接入 | 同一套 AI 通过 `ClientPort` 接入；当前只维护 mineflayer，mod 适配器不在计划内 |
 
 ### 1.1 三条不变量
 
@@ -336,9 +336,10 @@ chat → 归一化 → 意图路由：
 
 ```
 ClientPort（纯数据，版本化，能力协商）
-  ├─ MineflayerAdapter（进程内，现在）
-  └─ ModAdapter（WebSocket，将来）
+  └─ MineflayerAdapter（进程内，当前唯一适配器）
 ```
+
+自研 mod 适配器不在当前计划内；保留 `ClientPort` 边界以便未来需要时重新评估。
 
 - 四类：`query / act / event / capabilities`；不传库对象（`Vec3/Block/Recipe/Goal`）。
 - 能力是行为契约（`navigate / interact / observe.screen`），不是实现名（不绑定具体导航库）。

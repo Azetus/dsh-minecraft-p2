@@ -1,6 +1,6 @@
 # M5 安全环境长跑（材料 / 建造 / 合成 / 熔炼）
 
-> 状态（Phase E）：CP1–CP5 为**低优先**，当前不作为验收门槛；26.1 实机本轮不跑，历史 1.21.1/26.1 证据只作记录。`p2 doctor` / source-bundle digest 已砍掉，由 `verify-dist` + manifest 覆盖。
+> 状态：CP1–CP5 **不作为当前计划**；本文件仅保留安全长跑场景参考，不作为验收门槛。26.1 实机不再复跑，历史 1.21.1/26.1 证据只作记录。`p2 doctor` / source-bundle digest 已砍掉，由 `verify-dist` + manifest 覆盖。
 
 目标：在**无敌对**环境验证 Agent 自主组合有限原语，而不是执行一套固定脚本。
 
