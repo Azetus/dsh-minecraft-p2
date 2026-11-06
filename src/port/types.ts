@@ -28,6 +28,10 @@ export type BlockInfo = {
   material?: string
   diggable?: boolean
   hardness?: number
+  /** Block light 0–15 when the adapter can read it; undefined is unknown. */
+  light?: number
+  /** Sky light 0–15 when the adapter can read it; undefined is unknown. */
+  skyLight?: number
   /** Item names that can harvest this block; [] means hand is sufficient. */
   harvestTools?: string[]
 }
@@ -56,6 +60,8 @@ export type EntityInfo = {
   type?: string
   /** Human-readable category, when the adapter has one. */
   kind?: string
+  /** Entity health when the adapter exposes it (not guaranteed for all mobs). */
+  health?: number
   username?: string
   /** Dropped item stack, resolved by the adapter when it can. */
   item?: { name: string; count: number }

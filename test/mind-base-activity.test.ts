@@ -70,15 +70,15 @@ function player(x: number, z: number, username = 'Alice'): EntityInfo {
 const ctx: EvalCtx = { now: 1_000 }
 
 describe('base activity controller', () => {
-  it('starts in wandering with a fixed default radius and no persistence', () => {
+  it('starts idle with no persistence', () => {
     const controller = new BaseActivityController()
     expect(controller.view()).toEqual({
-      kind: 'wandering',
+      kind: 'idle',
       state: 'inactive',
-      params: { radius: 8 },
+      params: {},
       waitingReason: null,
     })
-    expect(new BaseActivityController().view().kind).toBe('wandering')
+    expect(new BaseActivityController().view().kind).toBe('idle')
   })
 
   it('records the anchor on takeover and on an Agent switch while active', () => {
@@ -129,6 +129,7 @@ describe('base.work giver', () => {
   it('wanders inside the anchor radius and not around home', () => {
     const controller = new BaseActivityController()
     controller.activate(0, { x: 0, y: 64, z: 0 })
+    controller.set({ kind: 'wandering' }, 0, { x: 0, y: 64, z: 0 })
     const candidate = asCandidate(createBaseActivityGiver(controller).find({ now: 1_000 }, flatWorld()))
     expect(candidate.driverId).toBe('move')
     expect(candidate.keys.startsWith('base:wander:')).toBe(true)

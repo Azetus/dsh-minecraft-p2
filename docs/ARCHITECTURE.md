@@ -57,7 +57,7 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 
 ### 2.2 Owner session 与 `.p2` 工作区
 
-- body start 时 bridge 在 owner agent scope 注册：五个包内 skill、`.p2/skills` workspace provider、persona section、memory context、P2 工具 + `p2_memory`、auto-wake。stop 时全部 dispose；fault 只停 auto-wake，保留只读工具供检查。
+- body start 时 bridge 在 owner agent scope 注册：六个包内 skill（operator/persona/memory/wake/subagent/survival）、`.p2/skills` workspace provider、persona section、memory context、P2 工具 + `p2_memory`、auto-wake。stop 时全部 dispose；fault 只停 auto-wake，保留只读工具供检查。
 - 工具和 skill 注册在 owner agent scope，子 agent/其他 session 看不到；`p2_body` 仍是全局开发工具并做 owner 检查。
 - `.p2/` 是本机内部内容，由 `p2 start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有用户编辑。persona、config、memory、workspace skills 都在这里；`.p2` 不入库。
 - auto-wake 是 bridge 的调度能力，不进入 P2Mind：它只在 owner session 静默后注入一个 turn，不生成 order/duty，也不限制 Agent 的目标选择。默认 `skipActiveWork:false`；设为 `true` 才按 active order/plan/duty/armed goal 跳过唤醒，这是调度偏好，不是授权门。
@@ -85,7 +85,7 @@ src/
   mind/verify/     验证器
   mind/journal/    意图日志与恢复
   contracts/       协议、framing、通用类型
-skills/            owner-session 运行提示（p2-operator/persona/memory/wake/subagent）
+skills/            owner-session 运行提示（p2-operator/persona/memory/wake/subagent/survival）
 content/
   plans/           结构模板 JSON
   templates/       .p2 工作区模板（persona/config/skills/memory 说明）

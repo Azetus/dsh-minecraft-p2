@@ -12,7 +12,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - 一次只推进一条 active order；后续 order 排队。
 - `p2_order` 返回 accepted 后结束本轮，不要 `Start-Sleep`、不要轮询 `p2_events`。
 - 终态、blocked、失败会以 `[p2 completion]` wake 推回来；正常执行期间不要介入。
-- 唤醒后先读 wake 的 `code` / `failure` / `observed`；`failure.facts.snapshot` 已经带同一时刻的脚/头/支撑/四邻/bodyOverlap，`failure.diagnosis` 是闭合分类。事实够就直接行动，不要再补一次 `p2_observe`。
+- 唤醒后先读 wake 的 `code` / `failure` / `observed`；`failure.facts.snapshot` 已经带同一时刻的脚/头/支撑/四邻/bodyOverlap，`failure.diagnosis` 是闭合分类。事实够就直接行动。
 - `diagnosis` 只是分类，不是命令；`recovery` 是契约级下一步（retry/replan/reobserve/wait/restart/none），不是坐标或动作参数。
 - 怀疑卡死时，间隔 ≥60s 看一次 `p2_status`，不要连续看。
 
@@ -30,11 +30,12 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - `dig` 默认 `purpose:"harvest"`；只想清掉方块时显式 `purpose:"clear"`。
 - 体积挖掘用 `dig {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?}`；`maxBlocks` 默认 24、硬上限 64。
 - 连续水平通道用 `dig {shape:"tunnel",to:{x,y,z},height? 默认2,maxBlocks? 默认24,preserveFloor?}`：起点是当前脚格，只允许一个水平轴向、至多一次 y±1 台阶，不做竖井。一次 order 清脚/头并前进，返回 `path`/`returnable`；遇到水/岩浆、未加载或不可破坏会 `DIG_PARTIAL` + `stoppedAt` + `reason`，不要继续猜。
-- 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty，返回 `previousDuty/started`。duty 持久化，blocked/failed 后 base 保持 inactive；duty 不会自动复活。
-- 默认活动用 `p2_base_activity`：默认 wandering（anchor 半径 8）；`idle` 静止；`escort` 按玩家/实体名跟随，跟丢只报 `TARGET_LOST`，不传送。base **不持久化**，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}`，不要反复 set idle。
+- 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty，返回 `previousDuty/started`。duty 持久化；blocked/failed 后 base inactive。
+- 默认活动用 `p2_base_activity`：默认 `idle`；`wandering` 需显式设置（anchor 半径 8）；`escort` 跟随玩家/实体，跟丢报 `TARGET_LOST`，不传送。base **不持久化**，重启回 `idle`；完全停住用 `hold`。
 - 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立。**这是 P2 的自动选择默认值，不是对你的限制。**
-- 显式 `attack` order 由你决定目标，P2 不做玩家/被动/中立保护拦截，包括玩家角色；显式 attack 期间自动 fight 关闭，只保留致命环境反射。
+- 显式 `attack` order 由你决定目标，P2 不做玩家/被动/中立保护拦截，包括玩家角色；显式 attack 期间自动 fight 关闭，只保留致命环境反射。可选 `maxChases`（默认12）；失败带 `chases/targetHealth`（有则带）。
 - `dig`/`clear`/`attack` 会自动选工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换。
+- 挖矿/照明/战斗拾取：加载 `p2-survival`，按隔墙挖、火把和掉落确认规则执行。
 - 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
 
 ## 3. hold 与队列
@@ -101,5 +102,5 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 
 - `ACT_UNCONFIRMED`：先读回；如果方块/背包/位置已经变化，按新事实继续，不要重放。
 - `STOP_UNCONFIRMED`：停止未确认，继续下 order 可能叠加副作用；重启 body 是恢复手段，但会丢队列。
-- body 重启 = 新 epoch、事件环清空、队列不恢复；base activity 也回默认 wandering，duty 只有未过期且 identity 匹配的 active 状态会恢复。旧 queued order 与 active hold 会以 `abandoned`（`reason:"RESTART"`）结束，不会自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
+- body 重启 = 新 epoch、事件环清空、队列不恢复；base activity 也回默认 `idle`，duty 只有未过期且 identity 匹配的 active 状态会恢复。旧队列/active hold 以 `abandoned`（`reason:"RESTART"`）结束，不自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
 - provider 卡死时，`p2_body restart` 通常比连续重试更安全；可带 `host`/`port` 换服，省略则复用上次 target；代价是丢队列和未确认动作。provider 断开原因看 `lastDisconnect`；`kick` 不要立即 restart。

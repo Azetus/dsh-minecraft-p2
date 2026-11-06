@@ -23,14 +23,16 @@ const MAX_TARGET_NAME = 64
 /**
  * The permanent default behaviour of the body. It is deliberately in-memory:
  * a body restart recreates the controller and therefore starts in the default
- * `wandering` state instead of restoring an Agent choice.
+ * `idle` state instead of restoring an Agent choice. The Agent must explicitly
+ * select `wandering` or `escort`; a fresh/restarted body never walks away from
+ * its spawn or last position on its own.
  *
  * The controller only holds intent and anchor state. Target selection belongs
  * to the `base.work` giver; this class never reads the world.
  */
 export class BaseActivityController {
-  private kind: BaseActivityKind = 'wandering'
-  private params: BaseActivityView['params'] = { radius: DEFAULT_WANDER_RADIUS }
+  private kind: BaseActivityKind = 'idle'
+  private params: BaseActivityView['params'] = {}
   private state: BaseActivityView['state'] = 'inactive'
   private waiting: BaseWaitingReason | null = null
   private anchorCell: BaseCell | undefined

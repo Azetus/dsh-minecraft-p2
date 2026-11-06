@@ -38,6 +38,8 @@ const self: SelfInfo = {
 type RawBlock = {
   name: string
   loaded: boolean
+  light?: number
+  skyLight?: number
   pos: { x: number; y: number; z: number }
 }
 
@@ -60,6 +62,8 @@ function fakePort(blocks: RawBlock[] = []): FakeFindPort {
       return blocks.map(block => ({
         name: block.name,
         loaded: block.loaded,
+        ...(block.light === undefined ? {} : { light: block.light }),
+        ...(block.skyLight === undefined ? {} : { skyLight: block.skyLight }),
         pos: block.pos,
       }))
     },
@@ -121,6 +125,22 @@ describe('world.observe find', () => {
       count: 257,
     }])
     expect(fake.writes).toBe(0)
+  })
+
+  it('returns raw light for find matches when the adapter provides it', async () => {
+    const fake = fakePort([
+      { name: 'torch', loaded: true, pos: { x: 1, y: 64, z: 0 }, light: 14, skyLight: 0 },
+    ])
+    const response = await runtimeWith(fake.port).handleRequestAsync(request({
+      mode: 'find',
+      near: { x: 0, y: 64, z: 0 },
+      radius: 8,
+      only: ['torch'],
+    }))
+    const result = response.result as unknown as WorldObserveResult
+    expect(result.blocks).toMatchObject([
+      { cell: { x: 1, y: 64, z: 0 }, name: 'torch', light: 14, skyLight: 0 },
+    ])
   })
 
   it('sorts by distance and applies limit after total', async () => {

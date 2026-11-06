@@ -15,6 +15,7 @@ export type CombatEntity = {
   position: Vec3
   type?: string
   kind?: string
+  health?: number
 }
 
 /**
@@ -64,11 +65,12 @@ export type MeleeResult = {
     chases: number
     cooldownMs: number
     lostReason?: string
+    targetHealth?: number
   }
 }
 
 const DEFAULT_REACH = 3
-const DEFAULT_MAX_CHASES = 8
+const DEFAULT_MAX_CHASES = 12
 const DEFAULT_MAX_ATTACKS = 24
 const DEFAULT_TOTAL_MS = 40_000
 const DEFAULT_CHASE_MS = 5_000
@@ -111,6 +113,7 @@ export async function runMeleeCombat(
         evidence.lost()
         return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, 'left-query-range')
       }
+      if (typeof target.health === 'number') evidence.targetHealth = target.health
       const guard = guardTarget(target, options)
       if (guard !== undefined) return fail(guard, evidence, targetId, options, chases, cooldown, 'protected')
       const distance = distanceTo(port.self().pos, target.position)
@@ -218,6 +221,7 @@ function snapshot(
     ...(options.targetName === undefined ? {} : { targetName: options.targetName }),
     attacks: evidence.attacksIssued,
     ...evidence.snapshot(),
+    ...(evidence.targetHealth === undefined ? {} : { targetHealth: evidence.targetHealth }),
     chases,
     cooldownMs: cooldown,
   }

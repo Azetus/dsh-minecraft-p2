@@ -18,6 +18,7 @@ export const P2_SKILL_NAMES: ReadonlySet<string> = new Set([
   'p2-memory',
   'p2-wake',
   'p2-subagent',
+  'p2-survival',
 ])
 
 const PACKAGED: Array<{ name: string; description: string }> = [
@@ -37,6 +38,10 @@ const PACKAGED: Array<{ name: string; description: string }> = [
   {
     name: 'p2-subagent',
     description: 'Use when delegating research, summaries, or reviews to a subagent; the child has no P2 tools and cannot control the body, and the main session owns every decision.',
+  },
+  {
+    name: 'p2-survival',
+    description: 'Use when mining, lighting tunnels or shelters, or collecting combat drops: avoid through-wall digs, light spawnable spaces, and confirm drops before leaving.',
   },
 ]
 

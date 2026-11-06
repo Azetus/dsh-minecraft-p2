@@ -97,6 +97,24 @@ function job(params: Record<string, unknown>): Job {
 }
 
 describe('combat ROE', () => {
+  it('honors an explicit maxChases and reports target health', async () => {
+    const { port } = combatPort({
+      target: () => entity({ id: 'z1', name: 'zombie', position: { x: 6, y: 64, z: 0 }, health: 1 }),
+      moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
+      attack: async () => ({ state: 'ok', elapsedMs: 1 }),
+    })
+    const handle = createAttackDriver().start(
+      job({ entityId: 'z1', targetName: 'zombie', maxChases: 2 }),
+      { port, now: () => 1 },
+    )
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({
+      state: 'failed',
+      code: 'ATTACK_CHASE_LIMIT',
+      observed: { chases: 2, targetHealth: 1 },
+    })
+  })
+
   it('attacks only the explicit attack-order entity', () => {
     const giver = createAttackOrderGiver(() => ({
       order: { id: 'ord-a', verb: 'attack', params: { entityId: 'e1' } },
@@ -331,6 +349,10 @@ describe('combat evidence', () => {
     })
     const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
     await waitFor(handle)
-    expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT' })
+    expect(handle.result()).toMatchObject({
+      state: 'failed',
+      code: 'ATTACK_CHASE_LIMIT',
+      observed: { chases: 12 },
+    })
   })
 })

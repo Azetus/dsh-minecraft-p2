@@ -25,6 +25,8 @@ const ATTACK_SCHEMA: SchemaNode = {
     allowAny: { type: 'boolean' },
     /** Bounded entity lookup box for a far explicit target; default 32. */
     locateRadius: { type: 'number', minimum: 8, maximum: 64 },
+    /** Optional per-order chase cap; default 12. */
+    maxChases: { type: 'integer', minimum: 1, maximum: 64 },
     /** Internal candidate keys, so a hot constant tree can renew instead of preempt. */
     continuationKey: { type: 'string' },
     /** Deprecated compatibility flag; explicit orders now use allowAny. */
@@ -40,6 +42,7 @@ type AttackParams = {
   orderId?: string
   allowAny?: boolean
   locateRadius?: number
+  maxChases?: number
   continuationKey?: string
   allowPassive?: boolean
 }
@@ -93,6 +96,7 @@ async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
     ...(params.allowAny === true ? { allowAny: true } : {}),
     ...(params.allowPassive === true ? { allowPassive: true } : {}),
+    ...(params.maxChases === undefined ? {} : { maxChases: params.maxChases }),
   })
   return {
     state: result.state,
@@ -151,6 +155,7 @@ function locate(port: ClientPort, entityId: string, locateRadius: number): Comba
     position: entity.position,
     ...(entity.type === undefined ? {} : { type: entity.type }),
     ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+    ...(entity.health === undefined ? {} : { health: entity.health }),
   }
 }
 

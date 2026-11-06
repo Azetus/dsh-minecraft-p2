@@ -50,6 +50,7 @@ function fakePort(
     emptyBlocks?: boolean
     autoMove?: boolean
     blocks?: Map<string, { name: string; loaded: boolean; pos: { x: number; y: number; z: number } }>
+    time?: { timeOfDay: number; worldAge: number }
   } = {},
 ): FakePort {
   const moves: Array<{ x: number; y: number; z: number }> = []
@@ -72,7 +73,7 @@ function fakePort(
   const port = {
     on: () => {},
     self: () => self,
-    time: () => ({ timeOfDay: 1000, worldAge: 100 }),
+    time: () => options.time ?? { timeOfDay: 1000, worldAge: 100 },
     blocksIn,
     blockAt: (p: { x: number; y: number; z: number }) => blocks.get(key(p)) ?? null,
     entities: () => [],
@@ -127,7 +128,23 @@ describe('mind integration', () => {
     })
   })
 
-  it('starts in wandering and reports the base layer', () => {    const { port } = fakePort([], { emptyBlocks: true })
+  it('reports the world clock including night', () => {
+    const { port } = fakePort([], { time: { timeOfDay: 14_000, worldAge: 2 * 24_000 + 14_000 } })
+    const mind = createMind({
+      port,
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+    expect(mind.status().worldTime).toEqual({
+      day: 2,
+      timeOfDay: 14_000,
+      isNight: true,
+      ticksToSunset: 0,
+    })
+  })
+
+  it('starts idle and reports the base layer', () => {    const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
       port,
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -136,14 +153,20 @@ describe('mind integration', () => {
     })
     mind.tick()
     expect(mind.status().baseActivity).toMatchObject({
-      kind: 'wandering',
+      kind: 'idle',
       state: 'active',
-      params: { radius: 8 },
+      params: {},
     })
     expect(mind.status().activity).toMatchObject({
       layer: 'base',
-      kind: 'wandering',
+      kind: 'idle',
       state: 'active',
+    })
+    expect(mind.status().worldTime).toEqual({
+      day: 0,
+      timeOfDay: 1000,
+      isNight: false,
+      ticksToSunset: 12000,
     })
   })
 
@@ -166,10 +189,10 @@ describe('mind integration', () => {
     mind.cancelAll()
     mind.tick()
     expect(mind.status().baseActivity?.state).toBe('active')
-    expect(mind.status().activity).toMatchObject({ layer: 'base', kind: 'wandering' })
+    expect(mind.status().activity).toMatchObject({ layer: 'base', kind: 'idle' })
   })
 
-  it('resets base activity to wandering after a body restart', () => {
+  it('resets base activity to idle after a body restart', () => {
     const journalPath = join(tempDir(), 'journal.jsonl')
     const first = createMind({
       port: fakePort([], { emptyBlocks: true }).port,
@@ -188,7 +211,7 @@ describe('mind integration', () => {
       now: () => 2_000,
     })
     second.tick()
-    expect(second.status().baseActivity).toMatchObject({ kind: 'wandering', state: 'active' })
+    expect(second.status().baseActivity).toMatchObject({ kind: 'idle', state: 'active' })
   })
 
   it('replaces an active duty with a terminal event and starts the new one', () => {

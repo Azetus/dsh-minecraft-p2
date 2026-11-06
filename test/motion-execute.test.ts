@@ -136,6 +136,25 @@ describe('move state machines', () => {
     expect(move.update(state, source.next())).toBe('success')
   })
 
+  it('closes a door after crossing it', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,1', rawBlock('oak_door', [], { half: 'lower', open: 'true' }))
+    world.blocks.set('0,65,1', rawBlock('oak_door', [], { half: 'upper', open: 'true' }))
+    const source = contextFor(world)
+    const moves = [
+      new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 }),
+      new TraverseMove({ x: 0, y: 64, z: 1 }, { x: 0, y: 64, z: 2 }),
+    ]
+    const executor = new PathExecutor(moves, () => source.next())
+    movePos(world, { x: 0, y: 64, z: 0 })
+    executor.tick(0)
+    movePos(world, { x: 0, y: 64, z: 1 })
+    executor.tick(100)
+    movePos(world, { x: 0, y: 64, z: 2 })
+    expect(executor.tick(200).state).toBe('succeeded')
+    expect(world.actions).toContain('use:0,64,1')
+  })
+
   it('approaches and jumps for a one-block step', () => {
     const world = flatWorld()
     world.blocks.set('0,64,2', rawBlock('stone', FULL_CUBE))
@@ -153,6 +172,39 @@ describe('move state machines', () => {
     expect(world.inputs.get('jump')).toBe(true)
     movePos(world, { x: 0, y: 65, z: 2 })
     expect(move.update(state, source.next())).toBe('success')
+  })
+
+  it('jumps before the step face while holding forward', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,1', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,65,1', rawBlock('air', []))
+    const source = contextFor(world)
+    // One block from the destination centre: jump now, not after touching the face.
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.5 } }
+    const move = new AscendMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 1 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    move.update(state, source.next())
+    move.update(state, source.next())
+    expect(world.inputs.get('jump')).toBe(true)
+    expect(world.inputs.get('forward')).toBe(true)
+    expect(world.inputs.get('back')).not.toBe(true)
+  })
+
+  it('waits to land before jumping for a step', () => {
+    const world = flatWorld()
+    world.blocks.set('0,64,1', rawBlock('stone', FULL_CUBE))
+    world.blocks.set('0,65,1', rawBlock('air', []))
+    const source = contextFor(world)
+    world.selfView = { ...world.selfView, pos: { x: 0.5, y: 64, z: 0.7 }, onGround: false }
+    const move = new AscendMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 65, z: 1 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    move.update(state, source.next())
+    expect(world.inputs.get('jump')).not.toBe(true)
+
+    world.selfView = { ...world.selfView, onGround: true }
+    move.update(state, source.next())
+    move.update(state, source.next())
+    expect(world.inputs.get('jump')).toBe(true)
   })
 
   it('prices a two-block fall and rejects it when maxFall is lower', () => {

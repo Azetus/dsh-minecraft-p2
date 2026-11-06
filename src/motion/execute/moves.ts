@@ -16,10 +16,17 @@ import { COST_INF } from '../model/types.ts'
  * Vanilla jump kinematics: v0 = 0.42, gravity 0.08, drag 0.98 per tick, which
  * peaks at 1.2522 blocks. A rise at or below `JUMP_PEAK - JUMP_MARGIN` is
  * reliably landable; the margin absorbs tick quantisation and the fact that the
- * executor launches from up to 0.9 blocks away instead of standing still.
+ * executor launches from up to `ASCEND_JUMP_DISTANCE` blocks away instead of
+ * standing still.
  */
 export const JUMP_PEAK = 1.2522
 export const JUMP_MARGIN = 0.15
+/**
+ * Start the jump early enough that holding forward through the jump still
+ * produces horizontal momentum before the step face. Jumping at the face is
+ * too late; the body must already be moving toward the step.
+ */
+const ASCEND_JUMP_DISTANCE = 1.1
 /** The body must clear the placement cell's top by this much before placing. */
 export const PLACE_CLEARANCE = 1.01
 
@@ -406,6 +413,7 @@ export class AscendMove extends BaseMove {
   private phase: 'approach' | 'jump' = 'approach'
   private jumpTicks = 0
   private retries = 0
+  private started = false
 
   constructor(readonly src: Cell, readonly dest: Cell) {
     super()
@@ -452,6 +460,7 @@ export class AscendMove extends BaseMove {
     this.phase = 'approach'
     this.jumpTicks = 0
     this.retries = 0
+    this.started = false
   }
 
   safeToCancel(_state: MoveState): boolean {
@@ -472,8 +481,16 @@ export class AscendMove extends BaseMove {
     const distance = distance2d(ctx.position, this.dest)
     if (this.phase === 'approach') {
       aim(ctx, this.dest)
+      if (!this.started) {
+        // The previous edge can leave the body airborne at the step face.
+        // Landing first is mandatory: a jump started in the air has no support.
+        if (!ctx.self.onGround && !wetSource) return 'running'
+        this.started = true
+      }
       holdForward(ctx)
-      if (distance <= 0.9 && (ctx.self.onGround || wetSource)) {
+      // Launch while still approaching, so `forward` produces momentum in the
+      // air before the body reaches the step face. Jumping at the face is late.
+      if (distance <= ASCEND_JUMP_DISTANCE && (ctx.self.onGround || wetSource)) {
         this.phase = 'jump'
         this.jumpTicks = 0
       }

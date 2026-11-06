@@ -53,6 +53,20 @@ describe('order store', () => {
     expect(store.all().map(record => record.order.id)).toEqual(['ord-1', 'ord-2'])
   })
 
+  it('validates attack maxChases without rejecting the normal target params', () => {
+    const store = new OrderStore()
+    expect(() => store.enqueue({
+      id: 'ord-attack',
+      verb: 'attack',
+      params: { entityId: 'e1', maxChases: 12 },
+    })).not.toThrow()
+    expect(errorCode(() => store.enqueue({
+      id: 'ord-attack-bad',
+      verb: 'attack',
+      params: { entityId: 'e2', maxChases: 0 },
+    }))).toBe('INVALID_ORDER')
+  })
+
   it('rejects an unknown verb and a duplicate id', () => {
     const store = new OrderStore()
     expect(errorCode(() => store.enqueue(order('bad', 'fly')))).toBe('INVALID_ORDER')

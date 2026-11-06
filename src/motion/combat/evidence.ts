@@ -6,6 +6,7 @@ export class CombatEvidence {
   targetLost = false
   lastHurtAt: number | undefined
   lastDeathAt: number | undefined
+  targetHealth: number | undefined
 
   hurt(entityId: string, targetId: string, now: number): void {
     if (entityId !== targetId) return

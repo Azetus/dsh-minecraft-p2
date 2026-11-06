@@ -1,4 +1,4 @@
-import { sameCell } from '../model/block.ts'
+import { cellOf, sameCell } from '../model/block.ts'
 import {
   COST_INF,
   initialMoveState,
@@ -74,6 +74,8 @@ export class PathExecutor {
   private readonly breakTimeoutMs: number
   private breaking: { cells: Cell[]; startedAt: number; lastDigAt: number } | undefined
   private surfacing: { since: number } | undefined
+  /** A door the body opened/used and should close after leaving its cell. */
+  private doorToClose: Cell | undefined
 
   constructor(
     private readonly moves: readonly Move[],
@@ -104,6 +106,7 @@ export class PathExecutor {
       return this.result
     }
     const ctx = this.context()
+    this.closeDoorBehind(ctx)
     if (this.moves.length === 0) {
       this.finish('succeeded')
       return this.result
@@ -222,6 +225,12 @@ export class PathExecutor {
   private advance(ctx: MoveContext, now: number): void {
     const state = this.states[this.index]!
     state.status = 'success'
+    const completed = this.moves[this.index]!
+    if (completed.kind === 'traverse' && this.doorToClose === undefined
+      && ctx.rules.doorState(completed.dest) === 'open') {
+      this.doorToClose = completed.dest
+    }
+    this.closeDoorBehind(ctx)
     this.breaking = undefined
     this.index += 1
     if (this.index >= this.moves.length) {
@@ -237,8 +246,18 @@ export class PathExecutor {
     this.offPathTicks = 0
   }
 
-  private isValid(move: Move, cell: Vec3, ctx: MoveContext): boolean {
-    for (const valid of move.validPositions()) {
+  /**
+   * Close a door once the body has left its cell. Closing while still inside
+   * would trap the body; leaving it open behind is the bug this fixes.
+   */
+  private closeDoorBehind(ctx: MoveContext): void {
+    if (this.doorToClose === undefined) return
+    if (sameCell(cellOf(ctx.position), this.doorToClose)) return
+    ctx.world.useOn(this.doorToClose)
+    this.doorToClose = undefined
+  }
+
+  private isValid(move: Move, cell: Vec3, ctx: MoveContext): boolean {    for (const valid of move.validPositions()) {
       if (sameCell(valid, cell)) return true
       if (reached(ctx.position, valid, ctx, 0.35)) return true
     }

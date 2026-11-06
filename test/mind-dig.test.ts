@@ -433,10 +433,44 @@ describe('dig volume', () => {
 
   it('rejects a volume above maxBlocks without digging', async () => {
     const fake = portWith()
+    for (let x = 0; x <= 5; x += 1) {
+      for (let y = 60; y <= 64; y += 1) {
+        for (let z = 0; z <= 5; z += 1) fake.blocks.set(`${x},${y},${z}`, stone())
+      }
+    }
     const result = await runJob(fake.port, {
       shape: 'box', from: { x: 0, y: 60, z: 0 }, to: { x: 5, y: 64, z: 5 },
     })
     expect(result).toMatchObject({ state: 'failed', code: 'DIG_VOLUME_TOO_LARGE' })
     expect(fake.digs()).toBe(0)
+  })
+
+  it('applies maxBlocks after the only filter, not to the raw volume', async () => {
+    const fake = portWith()
+    const target = { x: 1, y: 64, z: 1 }
+    fake.blocks.set(key(target), stone({ name: 'oak_log', material: 'mineable/axe' }))
+    for (const cell of [
+      { x: 1, y: 64, z: 0 }, { x: 1, y: 65, z: 0 },
+      { x: 1, y: 64, z: 2 }, { x: 1, y: 65, z: 2 },
+      { x: 2, y: 64, z: 1 }, { x: 2, y: 65, z: 1 },
+      { x: 0, y: 64, z: 1 }, { x: 0, y: 65, z: 1 },
+    ]) fake.blocks.set(key(cell), stone({ name: 'air' }))
+    for (const cell of [
+      { x: 1, y: 63, z: 0 }, { x: 1, y: 63, z: 1 }, { x: 1, y: 63, z: 2 },
+      { x: 2, y: 63, z: 1 }, { x: 0, y: 63, z: 1 },
+    ]) fake.blocks.set(key(cell), stone())
+    const result = await runJob(fake.port, {
+      shape: 'box',
+      from: { x: 0, y: 60, z: 0 },
+      to: { x: 5, y: 64, z: 5 },
+      only: ['oak_log'],
+      purpose: 'clear',
+    })
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'DIG_PARTIAL',
+      observed: { kind: 'dig.volume', planned: 180, matching: 1, dug: 1 },
+    })
+    expect(fake.digs()).toBe(1)
   })
 })

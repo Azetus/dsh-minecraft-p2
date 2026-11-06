@@ -38,7 +38,7 @@
 
 常驻树顺序：`threat.fight → escape → self.eat → self.unstuck`。自动 fight 只在 `p2_policy.fight` 存在时启用；显式 `attack` order 期间它关闭，`escape` 也只保留致命环境反射。`p2_policy` 是 body 级、process-local、不持久化：重启回只 flee。
 
-**活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `wandering`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
+**活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `idle`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
 
 ### 2.1 mineflayer 导航（当前实现）
 
@@ -86,9 +86,10 @@
 `mind.status.metrics` 提供进程内 run metrics：`orders`（accepted/succeeded/failed/blocked/cancelled）、`jobs`（started/succeeded/failed/interrupted/retried/preempted）、`holds`、`holdReasons`、`failureCodes`、`completionRate`、`lastFailure`。`job.terminal` 事件附带 `diagnostic {code,category,hint}`；指标只从事件派生，不读世界。
 
 `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`；bridge 用它给 owner 记忆分 scope，不参与控制。缺失时 bridge 回退到 target/unknown 并日志。
+`mind.status.worldTime` 是当前观测时钟：`{day, timeOfDay, isNight, ticksToSunset}`；`day=floor(worldAge/24000)`，`timeOfDay` 0–23999，`isNight` 为 13000–22999，`ticksToSunset` 白天为 `max(0,13000-timeOfDay)`、夜间 0。
 `metrics.jsonl`（journal 同目录）在每个 order 终态追加一行：`orderId/verb/state/acceptedAt/durationMs/attempts/lastCode/blockedKeys/target`；写入失败不影响 order。`p2_orders` 的每个视图带 `attempts/lastCode/blockedKeys`。
 `mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。duty 会持久化到 journal 同目录的 `duty.json` v2：baseline、activeMs、pausedMs、jobs 与状态；body 重启后只恢复未过期且 identity 匹配的 active duty，`collected` 从 baseline+背包重算，`activeMs` 从文件恢复（宕机时间不计入 active 时间）；completed/blocked/failed/cancelled 不复活。duty 被 order/plan/threat 暂停时不消耗 active 时间；blocked/failed 会让 base 保持 inactive，等 Agent 决定。
-`mind.status.baseActivity` 是默认活动视图：`idle / wandering / escort`，只有 `active | inactive`；不持久化，重启回 `wandering`。`wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 切换），固定不随身体漂移；半径默认 8，不接受 center。`escort` 按玩家名/实体名跟随，不 teleport；目标丢失保持 `active` 且 `waitingReason:"TARGET_LOST"`，不自动切换。
+`mind.status.baseActivity` 是默认活动视图：`idle / wandering / escort`，只有 `active | inactive`；不持久化，重启回 `idle`。`wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 切换），固定不随身体漂移；半径默认 8，不接受 center。`escort` 按玩家名/实体名跟随，不 teleport；目标丢失保持 `active` 且 `waitingReason:"TARGET_LOST"`，不自动切换。
 `mind.status.activity` 报告当前生效层：`{layer, kind, state, pausedBy}`；layer 为 `constant / order / duty / base`，state 为 `active / waiting / paused`。order/plan 在跑时 layer=order，duty 被暂停不改变 layer；blocked/failed duty 报 `layer:"duty", state:"waiting"`，base 保持 inactive。
 `mind.status.reaction` 是 body 级反应策略视图：`{source, mode, fight, selfCare}`。`mode` 为 `flee / allowlist / all-hostiles`；`fight.allowedTargets:[]` 显示 `all-hostiles`，但仍排除玩家/被动/中立、neutral 保护名单和 auto-avoid。策略不持久化，重启后 `source:"default"`、`mode:"flee"`。
 `plan.work` 全 blocked 返回 `hold`（`notify:false`，由 `plan.blocked` 上报）；`order.attack` 目标丢失/无效返回 `hold`；`order.hold` 返回 `hold`（`notify:false`）。显式 `attack` 不做玩家/被动/中立保护拦截；`ATTACK_TARGET_PROTECTED` 只属于自动 fight/未授权 driver 调用。`hold` 不是成功，也不是失败。
@@ -119,7 +120,7 @@
 | `action.pending` 未结算 | 只对账（必要时 `check` Job），不重放 |
 | order 已取消 | 恢复后保持取消，plan 不复活 |
 | 重启时 queued order / active hold | 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复 |
-| base activity | **不恢复**；重启回默认 `wandering`，需要 idle/escort 时重新 `p2_base_activity` |
+| base activity | **不恢复**；重启回默认 `idle`，需要 wandering/escort 时重新 `p2_base_activity` |
 | active duty | 只恢复 identity 匹配且 `activeMs` 未超预算的 active 状态；collected 从 baseline+背包重算；终态不复活 |
 | 世界/角色/模板/定义版本不匹配 | 拒绝恢复，上报 |
 | 能从世界重建的进度（已建方块） | 重建，不依赖内存 |
@@ -135,14 +136,14 @@
 
 | 接口 | 内容 |
 |---|---|
-| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / `duty` / `baseActivity` / `activity` / `identity`（若 provider 提供）/ 最近偏差摘要 |
-| `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤；附当前 `biome` |
-| `p2_observe {mode:"find",near?,radius?,only,limit?}` | 只读最近方块：只查已加载匹配，按欧氏距离排序返回 `{cell,name,distance}`；`radius` 1–32（默认 16）、`limit` 1–10（默认 5）、`only` 1–32 必填；`total` 为匹配数（上限 256，超出时 `truncated:true`）；不判断可达、不移动、不选目标；先 find 再 go/craft |
+| `p2_status` | 当前 order / job / 预算余量 / tracker 状态 / `duty` / `baseActivity` / `activity` / `identity`（若 provider 提供）/ `worldTime` / 最近偏差摘要 |
+| `p2_observe {min,max｜points,detail}` | 只读语义观测：box（`blocks` / `counts` / `surface`）或定向 points；未加载块 `loaded=false`；上限 4096 块 / 64 轴 / 256 点；不做视锥/遮挡过滤；附当前 `biome`；block 条目带原始 `light`/`skyLight`（0–15，未知省略） |
+| `p2_observe {mode:"find",near?,radius?,only,limit?}` | 只读最近方块：只查已加载匹配，按欧氏距离排序返回 `{cell,name,distance,light?,skyLight?}`；`radius` 1–32（默认 16）、`limit` 1–10（默认 5）、`only` 1–32 必填；`total` 为匹配数（上限 256，超出时 `truncated:true`）；不判断可达、不移动、不选目标；先 find 再 go/craft |
 | `p2_entities {center?,radius?,types?,names?,limit?}` | 不移动的实体/掉落物观测：半径 ≤160、limit ≤512、按距离排序；掉落物带 `item.name/count`；只受服务器跟踪范围限制 |
 | `p2_preview_blueprint {blueprint}` | 只读 dry-run：必需/缺料、冲突（当前方块、是否可拆）、未加载格、非法字段；不消耗材料、不清障、不放置 |
 | `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
 | `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
-| `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `wandering`，半径 1–8；`idle` 静止；`escort` 按目标名跟随、不 teleport；不持久化，重启回 wandering；要完全停住用 `p2_order {verb:"hold"}` |
+| `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `idle`；`wandering` 半径 1–8；`escort` 按目标名跟随、不 teleport；不持久化，重启回 idle；要完全停住用 `p2_order {verb:"hold"}` |
 | `p2_policy {action:"set"\|"reset"\|"status",reaction?}` | body 级反应策略；`set` 全量替换；无 `fight` = 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立；不持久化；显式 attack 不受它限制 |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
 | `p2_events {sinceSeq}` | 详细事件审计（order/job/plan/tracker/move）；仅供排查，不是主轮询手段 |
@@ -267,10 +268,10 @@ order 可带 `policy.conflict`：
 
 ### 10.8 idle 边界与执行原语（M4-03 重构）
 
-- 默认无 order：**base activity**，默认 `wandering`，只在 anchor 半径 8 内做局部移动；不采集、不建造、不战斗、不生成新任务。
+- 默认无 order：**base activity**，默认 `idle`；Agent 显式设置 `wandering` 时只在 anchor 半径内做局部移动；不采集、不建造、不战斗、不生成新任务。
 - 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；自动 fight 默认不选玩家/被动/中立；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
 - 显式 `attack` order 是 Agent 的目标选择：P2 不做玩家/被动/中立保护拦截；期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。
-- base 不持久化：body 重启后回到 `wandering`；Agent 可用 `p2_base_activity` 改为 `idle`/`escort`/调整 `wandering.radius`。
+- base 不持久化：body 重启后回到 `idle`；Agent 可用 `p2_base_activity` 改为 `wandering`/`escort` 或调整 `wandering.radius`。
 - 需要完全停住时用 `p2_order {verb:"hold"}`；hold 是占住 active 位的 barrier，不是队列清空。
 - 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击（除非 `p2_policy.fight` 明确允许）。
 - Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
@@ -335,7 +336,7 @@ order 可带 `policy.conflict`：
 
 ### 10.11 Owner session、persona、memory 与 auto-wake（bridge）
 
-- body start 时 bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、五个 `p2-*` skill、`.p2/skills` provider、persona section、memory context 和 auto-wake；stop 时 dispose，fault 只停 auto-wake。
+- body start 时 bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、六个 `p2-*` skill、`.p2/skills` provider、persona section、memory context 和 auto-wake；stop 时 dispose，fault 只停 auto-wake。
 - `.p2/` 由 `p2 start`/`p2_body start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有编辑；`.p2` 整体不入库。
 - persona 是 `.p2/persona.md` 的 mtime 缓存 section（≤4KB，`interpolate:false`，order 100）；memory 是 `.p2/memory/<world>/<character>.jsonl`，按 `mind.status.identity` 分 scope，summary 只注入 pinned + 最近 fact/state（2KB/20 条）。
 - auto-wake 只看 owner agent 的 idle 静默，不检查“是否正在跑 order”作为触发条件；默认 `skipActiveWork:false`，active order/plan/duty/armed goal 不会阻止唤醒。设为 `true` 才在调度层跳过这些 active work。

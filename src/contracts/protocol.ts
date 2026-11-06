@@ -258,6 +258,13 @@ export type MindMetricsView = {
 export type MindStatusView = {
   /** Recovery identity bound to this body; absent when the provider had none. */
   identity?: { worldId: string; characterId: string }
+  /** Observed overworld clock for planning; absent when the provider has no time. */
+  worldTime?: {
+    day: number
+    timeOfDay: number
+    isNight: boolean
+    ticksToSunset: number
+  }
   tracker: 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
   job: { runId: string; driverId: string } | null
   fault: { code: string; since: number } | null
@@ -344,6 +351,10 @@ export type WorldObserveBlock = {
   /** Provider collision hint; undefined when the adapter cannot tell. */
   solid?: boolean
   state?: Record<string, string>
+  /** Raw block light 0–15; omitted when the adapter cannot tell. */
+  light?: number
+  /** Raw sky light 0–15; omitted when the adapter cannot tell. */
+  skyLight?: number
 }
 
 /** One nearest-block match from a find query. */
@@ -352,6 +363,10 @@ export type WorldFoundBlock = {
   name: string
   /** Euclidean cell distance from `near`, rounded to 2 decimals. */
   distance: number
+  /** Raw block light 0–15; omitted when the adapter cannot tell. */
+  light?: number
+  /** Raw sky light 0–15; omitted when the adapter cannot tell. */
+  skyLight?: number
 }
 
 export type WorldObserveCounts = {

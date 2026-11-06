@@ -133,7 +133,7 @@ export type MindRuntime = {
 export type CreateMindOptions = {
   port: ClientPort
   home?: Vec3
-  /** Initial base activity; defaults to wandering and is never persisted. */
+  /** Initial base activity; defaults to idle and is never persisted. */
   baseActivity?: BaseActivitySpec
   /** Recovery identity from the provider; defVersion is computed from plans. */
   identity?: { worldId: string; characterId: string; defVersion?: string }
@@ -151,6 +151,18 @@ export type CreateMindOptions = {
  * 50 ms loop. Definition or journal failures abort body start rather than
  * running with half-loaded content.
  */
+function worldTimeView(time: { timeOfDay: number; worldAge: number }): NonNullable<MindStatusView['worldTime']> {
+  const timeOfDay = ((Math.floor(time.timeOfDay) % 24_000) + 24_000) % 24_000
+  const day = Math.floor(Math.max(0, time.worldAge) / 24_000)
+  return {
+    day,
+    timeOfDay,
+    isNight: timeOfDay >= 13_000 && timeOfDay < 23_000,
+    // 0 once the sun has set; keep it non-negative for planning.
+    ticksToSunset: Math.max(0, 13_000 - timeOfDay),
+  }
+}
+
 export function createMind(options: CreateMindOptions): MindRuntime {
   const now = options.now ?? (() => Date.now())
   const registry = new Registry()
@@ -1269,6 +1281,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         ...(options.identity === undefined
           ? {}
           : { identity: { worldId: options.identity.worldId, characterId: options.identity.characterId } }),
+        worldTime: worldTimeView(sensors.read().time),
         tracker: tracker.state(),
         job: current === null ? null : { runId: current.job.runId, driverId: current.job.driverId },
         fault: fault === null ? null : { code: fault.code, since: fault.since },

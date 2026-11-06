@@ -42,10 +42,11 @@ const agent: AgentLike = {
 }
 
 describe('owner session registrations', () => {
-  it('loads and registers the five packaged skills', () => {
+  it('loads and registers the six packaged skills', () => {
     const sources = loadPackagedSkills(process.cwd())
     expect(sources.map(source => source.name).sort()).toEqual([...P2_SKILL_NAMES].sort())
     expect(sources.find(source => source.name === 'p2-subagent')?.content).toContain('没有 P2')
+    expect(sources.find(source => source.name === 'p2-survival')?.content).toContain('不隔墙挖')
     const registered: Array<Record<string, unknown>> = []
     const disposers = registerPackagedSkills(
       {
@@ -61,7 +62,7 @@ describe('owner session registrations', () => {
       },
       sources,
     )
-    expect(disposers).toHaveLength(5)
+    expect(disposers).toHaveLength(6)
     expect(registered.map(skill => skill.name).sort()).toEqual([...P2_SKILL_NAMES].sort())
     expect(registered[0]).toMatchObject({ source: 'runtime', invocation: { modelInvocable: true } })
   })

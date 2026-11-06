@@ -43,6 +43,10 @@ type BlockInfo = {
   material?: string
   diggable?: boolean
   hardness?: number
+  /** Raw block light 0–15; undefined = unknown. */
+  light?: number
+  /** Raw sky light 0–15; undefined = unknown. */
+  skyLight?: number
   harvestTools?: string[]
 }
 type Item = { slot: number; name: string; count: number }
@@ -98,7 +102,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `BlockInfo.harvestTools` 是适配器给出的“可掉落工具”名称列表；`[]` 表示手即可。缺省表示适配器不知道，不能当作“需要任何工具”。
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
   - 单格：`{x,y,z}` 保持旧语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
-  - 体积：`{shape:"box"|"line", from:{x,y,z}, to:{x,y,z}, height? 1–8, only?:string[], preserveFloor? 默认 true, maxBlocks? 1–64 默认 24}`。`line` 要求恰好一个轴不同；超过 `maxBlocks` 直接 `DIG_VOLUME_TOO_LARGE`，不静默截断；
+  - 体积：`{shape:"box"|"line", from:{x,y,z}, to:{x,y,z}, height? 1–8, only?:string[], preserveFloor? 默认 true, maxBlocks? 1–64 默认 24}`。`line` 要求恰好一个轴不同；`maxBlocks` 是实际挖掘预算，先按 `only`/空气/脚下保护过滤再检查，超过才 `DIG_VOLUME_TOO_LARGE`，不静默截断；原始体积另有 4096 扫描硬上限；
   - 隧道：`{shape:"tunnel", to:{x,y,z}, height? 1–3 默认 2, preserveFloor? 默认 true, maxBlocks? 默认 24/上限 64}`。起点是当前脚格，`to` 只允许一个水平轴向、至多一次 y±1 台阶，不做竖井；逐格清脚/头、前进、两次读回，返回 `path`（含起点）与 `returnable`。每挖一格前检查目标格和行进方向后一格，遇水/岩浆、未加载或不可破坏立即停止，返回 `failed DIG_PARTIAL` + `stoppedAt` + `reason`（`fluid`/`unloaded`/`unbreakable`/`tool`/`dig`/`readback`/`move`/`equip`），不挖穿、不猜；
   - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
   - 自动选最佳工具（`chooseTool`）并 `equip`；最近一次显式 `equip` 成功后，下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use`）不自动切换，动作启动后恢复自动（one-action override）。
@@ -109,22 +113,24 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `hold.params.durationMs` 可选，1000–3_600_000；从 hold **成为 active** 的时刻起算，到期由 body 置为 `succeeded` 并带 `observed.expired:true`，队列恢复。不带 duration 的 hold 是永久 barrier，只能 cancel。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
+- `place` 的 `{x,y,z}` 是**目标方块所占格**，不是支撑/参照格；driver 用目标格与 `face` 反推参照，provider 成功体回报实际 `x/y/z/face`，失败体带 `target/face/supports/attempts`。没有“自动下移一格”的语义。
 - `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不再移动过去。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
 - provider `place` 也按人类逻辑选支撑：先试请求的 `face`，其参照格不是实心/流体时继续扫描 up/down/north/south/east/west；任意一面有实心参照即可放置，成功体带实际使用的 `face`。只有六面都没有实心参照才报 `PLACE_UNSUPPORTED`，并在 provider details 与 driver failure 中带 `supports` 六面事实。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`（不再报 `CRAFT_NO_INGREDIENTS`），由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`：有界追击最多 8 次（每次 ≤5s），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
+- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
 - `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`。它只读、不参与控制；bridge 用它给记忆/owner-session 分 scope。provider 没有 identity 时字段省略，调用方必须回退而不是猜测。
+- `mind.status.worldTime` 是当前观测的时钟：`{day, timeOfDay, isNight, ticksToSunset}`。`day = floor(worldAge/24000)`；`timeOfDay` 归一化到 0–23999；`isNight` 为 13000–22999；`ticksToSunset` 在白天为 `max(0, 13000-timeOfDay)`，夜间为 0。它是观测值，不是控制输入。
 - **Duty（gather）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动显式常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan、没有常驻威胁时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；内部定义错误 → failed；`p2_duty stop` → cancelled。只支持单物品 gather 配额，不自行选新目标。
   - `p2_duty start` 会替换当前 duty：先校验新 spec（失败则旧 duty 不变），再把旧 active duty 置为 `cancelled` + `REPLACED_BY_NEW_DUTY`，停止旧 job，然后启动新 duty；返回 `{previousDuty,started}` 并发出 `duty.terminal`。tracker 的单写者门保证旧 job 停止确认前不会并行启动新 job。
   - duty 持久化到 journal 同目录的 `duty.json` v2（含 worldId/characterId、baseline、activeMs、pausedMs、jobs、state）。start、暂停/恢复、每次 job start、terminal 时落盘；v1 sidecar 可读一次并在下次写入时迁移。
   - body 重启时只恢复 `state=active`、identity 匹配的 duty；`collected = max(0, 当前背包 - baseline)`，`activeMs` 从文件恢复（宕机时间不计入 active）；completed/blocked/failed/cancelled 不复活。过期/超出 job 预算的 duty 恢复为 `blocked`（`DUTY_DEADLINE` / `DUTY_JOB_BUDGET`）。
   - duty 被 order/plan/常驻威胁暂停时 `paused:true`，`activeMs` 不增长；`blocked/failed` 后 base activity 保持 inactive，等 Agent 处理。
-- **Base activity**：`p2_base_activity {action:"set"|"status", activity?:{kind:"idle"|"wandering"|"escort", radius?, target?, distance?}}`。默认 `wandering`，半径 1–8（默认 8），不接受 `center`；escort 的 target 是玩家名/实体名，distance 1–8（默认 3），不 teleport。
+- **Base activity**：`p2_base_activity {action:"set"|"status", activity?:{kind:"idle"|"wandering"|"escort", radius?, target?, distance?}}`。默认 `idle`；`wandering` 半径 1–8（默认 8），不接受 `center`；escort 的 target 是玩家名/实体名，distance 1–8（默认 3），不 teleport。
   - `state` 只有 `active | inactive`；escort 目标丢失时保持 `active`，`waitingReason:"TARGET_LOST"`，不自动切换。
-  - **不持久化**：body 重启后回到 `wandering`；Agent 需要重新设置 `idle`/`escort`/半径。
+  - **不持久化**：body 重启后回到 `idle`；Agent 需要重新设置 `wandering`/`escort`/半径。
   - `wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 在 active 时切换），固定不随身体漂移；`duty`/`hold` 暂停 base。
   - `mind.status.activity` 报告当前生效层：`{layer:"constant"|"order"|"duty"|"base", kind, state:"active"|"waiting"|"paused", pausedBy}`。order/plan 在跑时 layer=order；blocked/failed duty 报 layer=duty、state=waiting；base 被更高层暂停时不改变 activity 的 layer。
 - **Reaction policy**：`p2_policy {action:"set"|"reset"|"status", reaction?:{fight?, selfCare?}}`；body 级、process-local、不持久化，重启回只 flee。
@@ -155,7 +161,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
-- 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。
+- 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。`Traverse` 在需要时开门，并在身体离开门格后由 executor 自动关门；关门不会在身体仍处于门格时执行。
 - 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。强制收尾统一执行 `stopDigging` / `deactivateItem` / `closeWindow` / `clearControlStates` / 清 dig 目标 / 背包重同步；一次停止在 `releaseFaultIntervalMs` 内仍无法确认记一次 fault，连续 `releaseFaultLimit` 次由 provider 主动断开连接，交给 body 既有的 fault/rebuild 路径重建 epoch。
 - **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，motion 第二遍按 `health - 6 + 3` 允许安全下落。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。
 - **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。这部分**不在 motion 核心**：`go` 把显式 lava/void 目标，以及目标低于当前 >2 格且允许 `lethal_fall` 的请求交给 Agent 层 `fatal` driver；driver 做受控 step-off，只有真实 `died` 才成功；`unloaded` 永不允许。

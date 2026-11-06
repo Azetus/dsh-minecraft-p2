@@ -354,6 +354,7 @@ function validateOrder(value: unknown): Order {
     throw orderError('INVALID_ORDER', 'order params must be an object')
   }
   if (value.verb === 'traverse') validateTraverseParams(value.params)
+  if (value.verb === 'attack') validateAttackParams(value.params)
   if (value.verb === 'dig') validateDigParams(value.params)
   if (value.verb === 'place') validatePlaceParams(value.params)
   if (value.verb === 'equip') validateEquipParams(value.params)
@@ -381,6 +382,16 @@ function validateOrder(value: unknown): Order {
     }
   }
   return value as unknown as Order
+}
+
+function validateAttackParams(params: JsonValue | undefined): void {
+  if (params === undefined) return
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'attack.params must be an object')
+  if (params.maxChases !== undefined
+    && (typeof params.maxChases !== 'number' || !Number.isInteger(params.maxChases)
+      || params.maxChases < 1 || params.maxChases > 64)) {
+    throw orderError('INVALID_ORDER', 'attack.maxChases must be an integer between 1 and 64')
+  }
 }
 
 /** Optional timed barrier: 1s–1h. Without duration the hold is indefinite. */

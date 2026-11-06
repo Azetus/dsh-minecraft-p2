@@ -642,7 +642,7 @@ describe('bridge completion wake', () => {
     expect(harness.owner!.tools.size).toBe(0)
     expect(harness.owner!.disposedSections).toBe(1)
     expect(harness.owner!.disposedContexts).toBe(1)
-    expect(harness.owner!.disposedSkills).toBe(5)
+    expect(harness.owner!.disposedSkills).toBe(6)
   })
 
   it('wakes an idle owner once with the failed order, observed and reason', async () => {

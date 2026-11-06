@@ -39,6 +39,8 @@ type RawBlock = {
   name: string
   loaded: boolean
   solid?: boolean
+  light?: number
+  skyLight?: number
   pos: { x: number; y: number; z: number }
 }
 
@@ -62,6 +64,8 @@ function fakePort(blocks: RawBlock[] = defaultBlocks): { port: ClientPort; write
             name: found.name,
             loaded: found.loaded,
             ...(found.solid === undefined ? {} : { solid: found.solid }),
+            ...(found.light === undefined ? {} : { light: found.light }),
+            ...(found.skyLight === undefined ? {} : { skyLight: found.skyLight }),
             pos: found.pos,
           }
     },
@@ -107,8 +111,23 @@ describe('world.observe', () => {
     expect(fake.writes).toBe(0)
   })
 
-  it('omits entities when asked', async () => {
-    const fake = fakePort()
+  it('reports raw block light when the adapter provides it', async () => {
+    const fake = fakePort([
+      { name: 'stone', loaded: true, pos: { x: 0, y: 64, z: 0 }, light: 4, skyLight: 15 },
+      { name: 'air', loaded: true, pos: { x: 1, y: 64, z: 0 }, light: 0, skyLight: 15 },
+    ])
+    const response = await runtimeWith(fake.port).handleRequestAsync(request({
+      min: { x: 0, y: 64, z: 0 },
+      max: { x: 1, y: 64, z: 0 },
+    }))
+    const result = response.result as unknown as WorldObserveResult
+    expect(result.blocks).toMatchObject([
+      { x: 0, y: 64, z: 0, name: 'stone', light: 4, skyLight: 15 },
+      { x: 1, y: 64, z: 0, name: 'air', light: 0, skyLight: 15 },
+    ])
+  })
+
+  it('omits entities when asked', async () => {    const fake = fakePort()
     const response = await runtimeWith(fake.port).handleRequestAsync(request({
       min: { x: 0, y: 64, z: 0 },
       max: { x: 0, y: 64, z: 0 },

@@ -96,7 +96,13 @@ function observeFind(
     names: only,
     count: OBSERVE_FIND_TOTAL_CAP + 1,
   })
-  const matches: Array<{ cell: ObserveVec3; name: string; sort: number }> = []
+  const matches: Array<{
+    cell: ObserveVec3
+    name: string
+    sort: number
+    light?: number
+    skyLight?: number
+  }> = []
   const radiusSquared = radius * radius
   for (const block of raw) {
     if (!block.loaded || block.pos === undefined) continue
@@ -104,7 +110,13 @@ function observeFind(
     const cell = { x: block.pos.x, y: block.pos.y, z: block.pos.z }
     const sort = squaredDistance(near, cell)
     if (sort > radiusSquared) continue
-    matches.push({ cell, name: block.name, sort })
+    matches.push({
+      cell,
+      name: block.name,
+      sort,
+      ...(block.light === undefined ? {} : { light: block.light }),
+      ...(block.skyLight === undefined ? {} : { skyLight: block.skyLight }),
+    })
   }
   matches.sort((left, right) =>
     left.sort - right.sort
@@ -117,6 +129,8 @@ function observeFind(
     cell: match.cell,
     name: match.name,
     distance: Math.round(Math.sqrt(match.sort) * 100) / 100,
+    ...(match.light === undefined ? {} : { light: match.light }),
+    ...(match.skyLight === undefined ? {} : { skyLight: match.skyLight }),
   }))
   return {
     ...common,
@@ -175,6 +189,8 @@ function observePoints(
           loaded: block.loaded,
           ...(block.solid === undefined ? {} : { solid: block.solid }),
           ...(block.state === undefined ? {} : { state: { ...block.state } }),
+          ...(block.light === undefined ? {} : { light: block.light }),
+          ...(block.skyLight === undefined ? {} : { skyLight: block.skyLight }),
         })
   }
   return { ...common, mode: 'points', detail: 'points', blocks }
@@ -254,6 +270,8 @@ function observeBox(
         loaded: block.loaded,
         ...(block.solid === undefined ? {} : { solid: block.solid }),
         ...(block.state === undefined ? {} : { state: { ...block.state } }),
+        ...(block.light === undefined ? {} : { light: block.light }),
+        ...(block.skyLight === undefined ? {} : { skyLight: block.skyLight }),
       })
     }
     base.blocks = blocks

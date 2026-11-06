@@ -105,6 +105,8 @@ type BlockLike = {
   diggable?: boolean
   hardness?: number
   harvestTools?: Record<string, boolean>
+  light?: number
+  skyLight?: number
   getProperties?: () => Record<string, string | number | boolean>
 }
 
@@ -114,6 +116,7 @@ type EntityLike = {
   username?: string
   type?: string
   kind?: string
+  health?: number
   position?: { x: number; y: number; z: number }
   width?: number
   height?: number
@@ -220,7 +223,24 @@ export class MineflayerClientPort implements ClientPort {
     const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
     if (block === null) return null
     const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
-    return blockInfo(block, this.bot.registry, serverTags)
+    const light = this.lightAt(p)
+    return blockInfo(block, this.bot.registry, serverTags, light.light, light.skyLight)
+  }
+
+  private lightAt(p: Vec3): { light?: number; skyLight?: number } {
+    try {
+      const world = this.bot.world as unknown as {
+        getBlockLight?: (pos: Vec3) => number
+        getSkyLight?: (pos: Vec3) => number
+      }
+      const pos = new Vec3Class(p.x, p.y, p.z)
+      return {
+        ...(world.getBlockLight === undefined ? {} : { light: world.getBlockLight(pos) }),
+        ...(world.getSkyLight === undefined ? {} : { skyLight: world.getSkyLight(pos) }),
+      }
+    } catch {
+      return {}
+    }
   }
 
   identity(): { worldId: string; characterId: string } {
@@ -319,7 +339,11 @@ export class MineflayerClientPort implements ClientPort {
           }
           if (filter !== undefined && !filter.includes(block.name)) continue
           const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
-          result.push({ ...blockInfo(block, this.bot.registry, serverTags), pos: { x, y, z } })
+          const light = this.lightAt({ x, y, z })
+          result.push({
+            ...blockInfo(block, this.bot.registry, serverTags, light.light, light.skyLight),
+            pos: { x, y, z },
+          })
         }
       }
     }
@@ -355,8 +379,9 @@ export class MineflayerClientPort implements ClientPort {
       const block = this.bot.blockAt(new Vec3Class(point.x, point.y, point.z)) as unknown as BlockLike | null
       if (block === null || !names.has(block.name)) continue
       const serverTags = typeof block.type === 'number' ? this.blockTags.tagsFor(block.type) : undefined
+      const light = this.lightAt(point)
       result.push({
-        ...blockInfo(block, this.bot.registry, serverTags),
+        ...blockInfo(block, this.bot.registry, serverTags, light.light, light.skyLight),
         pos: { x: point.x, y: point.y, z: point.z },
       })
     }
@@ -394,6 +419,7 @@ export class MineflayerClientPort implements ClientPort {
         ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
         ...(entity.type === undefined ? {} : { type: entity.type }),
         ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+        ...(typeof entity.health === 'number' ? { health: entity.health } : {}),
         ...(entity.username === undefined ? {} : { username: entity.username }),
         ...(item === undefined ? {} : { item }),
       })
@@ -858,7 +884,13 @@ export function portCapabilities(providerCapabilities: readonly string[]): Capab
   return capabilities
 }
 
-function blockInfo(block: BlockLike, registry?: unknown, serverTags?: ReadonlySet<string>): BlockInfo {
+function blockInfo(
+  block: BlockLike,
+  registry?: unknown,
+  serverTags?: ReadonlySet<string>,
+  light?: number,
+  skyLight?: number,
+): BlockInfo {
   const properties = typeof block.getProperties === 'function' ? block.getProperties() : {}
   const state: Record<string, string> = {}
   for (const [key, value] of Object.entries(properties)) state[key] = String(value)
@@ -866,6 +898,8 @@ function blockInfo(block: BlockLike, registry?: unknown, serverTags?: ReadonlySe
   const harvestTools = block.harvestTools === undefined
     ? undefined
     : Object.keys(block.harvestTools).map(id => itemName(registry, id))
+  const blockLight = light ?? block.light
+  const blockSkyLight = skyLight ?? block.skyLight
   const base = {
     name: block.name,
     loaded: true as const,
@@ -874,6 +908,8 @@ function blockInfo(block: BlockLike, registry?: unknown, serverTags?: ReadonlySe
     ...(block.material === undefined ? {} : { material: block.material }),
     ...(block.diggable === undefined ? {} : { diggable: block.diggable }),
     ...(block.hardness === undefined ? {} : { hardness: block.hardness }),
+    ...(blockLight === undefined ? {} : { light: blockLight }),
+    ...(blockSkyLight === undefined ? {} : { skyLight: blockSkyLight }),
     ...(harvestTools === undefined ? {} : { harvestTools }),
     ...(serverTags === undefined ? {} : { serverTags }),
   }

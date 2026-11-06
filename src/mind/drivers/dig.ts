@@ -60,6 +60,8 @@ type DigParams = {
 
 const DEFAULT_MAX_BLOCKS = 24
 const HARD_MAX_BLOCKS = 64
+/** Bound the raw volume scan before filtering; maxBlocks bounds actual digs. */
+const HARD_MAX_VOLUME = 4_096
 
 /**
  * One Agent-selected block, or a bounded volume (`shape: "box" | "line"`).
@@ -211,11 +213,11 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
   if ('error' in expansion) return { state: 'failed', code: 'BAD_ARGS', observed: { detail: expansion.error } }
   const cells = expansion.cells
   const maxBlocks = Math.min(HARD_MAX_BLOCKS, params.maxBlocks ?? DEFAULT_MAX_BLOCKS)
-  if (cells.length > maxBlocks) {
+  if (cells.length > HARD_MAX_VOLUME) {
     return {
       state: 'failed',
       code: 'DIG_VOLUME_TOO_LARGE',
-      observed: { planned: cells.length, maxBlocks },
+      observed: { volume: cells.length, maxBlocks, reason: 'volume-scan-cap' },
     }
   }
 
@@ -226,7 +228,43 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
   let dug = 0
   let alreadyAir = 0
 
+  // maxBlocks is a dig budget, not a raw-coordinate budget. Filter air,
+  // non-matching blocks and the preserved floor before enforcing it; otherwise
+  // `only:["oak_log"]` over a large box is rejected by the box size.
+  const candidates: DigCell[] = []
   for (const cell of cells) {
+    const before = ctx.port.blockAt(cell)
+    if (before === null || !before.loaded) {
+      skipped.push({ ...cell, reason: 'unloaded' })
+      continue
+    }
+    if (isAirName(before.name)) {
+      alreadyAir += 1
+      continue
+    }
+    if (only !== undefined && !only.includes(before.name)) {
+      skipped.push({ ...cell, reason: 'filtered', code: before.name })
+      continue
+    }
+    if (preserveFloor && selfCovers(ctx.port.self().pos, cell)) {
+      skipped.push({ ...cell, reason: 'preserve-floor' })
+      continue
+    }
+    candidates.push(cell)
+  }
+  if (candidates.length > maxBlocks) {
+    return {
+      state: 'failed',
+      code: 'DIG_VOLUME_TOO_LARGE',
+      observed: {
+        volume: cells.length,
+        planned: candidates.length,
+        maxBlocks,
+      },
+    }
+  }
+
+  for (const cell of candidates) {
     const before = ctx.port.blockAt(cell)
     if (before === null || !before.loaded) {
       skipped.push({ ...cell, reason: 'unloaded' })
@@ -299,6 +337,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     height: params.height ?? 1,
     purpose,
     planned: cells.length,
+    matching: candidates.length,
     dug,
     alreadyAir,
     skipped,

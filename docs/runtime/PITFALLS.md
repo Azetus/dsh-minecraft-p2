@@ -136,7 +136,7 @@
 ## 8. Base activity 与 duty
 
 ### 8.1 base 不持久化
-- **规则**：base activity 只存在进程内；body 重启回 `wandering`。Agent 不能把 `idle`/`escort` 当成跨重启设置；需要静止时用 `hold` 或重启后重设。
+- **规则**：base activity 只存在进程内；body 重启回 `idle`。Agent 不能把 `wandering`/`escort` 当成跨重启设置；需要移动时显式设置或重启后重设。
 - **规则**：`wandering` 的 anchor 只在接管时记录，不随身体漂移；不要用 home 或当前位置每 tick 重算中心。
 
 ### 8.2 escort 不传送

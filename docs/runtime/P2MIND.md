@@ -4,7 +4,7 @@
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
 > 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
-> 默认活动是 base activity：`idle / wandering / escort`，默认 `wandering`，只做 anchor 半径内的局部移动；不持久化，重启回 wandering。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
+> 默认活动是 base activity：`idle / wandering / escort`，默认 `idle`；`wandering` 只做 anchor 半径内的局部移动；不持久化，重启回 idle。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
 > 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
 
 ## 1. 目标
