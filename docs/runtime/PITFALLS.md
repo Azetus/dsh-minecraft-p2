@@ -12,7 +12,8 @@
 
 ### 1.2 `placeBlock` 没有错误码
 - **现象**：失败只有文本（`the block is still air` / `Server refused to place`），且判定是启发式的。
-- **规则**：不要解析错误文本做控制流；用“目标读回 + 换面/换点/换材料重试”收敛。门/床这类带状态方块用 `name + state 子集` 匹配。
+- **机理**：`placeBlock` 只等目标格 block type 变化；服务端可能把方块放在别的格、也可能吞掉物品。交互方块（工作台/箱子/熔炉）的普通右键会打开界面而不是放置。
+- **规则**：不要用错误文本做控制流；driver 只信“目标读回 + `placedAt/placedCells` + 物品数变化”。provider 只在“明确 refusal + 物品数不变 + 无新方块”时给 `retrySafe:true`；放置期间必须 sneak。门/床这类带状态方块用 `name + state 子集` 匹配。
 
 ### 1.3 `equip()` 之后 `heldItem` 可能是空
 - **现象**：`equip` 成功返回，`placeBlock` 报 `must be holding an item to place`；物品随后消失（被放到别处）。

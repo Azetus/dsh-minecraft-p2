@@ -30,7 +30,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - `dig` 默认 `purpose:"harvest"`；只想清掉方块时显式 `purpose:"clear"`。
 - 体积挖掘用 `dig {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?}`；`maxBlocks` 默认 24、硬上限 64。
 - 连续水平通道用 `dig {shape:"tunnel",to,height? 2,maxBlocks? 24,preserveFloor?}`：起点为脚格，单水平轴、至多一次 y±1，不做竖井；一次清脚/头并前进，返回 `path/returnable`；遇水/岩浆/未加载/不可破坏会 `DIG_PARTIAL` + `stoppedAt/reason`，不要继续猜。
-- 拾取用 `collect {radius? 默认8,item?,maxDrops? 默认8,timeoutMs? 默认30000}`：只处理已观测掉落物，不挖/不战/不预测；一次 job 跑完，失败也保留已收集数。
+- 拾取用 `collect {radius?,item?,maxDrops?,timeoutMs?}`：只处理已观测掉落物，不挖/不战/不预测；一次 job 跑完，失败也保留已收集数。
 - 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty。duty 持久化；blocked/failed 后 base inactive。
 - 默认活动用 `p2_base_activity`：默认 `idle`；`wandering` 需显式设置（anchor 半径 8）；`escort` 跟随玩家/实体，跟丢报 `TARGET_LOST`，不传送。base **不持久化**，重启回 `idle`；完全停住用 `hold`。
 - 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立——这是默认值，不是对你的限制。
@@ -68,9 +68,10 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `PICKUP_UNREACHABLE` | 掉落物存在但走不到 | 看 `failure.facts.requiredDig` 与 `unreachableDrops`；清阻挡、换落点或接受损失，不要自动追 |
 | `PICKUP_NOT_COLLECTED` | 已到附近但背包没增加 | 检查背包空间/服务端延迟；不要重复同一 dig |
 | `COLLECT_*` | 一次 collect 未收完（走不到/超时/满/消失） | 看 `collected/missed/unreachable/items`；整理背包/清阻挡后重新观察再补一次，不追 gone |
-| `PLACE_FAILED` | 放置后未读回目标方块 | 读 `failure.facts` 的 `face/supports/attempts/adjacent/providerCode` 与 `diagnosis`；START_EMBEDDED 换站位、SUPPORT_MISSING 换/补支撑、DENIED 换位置；不要原样重下 |
+| `PLACE_FAILED` | 放置后未读回目标方块 | 读 `failure.facts` 的 `face/supports/placedAt/itemConsumed`；START_EMBEDDED 换站位、SUPPORT_MISSING 换支撑、DENIED 换权限；不要原样重下 |
+| `PLACE_TARGET_OCCUPIED` / `PLACE_OFF_TARGET` / `PLACE_ITEM_CONSUMED` | 目标占用/落点不在目标/物品已消耗 | 读 `occupied/placedAt/placedCells/itemConsumed`；先核对坐标或清格，不原样重下 |
 | `PLACE_BLOCKED_BY_SELF` | 目标格落在自己身体里 | 用 `failure.facts.adjacent` 换站位，不要反复同一条 place |
-| `PLACE_UNSUPPORTED` / `NO_SUPPORT` | 目标周围没有可用支撑面 | 看 `failure.facts.supports` 与 `suggestedCells`；provider 已会扫六面，若仍失败就换候选格/先补支撑 |
+| `PLACE_UNSUPPORTED` / `NO_SUPPORT` | 请求 face 无支撑/视线 | 读 `supports/suggestedCells`；provider 不替你换面 |
 | `DIG_PARTIAL` | 体积/隧道挖掘部分完成 | 读 `dug/planned/skipped/stoppedAt/reason/causeCode/path`；只补必要格，不自动重试整批 |
 | `TOOL_INSUFFICIENT` / `EQUIP_NO_ITEM` | 缺工具/物品 | 先装备/合成；clear 可用手时显式 `purpose:"clear"` |
 | `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH` | provider 报成功但手持物缺失/错物 | 按未装备处理；先读背包/手持物，不要当成功 |
@@ -80,13 +81,13 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `ATTACK_TARGET_PROTECTED` | 自动 fight/未授权 driver 遇到受保护目标 | 显式 attack order 不返回此码；玩家/中立也可由你明确指定 |
 | `SELF_STUCK` | 卡住且 3 格内没有可站格 | 通知而非自动挖方块；换任务/人工处理 |
 | `ATTACK_NOT_KILLED` | 24 次攻击/40s 内未击杀 | 检查武器/目标类型，重新下令；不要盲目追击 |
-| `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项被支撑或站位卡住 | 换区域、换蓝图变体或换点；不要原样重下 |
-| `OBSERVATION_STALE` | 长期无观测更新 | 检查连接；恢复后自动继续，不重放 pending |
+| `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项卡住 | 换区域/变体/点；不要原样重下 |
+| `OBSERVATION_STALE` | 无观测更新 | 检查连接；恢复后自动继续，不重放 |
 | `HOLD_ORDER` / `mind.hold(...)` | 已知等待/常驻树无法安全行动 | 读 `p2_orders.queueBlockedBy` 或 hold reason；取消/改任务，不要重复下同一 order |
-| `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 找不到来源或工作项被反复阻塞 | duty 变 blocked、base 保持 inactive；换物品/区域后重新 `p2_duty start`，或 stop 后改用 order |
-| `DUTY_DEADLINE` / `DUTY_JOB_BUDGET` | duty active 时间或 job 预算耗尽 | duty 不自动继续；重新评估目标/预算后再 start |
+| `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 无来源/工作项阻塞 | duty blocked、base inactive；换物品/区域或 stop 后改 order |
+| `DUTY_DEADLINE` / `DUTY_JOB_BUDGET` | duty 时间/预算耗尽 | 不自动继续；重新评估后再 start |
 
-`failure.diagnosis` 只取 `HEAD_BLOCKED / SUPPORT_MISSING / TARGET_UNLOADED / START_EMBEDDED / NO_STAND_CELL / EFFECT_UNCONFIRMED / RELEASE_UNCONFIRMED / TOOL_MISSING / DENIED / UNKNOWN`，事实不足即 `UNKNOWN`。先对照 `facts.snapshot` 决定清哪格/换哪条路；不要再向 P2 要动作参数。
+`failure.diagnosis` 取 `HEAD_BLOCKED / SUPPORT_MISSING / TARGET_UNLOADED / TARGET_OCCUPIED / START_EMBEDDED / NO_STAND_CELL / EFFECT_UNCONFIRMED / RELEASE_UNCONFIRMED / TOOL_MISSING / DENIED / UNKNOWN`，不足即 `UNKNOWN`。看 `facts.snapshot`；勿向 P2 要动作参数。
 
 ## 5. 纪律
 

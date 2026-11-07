@@ -43,6 +43,9 @@ const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> =
   // An assertion is a broken definition/assumption, not a world state: the
   // same job would fail again, so the Agent must change the definition.
   { match: /ERR_ASSERTION/, category: 'definition', hint: 'the driver hit an internal assertion; the definition/assumption is wrong, do not retry the same job' },
+  { match: /PLACE_TARGET_OCCUPIED/, category: 'precondition', hint: 'target cell is occupied by a non-replaceable block; choose an empty/replaceable cell or clear it' },
+  { match: /PLACE_OFF_TARGET/, category: 'world', hint: 'the item was placed outside the target cell; read facts.placedAt/placedCells before correcting the coordinate' },
+  { match: /PLACE_ITEM_CONSUMED/, category: 'world', hint: 'the item left the inventory but no target block was confirmed; re-observe before placing again' },
   { match: /DIG_NO_BLOCK|DIG_READBACK_UNSTABLE|CHECK_|PLACE_|CONTAINER_/, category: 'world', hint: 'the world did not match the request; observe and retry deliberately' },
   { match: /STOP_UNCONFIRMED|DRIVER_FAULT/, category: 'safety', hint: 'stop/release was not confirmed; do not assume the action ended' },
 ]

@@ -114,9 +114,12 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `hold.params.durationMs` 可选，1000–3_600_000；从 hold **成为 active** 的时刻起算，到期由 body 置为 `succeeded` 并带 `observed.expired:true`，队列恢复。不带 duration 的 hold 是永久 barrier，只能 cancel。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
-- `place` 的 `{x,y,z}` 是**目标方块所占格**，不是支撑/参照格；driver 用目标格与 `face` 反推参照，provider 成功体回报实际 `x/y/z/face`，失败体带 `target/face/supports/attempts`。没有“自动下移一格”的语义。
+- `place` 的 `{x,y,z}` 是**目标方块所占格**，不是支撑/参照格。driver 先预检：目标已是期望方块 → `succeeded` + `observed.alreadyPlaced:true`，不发包不装备；空气/流体/server tag `replaceable` 可放；其他不可替换方块 → `PLACE_TARGET_OCCUPIED`，不移动、不 `ensureHeld`、不发包。没有“自动下移一格”的语义。
 - `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不再移动过去。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
-- provider `place` 也按人类逻辑选支撑：先试请求的 `face`，其参照格不是实心/流体时继续扫描 up/down/north/south/east/west；任意一面有实心参照即可放置，成功体带实际使用的 `face`。只有六面都没有实心参照才报 `PLACE_UNSUPPORTED`，并在 provider details 与 driver failure 中带 `supports` 六面事实。
+- `place` 每次只发一个 face 的包：显式 `face` 必须可用；省略时 driver 按 `up → down → north → south → east → west` 选第一个“有碰撞支撑 + 眼到面 ≤4.5 + 视线未挡”的面。provider 只执行请求的 face，不再六面 fallback。
+- 一次物品消耗最多一次 placement packet：provider 的失败体带 `retrySafe`（仅“服务端明确 refusal + 物品数不变 + 无新方块”为 true），只有 `retrySafe:true` 时 driver 才换下一个 face；超时/未知/`PLACE_OFF_TARGET`/`PLACE_ITEM_CONSUMED` 直接终态，`EQUIP_NO_ITEM`/`PLACE_NO_ITEM` 立即终态。
+- provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
+- provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`（不再报 `CRAFT_NO_INGREDIENTS`），由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
 - `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
@@ -194,7 +197,7 @@ type Job = {
   - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
   - `facts.snapshot` 是失败时的有界同快照：`self/target` 各含 feet/head/support，`targetNeighbors` 四邻，`bodyOverlap` 最多 4 格，另带 `pathStatus`/`bestReachable`；每格为 `{cell:[x,y,z], name, loaded}`，最多 16 个去重格，不含 path/candidates/visited；
   - `PLACE_UNSUPPORTED` 的 `facts` 额外带 `supports` 六面布尔（up/down/north/south/east/west）与最多 3 个 `suggestedCells`（`{cell,support}`，指附近已有实心参照面、可实际放置的候选目标格，不是站位）；
-  - `diagnosis` 是闭合枚举，一条失败最多一个：`HEAD_BLOCKED`、`SUPPORT_MISSING`、`TARGET_UNLOADED`、`START_EMBEDDED`、`NO_STAND_CELL`、`EFFECT_UNCONFIRMED`、`RELEASE_UNCONFIRMED`、`TOOL_MISSING`、`DENIED`、`UNKNOWN`；事实不足就是 `UNKNOWN`，不生成动作；
+  - `diagnosis` 是闭合枚举，一条失败最多一个：`HEAD_BLOCKED`、`SUPPORT_MISSING`、`TARGET_UNLOADED`、`TARGET_OCCUPIED`、`START_EMBEDDED`、`NO_STAND_CELL`、`EFFECT_UNCONFIRMED`、`RELEASE_UNCONFIRMED`、`TOOL_MISSING`、`DENIED`、`UNKNOWN`；事实不足就是 `UNKNOWN`，不生成动作；
   - `recovery` 是契约级字符串：`retry` / `replan` / `reobserve` / `wait` / `restart` / `none`，不是具体动作；
   - `cause` 是 `{kind: "provider"|"world"|"authority"|"budget"|"unknown", code}`，不是自然语言；
   - 失败体不再包含 `suggestions` / `action` / `params`；具体下一步选项由静态 skill 表或 Agent 决策，P2 不预测后续世界。
@@ -251,7 +254,7 @@ interface DriverHandle {
 | driver / 分支 | `succeeded` 的后置条件 | `failed` 时必须保留的证据 |
 |---|---|---|
 | `move`（`prepare`/`enter` 复用） | 实际到达有效站位；`arrival` + `standingCell`/`onGround` 读回成立 | `pathStatus`、`bestReachable`、`blockedBy`、`bodyOverlap`、`failure.facts.snapshot` |
-| `place` | 目标格（含 `cells` 多格）全部读回为期望方块 | `attempts`、`target`、`adjacent`、`supports`、`suggestedCells` |
+| `place` | 目标格（含 `cells` 多格）全部读回为期望方块；已在目标 → `alreadyPlaced:true` | `attempts`、`target/face`、`placedAt/placedCells`、`itemConsumed/retrySafe`、`supports`、`suggestedCells` |
 | `dig` 单格 `clear` | 目标格连续两次读回空气 | `block`/`target`、`standQuery`、`blockedBy` |
 | `dig` 单格 `harvest` | 目标格为空气，且该分支约定的掉落/背包增量已确认 | `dropDelta`、`pickup`、`standQuery.requiredDig`、`partial`（若有） |
 | `collect` | 已选中的每个掉落物实体都确认收集；无匹配掉落时 `drops:0` 也算成功 | `collected/collectedDrops/missed/unreachable/inventoryDelta/items/failure` |

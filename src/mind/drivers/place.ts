@@ -3,6 +3,7 @@ import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { standingCell } from '../../motion/execute/index.ts'
 import { createRules, defaultConstraints, PLAYER_HEIGHT } from '../../motion/model/index.ts'
+import { REPLACEABLE } from '../../motion/model/semantics/vanilla.ts'
 import { standCells } from '../../motion/search/index.ts'
 import { approachBlock } from '../approach.ts'
 import { failureBody, failureSnapshot, readFailure, withFailure, diagnoseFailure } from '../failure.ts'
@@ -84,13 +85,37 @@ type Attempt = {
   place?: string
   code?: string
   ok: boolean
+  itemConsumed?: boolean | null
+  retrySafe?: boolean
+  placedAt?: Cell
 }
 
+type FaceChoice = {
+  face: Face
+  reference: Cell
+  support: BlockInfo
+}
+
+type PlaceEvidence = {
+  placedAt?: Cell
+  placedCells?: Cell[]
+  changedCells?: Array<Cell & { name: string }>
+  itemConsumed?: boolean | null
+  retrySafe?: boolean
+  supports?: Record<string, boolean>
+  providerCode?: string
+  providerMessage?: string
+  itemCountBefore?: number
+  itemCountAfter?: number
+}
+
+type StancePlan = { stand: Cell; move: boolean }
+
 /**
- * Place one expected block (or one two-cell group: door, bed). The placement
- * is issued once at the anchor cell; every cell the server produced is read
- * back, so a half group is never reported as success. Movement to a stance is
- * not progress: only the readback decides.
+ * Place one expected block (or one two-cell group: door, bed). The target is
+ * the occupied cell; the driver selects one exposed support face and sends at
+ * most one placement packet per item consumption. Only the readback proves
+ * success; a provider `ok` is not accepted without it.
  */
 export function createPlaceDriver(): Driver {
   return {
@@ -124,12 +149,10 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
     ...(params.expectedState === undefined ? {} : { state: params.expectedState }),
   }
   const cells: Cell[] = [target, ...(params.cells ?? [])]
+  const supportHint = expectedSupport(port, target, params.item)
 
-  const before = port.blockAt(target)
-  if (before === null || !before.loaded) {
-    return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
-  }
-  if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
+  const precheck = preflight(port, target, cells, expected, params, supportHint)
+  if (precheck !== undefined) return precheck
 
   const requestedStands = params.stands ?? (params.standX !== undefined && params.standY !== undefined
     && params.standZ !== undefined
@@ -150,52 +173,20 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
         target,
         skippedStands: requestedStands.length,
         adjacent: suggestedStances(port, cells),
+        ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
       },
     }
   }
 
   if (explicit.length > 0) {
-    const attempts: Attempt[] = []
-    let lastPlaceObserved: DriverResult['observed']
-    for (const stand of explicit) {
-      const moved = await port.moveTo(stand, { range: 0.5, timeoutMs: 20_000 })
-      if (moved.state !== 'ok') {
-        attempts.push({ stance: stand, move: 'failed', code: moved.code ?? 'PLACE_APPROACH_FAILED', ok: false })
-        continue
-      }
-      if (params.yaw !== undefined) {
-        const looked = await lookYaw(port, params.yaw)
-        if (looked !== undefined) {
-          attempts.push({ stance: stand, move: 'ok', code: looked, ok: false })
-          continue
-        }
-      }
-      const placed = await placeFaces(port, cells, params, expected)
-      const placedObserved = isRecord(placed.observed) ? placed.observed : undefined
-      if (placed.state !== 'succeeded') lastPlaceObserved = placed.observed
-      attempts.push({
-        stance: stand,
-        move: 'ok',
-        ...(typeof placedObserved?.face === 'string' ? { face: placedObserved.face as Face } : {}),
-        place: placed.state === 'succeeded' ? 'ok' : 'failed',
-        ...(placed.code === undefined ? {} : { code: placed.code }),
-        ok: placed.state === 'succeeded',
-      })
-      if (placed.state === 'succeeded') {
-        return { state: 'succeeded', observed: { attempts: attempts as unknown as never } }
-      }
-    }
-    const last = attempts[attempts.length - 1]
-    const selfBlocked = attempts.some(attempt => attempt.code === 'PLACE_BLOCKED_BY_SELF')
-    return {
-      state: 'failed',
-      code: last?.code ?? 'PLACE_FAILED',
-      observed: {
-        ...(isRecord(lastPlaceObserved) ? lastPlaceObserved : {}),
-        attempts: attempts as unknown as never,
-        ...(selfBlocked ? { blockedBy: 'self', target, adjacent: suggestedStances(port, cells) } : {}),
-      },
-    }
+    return await placeFromStances(
+      port,
+      cells,
+      params,
+      expected,
+      explicit.map(stand => ({ stand, move: true })),
+      supportHint,
+    )
   }
 
   const self = port.self().pos
@@ -221,6 +212,7 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
         blockedBy: 'self',
         target,
         adjacent: suggestedStances(port, cells),
+        ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
       },
     }
   }
@@ -228,74 +220,396 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
     const looked = await lookYaw(port, params.yaw)
     if (looked !== undefined) return { state: 'failed', code: looked }
   }
-  return placeFaces(port, cells, params, expected)
+
+  // Try the current stand first; alternative stands are only tried before any
+  // placement packet is sent. This keeps a failed packet from becoming a
+  // second item consumption.
+  const feet = { x: Math.floor(port.self().pos.x), y: Math.floor(port.self().pos.y), z: Math.floor(port.self().pos.z) }
+  const plans: StancePlan[] = [{ stand: feet, move: false }]
+  for (const stand of suggestedStances(port, cells)) {
+    if (sameCell(stand, feet) || plans.some(plan => sameCell(plan.stand, stand))) continue
+    plans.push({ stand, move: true })
+  }
+  return await placeFromStances(port, cells, params, expected, plans, supportHint)
 }
 
-async function placeFaces(
+async function placeFromStances(
   port: ClientPort,
   cells: Cell[],
   params: PlaceParams,
   expected: ExpectedBlock,
+  stances: StancePlan[],
+  supportHint: Cell | undefined,
 ): Promise<DriverResult> {
   const target = cells[0]!
-  const faces = params.face === undefined ? supportFaces(port, target) : [params.face]
-  if (faces.length === 0) return { state: 'failed', code: 'NO_SUPPORT' }
-
-  let lastCode = 'PLACE_FAILED'
-  let lastObserved: DriverResult['observed']
-  let lastFace: Face | undefined
   const attempts: Attempt[] = []
-  for (const face of faces) {
-    lastFace = face
-    const result = await port.place(target, face, params.item)
-    if (result.state === 'unknown') {
-      return actFailure(result, 'PLACE_FAILED')
+  let lastCode: string | undefined
+  let lastEvidence: PlaceEvidence | undefined
+  let packetFailure = false
+
+  for (const plan of stances) {
+    if (plan.move) {
+      const moved = await port.moveTo(plan.stand, { range: 0.5, timeoutMs: 20_000 })
+      if (moved.state !== 'ok') {
+        attempts.push({
+          stance: plan.stand,
+          move: 'failed',
+          code: moved.code ?? 'PLACE_APPROACH_FAILED',
+          ok: false,
+        })
+        lastCode = moved.code ?? 'PLACE_APPROACH_FAILED'
+        continue
+      }
     }
-    if (result.state === 'failed') {
+    if (params.yaw !== undefined) {
+      const looked = await lookYaw(port, params.yaw)
+      if (looked !== undefined) {
+        attempts.push({ stance: plan.stand, move: 'ok', code: looked, ok: false })
+        lastCode = looked
+        continue
+      }
+    }
+    if (bodyCoversCells({ x: plan.stand.x + 0.5, y: plan.stand.y, z: plan.stand.z + 0.5 }, cells)) {
+      attempts.push({ stance: plan.stand, place: 'failed', code: 'PLACE_BLOCKED_BY_SELF', ok: false })
+      lastCode = 'PLACE_BLOCKED_BY_SELF'
+      continue
+    }
+
+    const choices = faceChoices(port, target, plan.stand, params.face)
+    if (choices.length === 0) {
+      attempts.push({
+        stance: plan.stand,
+        ...(params.face === undefined ? {} : { face: params.face }),
+        place: 'none',
+        code: 'PLACE_UNSUPPORTED',
+        ok: false,
+      })
+      lastCode = 'PLACE_UNSUPPORTED'
+      continue
+    }
+
+    for (let index = 0; index < choices.length; index += 1) {
+      const choice = choices[index]!
+      const result = await port.place(target, choice.face, params.item)
+      const evidence = readPlaceEvidence(result.observed)
+      const attempt: Attempt = {
+        stance: plan.stand,
+        face: choice.face,
+        place: result.state === 'ok' ? 'ok' : 'failed',
+        ...(result.code === undefined ? {} : { code: result.code }),
+        ok: result.state === 'ok',
+        ...(evidence.itemConsumed === undefined ? {} : { itemConsumed: evidence.itemConsumed }),
+        ...(evidence.retrySafe === undefined ? {} : { retrySafe: evidence.retrySafe }),
+        ...(evidence.placedAt === undefined ? {} : { placedAt: evidence.placedAt }),
+      }
+      attempts.push(attempt)
+      if (result.state === 'unknown') return actFailure(result, 'PLACE_FAILED')
+
+      if (result.state === 'ok') {
+        const confirmed = await confirmCells(port, cells, expected)
+        if (!confirmed) {
+          return {
+            state: 'failed',
+            code: 'PLACE_READBACK_MISMATCH',
+            observed: failureObserved(
+              target,
+              cells,
+              attempts,
+              supportHint,
+              evidence,
+              choice.face,
+              plan.stand,
+            ),
+          }
+        }
+        return {
+          state: 'succeeded',
+          observed: successObserved(port, target, cells, params, expected, choice.face, plan.stand, attempts, supportHint, evidence),
+        }
+      }
+
       lastCode = result.code ?? 'PLACE_FAILED'
-      lastObserved = result.observed
-      attempts.push({ face, place: 'failed', code: lastCode, ok: false })
-      // Target-inside-body does not depend on the chosen face; stop early.
-      if (lastCode === 'PLACE_BLOCKED_BY_SELF') {
+      lastEvidence = evidence
+      packetFailure = true
+
+      // A provider-proven refusal (no item consumed, no block changed) is the
+      // only failure that may try another face. A timeout, off-target placement
+      // or consumed item is terminal for this job.
+      if (evidence.retrySafe !== true) {
         return {
           state: 'failed',
           code: lastCode,
-          observed: {
-            blockedBy: 'self',
-            target,
-            face,
-            attempts: attempts as unknown as never,
-            ...(result.observed === undefined ? {} : { provider: result.observed }),
-          },
+          observed: failureObserved(target, cells, attempts, supportHint, evidence, choice.face, plan.stand),
         }
       }
-      continue
+      if (index < choices.length - 1) continue
+      // All faces of this stance were safe refusals; a later stance may expose
+      // another face, still without consuming the item.
+      break
     }
-    attempts.push({ face, place: 'ok', ok: true })
-    // The server accepted the placement. One immediate read confirms every
-    // cell of the group; permanence is the plan verifier's job.
-    if (cellsMatch(port, cells, expected)) return { state: 'succeeded' }
-    lastCode = 'PLACE_READBACK_MISMATCH'
   }
-  // Keep the provider's own failure record (face/provider code/message/
-  // supports) as the same-observation evidence the failure projection copies.
-  const observed: Record<string, JsonValue> = {}
-  if (isRecord(lastObserved)) Object.assign(observed, lastObserved)
-  else if (lastObserved !== undefined) observed.provider = lastObserved
-  observed.target = target as unknown as JsonValue
-  observed.attempts = attempts as unknown as JsonValue
-  if (lastFace !== undefined) observed.face = lastFace
+
+  if (packetFailure) {
+    return {
+      state: 'failed',
+      code: lastCode ?? 'PLACE_FAILED',
+      observed: failureObserved(target, cells, attempts, supportHint, lastEvidence),
+    }
+  }
+  const blocked = attempts.some(attempt => attempt.code === 'PLACE_BLOCKED_BY_SELF')
   return {
     state: 'failed',
-    code: lastCode,
-    observed: observed as unknown as JsonValue,
+    code: blocked ? 'PLACE_BLOCKED_BY_SELF' : 'PLACE_UNSUPPORTED',
+    observed: failureObserved(target, cells, attempts, supportHint),
   }
 }
 
-async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefined> {
-  if (port.lookYaw === undefined) return undefined
-  const result = await port.lookYaw(yaw)
-  return result.state === 'ok' ? undefined : (result.code ?? 'PLACE_LOOK_FAILED')
+function preflight(
+  port: ClientPort,
+  target: Cell,
+  cells: Cell[],
+  expected: ExpectedBlock,
+  params: PlaceParams,
+  supportHint: Cell | undefined,
+): DriverResult | undefined {
+  const first = port.blockAt(target)
+  if (first === null || !first.loaded) {
+    return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE', observed: { target, cells } }
+  }
+  if (cellsMatch(port, cells, expected)) {
+    return {
+      state: 'succeeded',
+      observed: {
+        kind: 'place',
+        target,
+        cells,
+        item: params.item,
+        alreadyPlaced: true,
+        placedAt: target,
+        placedCells: cellViews(port, cells),
+        ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
+      },
+    }
+  }
+  for (const cell of cells) {
+    const block = port.blockAt(cell)
+    if (block === null || !block.loaded) {
+      return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE', observed: { target, cells, cell } }
+    }
+    if (isReplaceableTarget(block)) continue
+    return {
+      state: 'failed',
+      code: 'PLACE_TARGET_OCCUPIED',
+      observed: {
+        kind: 'place',
+        target,
+        cells,
+        item: params.item,
+        occupied: { cell, block: block.name, replaceable: false },
+        suggestedCells: suggestedPlaceCells(port, cells),
+        ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
+      },
+    }
+  }
+  return undefined
+}
+
+function faceChoices(
+  port: ClientPort,
+  target: Cell,
+  stand: Cell,
+  requestedFace: Face | undefined,
+): FaceChoice[] {
+  const candidates = requestedFace === undefined
+    ? FACES
+    : FACES.filter(face => face.name === requestedFace)
+  const eye = { x: stand.x + 0.5, y: stand.y + 1.5, z: stand.z + 0.5 }
+  const center = { x: target.x + 0.5, y: target.y + 0.5, z: target.z + 0.5 }
+  const baseAllowed = new Set([cellKey(stand), cellKey(target)])
+  const choices: FaceChoice[] = []
+  for (const face of candidates) {
+    const reference = { x: target.x + face.dx, y: target.y + face.dy, z: target.z + face.dz }
+    const support = port.blockAt(reference)
+    if (!isPlaceSupport(support)) continue
+    // `face.dx..` points from the target to the reference; the clicked face is
+    // the shared boundary, at the target centre plus half that offset.
+    const point = {
+      x: center.x + face.dx * 0.5,
+      y: center.y + face.dy * 0.5,
+      z: center.z + face.dz * 0.5,
+    }
+    if (Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z) > 4.5) continue
+    // The line to the face centre may graze the reference block itself; it is
+    // the support, not an obstruction.
+    const allowed = new Set(baseAllowed)
+    allowed.add(cellKey(reference))
+    if (!lineClear(port, eye, point, allowed)) continue
+    choices.push({ face: face.name, reference, support })
+  }
+  return choices
+}
+
+function successObserved(
+  port: ClientPort,
+  target: Cell,
+  cells: Cell[],
+  params: PlaceParams,
+  expected: ExpectedBlock,
+  face: Face,
+  stance: Cell,
+  attempts: Attempt[],
+  supportHint: Cell | undefined,
+  evidence: PlaceEvidence,
+): JsonValue {
+  return {
+    kind: 'place',
+    target,
+    cells,
+    item: params.item,
+    expected,
+    face,
+    stance,
+    placedAt: target,
+    placedCells: cellViews(port, cells),
+    alreadyPlaced: false,
+    ...(attempts.length <= 1 ? {} : { attempts: attempts as unknown as JsonValue }),
+    ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
+    ...(evidence.itemConsumed === undefined ? {} : { itemConsumed: evidence.itemConsumed }),
+    ...(evidence.itemCountBefore === undefined ? {} : { itemCountBefore: evidence.itemCountBefore }),
+    ...(evidence.itemCountAfter === undefined ? {} : { itemCountAfter: evidence.itemCountAfter }),
+    ...(evidence.supports === undefined ? {} : { supports: evidence.supports }),
+  }
+}
+
+function failureObserved(
+  target: Cell,
+  cells: Cell[],
+  attempts: Attempt[],
+  supportHint: Cell | undefined,
+  evidence?: PlaceEvidence,
+  face?: Face,
+  stance?: Cell,
+): JsonValue {
+  return {
+    kind: 'place',
+    target,
+    cells,
+    ...(face === undefined ? {} : { face }),
+    ...(stance === undefined ? {} : { stance }),
+    ...(evidence?.placedAt === undefined ? {} : { placedAt: evidence.placedAt }),
+    ...(evidence?.placedCells === undefined ? {} : { placedCells: evidence.placedCells }),
+    ...(evidence?.changedCells === undefined ? {} : { changedCells: evidence.changedCells }),
+    ...(evidence?.itemConsumed === undefined ? {} : { itemConsumed: evidence.itemConsumed }),
+    ...(evidence?.retrySafe === undefined ? {} : { retrySafe: evidence.retrySafe }),
+    ...(evidence?.supports === undefined ? {} : { supports: evidence.supports }),
+    ...(evidence?.providerCode === undefined ? {} : { providerCode: evidence.providerCode }),
+    ...(evidence?.providerMessage === undefined ? {} : { providerMessage: evidence.providerMessage }),
+    ...(evidence?.itemCountBefore === undefined ? {} : { itemCountBefore: evidence.itemCountBefore }),
+    ...(evidence?.itemCountAfter === undefined ? {} : { itemCountAfter: evidence.itemCountAfter }),
+    attempts: attempts as unknown as JsonValue,
+    ...(supportHint === undefined ? {} : { supportMatchesExpected: true, suggestedTarget: supportHint }),
+  }
+}
+
+function readPlaceEvidence(value: JsonValue | undefined): PlaceEvidence {
+  if (!isRecord(value)) return {}
+  const at = cellValue(value.placedAt)
+  const placedCells = arrayCells(value.placedCells)
+  const changedCells = arrayChangedCells(value.changedCells)
+  return {
+    ...(at === undefined ? {} : { placedAt: at }),
+    ...(placedCells === undefined ? {} : { placedCells }),
+    ...(changedCells === undefined ? {} : { changedCells }),
+    ...(typeof value.itemConsumed === 'boolean' || value.itemConsumed === null ? { itemConsumed: value.itemConsumed } : {}),
+    ...(typeof value.retrySafe === 'boolean' ? { retrySafe: value.retrySafe } : {}),
+    ...(isRecord(value.supports) ? { supports: booleanRecord(value.supports) } : {}),
+    ...(typeof value.providerCode === 'string' ? { providerCode: value.providerCode } : {}),
+    ...(typeof value.providerMessage === 'string' ? { providerMessage: value.providerMessage } : {}),
+    ...(typeof value.itemCountBefore === 'number' ? { itemCountBefore: value.itemCountBefore } : {}),
+    ...(typeof value.itemCountAfter === 'number' ? { itemCountAfter: value.itemCountAfter } : {}),
+  }
+}
+
+async function confirmCells(port: ClientPort, cells: Cell[], expected: ExpectedBlock): Promise<boolean> {
+  if (cellsMatch(port, cells, expected)) return true
+  await sleep(100)
+  if (cellsMatch(port, cells, expected)) return true
+  await sleep(100)
+  return cellsMatch(port, cells, expected)
+}
+
+function cellsMatch(port: ClientPort, cells: Cell[], expected: ExpectedBlock): boolean {
+  return cells.every(cell => {
+    const block = port.blockAt(cell)
+    return block !== null && block.loaded && matchesName(block, expected)
+  })
+}
+
+function cellViews(port: ClientPort, cells: Cell[]): JsonValue {
+  return cells.map(cell => {
+    const block = port.blockAt(cell)
+    return {
+      ...cell,
+      name: block === null ? null : block.name,
+      loaded: block?.loaded === true,
+    }
+  }) as unknown as JsonValue
+}
+
+function matchesName(block: BlockInfo, expected: ExpectedBlock): boolean {
+  // The driver proves the block identity; the plan verifier proves the state
+  // subset (door half, bed part) once the server's update has applied.
+  return matchesExpected({ name: block.name, loaded: block.loaded }, { name: expected.name })
+}
+
+function expectedSupport(port: ClientPort, target: Cell, item: string): Cell | undefined {
+  for (const face of FACES) {
+    const reference = { x: target.x + face.dx, y: target.y + face.dy, z: target.z + face.dz }
+    const block = port.blockAt(reference)
+    if (block !== null && block.loaded && sameItem(block.name, item)) return reference
+  }
+  return undefined
+}
+
+/** Air/fluid/`replaceable` targets may receive a block; solid targets may not. */
+function isReplaceableTarget(block: BlockInfo): boolean {
+  if (!block.loaded) return false
+  const name = normalizeName(block.name)
+  if (isAir(name) || name === 'water' || name === 'lava') return true
+  if (block.serverTags !== undefined) {
+    return block.serverTags.has('minecraft:replaceable') || block.serverTags.has('replaceable')
+  }
+  return REPLACEABLE.has(name)
+}
+
+/** A placement reference needs collision, not merely a non-air name. */
+function isPlaceSupport(block: BlockInfo | null): block is BlockInfo {
+  if (block === null || !block.loaded) return false
+  if (isAir(normalizeName(block.name)) || block.name === 'water' || block.name === 'lava') return false
+  if (block.solid === false) return false
+  if (block.collision !== undefined) return block.collision.length > 0
+  // Adapters without collision metadata keep the old name-based fallback.
+  return true
+}
+
+function lineClear(port: ClientPort, from: Cell, to: Cell, allowed: Set<string>): boolean {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z)
+  const steps = Math.ceil(distance / 0.1)
+  for (let step = 1; step < steps; step += 1) {
+    const t = step / steps
+    const at = {
+      x: Math.floor(from.x + (to.x - from.x) * t),
+      y: Math.floor(from.y + (to.y - from.y) * t),
+      z: Math.floor(from.z + (to.z - from.z) * t),
+    }
+    if (allowed.has(cellKey(at))) continue
+    const block = port.blockAt(at)
+    // Unknown/unloaded cells are not proof of a wall; the provider still has the
+    // final say. A loaded non-air block on the line is a real obstruction.
+    if (block === null || !block.loaded) continue
+    if (!isAir(block.name) && block.name !== 'water' && block.name !== 'lava') return false
+  }
+  return true
 }
 
 /** Add the unified failure projection to every placement failure path. */
@@ -306,6 +620,7 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
   const cells = [target, ...(params.cells ?? [])]
   const observed = result.observed
   const provider = isRecord(observed) ? observed : undefined
+  const evidence = readPlaceEvidence(observed)
   const facts: Record<string, JsonValue> = {
     target,
     snapshot: failureSnapshot(port, target, observed) as unknown as JsonValue,
@@ -318,13 +633,25 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
   }
   // Prefer the provider's own six-face read from the placement window; fall
   // back to reading the target only when the provider did not report it.
-  const providerSupports = isRecord(provider?.supports) ? provider.supports : undefined
+  const providerSupports = evidence.supports ?? (isRecord(provider?.supports) ? booleanRecord(provider.supports) : undefined)
   if (code === 'PLACE_FAILED' || code === 'PLACE_READBACK_MISMATCH'
-    || code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
+    || code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT' || code === 'PLACE_OFF_TARGET') {
     facts.supports = (providerSupports ?? supportFacts(port, target)) as unknown as JsonValue
   }
-  if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT') {
+  if (code === 'PLACE_UNSUPPORTED' || code === 'NO_SUPPORT' || code === 'PLACE_TARGET_OCCUPIED') {
     facts.suggestedCells = suggestedPlaceCells(port, cells) as unknown as JsonValue
+  }
+  if (evidence.placedAt !== undefined) facts.placedAt = evidence.placedAt as unknown as JsonValue
+  if (evidence.placedCells !== undefined) facts.placedCells = evidence.placedCells as unknown as JsonValue
+  if (evidence.changedCells !== undefined) facts.changedCells = evidence.changedCells as unknown as JsonValue
+  if (evidence.itemConsumed !== undefined) facts.itemConsumed = evidence.itemConsumed
+  if (evidence.retrySafe !== undefined) facts.retrySafe = evidence.retrySafe
+  if (evidence.itemCountBefore !== undefined) facts.itemCountBefore = evidence.itemCountBefore
+  if (evidence.itemCountAfter !== undefined) facts.itemCountAfter = evidence.itemCountAfter
+  if (isRecord(provider?.occupied)) facts.occupied = provider.occupied as unknown as JsonValue
+  if (provider?.supportMatchesExpected === true) {
+    facts.supportMatchesExpected = true
+    if (isCell(provider.suggestedTarget)) facts.suggestedTarget = provider.suggestedTarget as unknown as JsonValue
   }
   // Stand cells, not placement candidates: the same `adjacent` meaning as
   // PLACE_BLOCKED_BY_SELF.
@@ -352,24 +679,11 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
   }
 }
 
-function cellsMatch(port: ClientPort, cells: Cell[], expected: ExpectedBlock): boolean {
-  return cells.every(cell => {
-    const block = port.blockAt(cell)
-    return block !== null && block.loaded && matchesName(block, expected)
-  })
-}
-
-function matchesName(block: BlockInfo, expected: ExpectedBlock): boolean {
-  // The driver proves the block identity; the plan verifier proves the state
-  // subset (door half, bed part) once the server's update has applied.
-  return matchesExpected({ name: block.name, loaded: block.loaded }, { name: expected.name })
-}
-
-/** All six faces of one target cell, true when that neighbour is solid. */
+/** All six faces of one target cell, true when that neighbour is a support. */
 function supportFacts(port: ClientPort, target: Cell): Record<Face, boolean> {
   const result = {} as Record<Face, boolean>
   for (const face of FACES) {
-    result[face.name] = isSolid(port.blockAt({
+    result[face.name] = isPlaceSupport(port.blockAt({
       x: target.x + face.dx,
       y: target.y + face.dy,
       z: target.z + face.dz,
@@ -396,11 +710,11 @@ function suggestedPlaceCells(
       for (let dz = -2; dz <= 2; dz += 1) {
         if (dx === 0 && dy === 0 && dz === 0) continue
         const candidate: Cell = { x: target.x + dx, y: target.y + dy, z: target.z + dz }
-        if (cells.some(cell => cell.x === candidate.x && cell.y === candidate.y && cell.z === candidate.z)) continue
+        if (cells.some(cell => sameCell(cell, candidate))) continue
         if (bodyCoversCells(self, [candidate])) continue
         const block = port.blockAt(candidate)
         if (block === null || !block.loaded || !isAir(block.name)) continue
-        const support = FACES.find(face => isSolid(port.blockAt({
+        const support = FACES.find(face => isPlaceSupport(port.blockAt({
           x: candidate.x + face.dx,
           y: candidate.y + face.dy,
           z: candidate.z + face.dz,
@@ -419,26 +733,8 @@ function suggestedPlaceCells(
   return candidates.slice(0, 3).map(({ cell, support }) => ({ cell, support }))
 }
 
-function supportFaces(port: ClientPort, target: Cell): Face[] {
-  const faces: Face[] = []
-  for (const face of FACES) {
-    const reference = port.blockAt({
-      x: target.x + face.dx,
-      y: target.y + face.dy,
-      z: target.z + face.dz,
-    })
-    if (isSolid(reference)) faces.push(face.name)
-  }
-  return faces
-}
-
 function isAir(name: string): boolean {
   return name === 'air' || name === 'cave_air' || name === 'void_air'
-}
-
-function isSolid(block: BlockInfo | null): boolean {
-  return block !== null && block.loaded && !isAir(block.name)
-    && block.name !== 'water' && block.name !== 'lava'
 }
 
 /** Does the body at `pos` occupy any of the target cells? */
@@ -448,6 +744,12 @@ function bodyCoversCells(pos: { x: number; y: number; z: number }, cells: readon
   const firstY = Math.floor(pos.y + 0.001)
   const lastY = Math.floor(pos.y + PLAYER_HEIGHT - 0.001)
   return cells.some(cell => cell.x === x && cell.z === z && cell.y >= firstY && cell.y <= lastY)
+}
+
+async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefined> {
+  if (port.lookYaw === undefined) return undefined
+  const result = await port.lookYaw(yaw)
+  return result.state === 'ok' ? undefined : (result.code ?? 'PLACE_LOOK_FAILED')
 }
 
 /**
@@ -465,4 +767,65 @@ function suggestedStances(port: ClientPort, cells: readonly Cell[]): Cell[] {
     accept: (cell, feetY) => !bodyCoversCells({ x: cell.x + 0.5, y: feetY, z: cell.z + 0.5 }, cells),
   }, { from: standingCell(rules, port.self().pos), dry: true })
   return query.cells.slice(0, 4).map(candidate => candidate.cell)
+}
+
+function isCell(value: unknown): value is Cell {
+  return isRecord(value)
+    && typeof value.x === 'number'
+    && typeof value.y === 'number'
+    && typeof value.z === 'number'
+}
+
+function cellValue(value: JsonValue | undefined): Cell | undefined {
+  return isCell(value) ? { x: value.x, y: value.y, z: value.z } : undefined
+}
+
+function arrayCells(value: JsonValue | undefined): Cell[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const cells: Cell[] = []
+  for (const entry of value.slice(0, 8)) {
+    if (isCell(entry)) cells.push({ x: entry.x, y: entry.y, z: entry.z })
+  }
+  return cells
+}
+
+function arrayChangedCells(value: JsonValue | undefined): Array<Cell & { name: string }> | undefined {
+  if (!Array.isArray(value)) return undefined
+  const cells: Array<Cell & { name: string }> = []
+  for (const entry of value.slice(0, 8)) {
+    if (!isRecord(entry) || typeof entry.name !== 'string') continue
+    if (typeof entry.x !== 'number' || typeof entry.y !== 'number' || typeof entry.z !== 'number') continue
+    cells.push({ x: entry.x, y: entry.y, z: entry.z, name: entry.name })
+  }
+  return cells
+}
+
+function booleanRecord(value: Record<string, JsonValue>): Record<string, boolean> {
+  const result: Record<string, boolean> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === 'boolean') result[key] = entry
+  }
+  return result
+}
+
+function sameCell(left: Cell, right: Cell): boolean {
+  return left.x === right.x && left.y === right.y && left.z === right.z
+}
+
+function cellKey(cell: Cell): string {
+  return `${cell.x},${cell.y},${cell.z}`
+}
+
+function normalizeName(name: string): string {
+  return name.replace(/^minecraft:/u, '')
+}
+
+function sameItem(left: string, right: string): boolean {
+  return normalizeName(left) === normalizeName(right)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
 }

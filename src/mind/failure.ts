@@ -34,6 +34,7 @@ export type FailureDiagnosis =
   | 'HEAD_BLOCKED'
   | 'SUPPORT_MISSING'
   | 'TARGET_UNLOADED'
+  | 'TARGET_OCCUPIED'
   | 'START_EMBEDDED'
   | 'NO_STAND_CELL'
   | 'EFFECT_UNCONFIRMED'
@@ -153,6 +154,16 @@ const FACT_KEYS = new Set([
   'elapsedMs',
   'elapsedGameAge',
   'unreachableDrops',
+  'placedAt',
+  'placedCells',
+  'changedCells',
+  'itemConsumed',
+  'retrySafe',
+  'occupied',
+  'supportMatchesExpected',
+  'suggestedTarget',
+  'itemCountBefore',
+  'itemCountAfter',
 ])
 
 const MAX_FACT_ARRAY = 8
@@ -300,6 +311,7 @@ export function diagnoseFailure(input: {
   if (code === 'STOP_UNCONFIRMED') return 'RELEASE_UNCONFIRMED'
   if (code === 'ACT_UNCONFIRMED' || code === 'CLIENT_TIMEOUT') return 'EFFECT_UNCONFIRMED'
   if (code === 'ACTION_DENIED') return 'DENIED'
+  if (code === 'PLACE_TARGET_OCCUPIED') return 'TARGET_OCCUPIED'
   if (TOOL_CODES.has(code)) return 'TOOL_MISSING'
   // PICKUP_UNREACHABLE is the drop-specific "no reachable stand cell" code;
   // its requiredDig lists the blocking cells, not a body head/support fault.

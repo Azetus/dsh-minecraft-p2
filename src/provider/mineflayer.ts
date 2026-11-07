@@ -9,8 +9,19 @@ import { defaultConstraints } from '../motion/model/types.ts'
 import type { Cell } from '../motion/model/types.ts'
 import { VanillaNodeReader } from '../motion/vanilla/classify.ts'
 import { planVanillaPath } from '../motion/vanilla/search.ts'
-import { attachBlockTags } from '../port/mineflayer/block-tags.ts'
+import { attachBlockTags, blockTagsFor } from '../port/mineflayer/block-tags.ts'
 import { parseUnstickBlocks } from '../port/policy.ts'
+import { REPLACEABLE } from '../motion/model/semantics/vanilla.ts'
+import {
+  countItem,
+  diffPlacement,
+  isPlaceSupport,
+  isTargetOccupied,
+  itemConsumed,
+  retrySafe,
+  samePlacePoint,
+  snapshotPlaceNeighborhood,
+} from './place-evidence.ts'
 
 /**
  * The mineflayer module itself, re-exported for the body's authored-op bridge.
@@ -155,6 +166,19 @@ function isAirName(name: string): boolean {
 
 function isFluidName(name: string): boolean {
   return name === 'water' || name === 'flowing_water' || name === 'lava' || name === 'flowing_lava'
+}
+
+/** Tag-first replaceable check, aligned with the driver's target preflight. */
+function isReplaceableTargetBlock(
+  block: NonNullable<ReturnType<Bot['blockAt']>>,
+  tags: ReadonlySet<string> | undefined,
+): boolean {
+  const name = block.name.replace(/^minecraft:/u, '')
+  if (isAirName(name) || isFluidName(name)) return true
+  if (tags !== undefined) {
+    return tags.has('minecraft:replaceable') || tags.has('replaceable')
+  }
+  return REPLACEABLE.has(name)
 }
 
 function clampNumber(value: JsonValue | undefined, fallback: number, min: number, max: number): number {
@@ -1530,39 +1554,84 @@ class MineflayerActHandle implements ActHandle {
           if (PLACE_FACES[requestedFace] === undefined) {
             throw new Error(`unsupported place face: ${requestedFace}`)
           }
+          const itemName = typeof this.args.item === 'string'
+            ? this.args.item.replace(/^minecraft:/u, '')
+            : ''
+          if (itemName.length === 0) {
+            this.failed = new Error('place requires an item name')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
           const target = new Vec3(x, y, z)
           const supports: Record<string, boolean> = {}
           for (const [name, vector] of Object.entries(PLACE_FACES)) {
             const reference = new Vec3(x - vector[0], y - vector[1], z - vector[2])
-            const block = this.bot.blockAt(reference)
-            supports[name] = block !== null && !isAirName(block.name) && !isFluidName(block.name)
+            supports[name] = isPlaceSupport(this.bot.blockAt(reference))
           }
-          // Prefer the requested face, then fall back to any other solid
-          // reference. A side/top/bottom face is enough for mineflayer; the
-          // old "up only" assumption rejected valid human placements.
-          const order = [requestedFace, ...Object.keys(PLACE_FACES).filter(name => name !== requestedFace)]
-          let vector: readonly [number, number, number] | undefined
-          let referenceBlock: ReturnType<Bot['blockAt']> | null = null
-          let usedFace: string | undefined
-          for (const name of order) {
-            if (supports[name] !== true) continue
-            const candidate = PLACE_FACES[name]
-            if (candidate === undefined) continue
-            const reference = new Vec3(x - candidate[0], y - candidate[1], z - candidate[2])
-            vector = candidate
-            referenceBlock = this.bot.blockAt(reference)
-            usedFace = name
-            break
-          }
-          if (vector === undefined || referenceBlock === null || usedFace === undefined) {
-            this.failed = new Error(`no support block around ${x},${y},${z}`)
-            this.failedCode = 'PLACE_UNSUPPORTED'
-            this.failureDetails = { supports, requestedFace }
+          const targetBlock = this.bot.blockAt(target)
+          if (targetBlock === null) {
+            this.failed = new Error(`place target ${x},${y},${z} is not loaded`)
+            this.failedCode = 'OBSERVATION_UNAVAILABLE'
+            this.failureDetails = { target: { x, y, z }, supports, requestedFace }
             return
           }
-          const chosenVector = vector
+          // A target that already has the requested block is already done; no
+          // item, equip or packet is needed.
+          if (targetBlock.name === itemName) {
+            this.result = {
+              name: targetBlock.name,
+              x,
+              y,
+              z,
+              face: requestedFace,
+              alreadyPlaced: true,
+              placedAt: { x, y, z },
+              placedCells: [{ x, y, z }],
+            }
+            this.completed = true
+            return
+          }
+          // Placing into a colliding block is refused by the server. Stop before
+          // touching the inventory or spending a packet. Tagged replaceable
+          // blocks (grass, snow layer, ...) are still legal targets.
+          const targetType = (targetBlock as unknown as { type?: number }).type
+          const targetTags = typeof targetType === 'number'
+            ? blockTagsFor(this.bot).tagsFor(targetType)
+            : undefined
+          if (isTargetOccupied(targetBlock) && !isReplaceableTargetBlock(targetBlock, targetTags)) {
+            this.failed = new Error(`target ${x},${y},${z} is occupied by ${targetBlock.name}`)
+            this.failedCode = 'PLACE_TARGET_OCCUPIED'
+            this.failureDetails = {
+              target: { x, y, z },
+              block: targetBlock.name,
+              supports,
+              requestedFace,
+            }
+            return
+          }
+          // The driver selected one face. Honour it exactly: a provider-side
+          // six-face fallback used to hide which face actually failed and could
+          // consume one item across several attempts.
+          const chosenVector = PLACE_FACES[requestedFace]
+          if (chosenVector === undefined) throw new Error(`unsupported place face: ${requestedFace}`)
+          const reference = new Vec3(x - chosenVector[0], y - chosenVector[1], z - chosenVector[2])
+          const referenceBlock = this.bot.blockAt(reference)
+          if (referenceBlock === null || !isPlaceSupport(referenceBlock)) {
+            this.failed = new Error(`no support block on face ${requestedFace} of ${x},${y},${z}`)
+            this.failedCode = 'PLACE_UNSUPPORTED'
+            this.failureDetails = {
+              target: { x, y, z },
+              face: requestedFace,
+              requestedFace,
+              supports,
+              reference: { x: reference.x, y: reference.y, z: reference.z },
+              // No packet was sent: another face can be tried safely.
+              retrySafe: true,
+            }
+            return
+          }
+          const chosenFace = requestedFace
           const chosenReference = referenceBlock
-          const chosenFace = usedFace
           void (async () => {
             // The client inventory model can lag behind the server; refresh it
             // before trusting `heldItem` or the placement will be refused.
@@ -1574,15 +1643,84 @@ class MineflayerActHandle implements ActHandle {
               throw Object.assign(new Error(`target ${x},${y},${z} is inside the bot's own body`), { code: 'PLACE_BLOCKED_BY_SELF' })
             }
             const held = this.bot.heldItem
-            if (held === null || held === undefined) {
-              throw Object.assign(new Error('no item is held for placement'), { code: 'PLACE_NO_ITEM' })
+            if (held === null || held === undefined || held.name !== itemName) {
+              throw Object.assign(new Error(`no ${itemName} is held for placement`), { code: 'PLACE_NO_ITEM' })
             }
-            await this.bot.placeBlock(chosenReference, new Vec3(chosenVector[0], chosenVector[1], chosenVector[2]))
-            const placed = this.bot.blockAt(target)
-            if (placed === null || isAirName(placed.name) || placed.name !== held.name) {
-              throw Object.assign(new Error(`server did not place ${held.name} at ${x},${y},${z}`), { code: 'PLACE_FAILED' })
+            const before = snapshotPlaceNeighborhood(
+              point => this.bot.blockAt(new Vec3(point.x, point.y, point.z)),
+              { x, y, z },
+            )
+            const itemCountBefore = countItem(this.bot.inventory.items(), itemName)
+            const wasSneaking = typeof this.bot.getControlState === 'function'
+              && this.bot.getControlState('sneak')
+            let placeError: unknown
+            try {
+              // Interactive reference blocks (crafting table, chest, furnace,
+              // ...) consume a plain right-click to open their UI. Sneaking is
+              // the vanilla way to place against them instead.
+              if (!wasSneaking && typeof this.bot.setControlState === 'function') {
+                this.bot.setControlState('sneak', true)
+              }
+              await this.bot.placeBlock(chosenReference, new Vec3(chosenVector[0], chosenVector[1], chosenVector[2]))
+            } catch (error) {
+              placeError = error
+            } finally {
+              if (!wasSneaking && typeof this.bot.setControlState === 'function') {
+                this.bot.setControlState('sneak', false)
+              }
             }
-            return { name: placed.name, x, y, z, face: chosenFace }
+            await this.syncInventoryWindow()
+            const after = snapshotPlaceNeighborhood(
+              point => this.bot.blockAt(new Vec3(point.x, point.y, point.z)),
+              { x, y, z },
+            )
+            const diff = diffPlacement(before, after, itemName)
+            const itemCountAfter = countItem(this.bot.inventory.items(), itemName)
+            const consumed = itemConsumed(itemCountBefore, itemCountAfter)
+            const targetAfter = this.bot.blockAt(target)
+            const targetPlaced = diff.placedCells.some(cell => samePlacePoint(cell, { x, y, z }))
+              || (targetAfter !== null && targetAfter.name === itemName)
+            if (placeError === undefined && targetPlaced) {
+              return {
+                name: itemName,
+                x,
+                y,
+                z,
+                face: chosenFace,
+                placedAt: { x, y, z },
+                placedCells: diff.placedCells.length === 0 ? [{ x, y, z }] : diff.placedCells,
+                itemCountBefore,
+                itemCountAfter,
+                itemConsumed: consumed,
+                ...(diff.changedCells.length === 0 ? {} : { changedCells: diff.changedCells }),
+              }
+            }
+            const message = placeError instanceof Error
+              ? placeError.message
+              : placeError === undefined
+                ? `server did not place ${itemName} at ${x},${y},${z}`
+                : String(placeError)
+            const code = diff.placedCells.length > 0 && !targetPlaced
+              ? 'PLACE_OFF_TARGET'
+              : consumed === true ? 'PLACE_ITEM_CONSUMED' : 'PLACE_FAILED'
+            throw Object.assign(new Error(message), {
+              code,
+              details: {
+                target: { x, y, z },
+                face: chosenFace,
+                requestedFace,
+                providerCode: code,
+                providerMessage: message.slice(0, 200),
+                supports,
+                placedAt: diff.placedCells[0] ?? null,
+                placedCells: diff.placedCells,
+                changedCells: diff.changedCells,
+                itemCountBefore,
+                itemCountAfter,
+                itemConsumed: consumed,
+                retrySafe: retrySafe({ message, consumed, placedCells: diff.placedCells }),
+              },
+            })
           })().then(result => {
             this.result = result
             this.completed = true
@@ -1594,7 +1732,8 @@ class MineflayerActHandle implements ActHandle {
               : 'PLACE_FAILED'
             // The driver needs the face and the provider's own error text to
             // explain a placement that did not read back; keep it structured.
-            this.failureDetails = {
+            const details = (error as { details?: JsonValue }).details
+            this.failureDetails = details ?? {
               face: chosenFace,
               providerCode: this.failedCode,
               providerMessage: failed.message.slice(0, 200),
@@ -2371,7 +2510,9 @@ function reasonText(reason: unknown): string {
 
 function actErrorCategory(code: string): 'environment' | 'runtime' | 'timeout' {
   if (code === 'GAME_PAUSED' || code === 'CONNECTION_LOST' || code === 'MOVE_TO_BLOCKED') return 'environment'
-  if (code === 'PLACE_NO_ITEM' || code === 'PLACE_UNSUPPORTED' || code === 'ATTACK_NO_TARGET' || code === 'EQUIP_NO_ITEM' || code === 'USE_NO_ITEM') return 'environment'
+  if (code === 'PLACE_NO_ITEM' || code === 'PLACE_UNSUPPORTED' || code === 'PLACE_TARGET_OCCUPIED'
+    || code === 'PLACE_OFF_TARGET' || code === 'PLACE_ITEM_CONSUMED'
+    || code === 'ATTACK_NO_TARGET' || code === 'EQUIP_NO_ITEM' || code === 'USE_NO_ITEM') return 'environment'
   if (code === 'ACT_TIMEOUT' || code === 'MOVE_TO_TIMEOUT') return 'timeout'
   return 'runtime'
 }

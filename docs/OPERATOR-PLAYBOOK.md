@@ -61,8 +61,11 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(GOTO_STUCK)` | 位移看门狗/恢复失败；读 `facts.snapshot`/`blockedBy`/`probe`，先清阻挡或换路线 |
 | `failed(GOAL_NOT_STANDABLE)` | exact 目标不可站；换可站格或先清目标格；`traverse scaffold` 由 driver 传 `allowUnsupportedGoal` |
 | `failed(BODY_OVERLAP)` | 身体 AABB 与方块相交；用 `facts.snapshot.bodyOverlap`/`blockedBy` 清格；用 `go {unstickDig}` 显式授权 |
-| `failed(PLACE_FAILED)` | 放置尝试后未读回目标方块；读 `failure.facts` 的 `target/face/supports/attempts/providerCode/providerMessage` 与 `diagnosis`。`START_EMBEDDED` 按 `adjacent` 换站位；`SUPPORT_MISSING` 先补/换支撑面；`DENIED` 换位置/权限；其余先观察再决定。不要原样重下同一条 place |
-| `failed(PLACE_UNSUPPORTED)` / `failed(NO_SUPPORT)` | 目标周围没有可用支撑面；读 `supports`/`suggestedCells`，换候选格或先补支撑 |
+| `failed(PLACE_FAILED)` | 放置尝试后未读回目标方块；读 `failure.facts` 的 `target/face/supports/placedAt/placedCells/itemConsumed/retrySafe` 与 `diagnosis`。只有 `retrySafe:true` 才换面；`placedAt` 不在 target 时先核对坐标，不要原样重下同一条 place |
+| `failed(PLACE_TARGET_OCCUPIED)` | 目标格已有不可替换方块（如 grass_block）；换空气/可替换格或先 clear。该失败不会装备/消耗物品 |
+| `failed(PLACE_OFF_TARGET)` | 实际落点不在目标格；读 `facts.placedAt/placedCells`，修正坐标/参考面后再下，不要重复同一条 order |
+| `failed(PLACE_ITEM_CONSUMED)` | 物品已消耗但目标格没有确认方块；先观察实际落点和背包，再决定是否补放 |
+| `failed(PLACE_UNSUPPORTED)` / `failed(NO_SUPPORT)` | 请求的 face 没有可用支撑/视线；读 `supports`/`suggestedCells`，换候选格、显式 face 或先补支撑。provider 不会替你换面 |
 | `failed(PLACE_BLOCKED_BY_SELF)` | 目标格落在身体里；按 `adjacent` 换站位，不要反复同一条 place |
 | `failed(CRAFT_INCOMPLETE)` | 合成已开始但 `produced < requested`；读 `facts.count/attempted/crafted/produced`，只补差额 |
 | `failed(DIG_PARTIAL)` | 体积/隧道挖掘部分完成；读 `facts.stoppedAt/reason/causeCode/skipped/path`，只补剩余格，不重试整批 |

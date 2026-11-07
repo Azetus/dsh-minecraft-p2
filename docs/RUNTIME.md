@@ -109,6 +109,7 @@
    - `collect` 的部分/不可达/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/inventoryDelta`，不因 `failed` 丢掉已收集数量；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
    - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
+   - `place` 的 `PLACE_TARGET_OCCUPIED / PLACE_OFF_TARGET / PLACE_ITEM_CONSUMED / PLACE_READBACK_MISMATCH / PLACE_UNSUPPORTED / NO_SUPPORT` 不重试；`PLACE_FAILED` 只有在 provider 给出 `retrySafe:true` 时才可能换面，否则终态；
    - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
    - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
@@ -167,24 +168,26 @@
 
 ## 10. 放置是“尝试”，不是永久承诺
 
-- `place` 不预判目标格是否可替换；任何目标都尝试，服务器接受/拒绝才是放置结果。
-- 目标可以是水/岩浆等流体；底层不维护 replaceable 名单，也不把非空气一律当冲突。
-- place 的 `ok` 只表示“服务器接受了这次操作，且即时读回是 expected”；不表示方块会永久存在。
+- `place` 先预检目标格：已是期望方块 → `succeeded + observed.alreadyPlaced:true`；空气/流体/可替换方块可放；其他方块 → `PLACE_TARGET_OCCUPIED`，不移动、不装备、不发包。
+- 目标可以是水/岩浆等流体；可替换判定优先用 server tag `minecraft:replaceable`，tags 未就绪时回退名称表。
+- `place` 一次只发一个 face 的包；provider 不替 driver 换面。只有 provider 证明 `retrySafe:true`（明确 refusal、物品数不变、无新方块）时 driver 才换下一个 face，避免一次消耗后再次 `ensureHeld` 导致 `EQUIP_NO_ITEM`。
+- 成功/失败都带实际落点 `placedAt/placedCells` 与 `itemConsumed`；target 外出现方块 → `PLACE_OFF_TARGET`，物品减少但无落点 → `PLACE_ITEM_CONSUMED`。
+- place 的 `ok` 只表示“该 face 的目标格已读回 expected”；不表示方块会永久存在。
+- provider 在 `bot.placeBlock` 前后设置/恢复 sneak：交互方块（工作台/箱子/熔炉）普通右键会打开界面，sneak 后才能放到相邻格。
 - 终态由 verifier 判定：build order 验证每个期望方块仍在；sealed-room 验证外壳/内部。
 - 执行期间 plan 每 tick 重算工作项：方块消失会重新变成 unsatisfied，按 policy 重试或 blocked；不用计时器或异步稳定窗口。
 - 完成之后的世界变化属于后续观测/check，不归 place 保证。
 
 ### 10.1 放置面与朝向（当前限制）
 
-- place driver 目前**不能指定朝向**：它按 `up → down → north → south → east → west` 的固定顺序
-  找第一个实心邻居作为参考面并尝试；这不是随机，也不由 Agent 选择。
-- 没有“自动选面”的显式 API；参考面由 driver 的支撑邻居扫描决定，provider 只是执行。
+- `place` 的 `face` 是可选显式参数；省略时 driver 按 `up → down → north → south → east → west`
+  选第一个“有碰撞支撑 + 眼到面 ≤4.5 + 视线未挡”的面。显式 face 不可用就失败，不 fallback。
+- provider 只执行请求的 face；参考面由 driver 选择，provider 负责目标/支撑/物品/落点证据。
 - Minecraft 的最终方块状态还取决于玩家朝向、放置面与方块规则；当前不能保证得到特定 state。
 - 因此台阶的上/下半、楼梯/门/火把的朝向、部分红石元件的朝向都可能与 `expected.state` 不一致；
   `expected.state` 只用于**验证**，不是可指定的放置参数。
 - 不一致会表现为 `PLACE_READBACK_MISMATCH` 或 plan 失败/blocked，而不是被自动纠正。
-- 若未来需要定向放置，应在 place 参数中增加显式的 `face`/`look`/`orientation` 语义，
-  并同步 ClientPort 契约；当前保持现状。
+- 定向放置仍需要额外的 `look`/`orientation` 语义；当前 `face` 只决定点击参考面。
 
 ### 10.2 冲突策略（M3-03）
 

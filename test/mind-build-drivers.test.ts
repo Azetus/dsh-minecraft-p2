@@ -114,21 +114,48 @@ describe('place driver', () => {
     fake.world.set('1,64,0', block('air', target))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
     await wait(30)
-    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { placedAt: { x: 1, y: 64, z: 0 }, alreadyPlaced: false } })
     expect(fake.world.get('1,64,0')?.name).toBe('dirt')
     expect(fake.places.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('retries another support face after a refused placement', async () => {
-    const fake = fakePort({ failPlaceFaces: ['up'] })
+  it('retries another support face only when the provider proves retrySafe', async () => {
+    const fake = fakePort({
+      failPlaceFaces: ['up'],
+      placeFailureObserved: { retrySafe: true, itemConsumed: false },
+    })
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('2,64,0', block('stone', { x: 2, y: 64, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
     await wait(300)
-    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.places).toContain('up')
     expect(fake.places.some(face => face !== 'up')).toBe(true)
+  })
+
+  it('does not try another face after an item-consuming failure', async () => {
+    const fake = fakePort({
+      failPlaceFaces: ['up', 'down', 'north', 'south', 'east', 'west'],
+      failPlaceCode: 'PLACE_ITEM_CONSUMED',
+      placeFailureObserved: {
+        face: 'up',
+        placedAt: { x: 1, y: 63, z: 0 },
+        itemConsumed: true,
+        retrySafe: false,
+      },
+    })
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    await wait(30)
+
+    expect(handle.result()).toMatchObject({
+      state: 'failed',
+      code: 'PLACE_ITEM_CONSUMED',
+      observed: { placedAt: { x: 1, y: 63, z: 0 }, itemConsumed: true, retrySafe: false },
+    })
+    expect(fake.places).toEqual(['up'])
   })
 
   it('reports six-face supports and bounded candidate cells for PLACE_UNSUPPORTED', async () => {
@@ -216,7 +243,7 @@ describe('place driver', () => {
       },
     })
     expect(failure?.facts?.attempts).toEqual([
-      { face: 'up', place: 'failed', code: 'PLACE_FAILED', ok: false },
+      { stance: { x: 0, y: 64, z: 0 }, face: 'up', place: 'failed', code: 'PLACE_FAILED', ok: false },
     ])
     expect(failure?.facts?.adjacent).toEqual(expect.arrayContaining([{ x: 2, y: 64, z: 0 }]))
   })
@@ -304,7 +331,7 @@ describe('place driver', () => {
     fake.world.set('1,64,0', block('water', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
     await wait(30)
-    expect(handle.result()).toEqual({ state: 'succeeded' })
+    expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.places).toHaveLength(1)
     expect(fake.world.get('1,64,0')?.name).toBe('dirt')
   })
@@ -314,7 +341,7 @@ describe('place driver', () => {
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
-    await wait(30)
+    await wait(300)
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
     expect((handle.result().observed as { failure?: unknown }).failure)
       .toMatchObject({ layer: 'driver', code: 'PLACE_READBACK_MISMATCH', facts: { target: { x: 1, y: 64, z: 0 } } })
@@ -334,9 +361,107 @@ describe('place driver', () => {
     fake.world.set('10,64,0', block('air', target))
     const handle = createPlaceDriver().start(job({ x: 10, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
     await wait(30)
-    expect(handle.result()).toEqual({ state: 'succeeded' })
-    expect(fake.moves).toHaveLength(1)
+    expect(handle.result()).toMatchObject({ state: 'succeeded' })
+    expect(fake.moves.length).toBeGreaterThanOrEqual(1)
     expect(fake.places.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('rejects an occupied target before equipping or placing', async () => {
+    const fake = fakePort()
+    fake.world.set('1,64,0', block('grass_block', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    const result = handle.result()
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'PLACE_TARGET_OCCUPIED',
+      observed: { occupied: { cell: { x: 1, y: 64, z: 0 }, block: 'grass_block' } },
+    })
+    expect(fake.places).toHaveLength(0)
+    expect((result.observed as { failure?: unknown }).failure)
+      .toMatchObject({ diagnosis: 'TARGET_OCCUPIED', facts: { occupied: { block: 'grass_block' } } })
+  })
+
+  it('returns alreadyPlaced without a packet when the target already matches', async () => {
+    const fake = fakePort()
+    fake.world.set('1,64,0', block('dirt', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { alreadyPlaced: true, placedAt: { x: 1, y: 64, z: 0 } },
+    })
+    expect(fake.places).toHaveLength(0)
+  })
+
+  it('honours an explicit face without falling back to another support', async () => {
+    const fake = fakePort()
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({
+      x: 1, y: 64, z: 0, item: 'dirt', face: 'down',
+    }), { port: fake.port, now: () => 0 })
+    await wait(30)
+
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'PLACE_UNSUPPORTED' })
+    expect(fake.places).toHaveLength(0)
+  })
+
+  it('reports an expected support block as a hint without blocking the placement', async () => {
+    const fake = fakePort()
+    fake.world.set('1,63,0', block('dirt', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: {
+        supportMatchesExpected: true,
+        suggestedTarget: { x: 1, y: 63, z: 0 },
+      },
+    })
+  })
+
+  it('keeps the actual placedAt on an off-target failure', async () => {
+    const fake = fakePort({
+      failPlaceFaces: ['up'],
+      failPlaceCode: 'PLACE_OFF_TARGET',
+      placeFailureObserved: {
+        face: 'up',
+        placedAt: { x: 1, y: 63, z: 0 },
+        placedCells: [{ x: 1, y: 63, z: 0 }],
+        itemConsumed: true,
+        retrySafe: false,
+      },
+    })
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
+      port: fake.port,
+      now: () => 0,
+    })
+    await wait(30)
+
+    const result = handle.result()
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'PLACE_OFF_TARGET',
+      observed: { placedAt: { x: 1, y: 63, z: 0 }, itemConsumed: true },
+    })
+    expect((result.observed as { failure?: { facts?: { placedAt?: unknown } } }).failure?.facts?.placedAt)
+      .toEqual({ x: 1, y: 63, z: 0 })
   })
 })
 

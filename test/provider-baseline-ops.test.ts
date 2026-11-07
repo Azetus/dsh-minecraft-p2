@@ -18,6 +18,8 @@ function fakeBot(options: {
   recipes?: unknown[]
   craftError?: unknown
   placeWithoutEffect?: boolean
+  placeOffset?: Vec
+  consumeHeldOnPlace?: boolean
 } = {}) {
   const controls = new Map<string, boolean>()
   const blocks = options.blocks ?? new Map<string, string>()
@@ -107,10 +109,23 @@ function fakeBot(options: {
         z: reference.position.z + vector.z,
       }
       const held = (bot as unknown as { heldItem?: FakeItem | null }).heldItem
+      const dest = options.placeOffset === undefined
+        ? target
+        : {
+            x: target.x + options.placeOffset.x,
+            y: target.y + options.placeOffset.y,
+            z: target.z + options.placeOffset.z,
+          }
       if (options.placeWithoutEffect !== true && held !== null && held !== undefined) {
-        blocks.set(`${target.x},${target.y},${target.z}`, held.name)
+        blocks.set(`${dest.x},${dest.y},${dest.z}`, held.name)
       }
-      calls.push({ name: 'placeBlock', args: { target, vector } })
+      if (options.consumeHeldOnPlace === true && held !== null && held !== undefined) {
+        held.count = Math.max(0, held.count - 1)
+      }
+      calls.push({
+        name: 'placeBlock',
+        args: { target, vector, sneak: controls.get('sneak') ?? false },
+      })
     },
     setControlState: (name: string, value: boolean) => { controls.set(name, value) },
     getControlState: (name: string) => controls.get(name) ?? false,
@@ -363,7 +378,7 @@ describe('baseline query operations', () => {
 })
 
 describe('baseline placement support', () => {
-  it('falls back from the requested up face to a solid side reference', async () => {
+  it('honours the requested face instead of falling back to a side reference', async () => {
     const blocks = new Map<string, string>([
       ['1,64,0', 'air'],
       ['0,64,0', 'stone'],
@@ -373,15 +388,121 @@ describe('baseline placement support', () => {
     const provider = new MineflayerProvider(bot)
     const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
 
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_UNSUPPORTED')
+    expect(result.error.details).toMatchObject({
+      requestedFace: 'up',
+      supports: { up: false, east: true },
+    })
+    expect(calls.find(call => call.name === 'placeBlock')).toBeUndefined()
+    expect(blocks.get('1,64,0')).toBe('air')
+  })
+
+  it('rejects an occupied target before touching the packet path', async () => {
+    const blocks = new Map<string, string>([['1,64,0', 'grass_block']])
+    const { bot, raw, calls } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_TARGET_OCCUPIED')
+    expect(result.error.details).toMatchObject({ block: 'grass_block', target: { x: 1, y: 64, z: 0 } })
+    expect(calls.find(call => call.name === 'placeBlock')).toBeUndefined()
+  })
+
+  it('allows a replaceable plant target', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'short_grass'],
+      ['1,63,0', 'stone'],
+    ])
+    const { bot, raw } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result).toMatchObject({ status: 'succeeded' })
+    expect(blocks.get('1,64,0')).toBe('dirt')
+  })
+
+  it('returns alreadyPlaced without a packet when the target already matches', async () => {
+    const blocks = new Map<string, string>([['1,64,0', 'dirt']])
+    const { bot, raw, calls } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
     expect(result).toMatchObject({
       status: 'succeeded',
-      result: { name: 'dirt', x: 1, y: 64, z: 0, face: 'east' },
+      result: { alreadyPlaced: true, placedAt: { x: 1, y: 64, z: 0 } },
     })
-    expect(blocks.get('1,64,0')).toBe('dirt')
-    expect(calls.find(call => call.name === 'placeBlock')?.args).toMatchObject({
-      target: { x: 1, y: 64, z: 0 },
-      vector: { x: 1, y: 0, z: 0 },
+    expect(calls.find(call => call.name === 'placeBlock')).toBeUndefined()
+  })
+
+  it('sneaks during placement and releases afterwards', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'air'],
+      ['1,63,0', 'stone'],
+    ])
+    const { bot, raw, calls, controls } = fakeBot({ blocks })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      result: { face: 'up', placedAt: { x: 1, y: 64, z: 0 } },
     })
+    expect(calls.find(call => call.name === 'placeBlock')?.args).toMatchObject({ sneak: true })
+    expect(controls.get('sneak')).toBe(false)
+  })
+
+  it('reports an off-target placement with the actual place evidence', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'air'],
+      ['1,63,0', 'stone'],
+    ])
+    const { bot, raw, calls } = fakeBot({ blocks, placeOffset: { x: 0, y: -1, z: 0 } })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = { name: 'dirt', count: 1 }
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_OFF_TARGET')
+    expect(result.error.details).toMatchObject({
+      placedAt: { x: 1, y: 63, z: 0 },
+      placedCells: [{ x: 1, y: 63, z: 0 }],
+      itemConsumed: false,
+      retrySafe: false,
+    })
+    expect(calls.filter(call => call.name === 'placeBlock')).toHaveLength(1)
+  })
+
+  it('reports a consumed item with no target block', async () => {
+    const blocks = new Map<string, string>([
+      ['1,64,0', 'air'],
+      ['1,63,0', 'stone'],
+    ])
+    const { bot, raw, calls } = fakeBot({
+      blocks,
+      inventory: [{ name: 'dirt', count: 1 }],
+      placeWithoutEffect: true,
+      consumeHeldOnPlace: true,
+    })
+    ;(raw as unknown as { heldItem: FakeItem }).heldItem = (raw as unknown as {
+      inventory: { items(): FakeItem[] }
+    }).inventory.items()[0]!
+    const provider = new MineflayerProvider(bot)
+    const result = await settleAct(provider.start('place', { x: 1, y: 64, z: 0, face: 'up', item: 'dirt' }))
+
+    expect(result.status).toBe('failed')
+    if (result.status !== 'failed') throw new Error('expected placement failure')
+    expect(result.error.code).toBe('PLACE_ITEM_CONSUMED')
+    expect(result.error.details).toMatchObject({ itemConsumed: true, retrySafe: false })
+    expect(calls.filter(call => call.name === 'placeBlock')).toHaveLength(1)
   })
 
   it('reports PLACE_UNSUPPORTED with six-face facts only when no reference is solid', async () => {
