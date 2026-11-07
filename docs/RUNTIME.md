@@ -15,7 +15,6 @@
 - `lastDisconnect` 记录 `at / kind / reason / eventLoopLagMs / serverAge / paused / ageIdleMs`；`kind` 为 `kick / error / end / reset`。
 - active body 通过 `p2_status` / `p2_body status` 暴露 `lastDisconnect`；faulted 时通过 `fault.lastDisconnect` 和 `fault.detail` 保留同一原因。
 - `kick` 且 reason 匹配 `duplicate_login`：`fault.autoRestart="disabled"`，释放 body 锁，唤醒 owner；不自动重启。
-- `npm run check` 的 body-process 测试以 providerless 方式启动；只有 `P2_PORT_LIVE=1` 时才执行实机连接测试。
 
 ## 2. tick 循环
 
@@ -40,17 +39,18 @@
 
 **活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `idle`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
 
+所有等待必须 `await` 到 timer；只跑微任务的同步忙等会阻断事件循环和心跳。
+
 ### 2.1 mineflayer 导航（当前实现）
 
-- `MotionRun` 拥有一次 motion 搜索、执行、恢复和清理；上层仍只下一个目标，不等待模型微操。A* 使用 P2 自研 `MotionSearch`，pathfinder 已从 provider/port 删除。
+- `MotionRun` 拥有一次 motion 搜索、执行、恢复和清理；上层仍只下一个目标，不等待模型微操。A* 使用 P2 自研 `MotionSearch`，provider/port 中没有 pathfinder。
 - 先验证容差内的站位，再以分片 A* 预检路线；每片 5ms、单次搜索 2s、生成节点软上限 12000。显式搜索超时/上限返回 unknown，不折成无路。
 - 预检明确 `noPath` 时不出发。预算内尚未证明全程可达但已有前缀时允许推进；前缀不是完成。
 - 路径策略默认禁止挖掘、垫块、搭桥、跑酷和冲刺；普通最大脚部落差 2 格。显式 `unstickDig` 是 core break 白名单；没有白名单的块不可挖。
 - 无路且目标更低时 motion 会跑“安全下落”第二遍：按 health 预算允许 3 格以上的安全下落；落点必须可站立、已加载、非液体/危险，下落列无阻挡。
 - 显式 `policy.hazards.allow` 的 lava/void 目标由 Agent 层 `fatal` driver 执行受控 step-off，只有真实 `died` 才成功；这不是 A* 的普通边。
-- `traverse` 是 Agent 显式下发的临时通行原语（`bridge` 同高直线 / `scaffold` 垂直垫脚柱），已委托 motion `moveTo { allowPlace, material }`；provider `pillarUp` 已删除。
+- `traverse` 是 Agent 显式下发的临时通行原语（`bridge` 同高直线 / `scaffold` 垂直垫脚柱），委托 motion `moveTo { allowPlace, material }`；provider 不提供 `pillarUp`。
 - 完成、取消、超时均执行 `stop → clearControlStates`，注销本次监听/定时器。释放未确认不允许另一个 provider act 启动。
-- 测试中的地形夹具只检验真实 A*、1.21.1 碰撞数据与本项目策略的组合；不模拟物理，不替代真实 Minecraft/DSH 长跑验收。耗时与重规划指标经移动事件暴露，尚无实机成功率结论。
 
 ## 3. 预算
 
@@ -131,6 +131,7 @@
 
 - `WorldView` 是同一份快照，供一次求值使用；谓词不得自行查询。
 - 证据三态：`confirmed / refuted / insufficient`；`insufficient` 时发 `check` Job 或超时上报。
+- `p2_observe` 的同步观测有硬顶（约 1000ms）；需要等待的观测必须走 `check` Job。返回体保持精简，只读必要字段，避免拖慢 tick/心跳。
 - 开熔炉/看箱子这类需要交互的观测，只能由 `check` Job 完成；Verifier 不抢交互能力。
 - 三级检查（job 读回 / plan verify / order post）不是三个独立证据源，除非观测路径确实不同。
 
@@ -144,7 +145,7 @@
 | `p2_entities {center?,radius?,types?,names?,limit?}` | 不移动的实体/掉落物观测：半径 ≤160、limit ≤512、按距离排序；掉落物带 `item.name/count`；只受服务器跟踪范围限制 |
 | `p2_preview_blueprint {blueprint}` | 只读 dry-run：必需/缺料、冲突（当前方块、是否可拆）、未加载格、非法字段；不消耗材料、不清障、不放置 |
 | `p2_order {verb,params,...}` | 只返回 accepted（`{accepted:true,id,state}`）；终态/blocked/失败由 completion wake 异步推送，调用后结束本轮 |
-| `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
+| `p2_duty {action:"start"\|"stop",duty?}` | start 会替换当前 active duty（当前 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，当前 job 停止后新 duty 才出 job），返回 `{previousDuty,started}`；stop 返回 cancelled view |
 | `p2_base_activity {action:"set"\|"status",activity?}` | 默认 `idle`；`wandering` 半径 1–8；`escort` 按目标名跟随、不 teleport；不持久化，重启回 idle；要完全停住用 `p2_order {verb:"hold"}` |
 | `p2_policy {action:"set"\|"reset"\|"status",reaction?}` | body 级反应策略；`set` 全量替换；无 `fight` = 只 flee；`fight.allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立；不持久化；显式 attack 不受它限制 |
 | `p2_report` | 最近一次偏离或终态的 digest（一句话 + 结构化字段） |
@@ -189,7 +190,7 @@
 - 不一致会表现为 `PLACE_READBACK_MISMATCH` 或 plan 失败/blocked，而不是被自动纠正。
 - 定向放置仍需要额外的 `look`/`orientation` 语义；当前 `face` 只决定点击参考面。
 
-### 10.2 冲突策略（M3-03）
+### 10.2 冲突策略
 
 order 可带 `policy.conflict`：
 
@@ -205,7 +206,7 @@ order 可带 `policy.conflict`：
   显式 `deny` 永远优先。
 - 清障策略只决定“拆不拆”，不参与“目标格是否可替换”的判断；place 仍然不维护 replaceable 名单。
 
-### 10.3 材料策略（M3-03）
+### 10.3 材料策略
 
 ```jsonc
 { "policy": { "materials": { "mode": "require-all" | "auto-gather", "maxGatherBlocks": 64 } } }
@@ -220,7 +221,7 @@ order 可带 `policy.conflict`：
 - `maxGatherBlocks` 按已开始的 gather job 计数；达到预算后停止 gather，等待/blocked。
 - 当前没有 crafting：需要合成才能得到的材料不会自动补。
 
-### 10.4 恢复与归因（M3-04）
+### 10.4 恢复与归因
 
 - 意图日志带 `v: 1`；遇到未知版本直接 `JOURNAL_VERSION_MISMATCH`，拒绝恢复。
 - blueprint 有自己的 `version`（当前 1）；未知版本拒绝，不猜测。
@@ -241,14 +242,15 @@ order 可带 `policy.conflict`：
   - `characterId`：provider 的玩家 UUID/username；
   - `defVersion`：plan 模板内容摘要（`defScope: "plans"`）；树定义已代码化，不参与身份。
 - `worldId` / `characterId` / plan `defVersion` 任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报。
-  旧版 journal（identity 无 `defScope`）按 world/character 接受一次，下一次写入补写 plan-only 头；
-  无 identity 头的 legacy journal 仍可读，下一次写入会补头。
+  不带 `defScope` 的 identity 头按 world/character 接受一次，下一次写入补写 plan-only 头；
+  无 identity 头的 journal 同样按 world/character 接受一次，下一次写入补头。
 - 身份来自 provider，不需要 Agent 每次传；未来 client-mod 可提供更稳定的 world/character ID。
-- 开发测试专用：`.p2/config.json` 的 `crashAfterPending: true` 会在首个
+- bridge 的工具绑定身份随 body epoch 变化；调用方不得硬编码 binding id，重启后以当前 `p2_status` 为准。
+- `.p2/config.json` 的 `crashAfterPending: true` 会在首个
   `action.pending` 写入后让 body 真实退出一次（标记 `.p2/crash-after-pending.done`），
-  用于验证“pending 窗口崩溃 → 重启对账”。生产配置不应开启。
+  用于模拟 pending 窗口崩溃后的重启对账。生产配置不应开启。
 
-### 10.6 游戏内对话推送给 Agent（M4）
+### 10.6 游戏内对话推送给 Agent
 
 - 对话**不由 body 解析**：`ClientPort` 的 `chat` 事件进入 body 有界队列（100 条），
   通过 `chat.poll {afterSeq}` 暴露给 bridge；`chat.say {text}` 只负责发一句话。
@@ -262,7 +264,7 @@ order 可带 `policy.conflict`：
 - bot 自己的聊天回显在 provider 层忽略，避免自回环。
 - 只有 active body 的 owner 会收到 wake；重启后 cursor 归零。
 
-### 10.7 check Job（M4-02）
+### 10.7 check Job
 
 - `check` 是 order verb：`p2_order {verb:"check", params:{x,y,z}}`。
 - check giver 从 active check order 选目标；check driver 才打开界面（箱子/熔炉等），
@@ -270,7 +272,7 @@ order 可带 `policy.conflict`：
 - 三态：`observed.state = ok | failed | unknown`；`unknown` 不会被当作成功。
 - Verifier 仍只用世界方块/物品快照；需要界面数据时必须排队 check，不直接开窗。
 
-### 10.8 idle 边界与执行原语（M4-03 重构）
+### 10.8 idle 边界与执行原语
 
 - 默认无 order：**base activity**，默认 `idle`；Agent 显式设置 `wandering` 时只在 anchor 半径内做局部移动；不采集、不建造、不战斗、不生成新任务。
 - 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；自动 fight 默认不选玩家/被动/中立；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
@@ -278,7 +280,7 @@ order 可带 `policy.conflict`：
 - base 不持久化：body 重启后回到 `idle`；Agent 可用 `p2_base_activity` 改为 `wandering`/`escort` 或调整 `wandering.radius`。
 - 需要完全停住时用 `p2_order {verb:"hold"}`；hold 是占住 active 位的 barrier，不是队列清空。
 - 只保留即时逃生反射：lava/深水/近身威胁/有顶掩体；不自动攻击（除非 `p2_policy.fight` 明确允许）。
-- Agent 显式 order（有限执行面，不再为 CP 增加专用 order）：
+- Agent 显式 order（有限执行面）：
   - `go`：移动到坐标/附近；
   - `place`：放任意方块/床，`item` + 目标；
   - `dig`：破坏指定方块；`dig`/`clear` driver 按方块自动选择最佳工具；
@@ -297,7 +299,7 @@ order 可带 `policy.conflict`：
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
 - Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；自动 fight 由 `p2_policy` 预授权（默认只 flee）；显式 `attack` order 可指定任何实体，P2 不拦。
 
-### 10.9 感知与唤醒粒度（M4 后）
+### 10.9 感知与唤醒粒度
 
 - body 维护有界 `perception` 队列：
   - `damaged`：health 下降；<=4 为 critical；

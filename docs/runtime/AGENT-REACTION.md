@@ -56,7 +56,7 @@ No immediate action required; assess after current work.
 ## 4. 显式 attack order
 
 - `p2_order {verb:"attack", params:{entityId:"..."}}` 是 Agent 明确点名；
-- **P2 不再做玩家/被动/中立保护拦截**，任何实体都可以被显式攻击；
+- **P2 不做玩家/被动/中立保护拦截**，任何实体都可以被显式攻击；
 - 技术失败仍然存在：目标丢失、无路、看不见、预算耗尽；
 - 显式 attack 期间自动 fight 关闭；
 - 常驻树只保留致命环境反射（岩浆/深水等），不因敌对、低血、饥饿、卡住而打断 attack；

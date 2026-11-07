@@ -66,12 +66,12 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 
 ```text
 ClientPort（query / act / event / capabilities，纯数据）
-  └─ MineflayerAdapter   现在：进程内调用；当前唯一投入的适配器
+  └─ MineflayerAdapter   当前：进程内调用；唯一投入的适配器
 ```
 
 - 换接入不换 AI：树、giver、plan、driver 都只依赖 ClientPort。
 - 能力是行为契约（`navigate / interact / observe.screen`），缺能力时 driver 声明 `requires` 并降级或报不支持。
-- 一致性测试保留为 ClientPort 契约测试；当前只对 mineflayer 适配器执行。自研 mod 适配器不在当前计划内，保留 `ClientPort` 边界以便未来需要时重新评估。
+- `ClientPort` 一致性以同一套场景描述；当前只实现 mineflayer 适配器，自研客户端适配器不在计划内，但边界保留，未来需要时再评估。
 
 ## 4. 目录
 
@@ -79,11 +79,10 @@ ClientPort（query / act / event / capabilities，纯数据）
 src/
   bridge/          DSH 插件、owner session、persona/memory/auto-wake、进程管理、唤醒
   body/            body 运行时（RPC、生命周期、装配）
-  port/            ClientPort 契约 + 能力 + 一致性测试
+  port/            ClientPort 契约 + 能力 + 一致性场景
   port/mineflayer/ mineflayer 适配器
   mind/            P2Mind：tree / trees / giver / job / tracker / driver / plan / order
   mind/verify/     验证器
-  mind/journal/    意图日志与恢复
   contracts/       协议、framing、通用类型
 skills/            owner-session 运行提示（p2-operator/persona/memory/wake/subagent/survival）
 content/
@@ -94,7 +93,7 @@ content/
 ## 5. 生命周期
 
 1. `/p2 start <host>:<port>` 或 `p2_body start` → bridge 先确保 `.p2` 工作区（缺失文件从 `content/templates/` 复制，不覆盖），再启动 body 子进程并注入 MC target。
-2. body 连接 provider → 加载 `content/`（树、模板）与注册表 → 读取意图日志恢复未完成 order。
+2. body 连接 provider → 加载计划模板与工作区模板 → 注册表 → 读取意图日志恢复未完成 order。
 3. body active 后 bridge 在 owner agent scope 注册 skill/persona/memory/tools/auto-wake。
 4. body 进入 tick 循环（50ms）：观测 → 常驻树 → 主树（事件）→ tracker → driver。
 5. 停止：`p2_body stop` 先冻结新 dispatch，请求当前 driver 停止并等待确认，落盘意图日志后退出；超时 SIGTERM，再 killTree；bridge 停止 auto-wake 并 dispose owner 注册。

@@ -98,29 +98,29 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 **语义**
 
 - `blockAt` 返回 `null` 表示未加载，**不等于空气**。
-- `findBlocks` 只返回已加载方块，未加载区块跳过且不折成空气；按 `near` 到 cell 的欧氏距离返回最近 `count` 个匹配，未知方块名返回空数组。它是只读查询，不取写令牌、不产生 job，也不判断可达性。
+- `findBlocks` 只返回已加载方块，未加载区块跳过且不折成空气；按 `near` 到 cell 的欧氏距离返回最近 `count` 个匹配，未知方块名返回空数组。它是只读查询，不取写令牌、不产生 job，也不判断可达性。适配器内部用 block id 数组查询，不使用函数匹配器或整盒逐格扫描；可交互距离由上层判断（方块 4.5 格、实体 3.0 格），find 命中不等于够得到。
 - `BlockInfo.harvestTools` 是适配器给出的“可掉落工具”名称列表；`[]` 表示手即可。缺省表示适配器不知道，不能当作“需要任何工具”。
 - `dig` order 接受 `params.purpose: "clear" | "harvest"`（默认 `harvest`）：
-  - 单格：`{x,y,z}` 保持旧语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
+  - 单格：`{x,y,z}` 使用目标格语义；`harvest` 要求背包中有 `harvestTools` 内的工具，否则快速失败 `TOOL_INSUFFICIENT`；`clear` 没有合适工具时可以徒手尝试，但不可破坏方块返回 `BLOCK_UNBREAKABLE`；
   - 体积：`{shape:"box"|"line", from:{x,y,z}, to:{x,y,z}, height? 1–8, only?:string[], preserveFloor? 默认 true, maxBlocks? 1–64 默认 24}`。`line` 要求恰好一个轴不同；`maxBlocks` 是实际挖掘预算，先按 `only`/空气/脚下保护过滤再检查，超过才 `DIG_VOLUME_TOO_LARGE`，不静默截断；原始体积另有 4096 扫描硬上限；
   - 隧道：`{shape:"tunnel", to:{x,y,z}, height? 1–3 默认 2, preserveFloor? 默认 true, maxBlocks? 默认 24/上限 64}`。起点是当前脚格，`to` 只允许一个水平轴向、至多一次 y±1 台阶，不做竖井；逐格清脚/头、前进、两次读回，返回 `path`（含起点）与 `returnable`。每挖一格前检查目标格和行进方向后一格，遇水/岩浆、未加载或不可破坏立即停止，返回 `failed DIG_PARTIAL` + `stoppedAt` + `reason`（`fluid`/`unloaded`/`unbreakable`/`tool`/`dig`/`readback`/`move`/`equip`），不挖穿、不猜；
-  - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
+  - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；`dig` 的 promise resolve 不是成功证据，目标格读回才是。不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
   - 自动选最佳工具（`chooseTool`）并 `equip`；最近一次显式 `equip` 成功后，下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use`）不自动切换，动作启动后恢复自动（one-action override）。
   - `harvest` 在整批结束后统一拾取一次（中心点）；单格 `harvest` 仍在挖后立即拾取；
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`。
 - `collect` order 是**一次有界的已观测掉落物拾取**：`{radius? 1–16 默认 8, item?, maxDrops? 1–16 默认 8, timeoutMs? 1000–90000 默认 30000}`。job 启动时以身体位置为球心读取一次 item 实体，按 AABB 距离近到远处理，最多 `maxDrops`；`item` 精确匹配 adapter 解析的 `entity.item.name`。每个实体只做一 pass（`standCells` 可站候选 → `moveTo` → 背包总计数增量 → 按 entity id 复查询），不挖、不战斗、不预测落点；超出 `maxDrops` 的实体进 `skippedByCap`，不算失败，本次不追。终态：无匹配掉落 → `succeeded` + `drops:0`；全部确认收集 → `succeeded`；`timedOut>0` → `failed COLLECT_TIMEOUT`；`full>0` → `failed COLLECT_INVENTORY_FULL`；`unreachable>0` → `failed COLLECT_UNREACHABLE`；其余 `missed>0` → `failed COLLECT_INCOMPLETE`。`collected` 是物品数（背包增量），`collectedDrops` 是确认收集的实体数；`collectedDrops + missed + unreachable = drops`（`missed` 含 `gone/merged/full/partial/timedOut`，`unreachable` 单独一桶）。collect 是 primitive 但一次性，失败不进入 order 重试；被抢占后恢复的新 pass 以当时背包为 baseline。
-- `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。`go.params.range`（0–8）透传到 move job，不再固定为 1。旧的 `moveTo.approach` 死参数已删除；站位调整只由 giver 的 standability/nearestStandable 完成。
+- `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。`go.params.range`（0–8）透传到 move job；站位调整只由 giver 的 standability/nearestStandable 完成，不使用 `moveTo.approach` 参数。
 - `p2_order` 的 accepted 结果带 `queue` 摘要：`{active, queued, blockedBy?, holdsActiveSlot?, queuedBehind?, release?}`。`hold` 是占住 active 位的 barrier，不是清空队列；`blockedBy`/`release` 直接指出被哪个 hold 堵住、如何释放。`p2_orders` 的 `queueBlockedBy` 保持同一语义。
 - `hold.params.durationMs` 可选，1000–3_600_000；从 hold **成为 active** 的时刻起算，到期由 body 置为 `succeeded` 并带 `observed.expired:true`，队列恢复。不带 duration 的 hold 是永久 barrier，只能 cancel。
 - `move` driver 按 ≤30s 分段推进，总预算 120s；失败时使用 provider 的 `bestReachable` 前缀继续，不把前缀当完成。
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
 - `place` 的 `{x,y,z}` 是**目标方块所占格**，不是支撑/参照格。driver 先预检：目标已是期望方块 → `succeeded` + `observed.alreadyPlaced:true`，不发包不装备；空气/流体/server tag `replaceable` 可放；其他不可替换方块 → `PLACE_TARGET_OCCUPIED`，不移动、不 `ensureHeld`、不发包。没有“自动下移一格”的语义。
-- `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不再移动过去。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
-- `place` 每次只发一个 face 的包：显式 `face` 必须可用；省略时 driver 按 `up → down → north → south → east → west` 选第一个“有碰撞支撑 + 眼到面 ≤4.5 + 视线未挡”的面。provider 只执行请求的 face，不再六面 fallback。
+- `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不移动到该格。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
+- `place` 每次只发一个 face 的包：显式 `face` 必须可用；省略时 driver 按 `up → down → north → south → east → west` 选第一个“有碰撞支撑 + 眼到面 ≤4.5 + 视线未挡”的面。provider 只执行请求的 face，不做六面 fallback。
 - 一次物品消耗最多一次 placement packet：provider 的失败体带 `retrySafe`（仅“服务端明确 refusal + 物品数不变 + 无新方块”为 true），只有 `retrySafe:true` 时 driver 才换下一个 face；超时/未知/`PLACE_OFF_TARGET`/`PLACE_ITEM_CONSUMED` 直接终态，`EQUIP_NO_ITEM`/`PLACE_NO_ITEM` 立即终态。
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
-- `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`（不再报 `CRAFT_NO_INGREDIENTS`），由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
+- `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
 - `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
@@ -128,7 +128,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`。它只读、不参与控制；bridge 用它给记忆/owner-session 分 scope。provider 没有 identity 时字段省略，调用方必须回退而不是猜测。
 - `mind.status.worldTime` 是当前观测的时钟：`{day, timeOfDay, isNight, ticksToSunset}`。`day = floor(worldAge/24000)`；`timeOfDay` 归一化到 0–23999；`isNight` 为 13000–22999；`ticksToSunset` 在白天为 `max(0, 13000-timeOfDay)`，夜间为 0。它是观测值，不是控制输入。
 - **Duty（gather）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动显式常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan、没有常驻威胁时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；内部定义错误 → failed；`p2_duty stop` → cancelled。只支持单物品 gather 配额，不自行选新目标。
-  - `p2_duty start` 会替换当前 duty：先校验新 spec（失败则旧 duty 不变），再把旧 active duty 置为 `cancelled` + `REPLACED_BY_NEW_DUTY`，停止旧 job，然后启动新 duty；返回 `{previousDuty,started}` 并发出 `duty.terminal`。tracker 的单写者门保证旧 job 停止确认前不会并行启动新 job。
+  - `p2_duty start` 会替换当前 duty：先校验新 spec（失败则现有 duty 不变），再把当前 active duty 置为 `cancelled` + `REPLACED_BY_NEW_DUTY`，停止当前 job，然后启动新 duty；返回 `{previousDuty,started}` 并发出 `duty.terminal`。tracker 的单写者门保证当前 job 停止确认前不会并行启动新 job。
   - duty 持久化到 journal 同目录的 `duty.json` v2（含 worldId/characterId、baseline、activeMs、pausedMs、jobs、state）。start、暂停/恢复、每次 job start、terminal 时落盘；v1 sidecar 可读一次并在下次写入时迁移。
   - body 重启时只恢复 `state=active`、identity 匹配的 duty；`collected = max(0, 当前背包 - baseline)`，`activeMs` 从文件恢复（宕机时间不计入 active）；completed/blocked/failed/cancelled 不复活。过期/超出 job 预算的 duty 恢复为 `blocked`（`DUTY_DEADLINE` / `DUTY_JOB_BUDGET`）。
   - duty 被 order/plan/常驻威胁暂停时 `paused:true`，`activeMs` 不增长；`blocked/failed` 后 base activity 保持 inactive，等 Agent 处理。
@@ -143,12 +143,13 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - `mind.status.reaction` 返回 `{source:"default"|"agent", mode:"flee"|"allowlist"|"all-hostiles", fight, selfCare}`。`selfCare` 默认启用 `eat`/`unstuck`，`retreat` 只作为血量门槛。
   - 显式 `attack` order 期间自动 fight 关闭；常驻树只保留岩浆/深水等致命环境反射，不因敌对、低血、饥饿或卡住而打断。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
+- provider 动作依赖物理 tick；区块未加载、死亡或传送中时 `await` 可能没有终态。所有动作都有硬超时，超时按 `ACT_TIMEOUT` / `ACT_UNCONFIRMED` 返回，不重放。
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
   - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。
   - `ACT_UNCONFIRMED`：动作可能已到达服务端，效果未知；不得重放，driver 必须先读回/观察，再由上层决定；不自动重试。
   - `ACTION_DENIED`：仅当同一 act 窗口内的服务端聊天/系统消息明确拒绝（权限、保护、adventure）时使用；`observed.serverMessages` 保留原文，`observed.denial` 指向命中项；没有命中就不猜。
   - `STOP_UNCONFIRMED`：停止/释放无法确认，保持 tracker fault。
-  - `CLIENT_TIMEOUT`：旧码，仅用于历史会话/metrics 映射，当前端口不再发出。
+  - `CLIENT_TIMEOUT`：兼容输入的超时码；provider 不产生该码，bridge/driver 收到后按“超时/效果未确认”处理，不重放。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 
 ### 2.1 移动与站位
@@ -156,23 +157,23 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
 - `serverTags` 是适配器层的服务端 block tags（`ReadonlySet<string>`），不序列化到 bridge；`undefined` 表示 tags 尚未就绪，不是“没有 tag”。
 - `moveTo` 目标为脚下路径格坐标，按格取整；`range` 默认 1、范围 0–8，使用三维格距离。容差内只接受已加载、有安全支撑及身体净空的格；半砖按真实支撑高度完成读回。
-- `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。所有普通移动和授权 `unstickDig` 都走 motion；不再有 `motion` 开关或 legacy `goto`。
+- `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。所有普通移动和授权 `unstickDig` 都走 motion；不存在独立的 `motion` 开关或 `goto` 路径。
 - `unstickDig` 是显式 break 白名单：只允许列出的坐标/方块名，核心先挖掘并读回，再执行移动；没有列出的块不可挖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。成功体带 `arrival{kind,policy,from,to,cell,feetY,at,movedDistance,elapsedMs}`；干地水平容差 0.45，水 1.0。
 - `BODY_OVERLAP`：真实 0.6×1.8 AABB 与已加载方块碰撞相交（半嵌、1 格高小窝）。规划前与到达后 fail-fast，`observed.blockedBy` 给出 `{x,y,z,name}`，不重试；自动清格不在 motion 内实现，Agent 用 `go {unstickDig}` 显式授权。
-- `GOAL_NOT_STANDABLE`：`exact` 到达的目标格经 `Rules.standInfo` 证明不可站；带 `reason/blockedBy` 直接失败，不把“下一层”当目标。执行器在身体离开 `validPositions` 时按整条剩余路径前后重同步，不再只扫描 ±4 条边。
+- `GOAL_NOT_STANDABLE`：`exact` 到达的目标格经 `Rules.standInfo` 证明不可站；带 `reason/blockedBy` 直接失败，不把“下一层”当目标。执行器在身体离开 `validPositions` 时按整条剩余路径前后重同步，不只扫描 ±4 条边。
 - **唯一例外**：`traverse scaffold` 的 `moveTo` 可带 `allowUnsupportedGoal:true`；只有同时 `allowPlace:true` 时 motion 才跳过 exact 目标的初始可站预检，让 `Pillar` 先垫脚。普通 `go exact` 不传该参数，仍严格拒绝不可站目标。
 - `GOTO_INVALID_TARGET`：容差内没有安全站位；`GOTO_TARGET_UNLOADED`：站位观测不完整；`GOTO_NO_PATH`：当前已加载世界、动作策略和搜索范围内无路；均不能推断整个世界永远不可达。
 - `GOTO_STUCK`：位移看门狗及有限恢复失败。`GOTO_SEARCH_TIMEOUT` / `GOTO_SEARCH_LIMIT` / `GOTO_TIMEOUT` 返回 `unknown`，不能当作无路。
 - `observed` 保留起点、目标、当前位置、路径状态、阻挡观测、候选站位、最佳前缀终点、耗时、节点数、重规划及恢复次数。`nearbyCandidates` 仅是安全站位建议，未证明可达，不能据此擅自更换目标。
-- 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；旧令牌进度不再发布。门与局部挖掘另有 `move.door / move.unstick-dig`。`Traverse` 在需要时开门，并在身体离开门格后由 executor 自动关门；关门不会在身体仍处于门格时执行。
-- 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消/旧令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。强制收尾统一执行 `stopDigging` / `deactivateItem` / `closeWindow` / `clearControlStates` / 清 dig 目标 / 背包重同步；一次停止在 `releaseFaultIntervalMs` 内仍无法确认记一次 fault，连续 `releaseFaultLimit` 次由 provider 主动断开连接，交给 body 既有的 fault/rebuild 路径重建 epoch。
+- 移动事件：`move.started / move.progress / move.no_path / move.stuck / move.finished`；经 `p2_events` 可读，进度最多每秒一次；非当前令牌的进度不发布。门与局部挖掘另有 `move.door / move.unstick-dig`。`Traverse` 在需要时开门，并在身体离开门格后由 executor 自动关门；关门不会在身体仍处于门格时执行。
+- 停止必须清理路径、goal、按键、定时器与事件监听；`STOP_UNCONFIRMED` 不得被普通取消或非当前令牌错误覆盖。终态同样需要释放确认，tracker 未确认则冻结新调度。强制收尾统一执行 `stopDigging` / `deactivateItem` / `closeWindow` / `clearControlStates` / 清 dig 目标 / 背包重同步；一次停止在 `releaseFaultIntervalMs` 内仍无法确认记一次 fault，连续 `releaseFaultLimit` 次由 provider 主动断开连接，交给 body 既有的 fault/rebuild 路径重建 epoch。
 - **安全下落预算**：普通路径禁止脚部 >2 格落差；第一遍无路且目标更低时，motion 第二遍按 `health - 6 + 3` 允许安全下落。落点必须已加载、可站立、支撑非水/岩浆/危险，下落列无阻挡；否则不生成边。
 - **显式危险允许**：`policy.hazards.allow` 只能是 `void / lethal_fall / lava`，默认空。这部分**不在 motion 核心**：`go` 把显式 lava/void 目标，以及目标低于当前 >2 格且允许 `lethal_fall` 的请求交给 Agent 层 `fatal` driver；driver 做受控 step-off，只有真实 `died` 才成功；`unloaded` 永不允许。
 - 终态 `observed` 包含 `safeFallPass / safeFall / healthBefore / healthAfter`；致命边由 `fatal` driver 的 `died` 证据判断。
 - **`traverse` order**：Agent 显式下发的临时通行辅助，不是 `build` 最终几何：
   - `mode:"bridge"`：同高、正方向、1 格宽直线；driver 校验几何/材料后委托 `moveTo { motion, allowPlace, material }`，由 motion `Bridge` 执行；
-  - `mode:"scaffold"`：垂直垫脚柱——必须同 x/z 列，向上 `dy` 级，最多 8 级；driver 校验列/材料后委托 motion `Pillar`；provider `pillarUp`/`pillar` 已删除;
+  - `mode:"scaffold"`：垂直垫脚柱——必须同 x/z 列，向上 `dy` 级，最多 8 级；driver 校验列/材料后委托 motion `Pillar`；provider 不提供 `pillarUp`/`pillar`；
   - 需要 `item`、材料计数、`maxBlocks`；占用/无支撑/材料不足/对角 bridge/水平或向下 scaffold 均失败；
   - 只由 Agent 下单，P2 不自主搭桥/垫脚；不自动清理，`observed.temporary=true`，清理是后续 Agent order。
 
@@ -191,7 +192,7 @@ type Job = {
 }
 ```
 
-- `runId` 在每次尝试时新生成；旧 `runId` 的结果只对账。
+- `runId` 在每次尝试时新生成；非当前 `runId` 的结果只对账。
 - 失败计数键 = `(orderId|workItemId|driverId)`。
 - 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, diagnosis, cause, recovery}`：
   - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
@@ -200,7 +201,7 @@ type Job = {
   - `diagnosis` 是闭合枚举，一条失败最多一个：`HEAD_BLOCKED`、`SUPPORT_MISSING`、`TARGET_UNLOADED`、`TARGET_OCCUPIED`、`START_EMBEDDED`、`NO_STAND_CELL`、`EFFECT_UNCONFIRMED`、`RELEASE_UNCONFIRMED`、`TOOL_MISSING`、`DENIED`、`UNKNOWN`；事实不足就是 `UNKNOWN`，不生成动作；
   - `recovery` 是契约级字符串：`retry` / `replan` / `reobserve` / `wait` / `restart` / `none`，不是具体动作；
   - `cause` 是 `{kind: "provider"|"world"|"authority"|"budget"|"unknown", code}`，不是自然语言；
-  - 失败体不再包含 `suggestions` / `action` / `params`；具体下一步选项由静态 skill 表或 Agent 决策，P2 不预测后续世界。
+  - 失败体只包含 `failure` / `observed` 等证据字段，不包含 `suggestions` / `action` / `params`；具体下一步选项由静态 skill 表或 Agent 决策，P2 不预测后续世界。
 - 没有专门失败体的 driver 由 body 在 `job.terminal` 处补一个通用投影，保证每个失败终态都能回答“在哪、为什么、下一步”。
 
 ## 4. WorkGiver
@@ -270,11 +271,11 @@ interface DriverHandle {
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 
-实现状态：
+读回要求：
 
-- `craft` 已改为 `produced >= requested`；provider 按配方产出数计算所需操作次数，driver 也接受 provider 早停但产出已足够的 `CRAFT_INCOMPLETE`。
-- `equip` 已读 provider 的 `held` 回执；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。
-- `container` 已读玩家/容器前后计数；缺失计数报 `CONTAINER_READBACK_UNKNOWN`，计数未移动/未达请求量报 `CONTAINER_INCOMPLETE`。
+- `craft` 以 `produced >= requested` 为成功；provider 按配方产出数计算所需操作次数，driver 也接受 provider 早停但产出已足够的 `CRAFT_INCOMPLETE`。
+- `equip` 读 provider 的 `held` 回执；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。写动作前关闭已打开窗口；`held` 未确认前不得继续放置。
+- `container` 读玩家/容器前后计数；缺失计数报 `CONTAINER_READBACK_UNKNOWN`，计数未移动/未达请求量报 `CONTAINER_INCOMPLETE`。
 - 任何 `state:'unknown'` 的动作只能以 `failed + ACT_UNCONFIRMED` 收尾，不得升格为 `succeeded`。
 
 ## 6. JobTracker
@@ -300,7 +301,7 @@ interface JobTracker {
 规则：
 
 1. 续做：`candidate.keys === current.continuationKey()` → 只续期。
-2. 切换：`seq++`（旧令牌失效）→ `requestStop()` → 等 `stopped` → 起新 job。
+2. 切换：`seq++`（当前令牌失效）→ `requestStop()` → 等 `stopped` → 起新 job。
 3. 迟到：`runId` 不匹配的结果只记 `stale-result`。
 4. 失败：按 `(orderId|workItemId|driverId)` 计数；超限上报 `blocked`。原始 order 的 retry/one-shot 见 RUNTIME §5；中间 retry 的 `job.terminal` 带 `retry: true`，不产生 completion wake。
 
@@ -381,11 +382,11 @@ type WorkState =
 | 码 | 含义 |
 |---|---|
 | `CAPABILITY_MISSING` | 端口不具备所需能力 |
-| `STALE_WRITE` | 写令牌不匹配（旧实例） |
+| `STALE_WRITE` | 写令牌不匹配（非当前实例） |
 | `ACT_TIMEOUT` | 动作在预算内无终态，释放已确认，且动作可安全重试（move/look/equip） |
 | `ACT_UNCONFIRMED` | 动作可能已生效但无终态；不重放，先读回/观察 |
 | `ACTION_DENIED` | 同一 act 窗口内有服务端消息明确拒绝（权限/保护/adventure）；带 `serverMessages`/`denial` 证据 |
-| `CLIENT_TIMEOUT` | 旧码，当前端口不再发出；仅历史数据映射 |
+| `CLIENT_TIMEOUT` | 兼容输入的超时码；provider 不产生，按超时/效果未确认处理 |
 | `NO_MATERIAL` / `NO_SUPPORT` / `NO_STAND` / `UNREACHABLE` / `CONFLICT` | 工作项不可执行 |
 | `DRIVER_FAULT` | driver 内部错误 |
 | `STOP_UNCONFIRMED` | 停止无法确认 → tracker fault |

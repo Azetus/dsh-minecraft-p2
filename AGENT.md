@@ -17,9 +17,9 @@
 P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责选工作、执行与恢复，DSH agent 只下目标级 order 并在偏离/终态时介入。模型响应不进入逐动作执行的等待路径。
 
 开始相关工作前先读 [ARCHITECTURE.md](docs/ARCHITECTURE.md)（进程边界、分层、目录、生命周期），再按需查：
+- [docs/README.md](docs/README.md)：文档索引与维护规则
 - [AUTHORITY.md](docs/AUTHORITY.md)：Agent/P2 决策权二分与新增行为评审清单
 - [runtime/P2MIND.md](docs/runtime/P2MIND.md)：控制结构（权威设计）
-- [runtime/PITFALLS.md](docs/runtime/PITFALLS.md)：踩坑清单与实现红线
 - [CONTRACTS.md](docs/CONTRACTS.md)：ClientPort / Job / WorkGiver / Driver / JobTracker / 树 / 计划
 - [RUNTIME.md](docs/RUNTIME.md)：tick 循环、预算、失败与恢复
 - [OPERATOR-PLAYBOOK.md](docs/OPERATOR-PLAYBOOK.md)：运行纪律

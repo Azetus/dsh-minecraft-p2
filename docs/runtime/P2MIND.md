@@ -1,6 +1,5 @@
 # P2Mind：NPC AI 控制结构
 
-> 状态：已实现，并在实机中验证有限 order、计划、树、tracker、driver 与 completion wake。
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
 > 当前 order 面：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
@@ -151,7 +150,7 @@ agent 下达的目标，不是动作。
 
 **构建阶段（barrier）**：1 地板（interior 下方）、2 下层壳（`interior.min.y` 与 +1）、3 上层壳/屋顶、4 室内家具、5 临时入口（`deferredWorkItems`）。阶段是硬屏障：只有当前阶段可派工，前序阶段未完成不得进入下一阶段。事件：`stage.started/progress/completed/blocked`，`plan.blocked` 负载带 stage、workItemId、target、triedStances、每个 stance 的拒绝原因、最后 job code 与材料账。
 
-**放置站位账本（PlanItemLedger）**：失败按 `(plan, workItem, stance)` 记账，不跨工作项共享；同一 stance 2 次无世界变化 → 失败，最多 3 个 stance，全部失败 → item blocked `NO_PLACE_STANCE`；世界指纹（目标格 + 六邻）变化或阶段切换时自动重评。`executable place` 也走同一账本，driver 逐个 stance 移动→放置，只有读回一致才算成功；`moveTo arrived` 不算放置成功。未知格先定向重读；仍未知则 item blocked `UNKNOWN`，不再用 move 循环。
+**放置站位账本（PlanItemLedger）**：失败按 `(plan, workItem, stance)` 记账，不跨工作项共享；同一 stance 2 次无世界变化 → 失败，最多 3 个 stance，全部失败 → item blocked `NO_PLACE_STANCE`；世界指纹（目标格 + 六邻）变化或阶段切换时自动重评。`executable place` 也走同一账本，driver 逐个 stance 移动→放置，只有读回一致才算成功；`moveTo arrived` 不算放置成功。未知格先定向重读；仍未知则 item blocked `UNKNOWN`，不用 move 循环。
 
 **暂停语义**：provider 的 server age 停滞是 `suspended`，不是失败。`GAME_PAUSED` 中的动作以 `interrupted/SUSPENDED` 收尾（不计重试、不 blocked），order/plan 保持 active，watchdog 与墙钟预算冻结；恢复后强制重观测再继续。超长暂停只通知，不自动 blocked。provider 记录 age 变化、`update_time` 包数与事件循环延迟，给出 `server-paused | client-stalled | event-loop-blocked | unknown` 判定。
 
@@ -345,7 +344,7 @@ ClientPort（纯数据，版本化，能力协商）
 
 - 四类：`query / act / event / capabilities`；不传库对象（`Vec3/Block/Recipe/Goal`）。
 - 能力是行为契约（`navigate / interact / observe.screen`），不是实现名（不绑定具体导航库）。
-- 一致性测试：一套 20 场景，两个适配器都要通过；这是“换接入”的验收标准。
+- 一致性场景：同一套场景描述 ClientPort 契约；新增适配器必须满足同一套行为，不能只实现子集。
 
 ## 9. 扩展点
 
@@ -358,13 +357,7 @@ ClientPort（纯数据，版本化，能力协商）
 
 红线：树节点只描述选择结构，不写坐标、目标或执行动作；谓词与 giver 是**注册表**，树只能引用已注册项。
 
-## 10. 当前验收
-
-- ClientPort 一致性场景、树/模板校验、核心单元测试全部通过。
-- 实机验证：有限 order、建造/放置、熔炉与容器、羊毛/床/门/火把、completion wake、body 重启恢复。
-- 长跑验收以安全环境下的 CP 组合与暂停点为准，不把单测或类型检查称作游戏验收。
-
-## 11. 不做与风险
+## 10. 不做与风险
 
 **不做**：通用行为树/IR 解释器；树里写坐标；driver 自选目标；Verifier 抢交互；按 jobId 计失败；双运行时控制路径；最优路径/最优顺序。
 
@@ -377,7 +370,7 @@ ClientPort（纯数据，版本化，能力协商）
 | 对话成为第二控制路径 | 只产 order；走同一校验器；`say` 独立通道 |
 | 换 mod 返工 | ClientPort 行为契约 + capabilities + 双跑一致性测试 |
 
-## 12. 术语
+## 11. 术语
 
 | P2Mind | 通用概念 | 说明 |
 |---|---|---|

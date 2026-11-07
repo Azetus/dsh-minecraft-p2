@@ -1,8 +1,7 @@
 # 运动模块（Motion）
 
-> 状态：P0–P4 已实现；1.21.1 与 26.1 均用真实服务端 + 当前适配器跑通移动矩阵（26.1 仅作历史证据，当前不再复跑）。方块语义优先读服务端 block tags；D1 水+梯子上岸已覆盖，D2 脚手架按缩窄边界收口（顶面/上下台阶/旁边通过），柱内攀爬与侧穿不做（需要专门物理层，当前不投入）。
-> 范围是**原版兼容环境**：不安装、不依赖任何客户端 mod；P2 通过当前唯一适配器接入，执行基线为原版移动与战斗规则。
-> 本文只描述运动模块自身的契约与实现边界，不记录外部参考项目的名称或代码。
+> 运动模块在真实服务端与当前适配器下执行原版移动/战斗语义；方块语义优先读服务端 block tags。当前边界：水默认 `swim`，梯子/藤蔓可上下，脚手架只作为支撑/放置方块（不做柱内攀爬与侧穿），不安装也不依赖客户端 mod。
+> 本文只描述运动模块的当前契约与实现边界。
 
 ## 1. 目标与边界
 
@@ -93,14 +92,14 @@ type MotionWorld = {
 | 可替换 | `minecraft:replaceable` | REPLACEABLE 小表 + AIR |
 | 火/营火危险 | `minecraft:fire` / `minecraft:campfires` | HAZARD_NAMES 小表 |
 | 其他危险 | 无通用 tag | HAZARD_NAMES（最小表） |
-| 固体 | collision 非空 | `solid` / legacy 名表 |
+| 固体 | collision 非空 | `solid` / 兼容名表 |
 
 约束：
 
 - `minecraft:replaceable` 只表示“可被放置替换”，**不等于可穿过**；行走仍以 collision 为准。
 - 上锁门用 `doors && !openable` 判定，未识别的新红石门不会被误开。
 - tag 缺失或未知时，危险结论保持 `unknown`，不得默认安全。
-- `pale_oak_door` 在 26.1 由 `wooden_doors`/`mob_interactable_doors` 自动识别；1.21.1 数据没有该方块。
+- `pale_oak_door` 由 `wooden_doors`/`mob_interactable_doors` 自动识别，不依赖名字表。
 
 ### 2.2 共享谓词
 
@@ -119,9 +118,9 @@ type MotionWorld = {
 
 水的语义按 `waterProfile`：
 
-- `none`：所有流体格不可通行（保守旧行为）。
+- `none`：所有流体格不可通行（保守行为）。
 - `wade`：仅接受“脚格是水、头格不是水、水下是完整可走地面”的单格水深；脚湿头干，可以走过去、跳出来、落进去。更深的水列需要 waterline 控制器，仍为 `no`。
-- `swim`：在 `wade` 之上额外接受任意深度的**水面格**：脚在顶层水格、头格为空气、不需要水底支撑；不下潜，水下格不是节点。默认档位（A 档）。
+- `swim`：在 `wade` 之上额外接受任意深度的**水面格**：脚在顶层水格、头格为空气、不需要水底支撑；不下潜，水下格不是节点。默认档位。
 
 谓词返回三态时，未知一律按“不可用”处理，不能折成可用。所有谓词使用同一份规则快照；`RuleSet.invalidate()` 在每个执行 tick 开始时清缓存。
 
@@ -137,7 +136,7 @@ type MotionConstraints = {
   allowParkour: boolean        // 默认 false
   allowDiagonal: boolean       // 默认 false（先直线）
   allowClimb?: boolean         // 默认 true；梯子/藤蔓
-  waterProfile: 'none' | 'wade' | 'swim' // 默认 swim（A 档）；none/wade 显式关闭
+  waterProfile: 'none' | 'wade' | 'swim' // 默认 swim；none/wade 显式关闭
   allowFallOntoHalfSupport?: boolean   // 默认 false；落半砖/地毯
   allowParkourFromHalfSupport?: boolean // 默认 false；从半砖起跳
   maxFall: number              // 允许的无水落差
@@ -179,7 +178,7 @@ interface Move {
 
 - `cost` 由规划器和执行器共用；执行器在运行时重新计算，变成 `COST_INF` 就中止。
 - `validPositions` 用于“被推离/传送/卡住后回到路径”的恢复。
-- `update` 是逐 tick 的：设置输入、看向、放置、挖掘、等待；返回状态。它读取 `MoveContext`（世界、规则、约束、自身、tick），便于同一状态机在纯测试和实机间复用。
+- `update` 是逐 tick 的：设置输入、看向、放置、挖掘、等待；返回状态。它读取 `MoveContext`（世界、规则、约束、自身、tick），便于同一状态机在纯逻辑环境与真实适配器间复用。
 - `safeToCancel` 决定能否在移动中途切换路径；放置/搭桥过程中通常不允许。
 - `toBreak`/`toPlace` 是“这条边需要先改变的世界”，不是目标选择。
 
@@ -193,43 +192,37 @@ interface Move {
 
 ## 4. Move Set
 
-先做原版地面移动的最小集；桥/垫脚必须显式授权。
+当前 Move Set 以原版地面移动的最小集为基础；桥/垫脚必须显式授权。
 
 - **跳跃类净空**：`Ascend/Descend/Pillar/Parkour` 的 `cost` 与 `toBreak` 共用同一 clearance 集。`jumpClearance` 由真实脚高 + `JUMP_PEAK` + `PLAYER_HEIGHT` 推出顶点覆盖格（含 `src.above(2)`/`dest.above(2)`/gap 中间列；只裁掉 <0.1 格的擦碰，3 高走廊仍可 +1 跳）；`Descend` 额外查 `dest.above(2)`；`Pillar` 每一级都查自己的顶点净空。规划期不可行的撞头边直接 `COST_INF`，不留给执行器报 `jump-did-not-land`。
 
-| Move | 状态 | 前置 | 逐 tick | 完成 | 主要失败 |
-|---|---|---|---|---|---|
-| `Traverse` | P1 已实现 | 同层、目标可站、净空、非危险 | 朝向 + forward，必要时开门；离开门格后关门 | 到达目标脚位 | 卡住、被推离、方块变化 |
-| `Ascend` | P1 已实现 | 目标高 1、顶点净空、可站、真实抬升 ≤ `JUMP_PEAK−0.15` | 距离约 1.1 时提前起跳，持续 forward | 站上目标 | 跳早/跳晚、撞头、从半砖起跳过高 |
-| `Descend` | P1 已实现 | 目标低 1、落点可站 | 走出边缘/走落 | 到达低层 | 落点变化、被推下 |
-| `Fall` | P1 已实现 | 落差 ≤ maxFall、落点安全、落点不是半高支撑、可落任意深度水面（swim） | 走出边缘、落地 | onGround 或水面浮体 + 目标脚位 | 落点危险、超深、落半砖 |
-| `Downward` | P1 已实现（保守） | 正下方可站、脚下支撑已消失 | 走落/下降 | 到达 | 落点变化 |
-| `Bridge` | P3 已实现 | 同层、缺支撑、allowPlace、材料 | 潜行接近边缘、放置、读回、前进 | 支撑块读回可站 | 放置失败、读回不符、被推下 |
-| `Pillar` | P3 已实现 | 原地、allowPlace、材料、脚下是完整支撑 | 跳起、脚下放置、读回、落上 | 到达高度 | 放置被拒、读回不符、从半砖起跳 |
-| `Diagonal` | P3 已实现，默认关闭 | 两相邻角都可走/可站 | 斜向移动 | 到达 | 角落卡住、支撑不足 |
-| `Parkour` | P3 已实现，默认关闭 | 冲刺跳 2 格、起跳/落点检查、起点不是半砖/楼梯/梯子 | 起跳、空中、落地 | 到达对岸 | 起跳点偏、落点变化、撞头 |
-| `Climb` | B2 已实现 | 目标格 climbable 且身体可通过；竖直 ±1 或同层相邻 | 对准柱心、上升按 jump / 下降按 sneak / 侧向 forward | 脚在目标格且有攀爬块 | 未贴上梯子、被推离 |
-| `ClimbExit` | B3 已实现 | 起点是 climbable 且身体可通过；目标可站、高 1、直邻或斜邻 | 先跳后前移 | 站上目标 | 跳不出、撞平台侧 |
-| `Swim` | B4 已实现 | 起点是水面格；目标为同层水面或同层/+1 岸、头格干 | 始终 forward；出水或眼入水时 jump | 到达水面/岸脚位 | 卡住、被推离、头部完全没入超过 3 s |
+| Move | 前置 | 逐 tick | 完成 | 主要失败 |
+|---|---|---|---|---|
+| `Traverse` | 同层、目标可站、净空、非危险 | 朝向 + forward，必要时开门；离开门格后关门 | 到达目标脚位 | 卡住、被推离、方块变化 |
+| `Ascend` | 目标高 1、顶点净空、可站、真实抬升 ≤ `JUMP_PEAK−0.15` | 距离约 1.1 时提前起跳，持续 forward | 站上目标 | 跳早/跳晚、撞头、从半砖起跳过高 |
+| `Descend` | 目标低 1、落点可站 | 走出边缘/走落 | 到达低层 | 落点变化、被推下 |
+| `Fall` | 落差 ≤ maxFall、落点安全、落点不是半高支撑、可落任意深度水面（swim） | 走出边缘、落地 | onGround 或水面浮体 + 目标脚位 | 落点危险、超深、落半砖 |
+| `Downward` | 正下方可站、脚下支撑已消失 | 走落/下降 | 到达 | 落点变化 |
+| `Bridge` | 同层、缺支撑、allowPlace、材料 | 潜行接近边缘、放置、读回、前进 | 支撑块读回可站 | 放置失败、读回不符、被推下 |
+| `Pillar` | 原地、allowPlace、材料、脚下是完整支撑 | 跳起、脚下放置、读回、落上 | 到达高度 | 放置被拒、读回不符、从半砖起跳 |
+| `Diagonal` | 两相邻角都可走/可站 | 斜向移动 | 到达 | 角落卡住、支撑不足 |
+| `Parkour` | 冲刺跳 2 格、起跳/落点检查、起点不是半砖/楼梯/梯子 | 起跳、空中、落地 | 到达对岸 | 起跳点偏、落点变化、撞头 |
+| `Climb` | 目标格 climbable 且身体可通过；竖直 ±1 或同层相邻 | 对准柱心、上升按 jump / 下降按 sneak / 侧向 forward | 脚在目标格且有攀爬块 | 未贴上梯子、被推离 |
+| `ClimbExit` | 起点是 climbable 且身体可通过；目标可站、高 1、直邻或斜邻 | 先跳后前移 | 站上目标 | 跳不出、撞平台侧 |
+| `Swim` | 起点是水面格；目标为同层水面或同层/+1 岸、头格干 | 始终 forward；出水或眼入水时 jump | 到达水面/岸脚位 | 卡住、被推离、头部完全没入超过 3 s |
 
-阶段：
-
-- **P1**：`Traverse / Ascend / Descend / Fall / Downward`。
-- **P2**：自研分片 A*，替换现有搜索。
-- **P3**：`Bridge / Pillar / Diagonal / Parkour`（搭桥/垫脚需授权）。
-- **B（边界地形）**：`Climb` / `ClimbExit` + 水 wade/swim + 半砖/楼梯支撑与 guard。
-- 水桶、冰面、Elytra、岩浆行走、parkour place 不在当前范围；**不做潜水**（水面姿态只认“头格不是水”）。
+当前不做：水桶、冰面、Elytra、岩浆行走、parkour place、潜水（水面姿态只认“头格不是水”）。
 
 ### 4.1 边界地形的默认策略
 
-- **水**：默认是 `swim`（A 档）：`wade` 仍可走 1 深水；水面格（脚在顶层水格、头格干）可站、可规划，任意深度，不潜水、不做 waterline。`SwimMove` 负责水面→水面（同层）和水面→岸（同层/+1）；它始终按住 forward，出水或眼入水时按住 jump。`standingCell` 把浮体的脚格归一化到水面节点，搜索起点和 `arrived()` 都用它；水格目标到达时允许未 `onGround`（浮在水面即算到达），之后 `escape` 仍可能把身体带向岸边（已接受的行为）。执行器对 swim 跳过 `isValid/recover`，湿 move 的停滞只看水平位移，水 move 超时 ×3；只有头部完全没入水（眼格与其上一格都是水）持续 3 s 才报 `STUCK`。`escape` 的水线判定同样只认“头完全没入”，并以 dry 格为目标，避免抢占游泳 order；`standCells` 目标选择默认 dry（`pickup` 显式 `dry:false` 保留水格拾取）。
-- **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`。`ClimbExit` 负责“梯顶再上一格”（含斜向），即标准二层结构里从梯子穿洞上到楼板；反向（从楼板进梯）走 `Climb` 的 dy=−1。水面 `swim` 档可从水面进入梯子，梯顶再经 `ClimbExit` 上岸（矩阵 `water-ladder-exit`）；梯子没有到岸时仍为 no path。
-- **脚手架（Phase D2 缩窄）**：只作为支撑/放置方块；支持顶面站立、单块上/下台阶、旁边通过；**不做柱内攀爬与侧穿**。实机 probe（`.m5-runs/scaffold-probe.mjs`，1.21.1）显示：在 3 高脚手架柱内按住 jump 不上升（ladder 对照从 100 升到 103.15），侧面也进不去——瓶颈在 prismarine-physics 的静态 collision，不在 P2Motion 规则；Vanilla 的 scaffolding collision 是 context-dependent，而 mineflayer 的 `bot.blockAt` 只给静态 shape。因此 `scaffold-through` 仍是 no path；柱内攀爬/侧穿**不做**，除非未来专门实现物理层，当前不投入。
+- **水**：默认是 `swim`：`wade` 仍可走 1 深水；水面格（脚在顶层水格、头格干）可站、可规划，任意深度，不潜水、不做 waterline。`SwimMove` 负责水面→水面（同层）和水面→岸（同层/+1）；它始终按住 forward，出水或眼入水时按住 jump。`standingCell` 把浮体的脚格归一化到水面节点，搜索起点和 `arrived()` 都用它；水格目标到达时允许未 `onGround`（浮在水面即算到达），之后 `escape` 仍可能把身体带向岸边，这是接受的取舍。执行器对 swim 跳过 `isValid/recover`，湿 move 的停滞只看水平位移，水 move 超时 ×3；只有头部完全没入水（眼格与其上一格都是水）持续 3 s 才报 `STUCK`。`escape` 的水线判定同样只认“头完全没入”，并以 dry 格为目标，避免抢占游泳 order；`standCells` 目标选择默认 dry（`pickup` 显式 `dry:false` 保留水格拾取）。
+- **梯子/藤蔓**：`Climb` 可用；梯子格本身不可站（无支撑），到达判定用 `onClimb`。`ClimbExit` 负责“梯顶再上一格”（含斜向），即标准二层结构里从梯子穿洞上到楼板；反向（从楼板进梯）走 `Climb` 的 dy=−1。水面 `swim` 档可从水面进入梯子，梯顶再经 `ClimbExit` 上岸；没有可到岸的梯子仍为 no path。
+- **脚手架**：只作为支撑/放置方块；支持顶面站立、单块上/下台阶、旁边通过；**不做柱内攀爬与侧穿**。适配器只提供静态 collision shape，柱内/侧穿没有合法移动边，`scaffold-through` 为 no path；柱内攀爬/侧穿不在当前范围，除非专门实现物理层。
 - **半砖/楼梯**：collision + footprint 支撑；从下半砖起跳整方块、从下半砖垫脚、落半砖默认拒绝（物理不可行或落点高度歧义）；下半砖→下半砖允许。
 - **跳跃预算**：两条"物理不可能"用真实脚高与 1.2522 的跳跃峰值比较，而不是"支撑是不是整方块"——
   - `Ascend`：`destFeet − srcFeet > 1.2522 − 0.15` 才拒绝。所以 farmland/dirt_path（0.9375 → 抬升 1.0625）允许，箱子/灵魂沙（1.125）按余量拒绝，下半砖（1.5）拒绝。
   - `Pillar`：`srcFeet + 1.2522 − 0.15 > src.y + 1.01` 才允许。所以 farmland 起垫脚允许，下半砖/灵魂沙拒绝；放置门限与规划共用同一个 `PLACE_CLEARANCE`。
-- **支撑面的已知 over-approximation**：footprint 取最大支撑面会把薄片也算成可站（竹子、墙头、花盆/蛋糕、可可、水晶、推头等 18px 级薄面），全量 26,684 个方块状态里有 15 类非楼梯方块因此从"不可站"变"可站"。这是有意的保守方向（宁可多算可站，也不误杀楼梯与 farmland），执行器对因此失败的边有 STUCK 边界；不使用方块名表收窄。
+- **支撑面的已知 over-approximation**：footprint 取最大支撑面会把薄片也算成可站（竹子、墙头、花盆/蛋糕、可可、水晶、推头等 18px 级薄面），部分非楼梯方块因此从“不可站”变“可站”。这是有意的保守方向（宁可多算可站，也不误杀楼梯与 farmland），执行器对因此失败的边有 STUCK 边界；不使用方块名表收窄。
 - **楼梯高度近似**：站立高度仍是一格一个值，楼梯每级按 1.0 台阶处理（不做 0.5 平滑上台阶）；这是双高度 cell 之外的显式取舍。
 
 ### 4.2 未校验路径（vanilla 式，显式 opt-in）
@@ -247,7 +240,7 @@ interface Move {
 - 跟随：推进容差 0.45 水平 / 1.0 垂直（原版 `PathNavigation.followThePath`）；卡住窗口 5 s（100 ticks），只上报不重规划。
 - 搜索预算：区域 32 格、1024 节点、250 ms（原版是 `floor(followRange * 16)` 节点、`followRange + 8` 区域）。
 - 参考边界：原版对岩浆/栅栏/闭门/冰面等由 `PathType` malus 排除，对火/甜浆果等是“可通行但有代价”；我们只保留“危险 → 不是节点”，其余不建模。
-- 另一种目标选择（未实现，仅记录）：先对节点图做 BFS 找一个可站目标，再以精度 0 寻路；本实现直接采用原版的“建目标 + 精度 0”。
+- 目标选择直接采用原版的“建目标 + 精度 0”；不在节点图上另做 BFS 目标选择。
 - 非目标：风险检测/评分、每方块危险枚举、break/place/parkour/diagonal、潜水/waterline/氧气、第二套 Rules、跟随中重规划、路径质量指标。
 
 ### 4.3 桥与垫脚的策略边界
@@ -255,6 +248,8 @@ interface Move {
 - 默认 `allowPlace=false`：高处不可达就 `item blocked` / `unreachable`，不自动改变世界。
 - 只有 order/policy 显式授权时才允许 `Bridge`/`Pillar`，并把放置的材料、预算、失败原因写进结果。
 - 桥/垫脚的完成条件是“支撑块读回可站”，不是“放置调用返回”。
+- `Pillar` 在脚部高于目标格顶面后才发放置；跳起后立即放置会被服务端拒绝。失败后落地，按起跳状态重试，不向自己脚位重放。
+- `Bridge`/`Pillar` 的 `cost` 只检查尚未放置的格；执行中复验使用当前层脚位，不把刚放下的块当障碍。
 
 ## 5. 规划器
 
@@ -267,7 +262,7 @@ interface Move {
 - 预算：时间片（默认 5ms/步）+ 节点数（默认 20k）+ 总超时（默认 3s）；分片执行，不阻塞 tick/心跳。
 - 取消：可中断；返回 `best-so-far`（部分路径）与原因；执行器只把前缀当前缀，不把前缀当到达。
 - 缓存：每次搜索切片重新取一份 `MoveContext`（规则缓存按切片失效）；执行器在每个 tick 重新复验当前边。
-- P2 起默认使用自研 A*；现有搜索只作为**一次** no-path fallback，随后不再重试。
+- 默认使用自研 A*；no-path 只允许一次 vanilla fallback，随后不重试。
 
 ### 5.2 失败反馈
 
@@ -282,17 +277,17 @@ interface Move {
 
 ## 6. 执行器
 
-### 6.1 逐 tick 校验（已实现）
+### 6.1 逐 tick 校验
 
-- 当前脚位不在 `validPositions`：在整个剩余路径上向前扫描，再向回扫描，命中即重同步（不再只容忍 ±4 条边）；`Ascend` 的合法位置含 `src.above`/后方上一格，`Descend` 含 `dest.above`，`Fall/Downward` 含整段下落列。
-- 真实 0.6×1.8 身体 AABB 与已加载方块的碰撞相交（半嵌、1 格高小窝）：规划前与到达后各检查一次，直接失败 `BODY_OVERLAP`，`observed.blockedBy` 列出 `{x,y,z,name}`；不再对“从身体内部出发”的边反复规划。未加载/未知碰撞只进 `unknown`，不算 overlap。
+- 当前脚位不在 `validPositions`：在整个剩余路径上向前扫描，再向回扫描，命中即重同步（不只容忍 ±4 条边）；`Ascend` 的合法位置含 `src.above`/后方上一格，`Descend` 含 `dest.above`，`Fall/Downward` 含整段下落列。
+- 真实 0.6×1.8 身体 AABB 与已加载方块的碰撞相交（半嵌、1 格高小窝）：规划前与到达后各检查一次，直接失败 `BODY_OVERLAP`，`observed.blockedBy` 列出 `{x,y,z,name}`；不对“从身体内部出发”的边反复规划。未加载/未知碰撞只进 `unknown`，不算 overlap。
 - 精确到达（`arrival.kind === 'exact'`）的目标格必须可站；不可站直接 `GOAL_NOT_STANDABLE`（带 `reason`/`blockedBy`），不悄悄结束在下一层。
-- 到达容差：干地水平 **0.45**（`0.75 − bbWidth/2`），水面 1.0；`arrived` 以 `standingCell` 的脚格 + `standInfo.feetY` 判定，不再接受“目标列内、下一层”的宽松回退。成功体带 `arrival{kind,policy,from,to,cell,feetY,at,movedDistance,elapsedMs}`。
+- 到达容差：干地水平 **0.45**（`0.75 − bbWidth/2`），水面 1.0；`arrived` 以 `standingCell` 的脚格 + `standInfo.feetY` 判定，只接受目标脚位，不使用“目标列内、下一层”的宽松回退。成功体带 `arrival{kind,policy,from,to,cell,feetY,at,movedDistance,elapsedMs}`。
 - 当前 Move 的 `cost` 重新计算变成 `COST_INF`：中止 `UNREACHABLE`。
 - 当前 Move 耗时超过“原代价 + 宽限”：中止 `TIMEOUT`。
 - 无位移超过 `stallMs` 或离路径太远：中止 `STUCK`。
 - 执行器在完成/失败/取消时都 `releaseAll()`；不把“移动调用返回”当成功。
-- 取消可立即释放；放置/搭桥的 `safeToCancel` 留给 P3 的前置阶段。
+- 取消时执行器按 `safeToCancel` 判断当前 Move 是否可立即释放；放置/搭桥已改变世界时不伪造“未发生”，按实际读回与 `canceled` 上报。
 
 ### 6.2 取消与清理
 
@@ -302,7 +297,7 @@ interface Move {
 
 ## 7. 战斗
 
-### 7.1 控制器（近战已实现）
+### 7.1 控制器
 
 锁定目标后持续维护：
 
@@ -311,11 +306,11 @@ interface Move {
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
 - `distanceBand`：超出 `reach` 先接近；进入 `reach` 后停步攻击。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 走位、盾牌、远程、暴击仍后置未实现。
+- 当前不包含走位、盾牌、远程、暴击。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 
-### 7.2 证据（已实现）
+### 7.2 证据
 
 - `attacksIssued`：发出攻击次数。
 - `damageObserved`：短窗口内观察到目标受伤，且能归因到本方攻击。
@@ -323,90 +318,27 @@ interface Move {
 - `targetLost`：超出跟踪范围/卸载/视线丢失。
 - 只有死亡证据才报 `killed`；单纯从查询范围消失只能报 `targetLost` / `insufficient`。
 
-### 7.3 阶段
-
-- 战斗整体排在**移动模块全部完成并通过验收之后**；先做近战：接近 → 停步 → 视线检查 → 冷却就绪 → 攻击 → 重复。
-- 走位/盾牌/远程/暴击更后置。
-
 ## 8. 与 P2Mind 的接口
 
 - `ClientPort.moveTo(target, opts)` 与 `attack(entityId)` 的输入语义不变。
 - `move`/`attack` driver 只做：目标/约束/取消/结果。
 - giver 可调用只读的 `isReachable` / `pathTo` 做站位筛选；它不执行、不产生 job。
-- **最近可站查询收归 core**：`standCells` / `nearestStandCell`（`motion/search/stand.ts`）输入目标、`reach`（horizontal/vertical 包络）、可选业务谓词，输出按目标距离排序的可站格、每格 `feetY`、可达三态（`yes/no/unknown`）、`reason` 与 `coverage`。调用方只做排序/筛选策略，不再复制半径、垂直窗口或 standability 判断。
+- **最近可站查询收归 core**：`standCells` / `nearestStandCell`（`motion/search/stand.ts`）输入目标、`reach`（horizontal/vertical 包络）、可选业务谓词，输出按目标距离排序的可站格、每格 `feetY`、可达三态（`yes/no/unknown`）、`reason` 与 `coverage`。调用方只做排序/筛选策略，不复制半径、垂直窗口或 standability 判断。
   - 可达性用 `reachFrom`：与 A* 相同的 `motionNeighbors` + `Rules`，BFS 按步数；`complete=false`（节点预算耗尽）时未覆盖的格是 `unknown`，**预算不当作不可达**。未加载格与 A* 一样视为阻挡，因此 `complete` 的否定结论与执行器一致。
   - `approach` 用它选站位：无候选 → `APPROACH_NO_STAND`；有候选但全部证明不可达 → `APPROACH_NO_PATH`；窗口未加载 → `APPROACH_UNKNOWN`（可重试）。
-  - `pickup` 用它选拾取格，AABB/可拾取/合并/过期仍留在 pickup 层；谓词拿到真实 `feetY`，半砖上的掉落物不再按格底算。
-  - `pickup` **不再把 item 位置当移动目标**：只走 core 证明可站/未知的候选格；已证明不可达的格只作为证据。无候选时 `observed.standQuery.requiredDig` 给出 `Rules.standInfo` 的 `blockedBy`（`support/feet/head` + 方块名）；有候选但全部不可达时给 `unreachableReason:"path-blocked"` + `candidateCells`，不再逐格重试 `GOTO_NO_PATH`。
+  - `pickup` 用它选拾取格，AABB/可拾取/合并/过期仍留在 pickup 层；谓词拿到真实 `feetY`，半砖上的掉落物按真实支撑高度处理，不用格底近似。
+  - `pickup` 不把 item 位置当移动目标：只走 core 证明可站/未知的候选格；已证明不可达的格只作为证据。无候选时 `observed.standQuery.requiredDig` 给出 `Rules.standInfo` 的 `blockedBy`（`support/feet/head` + 方块名）；有候选但全部不可达时给 `unreachableReason:"path-blocked"` + `candidateCells`，不逐格重试 `GOTO_NO_PATH`。
   - `Rules.standInfo` 的 `no` 结果带可选 `blockedBy`（支撑/脚/头格 + 方块名），供 approach/pickup/place 直接给出“清哪格”。
   - `givers/common.nearestStandable/farthestStandable`、`escape.nearestCoveredStandable` 也走同一查询。
-- `moveTo` 始终走运动执行器；显式 `unstickDig` 作为 core break 白名单，不再回落到 legacy `goto`。
+- `moveTo` 始终走运动执行器；显式 `unstickDig` 作为 core break 白名单，不存在 `goto` 路径。
 - `MotionRun` 接管未加载目标：沿直线推进最多 16 格到已加载可站前缀（`activeTarget`），执行前缀后重新解析；最终目标仍由 `finalGoal` 判定。
-- `placement` 的可达性偏好使用 core `reachableCells`（与 A* 相同 Move 边/Rules，96 节点有界 hint），不再维护局部 BFS。
-- `traverse` order 已委托 motion 的 `moveTo { allowPlace, material }`；provider `pillarUp`/`pillar` 已删除。**致命退出**（lava/void/lethal_fall）由 Agent 层 `fatal` driver 执行，不进入 A*。
+- `placement` 的可达性偏好使用 core `reachableCells`（与 A* 相同 Move 边/Rules，96 节点有界 hint），不维护局部 BFS。
+- `traverse` order 委托 motion 的 `moveTo { allowPlace, material }`；provider 不提供 `pillarUp`/`pillar`。**致命退出**（lava/void/lethal_fall）由 Agent 层 `fatal` driver 执行，不进入 A*。
 - 所有对外结果包含：`state`、`reason`、`position`、`bestReachable`（如有）、`attempts`（如有）、`elapsedMs`。
-- `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / safeFallPass / healthBefore / healthAfter / elapsedMs`；新增 `planner` 标识本次规划器；Agent 层 `fatal` 的结果由 driver 自己记录。
+- `observed` 保留 `from / target / at / pathStatus / bestReachable / path / candidates / actions / safeFallPass / healthBefore / healthAfter / elapsedMs`；`planner` 标识本次规划器；Agent 层 `fatal` 的结果由 driver 自己记录。
 - 失败码保持可分类：`NO_PATH` / `UNREACHABLE` / `STUCK` / `TIMEOUT` / `CANCELED` / `STOP_UNCONFIRMED` / `PLACE_FAILED` / `BODY_OVERLAP` / `GOAL_NOT_STANDABLE` / `OBSERVATION_UNAVAILABLE` / `APPROACH_NO_STAND` / `APPROACH_NO_PATH` / `APPROACH_UNKNOWN`。
 
-## 9. 测试与验收
-
-- **验收只认真实游戏**：真实服务端 + 当前适配器；不使用“编造行为”的假执行器作为验收。
-- **移动矩阵**：平地、+1 台阶、1 格缺口、门、2 格落差、搭桥、垫脚；每个 Move 有实机用例。
-- **运动模块验收不使用 7×7 建造**：建造涉及 stage/stance/放置状态机，会干扰移动结论；建造回归另行安排。
-- **轨迹记录**：planned path、actual path、每个 Move 的完成/失败原因；实机失败变成回归用例。
-- **纯函数测试**：代价、状态转移、开集、边界条件；标注“非验收”。
-- **版本校准**：每个 pin 的客户端/适配器版本重跑移动矩阵；编译通过不等于行为不变。
-- **当前证据（P1/P2）**：真实服务端 + 当前适配器，平地/台阶/门/2 格落差通过，实际脚位与目标格一致；1 格缺口按 P1/P2 预期返回 `GOTO_NO_PATH`（Parkour 在 P3）。
-- **当前证据（P3）**：真实服务端 + 当前适配器，1 格缺口（Parkour）、2 格搭桥（放置读回）、2 级垫脚、对角移动通过；搭桥/垫脚的放置格读回为授权材料。
-- **当前证据（P4）**：真实服务端 + 当前适配器，锁定目标在 `entityHurt`/`entityDead` 证据后报 `killed`；被移出查询范围的目标报 `targetLost` 且 `killed=false`。
-- **当前证据（tags）**：1.21.1 实机 `tagsReady=true`，184 个 block tag、1003 个方块；26.1 实机 `tagsReady=true`，248 个 tag、1104 个方块。`oak_door`/`pale_oak_door` 带 `doors/mob_interactable_doors/wooden_doors`，`iron_door` 只有 `doors`，`oak_fence_gate` 带 `fence_gates`，`ladder` 带 `climbable`。
-- **26.1 实机**：同一套矩阵在 26.1 服务端通过 P1/P2、P3、P4；`pale_oak_door` 由 tags 自动识别，未使用名字特判。26.1 世界种子不同，但矩阵自建场地，几何结论不依赖原世界生成。**这是历史证据，当前不再复跑 26.1。**
-- **当前纯测试**：模型/规则、Move 状态机、执行器恢复、A* 开集与预算、攻击冷却/证据；均标注“非验收”。新增 `motion-stand-query`（最近可站查询：不可站目标/门后/缺口/未加载/半砖 feetY/预算/可达优先）、`motion-swim`（水面语义与 `SwimMove`）与 `motion-boundary`（38 行边界矩阵按 guards/climb/wade/swim 四阶段重放）。当前 `npm run check`（0.1.5）：909 passed / 1 skipped（910）。
-- **任务 A 实机（1.21.1）**：`motion-query-accept` 7/7 —— 目标块不可站、门后目标（门被打开）、跨 3 格缺口 `APPROACH_NO_PATH`、同层/半砖/坑内拾取全部收集、柱顶掉落物保留且移动 `GOTO_NO_PATH`。证据 `.m5-runs/motion-query/`。
-- **任务 B 实机（1.21.1）**：`motion-boundary-accept`（旧 `BOUNDARY_STAGE=water`，现拆为 `wade`/`swim`）25/25 —— 1 深水穿行与 2 格落水成功、2 深水与水+梯子 no path、waterlogged 半砖可走、梯子上下成功且旁边普通移动不受影响、梯顶 +1 no path、脚手架站立/放置成功且横穿 no path、叠放 GOTO_STUCK、半砖/楼梯上下成功、从下半砖跳整方块/垫脚/落半砖/起跳 no path、下半砖→下半砖成功、岩浆旁半砖可走/踏入岩浆 no path。证据 `.m5-runs/motion-boundary/`。
-- **水面游泳实机（1.21.1，2026-11-02）**：`motion-boundary-accept`（`BOUNDARY_STAGE=swim`）32/32 —— 4 行定向（`water-deep-2`、`water-fall-2`、`swim-lake-5wide`、`swim-fall-2deep`）全通过，随后全量 32 行通过；`water-deep-2`/`water-fall-2` 在 `wade` 下仍为 no path（纯测试），`swim` 下成功；5 格湖面横渡不再被 `escape:water` 抢占。证据 `accept-boundary-swim-2026-11-02T15-05-51-510Z.json`（4 行）、`accept-boundary-swim-2026-11-02T15-06-54-066Z.json`（32 行，均在 `.m5-runs/motion-boundary/`）。
-- **D1/D2 实机（1.21.1，2026-11-03）**：定向 boundary 10/10 —— 旧 `water-ladder` 负向 `GOTO_NO_PATH`；`water-ladder-exit` / `water-ladder-shallow` 成功；`water-ladder-no-ladder` 仍 no path；`scaffold-stand` / `scaffold-step-over` / `scaffold-top-down` / `scaffold-beside` 成功；`scaffold-through` 仍 no path。risky 2/2（`risky-river-2deep`、`risky-water-ladder`）。证据 `.m5-runs/motion-boundary/accept-boundary-swim-2026-11-03T16-48-40-640Z.json`、`.m5-runs/motion-risky/report-2026-11-03T16-50-14-098Z.json`。
-- **同 build 回归**：P1/P2、P3、capabilities（unstick / safe fall）全部通过。
-- **26.1 复跑（2026-11-02，ping 报 protocol 775）**：`motion-boundary-accept` 28/28、P1/P2、P3、capabilities、`motion-query-accept` 7/7、P4、`traverse`（bridge/scaffold）、`lethal_fall`（`died=true`）全部通过。证据 `accept-boundary-water-2026-11-02T10-06-23-229Z.json`、`accept-p1-2026-11-02T10-09-01-054Z.json`、`accept-p3-2026-11-02T10-09-32-632Z.json`、`accept-capabilities-2026-11-02T10-10-00-217Z.json`、`accept-query-2026-11-02T10-13-02-055Z.json`、`accept-p4-2026-11-02T10-12-10-333Z.json`、`accept-traverse-2026-11-02T10-15-26-947Z.json`、`accept-lethal-2026-11-02T10-15-42-428Z.json`（均在 `.m5-runs/` 下）。
-- 26.1 与 1.21.1 的差异只体现在数据面（协议 775、方块/状态集合），本轮阈值与几何判据不依赖版本。
-- **risky 模式实机（1.21.1，2026-11-02）**：`motion-risky-accept` 8/8 —— 2 深河水面横渡、安全拒绝附 `observed.alternative`（body 不动）、3 格落差通过、4 格落差拒绝、沿岩浆岸绕行、岩浆目标拒绝并按原版走完最接近路径、梯子上平台、risky 端到端过河；同轮 `motion-boundary-accept`（旧 water 阶段）28/28 回归通过（当时默认 wade；A 档后默认改为 swim）。证据 `report-2026-11-02T11-49-14-755Z.json`、`accept-boundary-water-2026-11-02T11-45-12-085Z.json`（均在 `.m5-runs/` 下）。
-- **risky 回归（1.21.1，2026-11-02，A 档默认 swim 后）**：`motion-risky-accept` 8/8；`risky-safe-alternative` 改用“半砖落点”场景（安全 `GOTO_NO_PATH` + `observed.alternative` + body 不动），因为 2 深河在 A 档下已可安全通过。证据 `report-2026-11-02T15-12-41-078Z.json`（`.m5-runs/motion-risky/`）。
-
-## 10. 阶段与删除
-
-### P0：模型与测试场（已完成）
-
-- `MotionWorld` 接口、`Rules`、`Constraints`、`Move` 接口。
-- 移动矩阵测试场；只记录 planned vs actual，不改行为。
-
-### P1：执行器优先（已完成）
-
-- `Traverse / Ascend / Descend / Fall / Downward` + `PathExecutor`。
-- 先用现有搜索当规划器；目标是“规划出来的路能走完”。
-- 失败分类与诊断。
-
-### P2：自研搜索（已完成）
-
-- 分片 A*、预算、取消、best-so-far、缓存失效。
-- 替换现有搜索；保留一个周期的 fallback。
-
-### P3：移动能力补齐（已完成）
-
-- `Diagonal / Parkour` 已有 Move 与 A* 邻居，默认关闭；需要显式约束开启。
-- `Bridge / Pillar` 已实现；桥/垫脚必须显式授权。
-- 移动矩阵覆盖到位，移动模块验收完成。
-
-### P4：战斗控制器（近战已完成）
-
-- **只有移动模块完成并通过验收后才开始**。
-- 近战连续控制、冷却、可见性、距离带、证据。
-- 走位/盾牌/远程后置。
-
-### 删除清单
-
-新模块通过验收后删除被取代的实现：旧搜索适配、旧分段逻辑、固定攻击间隔、基于“消失即死亡”的判定。不保留新旧双路径。
-
-## 11. 非目标
+## 9. 非目标
 
 - 客户端 mod、mod 内容、跨版本/多加载器矩阵。
 - 自动搭桥/垫脚（除非 order/policy 显式授权）。
