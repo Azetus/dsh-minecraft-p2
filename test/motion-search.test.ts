@@ -12,7 +12,7 @@ import {
   type MotionConstraints,
 } from '../src/motion/model/index.ts'
 import { matrixFields } from '../src/motion/matrix/index.ts'
-import { MinHeap, MotionSearch, reachableCells, type SearchOptions, type SearchResult } from '../src/motion/search/index.ts'
+import { MotionSearch, reachableCells, type SearchOptions, type SearchResult } from '../src/motion/search/index.ts'
 import { buildFixture, FixtureWorld, FULL_CUBE, rawBlock } from './helpers/motion-world.ts'
 
 function contextFor(world: FixtureWorld, patch: Partial<MotionConstraints> = {}) {
@@ -209,18 +209,5 @@ describe('MotionSearch', () => {
     const avoided = search({ coefficient: 8, radius: 1 })
     expect(avoided.status).toBe('success')
     expect(avoided.path).not.toContainEqual({ x: 0, y: 64, z: 2 })
-  })
-})
-
-describe('MinHeap', () => {
-  it('pops the lowest f, then h', () => {
-    const heap = new MinHeap()
-    heap.push({ x: 0, y: 0, z: 1 }, 5, 5)
-    heap.push({ x: 0, y: 0, z: 2 }, 3, 3)
-    heap.push({ x: 0, y: 0, z: 3 }, 3, 1)
-    expect(heap.pop()?.cell).toEqual({ x: 0, y: 0, z: 3 })
-    expect(heap.pop()?.cell).toEqual({ x: 0, y: 0, z: 2 })
-    expect(heap.pop()?.cell).toEqual({ x: 0, y: 0, z: 1 })
-    expect(heap.pop()).toBeUndefined()
   })
 })

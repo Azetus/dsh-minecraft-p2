@@ -9,7 +9,8 @@ import type { ActResult, BlockInfo, ClientPort, Face, Vec3 } from '../src/port/i
 
 /**
  * Category: cross-module contract (todo M2-03).
- * Protects: one cell per job, two stability reads, face retry, and stop.
+ * Protects: one cell per job, one placement packet per item consumption,
+ * retrySafe face selection, bounded readback, and stop.
  */
 
 type FakeWorld = Map<string, BlockInfo>

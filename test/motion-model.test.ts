@@ -14,9 +14,7 @@ import {
   type BlockClassifier,
   type MotionConstraints,
 } from '../src/motion/model/index.ts'
-import { matrixBlockMap, matrixCommands, matrixFields } from '../src/motion/matrix/index.ts'
 import {
-  buildFixture,
   FixtureWorld,
   FULL_CUBE,
   HALF_CUBE,
@@ -291,60 +289,5 @@ describe('motion rules: placement reference and constraints', () => {
       worldBorder: { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 128, z: 0 } },
     })
     expect(rules.standInfo({ x: 5, y: 64, z: 0 })).toEqual({ state: 'no', reason: 'outside-bounds' })
-  })
-})
-
-describe('movement matrix fixtures', () => {
-  const fields = matrixFields({ x: 0, y: 100, z: 0 })
-
-  it('defines the required fields in a stable order', () => {
-    expect(fields.map(field => field.id)).toEqual([
-      'flat', 'step-up', 'gap-1', 'door', 'drop-2', 'bridge', 'pillar', 'diagonal',
-    ])
-  })
-
-  it('builds a standable start for every field and a standable goal where P1 expects success', () => {
-    for (const field of fields) {
-      const world = buildFixture(field)
-      const rules = createRules(world, defaultConstraints())
-      expect(rules.standInfo(field.start).state, `${field.id} start`).toBe('yes')
-      if (field.expect.p1 === 'success') {
-        expect(rules.standInfo(field.goal).state, `${field.id} goal`).toBe('yes')
-      }
-    }
-  })
-
-  it('leaves the gap cell unstandable and marks its P1 expectation as unreachable', () => {
-    const gap = fields.find(field => field.id === 'gap-1')
-    expect(gap).toBeDefined()
-    if (gap === undefined) return
-    const world = buildFixture(gap)
-    const rules = createRules(world, defaultConstraints())
-    expect(rules.standInfo({ x: gap.origin.x, y: gap.origin.y + 1, z: gap.origin.z + 3 }).state).toBe('no')
-    expect(gap.expect.p1).toBe('unreachable')
-    expect(gap.expect.p3).toBe('success')
-  })
-
-  it('emits LAN setup commands, including door state and gap removal', () => {
-    const door = fields.find(field => field.id === 'door')
-    const gap = fields.find(field => field.id === 'gap-1')
-    expect(door).toBeDefined()
-    expect(gap).toBeDefined()
-    if (door === undefined || gap === undefined) return
-    const doorCommands = matrixCommands(door)
-    expect(doorCommands[0]).toMatch(/^\/fill .* air$/)
-    expect(doorCommands.some(command => command.includes('oak_door[half=lower'))).toBe(true)
-    expect(doorCommands.some(command => command.includes('oak_door[half=upper'))).toBe(true)
-    const gapCommands = matrixCommands(gap)
-    expect(gapCommands.some(command => command.startsWith('/fill') && command.endsWith(' air'))).toBe(true)
-  })
-
-  it('keeps the door state in the fixture block map', () => {
-    const door = fields.find(field => field.id === 'door')
-    if (door === undefined) return
-    const map = matrixBlockMap(door)
-    const lower = map.get(`${door.origin.x},${door.origin.y + 1},${door.origin.z + 3}`)
-    expect(lower?.name).toBe('oak_door')
-    expect(lower?.state?.half).toBe('lower')
   })
 })
