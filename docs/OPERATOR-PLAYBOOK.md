@@ -1,11 +1,11 @@
 # P2 运行手册（P2Mind）
 
 > 目标是让角色像一个有点笨的玩家：Agent 决定目标，P2Mind 自己干活；Agent 只在中断/偏离时介入。
-> 运行时操作以插件内置 `skills/p2-operator/SKILL.md` 为准（body 启动时注册给 owner session）；本文保留为开发参考，不自动注入。
+> 运行时操作以插件内置 `skills/p2-operator/SKILL.md` 为准（body 启动时注册给 owner session）；本文保留为运行参考，不自动注入。
 
 ## 1. 启动
 
-1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；开发时 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。`p2 start` 会先创建 `.p2` 工作区：缺失的 persona/config/skills/memory 说明从 `content/templates/` 复制，已有文件绝不覆盖。
+1. 人类：`/p2 setup` → `/p2 start <host>:<port>`（例如 `/p2 start 127.0.0.1:25575`）；也可以使用 `p2_body {action:"start", host, port}`。连接目标只在启动/重启参数里给，不写 `.p2/config.json`。`p2 start` 会先创建 `.p2` 工作区：缺失的 persona/config/skills/memory 说明从 `content/templates/` 复制，已有文件绝不覆盖。
 2. `p2_status`：确认 `target`、`connection=connected`、`bodyEpoch` 非空、owner 是本 session。若 `locks` 显示该 target 已被别的 session/进程占用，`/p2 start` 会直接拒绝；先让 owner `/p2 stop`，不要重复启动抢 username。
 3. `p2_observe`：确认进服、维度、位置与周围方块。找方块用 `p2_observe {mode:"find", only:["crafting_table"], radius:16}`；find 只返回已加载方块，不判断可达、不移动，拿到坐标后先 `go` 再 `craft`/`dig`。`blocks`/`find` 条目会带 `light`/`skyLight`（0–15，未知省略），可用来判断隧道/避难所是否需要火把。
 

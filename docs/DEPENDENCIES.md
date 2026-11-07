@@ -5,7 +5,7 @@
 ## 1. 包管理
 
 - 当前使用 npm，锁文件为 `package-lock.json`。
-- 包是 `private` 的本地 tarball，`npm run bundle` 输出到 `bundles/`，不发布 registry。
+- 包通过 npm 发布；`npm run bundle` 生成本地 tarball，用于离线安装和发布前验证。
 - Node 版本跟随 DSH 的声明：`^22.19.0 || >=24.0.0`。
 - npm 12 默认阻止依赖安装脚本；`package.json` 的 `allowScripts` 已记录 `esbuild@0.28.2`，只允许它执行安装时所需的平台二进制准备。
 
@@ -21,7 +21,7 @@
 
 ## 3. 运行时依赖
 
-当前 `dependencies` 只有 provider 的三项（`mineflayer`、`minecraft-protocol`、`minecraft-data`），其余为零：
+当前 `dependencies` 是 provider 的三项（`mineflayer`、`minecraft-protocol`、`minecraft-data`）加 `vec3`，其余为零：
 
 - bridge 只使用宿主提供的 Cordis/DSH 服务，不把宿主核心打进包。
 - body 与 authoring 目前不需要第三方运行时库。

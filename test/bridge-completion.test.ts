@@ -483,7 +483,7 @@ type Harness = {
 }
 
 type HarnessOptions = {
-  devAutoRestart?: boolean
+  autoRestart?: boolean
   restartBackoffMs?: number[]
   ownerScoped?: boolean
 }
@@ -568,7 +568,7 @@ function createHarness(
     requestTimeoutMs: 200,
     lockDir: tempLockDir(),
     workspaceDir: tempWorkspace(),
-    devAutoRestart: options.devAutoRestart === true,
+    autoRestart: options.autoRestart === true,
     ...(options.restartBackoffMs === undefined ? {} : { restartBackoffMs: options.restartBackoffMs }),
     spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
     log: () => {},
@@ -724,7 +724,7 @@ describe('bridge completion wake', () => {
   it('resets the event cursor on a body restart and still delivers the new epoch result', async () => {
     const first = createFakeBody('epoch-1', createFakeMind())
     const second = createFakeBody('epoch-2', createFakeMind())
-    const harness = createHarness([first, second], { devAutoRestart: true, restartBackoffMs: [0] })
+    const harness = createHarness([first, second], { autoRestart: true, restartBackoffMs: [0] })
     await harness.start()
     try {
       // Drive the first epoch's cursor past the seq numbers the new ring will use.

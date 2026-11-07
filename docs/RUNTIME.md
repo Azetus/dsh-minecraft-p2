@@ -15,6 +15,7 @@
 - `lastDisconnect` 记录 `at / kind / reason / eventLoopLagMs / serverAge / paused / ageIdleMs`；`kind` 为 `kick / error / end / reset`。
 - active body 通过 `p2_status` / `p2_body status` 暴露 `lastDisconnect`；faulted 时通过 `fault.lastDisconnect` 和 `fault.detail` 保留同一原因。
 - `kick` 且 reason 匹配 `duplicate_login`：`fault.autoRestart="disabled"`，释放 body 锁，唤醒 owner；不自动重启。
+- 其他 fault 默认自动重启：预算 3 次 / 60s，退避 1s / 2s / 4s；自动重启复用上次 target，新 epoch 从意图日志和世界重建，不恢复队列。
 
 ## 2. tick 循环
 

@@ -418,8 +418,8 @@ describe('body watchdog', () => {
       bodyEntry: 'unused-body.mjs',
       heartbeatMs: 10,
       requestTimeoutMs: 20,
-      devBodyControl: true,
-      devAutoRestart: true,
+      bodyControl: true,
+      autoRestart: true,
       restartBackoffMs: [0],
       lockDir: tempLockDir(),
       workspaceDir: tempWorkspace(),
@@ -466,7 +466,7 @@ describe('body watchdog', () => {
       bodyEntry: 'unused-body.mjs',
       heartbeatMs: 10,
       requestTimeoutMs: 20,
-      devBodyControl: true,
+      bodyControl: true,
       lockDir: tempLockDir(),
       workspaceDir: tempWorkspace(),
       spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
@@ -484,6 +484,50 @@ describe('body watchdog', () => {
     expect(started.target).toBe('127.0.0.1:25575')
     expect(started.status?.target).toBe('127.0.0.1:25575')
     await bodyTool.execute({ action: 'stop' }, { agent })
+  })
+
+  it('allows any session to start an inactive body but only the owner to control it', async () => {
+    const bodies = [createFakeBody('epoch-1'), createFakeBody('epoch-2')]
+    let spawns = 0
+    const tools = new Map<string, ToolDefinition>()
+    const ctx = {
+      commands: { register: () => () => {} },
+      tools: {
+        register: (definition: ToolDefinition) => {
+          tools.set(definition.name, definition)
+          return () => tools.delete(definition.name)
+        },
+      },
+      agents: { get: () => undefined },
+      effect: (callback: () => unknown) => {
+        callback()
+        return () => {}
+      },
+    }
+    const plugin = createP2Plugin({
+      bodyEntry: 'unused-body.mjs',
+      heartbeatMs: 10,
+      requestTimeoutMs: 20,
+      bodyControl: true,
+      lockDir: tempLockDir(),
+      workspaceDir: tempWorkspace(),
+      spawnBody: () => bodies[Math.min(spawns++, bodies.length - 1)]!.handle,
+      log: () => {},
+    })
+    ;(plugin as unknown as { apply(ctx: unknown): void }).apply(ctx)
+    const bodyTool = tools.get('p2_body')
+    if (bodyTool === undefined) throw new Error('p2_body was not registered')
+    const first = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
+    const second = { id: 'agent-2', session: { id: 'session-2', header: { cwd: owner.cwd } } }
+    await bodyTool.execute({ action: 'start', host: '127.0.0.1', port: 25575 }, { agent: first })
+    await expect(bodyTool.execute({ action: 'status' }, { agent: second }))
+      .rejects.toThrow(/owned by a different session/u)
+    await bodyTool.execute({ action: 'stop' }, { agent: first })
+    await expect(bodyTool.execute(
+      { action: 'start', host: '127.0.0.1', port: 25575 },
+      { agent: second },
+    )).resolves.toMatchObject({ state: 'active' })
+    await bodyTool.execute({ action: 'stop' }, { agent: second })
   })
 
   it('wakes the owner with fault and restart messages', async () => {
@@ -516,7 +560,7 @@ describe('body watchdog', () => {
       bodyEntry: 'unused-body.mjs',
       heartbeatMs: 10,
       requestTimeoutMs: 20,
-      devAutoRestart: true,
+      autoRestart: true,
       restartBackoffMs: [0, 0, 0],
       lockDir: tempLockDir(),
       workspaceDir: tempWorkspace(),
@@ -584,7 +628,7 @@ describe('body watchdog', () => {
       bodyEntry: 'unused-body.mjs',
       heartbeatMs: 10,
       requestTimeoutMs: 20,
-      devAutoRestart: true,
+      autoRestart: true,
       restartBackoffMs: [0],
       lockDir: tempLockDir(),
       workspaceDir: tempWorkspace(),

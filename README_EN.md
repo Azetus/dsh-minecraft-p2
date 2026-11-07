@@ -106,6 +106,7 @@ These tools become available in the DSH session that started P2. In that session
 | Tool | Purpose |
 |---|---|
 | `p2_status` | Check the connection, controlling session, current task, and recent failures |
+| `p2_body` | Start, stop, restart, or inspect the P2 body; any session may start it while inactive, but only the owner may control it once active |
 | `p2_order` | Submit a task. Supports `go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold` |
 | `p2_orders` | View active and queued tasks, and see why the queue is blocked |
 | `p2_cancel` | Cancel a specified task or all queued tasks |

@@ -106,6 +106,7 @@ P2 启动后，这些工具会在启动它的 DSH 会话中可用。你可以在
 | 工具 | 用途 |
 |---|---|
 | `p2_status` | 查看连接状态、所属会话、当前任务和最近的失败 |
+| `p2_body` | 启动、停止、重启或查看 P2 body；未启动时任何会话可启动，启动后仅 owner 可控制 |
 | `p2_order` | 提交任务，支持 `go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold` |
 | `p2_orders` | 查看正在执行和排队的任务，以及队列受阻的原因 |
 | `p2_cancel` | 取消指定任务或全部排队任务 |

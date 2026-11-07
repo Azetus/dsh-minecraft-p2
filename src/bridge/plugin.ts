@@ -142,12 +142,13 @@ export type P2PluginOptions = {
   lockHeartbeatMs?: number
   log?: (line: string) => void
   /**
-   * Development-only: register the global `p2_body` start/stop/status tool.
-   * The shipped plugin keeps body lifecycle on the human `/p2` command.
+   * Register the global `p2_body` lifecycle tool. It must exist before a body
+   * does: while inactive any session may start one; once active, only the
+   * owner session may control it.
    */
-  devBodyControl?: boolean
-  /** Development-only: bounded automatic body restart after a fault. */
-  devAutoRestart?: boolean
+  bodyControl?: boolean
+  /** Bounded automatic body restart after a fault. */
+  autoRestart?: boolean
   /** Development-only: auto-restart backoff schedule (tests use a zero schedule). */
   restartBackoffMs?: number[]
   /** Packaged templates copied into a missing workspace; tests may override. */
@@ -180,7 +181,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
     ...(options.lockHeartbeatMs === undefined ? {} : { lockHeartbeatMs: options.lockHeartbeatMs }),
     ...(options.log === undefined ? {} : { log: options.log }),
     autoRestart: {
-      enabled: options.devAutoRestart === true,
+      enabled: options.autoRestart === true,
       ...(options.restartBackoffMs === undefined ? {} : { backoffMs: options.restartBackoffMs }),
     },
     onFault: fault => notifyBodyFault?.(fault),
@@ -319,7 +320,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         const owner = manager.currentOwner
         if (owner !== undefined) repeat.reset(owner.sessionId)
         const next = fault.autoRestart === 'scheduled'
-          ? 'Auto-restarting within the development budget.'
+          ? 'Auto-restarting within the restart budget.'
           : fault.autoRestart === 'exhausted'
             ? 'Auto-restart budget is exhausted; start a new body manually with /p2 start.'
             : 'Start a new body manually with /p2 start.'
@@ -682,7 +683,7 @@ export function createP2Plugin(options: P2PluginOptions = {}): {
         await startAutoWake(agent, workspaceDir)
       }
 
-      if (options.devBodyControl === true && ctx.tools !== undefined) {
+      if (options.bodyControl === true && ctx.tools !== undefined) {
         globalDisposers.push(ctx.tools.register(createBodyTool(manager, {
           ensureTools: ensureOwnerSession,
           disposeTools,
@@ -739,7 +740,7 @@ type BodyToolHooks = {
 function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinition {
   return {
     name: 'p2_body',
-    description: 'Development-only body lifecycle. start requires host/port and both starts the body and connects it to that Minecraft server. restart stops and starts again; omit host/port to reuse the last target. stop closes the body process (there is no separate disconnect). A new start/restart creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. After a restart, observe before ordering again and do not replay the last order blindly.',
+    description: 'P2 body lifecycle. start requires host/port and both starts the body and connects it to that Minecraft server. restart stops and starts again; omit host/port to reuse the last target. stop closes the body process (there is no separate disconnect). A new start/restart creates a new epoch: tracker/job state and the order queue are not restored; P2Mind rebuilds from the world. After a restart, observe before ordering again and do not replay the last order blindly. While the body is inactive any session may start it; once active only the owner session may control it.',
     parameters: {
       type: 'object',
       properties: {
