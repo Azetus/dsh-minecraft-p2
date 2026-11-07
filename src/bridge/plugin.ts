@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -771,12 +771,6 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         const result = await startBody(manager, agent, parsed.target)
         await hooks.ensureTools(agent)
         hooks.startChatPolling()
-        void auditBodyControl(agent, {
-          action,
-          state: result.state,
-          epoch: result.epoch,
-          target: formatTarget(parsed.target),
-        })
         return { action, ...result, target: formatTarget(parsed.target), status: await bodyStatus(manager) }
       }
       if (action === 'restart') {
@@ -799,12 +793,6 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         const result = await startBody(manager, agent, target)
         await hooks.ensureTools(agent)
         hooks.startChatPolling()
-        void auditBodyControl(agent, {
-          action,
-          state: result.state,
-          epoch: result.epoch,
-          target: formatTarget(target),
-        })
         return { action, ...result, target: formatTarget(target), status: await bodyStatus(manager) }
       }
       if (action === 'stop') {
@@ -812,7 +800,6 @@ function createBodyTool(manager: BodyManager, hooks: BodyToolHooks): ToolDefinit
         const result = await stopBody(manager)
         hooks.stopChatPolling()
         hooks.disposeTools()
-        void auditBodyControl(agent, { action, state: result.state })
         return { action, ...result }
       }
       throw new Error(`unknown p2_body action: ${action}`)
@@ -858,20 +845,6 @@ async function bodyStatus(manager: BodyManager): Promise<JsonValue> {
     lastDisconnect: status.status.providerState?.lastDisconnect ?? null,
     providerState: status.status.providerState ?? null,
   } as unknown as JsonValue
-}
-
-async function auditBodyControl(agent: AgentLike, entry: Record<string, unknown>): Promise<void> {
-  const cwd = agent.session.header?.cwd
-  if (cwd === undefined || cwd.length === 0) return
-  try {
-    await mkdir(join(cwd, '.m5-runs'), { recursive: true })
-    await appendFile(
-      join(cwd, '.m5-runs', 'body-control.jsonl'),
-      `${JSON.stringify({ at: new Date().toISOString(), session: agent.session.id, agent: agent.id, ...entry })}\n`,
-    )
-  } catch {
-    // Development audit is best effort; lifecycle results never wait for it.
-  }
 }
 
 async function startBody(manager: BodyManager, agent: AgentLike, target?: McTarget): Promise<StartResult> {
@@ -922,13 +895,6 @@ export async function handleP2Command(
         if (cwd !== undefined) await hooks.prepareWorkspace?.(cwd)
         const result = await startBody(manager, invocation.agent, parsed.target)
         await hooks.onStarted?.(invocation.agent)
-        void auditBodyControl(invocation.agent, {
-          action: 'start',
-          state: result.state,
-          epoch: result.epoch,
-          target: formatTarget(parsed.target),
-          via: 'command',
-        })
         return success(`P2 body active at ${formatTarget(parsed.target)} (epoch ${result.epoch})`)
       }
       case 'status':
@@ -940,7 +906,6 @@ export async function handleP2Command(
           return error(`P2 body stop was not confirmed${result.error === undefined ? '' : `: ${result.error}`}`)
         }
         hooks.onStopped?.()
-        void auditBodyControl(invocation.agent, { action: 'stop', state: result.state, via: 'command' })
         return success('P2 body stopped')
       }
       default:
