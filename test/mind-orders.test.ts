@@ -83,9 +83,37 @@ describe('order store', () => {
       .toBe('INVALID_ORDER')
   })
 
+  it('validates bounded collect params and rejects unknown keys', () => {
+    const store = new OrderStore()
+    expect(store.enqueue({ id: 'collect-default', verb: 'collect' }).state).toBe('active')
+    expect(() => store.enqueue({
+      id: 'collect-bounded',
+      verb: 'collect',
+      params: { radius: 16, item: 'dirt', maxDrops: 16, timeoutMs: 90_000 },
+    })).not.toThrow()
+    const invalid: Array<Record<string, unknown>> = [
+      { radius: 0 },
+      { radius: 17 },
+      { maxDrops: 0 },
+      { maxDrops: 17 },
+      { timeoutMs: 999 },
+      { timeoutMs: 90_001 },
+      { item: '' },
+      { raduis: 8 },
+    ]
+    for (const [index, params] of invalid.entries()) {
+      expect(errorCode(() => store.enqueue({
+        id: `collect-bad-${index}`,
+        verb: 'collect',
+        params,
+      }))).toBe('INVALID_ORDER')
+    }
+  })
+
   it('accepts only the finite execution surface', () => {
     expect(ORDER_VERBS).toEqual([
-      'go', 'place', 'dig', 'equip', 'use', 'attack', 'check', 'container', 'craft', 'build', 'traverse', 'hold',
+      'go', 'place', 'dig', 'collect', 'equip', 'use', 'attack', 'check', 'container', 'craft', 'build',
+      'traverse', 'hold',
     ])
     const store = new OrderStore()
     for (const verb of ['fly', 'unknown']) {

@@ -275,6 +275,7 @@ const NO_STAND_CODES = new Set([
   'GOTO_INVALID_TARGET',
   'NO_STAND',
   'PICKUP_UNREACHABLE',
+  'COLLECT_UNREACHABLE',
 ])
 
 /** Codes that share the placement diagnosis order. */
@@ -302,7 +303,7 @@ export function diagnoseFailure(input: {
   if (TOOL_CODES.has(code)) return 'TOOL_MISSING'
   // PICKUP_UNREACHABLE is the drop-specific "no reachable stand cell" code;
   // its requiredDig lists the blocking cells, not a body head/support fault.
-  if (code === 'PICKUP_UNREACHABLE') return 'NO_STAND_CELL'
+  if (code === 'PICKUP_UNREACHABLE' || code === 'COLLECT_UNREACHABLE') return 'NO_STAND_CELL'
 
   const facts = input.facts ?? failureFacts(input.observed)
   const snapshot = isRecord(facts.snapshot) ? facts.snapshot : undefined

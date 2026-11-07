@@ -17,11 +17,12 @@ p2_order {verb:"go", params:{x:48,y:64,z:30}}
 p2_order {verb:"build", blueprint:{blocks:[...]}, policy:{conflict:{mode:"clear"}, materials:{mode:"auto-gather"}}}
 p2_order {verb:"equip", params:{item:"stone_pickaxe"}}
 p2_order {verb:"dig", params:{x:12,y:48,z:-3}}
+p2_order {verb:"collect", params:{radius:8}}
 p2_order {verb:"container", params:{x:47,y:64,z:29,action:"take-output",item:"charcoal",count:1}}
 p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ```
 
-- 有限词表：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
+- 有限词表：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`。
 - 默认活动用 `p2_base_activity`：默认 `{kind:"idle"}`（静止）；`{kind:"wandering"}` 需显式设置，只在 anchor 半径 8 内移动；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 idle；要完全停住用 `p2_order {verb:"hold"}`。
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight **默认**不选玩家/被动/中立——这是自动选择的默认值，不是 Agent 的权限上限。policy 不持久化，重启后要重设。
@@ -69,6 +70,10 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(APPROACH_NO_STAND)` / `failed(APPROACH_NO_PATH)` | 目标方块周围没有可站立/可接近格；换目标面或先清理/接近 |
 | `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
+| `failed(COLLECT_UNREACHABLE)` | 已观测掉落物里有走不到的；读 `observed.unreachable/items` 与 `facts.requiredDig`；清阻挡、换落点或接受损失，不要自动追 |
+| `failed(COLLECT_TIMEOUT)` | collect 到 deadline；读 `collected/collectedDrops/timedOut`；重新观察剩余掉落物后再发一次有界 collect |
+| `failed(COLLECT_INVENTORY_FULL)` | 背包没有空间；先整理/存放，不要重复 collect |
+| `failed(COLLECT_INCOMPLETE)` | 有 gone/partial/notCollected；读 `observed.items[].outcome`；消失的不要追，partial 按背包空间决定是否再发一次 |
 | `P2 body is already running at <target>` | 同 target 已有 body（锁或同进程 owner）；先让 owner `/p2 stop`，不要重复 `/p2 start` |
 | `providerState.lastDisconnect` | provider 断开原因（`kick`/`error`/`end`/`reset`）；`kick` 且为 duplicate_login 时不 auto-restart、释放锁，由 owner 决定是否重新 start |
 | `failed(ACT_UNCONFIRMED)` | 动作可能已生效、效果未知；先 `p2_observe`/`check` 读回，不要原样重下 |

@@ -6,7 +6,7 @@ P2Mind 把角色交给常驻 NPC AI：agent 只下**目标级 order**，NPC 自�
 
 ## 当前能力
 
-- 有限 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`
+- 有限 order 面：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`
 - 常驻树 + 主树 + WorkGiver / JobTracker / Driver
 - 计划、蓝图、材料政策与三态验证
 - 游戏内聊天接入、completion wake、body 重启与意图日志恢复

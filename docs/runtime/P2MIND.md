@@ -2,7 +2,7 @@
 
 > 状态：已实现，并在实机中验证有限 order、计划、树、tracker、driver 与 completion wake。
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
-> 当前 order 面：`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`。
+> 当前 order 面：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
 > 默认活动是 base activity：`idle / wandering / escort`，默认 `idle`；`wandering` 只做 anchor 半径内的局部移动；不持久化，重启回 idle。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
 > 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
@@ -101,9 +101,11 @@ agent 下达的目标，不是动作。
 }
 ```
 
-- 词表固定（`go / place / dig / equip / use / attack / check / container / craft / build / traverse / hold`）。
+- 词表固定（`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`）。
 - `blueprint` 只给最终几何；选址与可达性由 Planner 处理。
 - Order 只能由模型或对话管线产生；**树与 driver 不能创建 order**。
+
+**collect**：`{verb:"collect", params:{radius? 1–16 默认 8, item?, maxDrops? 1–16 默认 8, timeoutMs? 1000–90000 默认 30000}}`。job 启动时以身体位置为中心读取一次已加载 item 实体，按距离近到远处理，最多 `maxDrops` 个；不预测落点、不挖、不战斗。每个实体只做一 pass（可站候选格 `moveTo` → 背包计数增量确认 → 按 entity id 复查询），`missed`/`unreachable`/`timedOut` 都进入明确终态，不做 primitive 重试。`observed` 带 `collected/collectedDrops/missed/unreachable/inventoryDelta`；部分成功也是 `failed`，已收集数量保留。
 
 ### 4.2 Plan
 
@@ -276,7 +278,7 @@ interface DriverHandle {
 
 toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → readback → progress`。
 
-**读回要求**：`place` 读目标方块两次（间隔 200ms）；`dig` 读空气，`harvest` 还走到掉落物处并读背包增量；`craft` 读背包增量；`smelt` 读输出槽。读回是**稳定性观察**，不是“服务端已接受”的证明；需要强证据时走独立观测路径。
+**读回要求**：`place` 读目标方块两次（间隔 200ms）；`dig` 读空气，`harvest` 还走到掉落物处并读背包增量；`collect` 按实体复查询 + 背包总计数增量确认；`craft` 读背包增量；`smelt` 读输出槽。读回是**稳定性观察**，不是“服务端已接受”的证明；需要强证据时走独立观测路径。
 
 ### 4.8 Verifier
 

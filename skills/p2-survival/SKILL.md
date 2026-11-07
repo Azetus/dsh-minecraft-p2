@@ -18,6 +18,7 @@ description: Use when mining, lighting tunnels or shelters, or collecting combat
 
 ## 战斗拾取
 
-- 以取材料为目的的战斗结束后 5 分钟内确认并拾取掉落：用 `p2_entities` 找掉落，走到已加载可站格拾取，读背包增量。
+- 以取材料为目的的战斗结束后 5 分钟内确认并拾取掉落：先用 `p2_entities` 找掉落，再用 `collect {radius,item?,maxDrops?}` 做一次有界拾取，读 `observed.collected/missed/unreachable/inventoryDelta`。
+- `collect` 只处理 job 启动时已观测到的掉落物，不挖、不战、不预测落点；`failed` 也保留已收集数量。不要用循环 `collect` 追同一批实体。
 - 床要 3 块同色羊毛；先确认颜色和数量，不要拿混色。
 - 不把“掉落物存在”当成“已拾取”。

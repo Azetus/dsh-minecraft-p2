@@ -17,6 +17,7 @@ import { createClearDriver, CLEAR_DRIVER_ID } from '../mind/drivers/clear.ts'
 import { createCheckDriver, CHECK_DRIVER_ID } from '../mind/drivers/check.ts'
 import { createAttackDriver, ATTACK_DRIVER_ID } from '../mind/drivers/attack.ts'
 import { createDigDriver, DIG_DRIVER_ID } from '../mind/drivers/dig.ts'
+import { createCollectDriver, COLLECT_DRIVER_ID } from '../mind/drivers/collect.ts'
 import { createContainerDriver, CONTAINER_DRIVER_ID } from '../mind/drivers/container.ts'
 import { createPlaceDriver, PLACE_DRIVER_ID } from '../mind/drivers/place.ts'
 import { createEquipDriver, EQUIP_DRIVER_ID } from '../mind/drivers/equip.ts'
@@ -46,6 +47,7 @@ import type { ActivityLayer, MindActivityView } from '../contracts/protocol.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
 import { createAttackOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
+import { createCollectOrderGiver } from '../mind/givers/collect.ts'
 import { createContainerOrderGiver } from '../mind/givers/container.ts'
 import {
   createCraftOrderGiver,
@@ -172,6 +174,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: CHECK_DRIVER_ID, driver: createCheckDriver() })
   registry.registerDriver({ id: ATTACK_DRIVER_ID, driver: createAttackDriver() })
   registry.registerDriver({ id: DIG_DRIVER_ID, driver: createDigDriver() })
+  registry.registerDriver({ id: COLLECT_DRIVER_ID, driver: createCollectDriver() })
   registry.registerDriver({ id: CONTAINER_DRIVER_ID, driver: createContainerDriver() })
   registry.registerDriver({ id: PLACE_DRIVER_ID, driver: createPlaceDriver() })
   registry.registerDriver({ id: EQUIP_DRIVER_ID, driver: createEquipDriver() })
@@ -205,6 +208,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.attack', factory: () => createAttackOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.dig', factory: () => createDigOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.collect', factory: () => createCollectOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.container', factory: () => createContainerOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.place', factory: () => createPlaceOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.equip', factory: () => createEquipOrderGiver(() => activeOrderLookup?.()) })
@@ -1512,7 +1516,7 @@ function viewOf(
 }
 
 const PRIMITIVE_ORDER_VERBS = new Set([
-  'go', 'attack', 'dig', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
+  'go', 'attack', 'dig', 'collect', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
 ])
 
 /** Verbs that may be retried inside the same order before it becomes blocked. */

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { OrderStore } from '../src/mind/orders.ts'
-import type { ClientPort, SelfInfo } from '../src/port/index.ts'
+import type { ClientPort, EntityInfo, SelfInfo } from '../src/port/index.ts'
 
 /**
  * Category: state safety (order retry policy).
@@ -285,6 +285,53 @@ describe('primitive order retry policy', () => {
     expect(mind.orders.get('ord-noitem')?.state).toBe('failed')
     const terminals = [...mind.events.since(0)].filter(event => event.kind === 'job.terminal')
     expect(terminals).toHaveLength(1)
+  })
+
+  it('fails a collect order after one bounded pass instead of retrying it', async () => {
+    const at: SelfInfo = {
+      pos: { x: 0.5, y: 64, z: 0.5 },
+      yaw: 0,
+      pitch: 0,
+      health: 20,
+      food: 20,
+      onGround: true,
+      inWater: false,
+      inLava: false,
+    }
+    const drop: EntityInfo = {
+      id: 'drop-1',
+      name: 'item',
+      position: { x: 5.5, y: 64, z: 0.5 },
+      width: 0.25,
+      height: 0.25,
+      item: { name: 'dirt', count: 1 },
+    }
+    const port = {
+      on: () => {},
+      self: () => at,
+      time: () => ({ timeOfDay: 1000, worldAge: 1 }),
+      blockAt: () => null,
+      blocksIn: () => [],
+      entities: () => [drop],
+      inventory: () => [],
+      beginWrite: () => {},
+      endWrite: () => {},
+      moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
+    } as unknown as ClientPort
+    const mind = makeMind(port)
+    mind.enqueueOrder({ id: 'ord-collect', verb: 'collect', params: { radius: 8 } })
+    await runUntilTerminal(mind, 'ord-collect')
+
+    expect(mind.orders.get('ord-collect')?.state).toBe('failed')
+    const started = [...mind.events.since(0)]
+      .filter(event => event.kind === 'job.started')
+      .map(event => event.data as { driverId?: string })
+    expect(started.filter(data => data.driverId === 'collect')).toHaveLength(1)
+    const terminal = [...mind.events.since(0)]
+      .filter(event => event.kind === 'job.terminal')
+      .map(event => event.data as { code?: string })
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]?.code).toBe('COLLECT_UNREACHABLE')
   })
 
   it('appends one metrics line per order terminal with attempts and last code', async () => {

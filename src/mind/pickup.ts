@@ -12,6 +12,15 @@ import {
   pickupQueryBox,
 } from './aabb.ts'
 
+export type PickupItemOutcome =
+  | 'collected'
+  | 'partial'
+  | 'unreachable'
+  | 'gone'
+  | 'full'
+  | 'notCollected'
+  | 'timedOut'
+
 export type PickupItemView = {
   id: string
   name: string
@@ -23,6 +32,10 @@ export type PickupItemView = {
   playerQueryBox: Box
   distance: number
   canPickupFromStart: boolean
+  /** Items attributed to this entity from the observed inventory delta. */
+  picked?: number
+  /** Terminal classification for this entity, when this pass attempted it. */
+  outcome?: PickupItemOutcome
   presentAfter?: boolean
   positionAfter?: Vec3
   countAfter?: number
@@ -51,7 +64,15 @@ export type PickupStandView = {
 }
 
 export type PickupResult = {
+  /** Drops selected after the item filter and maxDrops cap. */
   drops: number
+  /** Drops matching the filter and radius, before the maxDrops cap. */
+  eligible: number
+  /** Drops left unprocessed because of the maxDrops cap. */
+  skippedByCap: number
+  /** Drops not attempted or abandoned because the wall budget expired. */
+  timedOut: number
+  timeoutHit: boolean
   picked: number
   unreachable: number
   notCollected: number
@@ -62,6 +83,10 @@ export type PickupResult = {
   observed: {
     kind: 'pickup'
     drops: number
+    eligible: number
+    skippedByCap: number
+    timedOut: number
+    timeoutHit: boolean
     picked: number
     unreachable: number
     notCollected: number
@@ -81,22 +106,51 @@ export type PickupResult = {
   }
 }
 
-const MAX_DROPS = 4
+/** Per-call scan/movement options. Dig uses the defaults, which preserve P1 behavior. */
+export type PickupOptions = {
+  /** Initial server-delay wait before the scan, in ticks (dig harvest uses 8-12). */
+  delayTicks?: number
+  /** Scan radius around `center`; default 6. */
+  radius?: number
+  /** Maximum drops processed; default 4. */
+  maxDrops?: number
+  /** Only drops whose adapter-resolved item name matches exactly. */
+  item?: string
+  /** Total wall budget for this call; absent means no deadline. */
+  timeoutMs?: number
+  /** Clock injection for tests. */
+  now?: () => number
+}
+
+const DEFAULT_PICKUP_RADIUS = 6
+const DEFAULT_MAX_DROPS = 4
+const HARD_MAX_PICKUP_RADIUS = 64
+const HARD_MAX_DROPS = 64
 const PICKUP_WAIT_MS = 1_500
 const MOVE_TIMEOUT_MS = 5_000
 const PLAYER_WIDTH = 0.6
 const PLAYER_HEIGHT = 1.8
 
 /**
- * Pick up drops from the block this job just removed. Decisions use the vanilla
- * player AABB inflated by (1.0, 0.5, 1.0), not a centre-distance sphere.
- * The server remains the authority: pickupDelay/target/age are not synced.
+ * Pick up observed drops near a point. Decisions use the vanilla player AABB
+ * inflated by (1.0, 0.5, 1.0), not a centre-distance sphere. The server remains
+ * the authority: pickupDelay/target/age are not synced.
+ *
+ * The scan happens once, nearest-first. `timeoutMs` bounds the whole pass: an
+ * expired deadline stops further movement, marks unattempted drops `timedOut`,
+ * and returns; it never retries the same entity after that.
  */
 export async function pickupNearby(
   port: ClientPort,
   center: Vec3,
-  options: { delayTicks?: number } = {},
+  options: PickupOptions = {},
 ): Promise<PickupResult> {
+  const clock = options.now ?? (() => Date.now())
+  const radius = clampNumber(options.radius ?? DEFAULT_PICKUP_RADIUS, 0, HARD_MAX_PICKUP_RADIUS)
+  const maxDrops = Math.floor(clampNumber(options.maxDrops ?? DEFAULT_MAX_DROPS, 1, HARD_MAX_DROPS))
+  const deadline = options.timeoutMs === undefined
+    ? undefined
+    : clock() + Math.max(0, options.timeoutMs)
   const startInventory = port.inventory()
   const startCount = totalCount(startInventory)
   const startFree = freeSlots(startInventory)
@@ -107,9 +161,12 @@ export async function pickupNearby(
     await sleep(options.delayTicks * 50 + 100)
   }
 
-  const query = queryBox(center)
+  const query = queryBox(center, radius)
   const requery = wideQueryBox(center)
-  const initial = dropsIn(port, query, center)
+  const matching = dropsIn(port, query, center, radius, options.item, self)
+  const eligible = matching.length
+  const initial = matching.slice(0, maxDrops)
+  const skippedByCap = Math.max(0, eligible - initial.length)
   const items = initial.map(entity => itemView(port, entity, self))
   let before = startCount
   let picked = 0
@@ -119,13 +176,36 @@ export async function pickupNearby(
   let full = 0
   let merged = 0
   let partial = 0
+  let timedOut = 0
   let standView: PickupStandView | undefined
 
   for (let index = 0; index < initial.length; index += 1) {
+    if (deadlineExpired(deadline, clock())) {
+      timedOut += initial.length - index
+      for (let rest = index; rest < items.length; rest += 1) items[rest]!.outcome = 'timedOut'
+      break
+    }
     const drop = initial[index]!
     const view = items[index]!
     const currentSelf = port.self()
     let pickedDuringMove = false
+
+    // Confirm one pickup from the observed inventory delta and re-query the
+    // entity. A remaining entity is `partial`, not a second attempt.
+    const confirmPickup = async (after: number): Promise<void> => {
+      const delta = after - before
+      picked += delta
+      view.picked = (view.picked ?? 0) + delta
+      before = after
+      await requeryItem(port, requery, drop, view, center)
+      if (view.presentAfter === true) {
+        partial += 1
+        view.outcome = 'partial'
+      } else {
+        view.outcome = 'collected'
+      }
+    }
+
     if (!canPickupFrom(currentSelf, drop)) {
       // P1: never walk to the item's position (an item is not a stand cell).
       // The core query supplies real stand cells plus their feet height; a cell
@@ -161,11 +241,13 @@ export async function pickupNearby(
             }),
       }
       let reached = false
+      let afterMove = before
       for (const cell of found.cells) {
+        if (deadlineExpired(deadline, clock())) break
         const moved = await port.moveTo(cell, {
           range: 0,
           intent: 'interact',
-          timeoutMs: MOVE_TIMEOUT_MS,
+          timeoutMs: Math.max(1, remainingMs(deadline, clock(), MOVE_TIMEOUT_MS)),
         })
         moves.push({
           target: cell,
@@ -173,10 +255,8 @@ export async function pickupNearby(
           ...(moved.code === undefined ? {} : { code: moved.code }),
           ...(moved.state === 'ok' ? { actual: { ...port.self().pos } } : {}),
         })
-        const afterMove = totalCount(port.inventory())
+        afterMove = totalCount(port.inventory())
         if (afterMove > before) {
-          picked += afterMove - before
-          before = afterMove
           pickedDuringMove = true
           reached = true
           break
@@ -187,35 +267,49 @@ export async function pickupNearby(
         }
       }
       if (pickedDuringMove) {
+        await confirmPickup(afterMove)
+        continue
+      }
+      // A deadline during positioning is a timeout, not proof the drop is
+      // unreachable: the candidate cells may have been fine.
+      if (deadlineExpired(deadline, clock())) {
+        timedOut += 1
+        view.outcome = 'timedOut'
         await requeryItem(port, requery, drop, view, center)
-        if (view.presentAfter === true) partial += 1
         continue
       }
       if (!reached) {
         unreachable += 1
+        view.outcome = 'unreachable'
         standView.unreachableReason = standUnreachableReason(found)
         await requeryItem(port, requery, drop, view, center)
         continue
       }
     }
 
-    let after = await waitForIncrease(port, before, PICKUP_WAIT_MS)
+    let after = await waitForIncrease(
+      port,
+      before,
+      Math.max(0, remainingMs(deadline, clock(), PICKUP_WAIT_MS)),
+      clock,
+    )
     if (after > before) {
-      picked += after - before
-      before = after
-      await requeryItem(port, requery, drop, view, center)
-      if (view.presentAfter === true) partial += 1
+      await confirmPickup(after)
       continue
     }
 
     // Do not move again by centre distance. A second wait covers the normal
     // server pickup delay / inventory packet lag; the AABB cell is authoritative.
-    after = await waitForIncrease(port, before, 750)
+    after = await waitForIncrease(port, before, Math.max(0, remainingMs(deadline, clock(), 750)), clock)
     if (after > before) {
-      picked += after - before
-      before = after
+      await confirmPickup(after)
+      continue
+    }
+
+    if (deadlineExpired(deadline, clock())) {
+      timedOut += 1
+      view.outcome = 'timedOut'
       await requeryItem(port, requery, drop, view, center)
-      if (view.presentAfter === true) partial += 1
       continue
     }
 
@@ -223,10 +317,13 @@ export async function pickupNearby(
     if (view.presentAfter !== true) {
       if (view.merged === true) merged += 1
       gone += 1
+      view.outcome = 'gone'
     } else if (startFree === 0) {
       full += 1
+      view.outcome = 'full'
     } else {
       notCollected += 1
+      view.outcome = 'notCollected'
     }
   }
 
@@ -239,8 +336,13 @@ export async function pickupNearby(
   const finalSelf = port.self()
   const width = finalSelf.width ?? PLAYER_WIDTH
   const height = finalSelf.height ?? PLAYER_HEIGHT
+  const timeoutHit = timedOut > 0
   return {
     drops: initial.length,
+    eligible,
+    skippedByCap,
+    timedOut,
+    timeoutHit,
     picked,
     unreachable,
     notCollected,
@@ -251,6 +353,10 @@ export async function pickupNearby(
     observed: {
       kind: 'pickup',
       drops: initial.length,
+      eligible,
+      skippedByCap,
+      timedOut,
+      timeoutHit,
       picked,
       unreachable,
       notCollected,
@@ -380,21 +486,34 @@ function itemView(port: ClientPort, entity: EntityInfo, self: SelfInfo): PickupI
   }
 }
 
-function dropsIn(port: ClientPort, query: Box, center: Vec3): EntityInfo[] {
+function dropsIn(
+  port: ClientPort,
+  query: Box,
+  center: Vec3,
+  radius: number,
+  item: string | undefined,
+  self: SelfInfo,
+): EntityInfo[] {
+  const selfQuery = pickupQueryBox(self)
   return port.entities(query)
     .filter(entity => entity.item !== undefined || entity.name === 'item' || entity.name === 'item_stack')
+    .filter(entity => item === undefined || entity.item?.name === item)
     .filter(entity => Math.hypot(
       entity.position.x - center.x,
       entity.position.y - center.y,
       entity.position.z - center.z,
-    ) <= 6)
-    .slice(0, MAX_DROPS)
+    ) <= radius)
+    // Nearest first: a bounded collect should spend its budget on the drop the
+    // body can reach soonest, not on adapter iteration order.
+    .sort((left, right) => boxDistance(selfQuery, itemBox(left)) - boxDistance(selfQuery, itemBox(right))
+      || left.id.localeCompare(right.id))
 }
 
-function queryBox(center: Vec3): Box {
+function queryBox(center: Vec3, radius: number): Box {
+  const reach = radius + 2
   return {
-    min: { x: center.x - 8, y: center.y - 4, z: center.z - 8 },
-    max: { x: center.x + 8, y: center.y + 5, z: center.z + 8 },
+    min: { x: center.x - reach, y: center.y - reach, z: center.z - reach },
+    max: { x: center.x + reach, y: center.y + reach, z: center.z + reach },
   }
 }
 
@@ -419,14 +538,33 @@ function freeSlots(items: Item[]): number | undefined {
   return Math.max(0, 36 - slots.size)
 }
 
-async function waitForIncrease(port: ClientPort, before: number, timeoutMs: number): Promise<number> {
-  const end = Date.now() + timeoutMs
+async function waitForIncrease(
+  port: ClientPort,
+  before: number,
+  timeoutMs: number,
+  now: () => number,
+): Promise<number> {
+  const end = now() + timeoutMs
   let after = totalCount(port.inventory())
-  while (after <= before && Date.now() < end) {
+  while (after <= before && now() < end) {
     await sleep(100)
     after = totalCount(port.inventory())
   }
   return after
+}
+
+function remainingMs(deadline: number | undefined, at: number, fallback: number): number {
+  if (deadline === undefined) return fallback
+  return Math.max(0, Math.min(fallback, deadline - at))
+}
+
+function deadlineExpired(deadline: number | undefined, at: number): boolean {
+  return deadline !== undefined && at >= deadline
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  return Math.min(max, Math.max(min, value))
 }
 
 function sleep(ms: number): Promise<void> {

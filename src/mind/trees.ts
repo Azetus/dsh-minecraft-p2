@@ -23,6 +23,7 @@ export const MAIN_TREE: TreeNode = {
     { type: 'giver', ref: 'order.go' },
     { type: 'giver', ref: 'order.attack' },
     { type: 'giver', ref: 'order.dig' },
+    { type: 'giver', ref: 'order.collect' },
     { type: 'giver', ref: 'order.place' },
     { type: 'giver', ref: 'order.equip' },
     { type: 'giver', ref: 'order.use' },

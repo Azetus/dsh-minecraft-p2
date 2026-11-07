@@ -108,6 +108,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - 自动选最佳工具（`chooseTool`）并 `equip`；最近一次显式 `equip` 成功后，下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use`）不自动切换，动作启动后恢复自动（one-action override）。
   - `harvest` 在整批结束后统一拾取一次（中心点）；单格 `harvest` 仍在挖后立即拾取；
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`。
+- `collect` order 是**一次有界的已观测掉落物拾取**：`{radius? 1–16 默认 8, item?, maxDrops? 1–16 默认 8, timeoutMs? 1000–90000 默认 30000}`。job 启动时以身体位置为球心读取一次 item 实体，按 AABB 距离近到远处理，最多 `maxDrops`；`item` 精确匹配 adapter 解析的 `entity.item.name`。每个实体只做一 pass（`standCells` 可站候选 → `moveTo` → 背包总计数增量 → 按 entity id 复查询），不挖、不战斗、不预测落点；超出 `maxDrops` 的实体进 `skippedByCap`，不算失败，本次不追。终态：无匹配掉落 → `succeeded` + `drops:0`；全部确认收集 → `succeeded`；`timedOut>0` → `failed COLLECT_TIMEOUT`；`full>0` → `failed COLLECT_INVENTORY_FULL`；`unreachable>0` → `failed COLLECT_UNREACHABLE`；其余 `missed>0` → `failed COLLECT_INCOMPLETE`。`collected` 是物品数（背包增量），`collectedDrops` 是确认收集的实体数；`collectedDrops + missed + unreachable = drops`（`missed` 含 `gone/merged/full/partial/timedOut`，`unreachable` 单独一桶）。collect 是 primitive 但一次性，失败不进入 order 重试；被抢占后恢复的新 pass 以当时背包为 baseline。
 - `go` 目标只接受已选择的坐标；若已知目标不可站立，giver 会在 2 格内找最近可站立格，找不到则 hold `GO_NO_STAND`。目标未加载时交给 move driver，向前 16 格推进到已加载前缀后再重规划。`go.params.range`（0–8）透传到 move job，不再固定为 1。旧的 `moveTo.approach` 死参数已删除；站位调整只由 giver 的 standability/nearestStandable 完成。
 - `p2_order` 的 accepted 结果带 `queue` 摘要：`{active, queued, blockedBy?, holdsActiveSlot?, queuedBehind?, release?}`。`hold` 是占住 active 位的 barrier，不是清空队列；`blockedBy`/`release` 直接指出被哪个 hold 堵住、如何释放。`p2_orders` 的 `queueBlockedBy` 保持同一语义。
 - `hold.params.durationMs` 可选，1000–3_600_000；从 hold **成为 active** 的时刻起算，到期由 body 置为 `succeeded` 并带 `observed.expired:true`，队列恢复。不带 duration 的 hold 是永久 barrier，只能 cancel。
@@ -253,6 +254,7 @@ interface DriverHandle {
 | `place` | 目标格（含 `cells` 多格）全部读回为期望方块 | `attempts`、`target`、`adjacent`、`supports`、`suggestedCells` |
 | `dig` 单格 `clear` | 目标格连续两次读回空气 | `block`/`target`、`standQuery`、`blockedBy` |
 | `dig` 单格 `harvest` | 目标格为空气，且该分支约定的掉落/背包增量已确认 | `dropDelta`、`pickup`、`standQuery.requiredDig`、`partial`（若有） |
+| `collect` | 已选中的每个掉落物实体都确认收集；无匹配掉落时 `drops:0` 也算成功 | `collected/collectedDrops/missed/unreachable/inventoryDelta/items/failure` |
 | `dig` `box`/`line` | 所有计划格清除；部分完成只能是 `DIG_PARTIAL` | `dug`、`planned`、`skipped`、`stoppedAt`、`partial` |
 | `dig` `tunnel` | 所有计划格清除且到达终点、`returnable:true` | `path`、`dug/planned`、`stoppedAt`、`reason`、`partial` |
 | `craft` | `produced >= requested`（不是 `crafted` 操作次数） | `attempted`、`crafted`、`produced`、`before/after`、`CRAFT_INCOMPLETE` |

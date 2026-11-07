@@ -53,6 +53,7 @@ describe('pickup', () => {
     const result = await pickupNearby(port, target)
 
     expect(result).toMatchObject({ drops: 1, picked: 1, unreachable: 0, notCollected: 0 })
+    expect(result.observed.items[0]?.outcome).toBe('collected')
     expect(moves).toHaveLength(1)
     expect(Math.hypot(moves[0]!.x - 1, moves[0]!.z)).toBeLessThanOrEqual(3)
   })
@@ -72,6 +73,7 @@ describe('pickup', () => {
     expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 1 })
     // P1: an item position is not a stand cell, so a dead window means no move.
     expect(moves).toBe(0)
+    expect(result.observed.items[0]?.outcome).toBe('unreachable')
     expect(result.observed.standQuery).toMatchObject({
       reason: 'unloaded-window',
       unreachableReason: 'unloaded-window',
@@ -209,6 +211,7 @@ describe('pickup', () => {
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 1, partial: 1, notCollected: 0 })
+    expect(result.observed.items[0]?.outcome).toBe('partial')
   })
 
   it('reports a merge when the original entity id disappears', async () => {
@@ -228,6 +231,96 @@ describe('pickup', () => {
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 0, gone: 1, merged: 1 })
+  })
+})
+
+describe('pickup scan options', () => {
+  function collectingPort(initial: EntityInfo[], blockAt: (point: Vec3) => BlockInfo | null = groundAt) {
+    const items: Item[] = []
+    const drops = [...initial]
+    const moves: Vec3[] = []
+    const port = {
+      self: () => selfAt(),
+      blockAt,
+      inventory: () => items,
+      entities: () => drops,
+      moveTo: async (target: Vec3) => {
+        moves.push(target)
+        let best = -1
+        let bestDistance = Number.POSITIVE_INFINITY
+        drops.forEach((entity, index) => {
+          const distance = Math.hypot(entity.position.x - target.x, entity.position.z - target.z)
+          if (distance < bestDistance) {
+            bestDistance = distance
+            best = index
+          }
+        })
+        if (best >= 0) {
+          const [picked] = drops.splice(best, 1)
+          if (picked?.item !== undefined) {
+            items.push({ slot: 36 + items.length, name: picked.item.name, count: picked.item.count })
+          }
+        }
+        return { state: 'ok' as const, elapsedMs: 1 }
+      },
+    } as unknown as ClientPort
+    return { port, drops, items, moves }
+  }
+
+  it('limits the scan to the requested radius', async () => {
+    const fake = collectingPort([drop({ x: 1.5, y: 64, z: 10.5 })])
+    const result = await pickupNearby(fake.port, { x: 0, y: 64, z: 0 }, { radius: 6 })
+
+    expect(result).toMatchObject({ drops: 0, eligible: 0, picked: 0 })
+    expect(fake.moves).toHaveLength(0)
+  })
+
+  it('processes the nearest drop first even when the adapter returns it last', async () => {
+    const fake = collectingPort([
+      drop({ x: 5.5, y: 64, z: 0.5 }),
+      drop({ x: 3.5, y: 64, z: 0.5 }),
+    ])
+    const result = await pickupNearby(fake.port, { x: 0, y: 64, z: 0 }, { radius: 8 })
+
+    expect(result).toMatchObject({ drops: 2, picked: 2 })
+    expect(fake.moves.length).toBeGreaterThanOrEqual(2)
+    expect(fake.moves[0]!.x).toBeLessThan(fake.moves[1]!.x)
+  })
+
+  it('filters by item name before applying maxDrops', async () => {
+    const fake = collectingPort([
+      drop({ x: 3.5, y: 64, z: 0.5 }),
+      { ...drop({ x: 5.5, y: 64, z: 0.5 }), item: { name: 'stone', count: 1 } },
+    ])
+    const result = await pickupNearby(fake.port, { x: 0, y: 64, z: 0 }, { radius: 8, item: 'dirt' })
+
+    expect(result).toMatchObject({ drops: 1, eligible: 1, skippedByCap: 0, picked: 1 })
+    expect(fake.drops.map(entity => entity.item?.name)).toEqual(['stone'])
+  })
+
+  it('caps processed drops and reports the eligible overflow', async () => {
+    const fake = collectingPort([
+      drop({ x: 3.5, y: 64, z: 0.5 }),
+      drop({ x: 5.5, y: 64, z: 0.5 }),
+      drop({ x: 7.5, y: 64, z: 0.5 }),
+    ])
+    const result = await pickupNearby(fake.port, { x: 0, y: 64, z: 0 }, { radius: 8, maxDrops: 1 })
+
+    expect(result).toMatchObject({ drops: 1, eligible: 3, skippedByCap: 2, picked: 1 })
+    expect(fake.drops).toHaveLength(2)
+  })
+
+  it('stops at the deadline and marks the drop timedOut', async () => {
+    const fake = collectingPort([drop({ x: 0.5, y: 64, z: -2.5 })])
+    const result = await pickupNearby(
+      fake.port,
+      { x: 0, y: 64, z: 0 },
+      { timeoutMs: 300 },
+    )
+
+    expect(result).toMatchObject({ drops: 1, picked: 0, timedOut: 1, timeoutHit: true })
+    expect(result.observed.items[0]?.outcome).toBe('timedOut')
+    expect(fake.moves).toHaveLength(0)
   })
 })
 

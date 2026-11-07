@@ -11,6 +11,7 @@ export const ORDER_VERBS = [
   'go',
   'place',
   'dig',
+  'collect',
   'equip',
   'use',
   'attack',
@@ -356,6 +357,7 @@ function validateOrder(value: unknown): Order {
   if (value.verb === 'traverse') validateTraverseParams(value.params)
   if (value.verb === 'attack') validateAttackParams(value.params)
   if (value.verb === 'dig') validateDigParams(value.params)
+  if (value.verb === 'collect') validateCollectParams(value.params)
   if (value.verb === 'place') validatePlaceParams(value.params)
   if (value.verb === 'equip') validateEquipParams(value.params)
   if (value.verb === 'use') validateUseParams(value.params)
@@ -503,6 +505,31 @@ function volumePoint(value: JsonValue | undefined, name: string): { x: number; y
     }
   }
   return { x: value.x as number, y: value.y as number, z: value.z as number }
+}
+
+const COLLECT_PARAM_KEYS = new Set(['radius', 'item', 'maxDrops', 'timeoutMs'])
+
+/** Collect only takes a bounded scan; unknown keys are typos, not defaults. */
+function validateCollectParams(params: JsonValue | undefined): void {
+  if (params === undefined) return
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'collect.params must be an object')
+  for (const key of Object.keys(params)) {
+    if (!COLLECT_PARAM_KEYS.has(key)) {
+      throw orderError('INVALID_ORDER', `collect.${key} is not a supported parameter`)
+    }
+  }
+  for (const key of ['radius', 'maxDrops', 'timeoutMs'] as const) {
+    const value = params[key]
+    if (value === undefined) continue
+    const minimum = key === 'timeoutMs' ? 1_000 : 1
+    const maximum = key === 'timeoutMs' ? 90_000 : 16
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
+      throw orderError('INVALID_ORDER', `collect.${key} must be an integer between ${minimum} and ${maximum}`)
+    }
+  }
+  if (params.item !== undefined && (typeof params.item !== 'string' || params.item.trim().length === 0)) {
+    throw orderError('INVALID_ORDER', 'collect.item must be a non-empty item name')
+  }
 }
 
 function validatePlaceParams(params: JsonValue | undefined): void {

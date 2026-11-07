@@ -105,9 +105,10 @@
    - 全部 `blocked`：order `blocked`，唤醒 agent 并附 digest。
 5. 原始 order 的 retry 策略：
    - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
-   - `equip / traverse / check` 是一次性，首次失败即终态；
+   - `equip / traverse / check / collect` 是一次性，首次失败即终态；`collect` 的一次 job 已经把启动时观测到的掉落物跑完，重试只会重复已消耗的实体；
+   - `collect` 的部分/不可达/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/inventoryDelta`，不因 `failed` 丢掉已收集数量；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
-   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED` 也不重试（重试同一目标不会改变结果）；
+   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
    - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
    - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
@@ -278,6 +279,7 @@ order 可带 `policy.conflict`：
   - `go`：移动到坐标/附近；
   - `place`：放任意方块/床，`item` + 目标；
   - `dig`：破坏指定方块；`dig`/`clear` driver 按方块自动选择最佳工具；
+  - `collect`：一次有界拾取，只处理 job 启动时已观测的掉落物；`radius/item/maxDrops/timeoutMs` 有界，`missed`/`unreachable`/`timedOut` 都给出明确终态，不做战斗/挖掘/预测；
   - `equip`：切换手持物品/工具；成功后保护下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use` 等非装备动作），不自动覆盖；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
   - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测；driver 自动选最强剑/斧，锁定目标后由 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
@@ -287,7 +289,7 @@ order 可带 `policy.conflict`：
   - `build`：执行最终几何 blueprint/Plan；
   - `traverse`：Agent 授权的桥/垫脚移动；
   - `hold`：原地待命。
-- 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `dig`（自动选工具，显式 `equip` 可覆盖下一次）；床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
+- 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `dig`（自动选工具，显式 `equip` 可覆盖下一次）；拾取 = `p2_entities` 确认后 `collect`（只处理已观测掉落物）；床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
 - 失败上报，不自行消耗食物或改变目标。
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
 - Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；自动 fight 由 `p2_policy` 预授权（默认只 flee）；显式 `attack` order 可指定任何实体，P2 不拦。
