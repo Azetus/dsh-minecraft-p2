@@ -1,11 +1,27 @@
 {
   "name": "dsh-minecraft-p2",
-  "version": "0.1.5",
-  "private": true,
-  "description": "Single-package DSH Minecraft P2 runtime: bridge, body, P2Mind and built-in provider.",
+  "version": "0.2.0",
+  "description": "A DeepSeek Harness plugin that brings a second player into your Minecraft Java Edition world. Chat with it in-game and ask it to mine, gather materials, or place blocks.",
   "license": "MIT",
   "type": "module",
   "packageManager": "npm@12.0.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Azetus/dsh-minecraft-p2.git"
+  },
+  "homepage": "https://github.com/Azetus/dsh-minecraft-p2#readme",
+  "bugs": {
+    "url": "https://github.com/Azetus/dsh-minecraft-p2/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "minecraft",
+    "mineflayer",
+    "agent",
+    "automation"
+  ],
   "main": "./lib/bridge.js",
   "types": "./lib/bridge/index.d.ts",
   "exports": {
@@ -20,8 +36,15 @@
     "lib/**",
     "content/**",
     "skills/**",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md",
+    "README_EN.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dsh": {
     "manifestVersion": 1,
     "bundle": {
@@ -30,7 +53,7 @@
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "0.2.1-rc.3"
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
