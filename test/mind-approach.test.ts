@@ -6,7 +6,15 @@ import { createDigDriver } from '../src/mind/drivers/dig.ts'
 import type { Job } from '../src/mind/types.ts'
 import type { BlockInfo, ClientPort, Item, Vec3 } from '../src/port/index.ts'
 
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+// These drivers sleep 200–700 ms on real timers. A fixed number of setTimeout(0)
+// flushes is enough on Windows (coarse timer granularity) but ends far too early
+// on Linux, leaving the driver "running". Wait on wall-clock time instead.
+async function settle(handle: { result(): { state: string } }, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (handle.result().state === 'running' && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
 
 function job(driverId: string, params: Record<string, unknown>): Job {
@@ -48,7 +56,7 @@ describe('interaction approach', () => {
       job('dig', { x: 10, y: 64, z: 0, purpose: 'harvest' }),
       { port, now: () => 0 },
     )
-    for (let index = 0; index < 200 && handle.result().state === 'running'; index += 1) await flush()
+    await settle(handle)
 
     expect(handle.result().state).toBe('succeeded')
     expect(moves).toHaveLength(1)
@@ -68,7 +76,7 @@ describe('interaction approach', () => {
       job('check', { x: 10, y: 64, z: 0 }),
       { port, now: () => 0 },
     )
-    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) await flush()
+    await settle(handle)
 
     expect(handle.result().state).toBe('succeeded')
     expect(moves).toHaveLength(1)
@@ -97,7 +105,7 @@ describe('interaction approach', () => {
       job('craft', { item: 'stick', count: 4 }),
       { port, now: () => 0 },
     )
-    for (let index = 0; index < 100 && handle.result().state === 'running'; index += 1) await flush()
+    await settle(handle)
 
     expect(handle.result().state).toBe('succeeded')
     expect(crafts).toBe(2)
