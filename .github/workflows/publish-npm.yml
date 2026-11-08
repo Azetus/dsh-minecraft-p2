@@ -1,0 +1,146 @@
+name: Build and publish npm package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify tarball
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify main-branch vX.Y.Z release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="$RELEASE_TAG"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must be v<x.y.z>, got: $tag" >&2
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "release tag $tag does not match package version $version" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          target=$(git rev-parse "$GITHUB_SHA^{commit}")
+          if ! git merge-base --is-ancestor "$target" refs/remotes/origin/main; then
+            echo "release commit $target is not on main" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Build tarball
+        run: npm run bundle
+
+      - name: Install DSH for install verification
+        run: |
+          npm install --global npm@12.0.2
+          npm install --global @deepseek-ai/dsh@0.2.2-rc.1 pnpm@11.28.5
+
+      - name: Verify tarball as an installed DSH bundle
+        run: npm run verify:dist -- --no-build
+
+      - name: Record tarball metadata
+        id: pkg
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          tarball="bundles/dsh-minecraft-p2-$version.tgz"
+          test -f "$tarball"
+          (cd bundles && sha256sum "dsh-minecraft-p2-$version.tgz" > SHA256SUMS)
+          cat bundles/SHA256SUMS
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarball-${{ steps.pkg.outputs.version }}
+          path: |
+            bundles/dsh-minecraft-p2-${{ steps.pkg.outputs.version }}.tgz
+            bundles/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish to npm
+    needs: build
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install npm with Trusted Publishing support
+        run: npm install --global npm@12.0.2
+
+      - name: Download tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: npm-tarball-${{ needs.build.outputs.version }}
+          path: .release-artifacts
+
+      - name: Verify artifact and version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "$version" = "${{ needs.build.outputs.version }}"
+          test "v$version" = "$RELEASE_TAG"
+          cd .release-artifacts
+          sha256sum -c SHA256SUMS
+
+      - name: Publish with npm Trusted Publishing
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version is already published; skipping"
+            exit 0
+          fi
+          tgz=$(ls .release-artifacts/*.tgz)
+          npm publish "$tgz" --access public --tag latest --provenance \
+            --registry=https://registry.npmjs.org/
