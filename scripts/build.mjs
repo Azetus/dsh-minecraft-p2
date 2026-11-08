@@ -7,6 +7,13 @@ import { dirname, join } from 'node:path'
 const root = process.cwd()
 const lib = join(root, 'lib')
 const esbuildCli = join(root, 'node_modules/esbuild/bin/esbuild')
+// On Unix, esbuild's postinstall replaces bin/esbuild with a hard link to the
+// native binary, so spawning it through `node` parses ELF bytes as JavaScript.
+// On Windows it stays a Node shim. Execute the Unix path directly and use node
+// only for the Windows shim.
+const esbuild = process.platform === 'win32'
+  ? { command: process.execPath, prefix: [esbuildCli] }
+  : { command: esbuildCli, prefix: [] }
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 
 await rm(lib, { recursive: true, force: true })
@@ -14,8 +21,8 @@ await rm(lib, { recursive: true, force: true })
 function compile(entry, outfile, extraArgs = []) {
   const out = join(root, outfile)
   mkdirSync(dirname(out), { recursive: true })
-  const result = spawnSync(process.execPath, [
-    esbuildCli,
+  const result = spawnSync(esbuild.command, [
+    ...esbuild.prefix,
     join(root, entry),
     '--bundle',
     '--format=esm',
