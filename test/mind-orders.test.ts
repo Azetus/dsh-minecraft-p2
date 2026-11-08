@@ -1,6 +1,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { dirname } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -309,16 +310,15 @@ describe('order journal', () => {
     expect(errorCode(() => restored.restore())).toBe('JOURNAL_VERSION_MISMATCH')
   })
 
-  it('writes an identity header and refuses a different world/character/def', () => {
-    const journal = tempJournal()
+  it('writes an identity header, restores a match, and archives a different world/character/def', () => {
     const identity = { worldId: 'world-a', characterId: 'char-a', defVersion: 'def-a', defScope: 'plans' as const }
-    const store = new OrderStore({ journalPath: journal, identity })
+
+    const matchedJournal = tempJournal()
+    const store = new OrderStore({ journalPath: matchedJournal, identity })
     store.enqueue(order('ord-1'))
-
-    const lines = readFileSync(journal, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    const lines = readFileSync(matchedJournal, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
     expect(lines[0]).toMatchObject({ kind: 'journal.identity', identity })
-
-    const same = new OrderStore({ journalPath: journal, identity })
+    const same = new OrderStore({ journalPath: matchedJournal, identity })
     same.restore()
     expect(same.get('ord-1')?.state).toBe('active')
 
@@ -327,8 +327,15 @@ describe('order journal', () => {
       { ...identity, characterId: 'char-b' },
       { ...identity, defVersion: 'def-b' },
     ]) {
-      const mismatch = new OrderStore({ journalPath: journal, identity: changed })
-      expect(errorCode(() => mismatch.restore())).toBe('RECOVERY_IDENTITY_MISMATCH')
+      const journal = tempJournal()
+      new OrderStore({ journalPath: journal, identity }).enqueue(order('ord-1'))
+      const events: OrderEvent[] = []
+      const mismatch = new OrderStore({ journalPath: journal, identity: changed, onEvent: event => events.push(event) })
+      expect(() => mismatch.restore()).not.toThrow()
+      expect(mismatch.all()).toEqual([])
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'journal.archived' }))
+      expect(readFileSync(join(dirname(journal), 'archive', 'journal.jsonl'), 'utf8')).toContain('ord-1')
+      expect(readFileSync(journal, 'utf8')).toBe('')
     }
   })
 })

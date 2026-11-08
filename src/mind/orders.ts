@@ -1,5 +1,5 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { closeSync, copyFileSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { JsonValue, P2Error } from '../contracts/types.ts'
@@ -58,6 +58,13 @@ export type OrderEvent =
   | { kind: 'order.accepted'; at: number; orderId: string }
   | { kind: 'order.terminal'; at: number; orderId: string; state: OrderState; observed?: JsonValue }
   | { kind: 'journal.legacy-accepted'; at: number; defVersion: string }
+  | {
+    kind: 'journal.archived'
+    at: number
+    reason: 'world' | 'character' | 'plans'
+    previous: RecoveryIdentity
+    current: RecoveryIdentity
+  }
 
 /** A driver action written before it starts; it is reconciled, never replayed. */
 export type PendingAction = {
@@ -173,9 +180,10 @@ export class OrderStore {
     }
     if (header !== undefined) {
       if (this.identity !== undefined && !sameIdentity(header.identity, this.identity)) {
-        throw identityError(
-          `journal identity mismatch: ${header.identity.worldId}/${header.identity.characterId}/${header.identity.defVersion}`,
-        )
+        // A journal from another world/character/plan set must never be applied.
+        // Archive it (best effort) and start empty instead of blocking the body.
+        this.archiveMismatchedJournal(header.identity, this.identity)
+        return
       }
       this.headerSeen = true
       if (header.identity.defScope === undefined && this.identity?.defScope === 'plans') {
@@ -317,6 +325,37 @@ export class OrderStore {
         return
       }
     }
+  }
+
+  /**
+   * Keep one last archived journal, then start empty. The fixed path is
+   * intentional: only the most recent mismatch is useful for diagnosis, and an
+   * ever-growing archive directory is not. Failure to archive throws: appending
+   * a new header to the old file would replay old orders on the next restore.
+   */
+  private archiveMismatchedJournal(previous: RecoveryIdentity, current: RecoveryIdentity): void {
+    const journal = this.journalPath
+    if (journal !== undefined) {
+      const target = join(dirname(journal), 'archive', 'journal.jsonl')
+      try {
+        mkdirSync(dirname(target), { recursive: true })
+        copyFileSync(journal, target)
+        writeFileSync(journal, '')
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw identityError(`journal identity mismatch and archive failed: ${reason}`)
+      }
+    }
+    this.records.clear()
+    this.acceptedOrder.length = 0
+    this.pending.clear()
+    this.headerSeen = false
+    this.rewriteHeader = false
+    this.activeId = undefined
+    const reason = previous.worldId !== current.worldId
+      ? 'world'
+      : previous.characterId !== current.characterId ? 'character' : 'plans'
+    this.onEvent?.({ kind: 'journal.archived', at: this.now(), reason, previous, current })
   }
 
   private appendJournal(entry: JournalEntry): void {

@@ -1,15 +1,17 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { OrderStore } from '../src/mind/orders.ts'
+import type { OrderEvent } from '../src/mind/orders.ts'
 
 /**
  * Category: data integrity (recovery identity).
- * Protects: a journal written before the plan-only identity is accepted once by
- * world/character, then rewritten with the new header on the next append; a
- * plan-scoped mismatch still refuses recovery.
+ * Protects: a matching journal restores; a legacy header is accepted once by
+ * world/character and rewritten with the plan-only header; any identity drift
+ * archives the journal (one latest copy) and starts empty instead of blocking
+ * the body; corrupt JSON still refuses recovery.
  */
 
 const dirs: string[] = []
@@ -48,6 +50,10 @@ function legacyJournal(journal: string, worldId = 'world-a', characterId = 'char
   ].join(''))
 }
 
+function archivePath(journal: string): string {
+  return join(dirname(journal), 'archive', 'journal.jsonl')
+}
+
 describe('journal identity migration', () => {
   it('accepts a legacy header once and writes the plan-only header on the next append', () => {
     const journal = tempJournal()
@@ -73,25 +79,66 @@ describe('journal identity migration', () => {
     expect(restored.get('ord-2')?.state).toBe('queued')
   })
 
-  it('still refuses a legacy header from a different world or character', () => {
+  it('archives a journal from another world or character and starts empty', () => {
     const journal = tempJournal()
     legacyJournal(journal)
     const identity = { worldId: 'world-b', characterId: 'char-b', defVersion: 'plans-1', defScope: 'plans' as const }
-    const store = new OrderStore({ journalPath: journal, identity })
-    expect(errorCode(() => store.restore())).toBe('RECOVERY_IDENTITY_MISMATCH')
+    const events: OrderEvent[] = []
+    const store = new OrderStore({ journalPath: journal, identity, onEvent: event => events.push(event) })
+    expect(() => store.restore()).not.toThrow()
+    expect(store.all()).toEqual([])
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'journal.archived', reason: 'world' }))
+    expect(readFileSync(archivePath(journal), 'utf8')).toContain('world-a')
+    expect(readFileSync(journal, 'utf8')).toBe('')
   })
 
-  it('refuses a plan-scoped header whose plan version changed', () => {
+  it('archives a plan-scoped header whose plan version changed', () => {
     const journal = tempJournal()
     writeFileSync(journal, entry({
       at: 1,
       kind: 'journal.identity',
       identity: { worldId: 'world-a', characterId: 'char-a', defVersion: 'plans-1', defScope: 'plans' },
     }))
+    const events: OrderEvent[] = []
     const store = new OrderStore({
       journalPath: journal,
       identity: { worldId: 'world-a', characterId: 'char-a', defVersion: 'plans-2', defScope: 'plans' },
+      onEvent: event => events.push(event),
     })
-    expect(errorCode(() => store.restore())).toBe('RECOVERY_IDENTITY_MISMATCH')
+    expect(() => store.restore()).not.toThrow()
+    expect(store.all()).toEqual([])
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'journal.archived', reason: 'plans' }))
+    expect(readFileSync(archivePath(journal), 'utf8')).toContain('plans-1')
+  })
+
+  it('keeps only the latest archived journal', () => {
+    const journal = tempJournal()
+    legacyJournal(journal, 'world-a', 'char-a')
+    const first = new OrderStore({
+      journalPath: journal,
+      identity: { worldId: 'world-b', characterId: 'char-b', defVersion: 'plans-1', defScope: 'plans' },
+    })
+    first.restore()
+    expect(readFileSync(archivePath(journal), 'utf8')).toContain('world-a')
+
+    legacyJournal(journal, 'world-c', 'char-c')
+    const second = new OrderStore({
+      journalPath: journal,
+      identity: { worldId: 'world-d', characterId: 'char-d', defVersion: 'plans-1', defScope: 'plans' },
+    })
+    second.restore()
+    const archived = readFileSync(archivePath(journal), 'utf8')
+    expect(archived).toContain('world-c')
+    expect(archived).not.toContain('world-a')
+  })
+
+  it('still refuses a corrupt journal instead of archiving it', () => {
+    const journal = tempJournal()
+    writeFileSync(journal, 'not json\n')
+    const store = new OrderStore({
+      journalPath: journal,
+      identity: { worldId: 'world-a', characterId: 'char-a', defVersion: 'plans-1', defScope: 'plans' },
+    })
+    expect(errorCode(() => store.restore())).toBe('JOURNAL_CORRUPT')
   })
 })
