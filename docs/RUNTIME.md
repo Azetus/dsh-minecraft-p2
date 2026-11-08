@@ -125,7 +125,7 @@
 | 重启时 queued order / active hold | 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复 |
 | base activity | **不恢复**；重启回默认 `idle`，需要 wandering/escort 时重新 `p2_base_activity` |
 | active duty | 只恢复 identity 匹配且 `activeMs` 未超预算的 active 状态；collected 从 baseline+背包重算；终态不复活 |
-| 世界/角色/模板/定义版本不匹配 | 拒绝恢复，上报 |
+| 世界/角色/模板/定义版本不匹配 | 归档到 `.p2/archive/journal.jsonl`（只保留最近一次），发 `journal.archived`，空 journal 启动；不阻塞 P2 |
 | 能从世界重建的进度（已建方块） | 重建，不依赖内存 |
 
 ## 7. 观测与证据
@@ -247,9 +247,11 @@ order 可带 `policy.conflict`：
   - `worldId`：provider 配置 `worldId`（默认启动 target 的 `host:port`）+ dimension；
   - `characterId`：provider 的玩家 UUID/username；
   - `defVersion`：plan 模板内容摘要（`defScope: "plans"`）；树定义已代码化，不参与身份。
-- `worldId` / `characterId` / plan `defVersion` 任一不一致 → `RECOVERY_IDENTITY_MISMATCH`，拒绝恢复并上报。
+- `worldId` / `characterId` / plan `defVersion` 任一不一致：把 journal 归档到 `.p2/archive/journal.jsonl`（覆盖上一次归档），发 `journal.archived` 事件，然后以空 journal 启动。身份漂移不阻塞 P2 启动。
   不带 `defScope` 的 identity 头按 world/character 接受一次，下一次写入补写 plan-only 头；
   无 identity 头的 journal 同样按 world/character 接受一次，下一次写入补头。
+- journal 是**单个 active order 的尽力恢复 + 审计日志**，不是持久任务队列：queued order 与 active hold 重启仍会 `abandoned`，pending 动作只对账不重放。因此身份检查只用于决定“这份旧日志还能不能用”，不承担更多状态。
+- 归档失败（无法写文件）才按 `RECOVERY_IDENTITY_MISMATCH` 拒绝启动，避免新 header 追加到旧文件里复活旧订单。JSON 损坏或 journal 版本不兼容仍直接拒绝（`JOURNAL_CORRUPT` / `JOURNAL_VERSION_MISMATCH`）。
 - 身份来自 provider，不需要 Agent 每次传；未来 client-mod 可提供更稳定的 world/character ID。
 - bridge 的工具绑定身份随 body epoch 变化；调用方不得硬编码 binding id，重启后以当前 `p2_status` 为准。
 - `.p2/config.json` 的 `crashAfterPending: true` 会在首个

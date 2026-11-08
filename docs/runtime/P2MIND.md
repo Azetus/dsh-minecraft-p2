@@ -315,7 +315,7 @@ toil 规范（每个 driver 3–8 个）：`ensureItem → moveTo → act → re
 1. 尾部半行丢弃；
 2. `pending` 动作**只对账、不重放**；对账需要观测时发 `check` Job；
 3. 已取消的 order 恢复后保持取消，其 plan 不复活；
-4. 校验 `worldId / characterId / templateVersion / defVersion`，不匹配则拒绝恢复并上报；
+4. 校验 `worldId / characterId / defVersion`；不匹配时归档到 `.p2/archive/journal.jsonl`（只保留最近一次）、发 `journal.archived`，以空 journal 启动，不阻塞 P2；
 5. 能从世界重建的（已建的墙）优先重建；不能的（投料、已合成未记账、睡眠历史、失败计数、预算）显式持久化。
 
 ## 7. 对话

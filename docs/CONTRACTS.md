@@ -382,7 +382,7 @@ type WorkState =
 {"at": 1793..., "kind": "order.terminal", "orderId": "...", "state": "succeeded", "evidence": {...}}
 ```
 
-恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；重启时 **queued order 与 active hold** 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复；版本不匹配拒绝恢复。
+恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；重启时 **queued order 与 active hold** 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复；身份/模板版本不匹配 → 归档到 `.p2/archive/journal.jsonl`（覆盖旧档）并发 `journal.archived`，空 journal 启动；JSON 损坏/版本不兼容仍拒绝恢复。
 
 ## 10. 错误码
 

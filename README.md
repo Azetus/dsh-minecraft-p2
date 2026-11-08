@@ -140,9 +140,10 @@ p2_order {verb:"go", params:{x:48,y:64,z:30}}
   config.json             # 角色、连接行为和自动唤醒设置
   memory/<world>/<character>.jsonl
   skills/<name>/SKILL.md   # 工作区技能，支持热加载
+  archive/journal.jsonl    # 身份不匹配时归档的上一份意图日志（只保留最近一次）
 ```
 
-`.p2/` 保存本地状态，请将它排除在版本控制之外。
+`.p2/` 保存本地状态，请将它排除在版本控制之外。改用户名或换存档后，旧 journal 会自动归档，不会再因此拒绝启动。
 
 ## 插件结构
 
