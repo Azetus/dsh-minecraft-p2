@@ -1,6 +1,6 @@
 import { isRecord } from '../../contracts/protocol.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import type { ClientPort, ClientEvent, EntityInfo } from '../../port/index.ts'
+import type { ClientPort, ClientEvent } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import {
@@ -144,10 +144,17 @@ function subscribe(port: ClientPort, event: ClientEvent, cb: (entityId: string) 
 
 function locate(port: ClientPort, entityId: string, locateRadius: number): CombatEntity | undefined {
   const self = port.self().pos
-  const entity: EntityInfo | undefined = port.entities({
-    min: { x: self.x - locateRadius, y: self.y - 16, z: self.z - locateRadius },
-    max: { x: self.x + locateRadius, y: self.y + 16, z: self.z + locateRadius },
-  }).find(candidate => candidate.id === entityId)
+  const inBox = (position: { x: number; y: number; z: number }): boolean =>
+    Math.abs(position.x - self.x) <= locateRadius
+    && Math.abs(position.y - self.y) <= 16
+    && Math.abs(position.z - self.z) <= locateRadius
+  const direct = port.entityById?.(entityId)
+  const entity = direct !== undefined
+    ? (inBox(direct.position) ? direct : undefined)
+    : port.entities({
+        min: { x: self.x - locateRadius, y: self.y - 16, z: self.z - locateRadius },
+        max: { x: self.x + locateRadius, y: self.y + 16, z: self.z + locateRadius },
+      }).find(candidate => candidate.id === entityId)
   if (entity === undefined) return undefined
   return {
     id: entity.id,

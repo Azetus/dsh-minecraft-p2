@@ -87,24 +87,33 @@ describe('sensors observation groups', () => {
     expect(fresh.self.pos).toEqual({ x: 5.5, y: 64, z: 5.5 })
   })
 
-  it('merges a targeted entity observation and updates an existing id', () => {
+  it('samples tracked entities inside the 15-block base box, including the vertical range', () => {
     const { port, state } = fakePort()
     const sensors = new Sensors({ port, now: () => 0, refreshMs: 1_000 })
-    sensors.read()
-    state.entities = [{
-      id: 'p1', name: 'Alice', username: 'Alice', type: 'player', position: { x: 3.5, y: 64, z: 0.5 },
-    }]
-    const found = sensors.observeEntities({ min: { x: -8, y: 60, z: -8 }, max: { x: 8, y: 68, z: 8 } })
-    expect(found.entitiesIn({ min: { x: 0, y: 60, z: 0 }, max: { x: 8, y: 68, z: 8 } }))
-      .toMatchObject([{ id: 'p1', username: 'Alice' }])
+    state.entities = [
+      { id: 'p-edge', name: 'Alice', username: 'Alice', type: 'player', position: { x: 14.5, y: 64, z: 0.5 } },
+      { id: 'p-out', name: 'Bob', username: 'Bob', type: 'player', position: { x: 16.5, y: 64, z: 0.5 } },
+      { id: 'p-up', name: 'Carol', username: 'Carol', type: 'player', position: { x: 0.5, y: 78, z: 0.5 } },
+      { id: 'p-high', name: 'Dave', username: 'Dave', type: 'player', position: { x: 0.5, y: 80, z: 0.5 } },
+    ]
+    const entities = sensors.read().entitiesIn({
+      min: { x: -20, y: 50, z: -20 },
+      max: { x: 20, y: 90, z: 20 },
+    })
+    expect(entities.map(entity => entity.id).sort()).toEqual(['p-edge', 'p-up'])
+  })
 
-    state.entities = [{
-      id: 'p1', name: 'Alice', username: 'Alice', type: 'player', position: { x: 5.5, y: 64, z: 0.5 },
-    }]
-    sensors.observeEntities({ min: { x: -8, y: 60, z: -8 }, max: { x: 8, y: 68, z: 8 } })
-    expect(found.entitiesIn({ min: { x: 0, y: 60, z: 0 }, max: { x: 8, y: 68, z: 8 } }))
-      .toHaveLength(1)
-    expect(found.entitiesIn({ min: { x: 5, y: 60, z: 0 }, max: { x: 6, y: 68, z: 1 } }))
-      .toMatchObject([{ id: 'p1', position: { x: 5.5, y: 64, z: 0.5 } }])
+  it('honours an explicit entity vertical half-extent', () => {
+    const { port, state } = fakePort()
+    const sensors = new Sensors({ port, now: () => 0, refreshMs: 1_000, entityVertical: 4 })
+    state.entities = [
+      { id: 'p-near', name: 'Alice', username: 'Alice', type: 'player', position: { x: 0.5, y: 68, z: 0.5 } },
+      { id: 'p-far', name: 'Bob', username: 'Bob', type: 'player', position: { x: 0.5, y: 70, z: 0.5 } },
+    ]
+    const entities = sensors.read().entitiesIn({
+      min: { x: -20, y: 50, z: -20 },
+      max: { x: 20, y: 90, z: 20 },
+    })
+    expect(entities.map(entity => entity.id)).toEqual(['p-near'])
   })
 })

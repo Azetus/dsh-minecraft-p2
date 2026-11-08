@@ -37,7 +37,6 @@ export class BaseActivityController {
   private waiting: BaseWaitingReason | null = null
   private anchorCell: BaseCell | undefined
   private nextDecisionAt = 0
-  private nextLookupAt = 0
   private seq = 0
 
   /** Validate and store an Agent choice. An active controller re-anchors. */
@@ -50,7 +49,6 @@ export class BaseActivityController {
     if (this.state === 'active' && feet !== undefined) {
       this.anchorCell = cellOf(feet)
       this.nextDecisionAt = now + 500
-      this.nextLookupAt = now
     }
     return this.view()
   }
@@ -62,7 +60,6 @@ export class BaseActivityController {
     this.waiting = null
     this.anchorCell = cellOf(feet)
     this.nextDecisionAt = now + 500
-    this.nextLookupAt = now
     this.seq += 1
     return true
   }
@@ -120,14 +117,6 @@ export class BaseActivityController {
     this.nextDecisionAt = now + delay
   }
 
-  lookupDue(now: number): boolean {
-    return now >= this.nextLookupAt
-  }
-
-  noteLookup(now: number): void {
-    this.nextLookupAt = now + 1_000
-  }
-
   /** Returns true only on the transition into waiting, so the body reports once. */
   markWaiting(reason: BaseWaitingReason, now: number): boolean {
     this.nextDecisionAt = now + 1_000
@@ -139,7 +128,7 @@ export class BaseActivityController {
   clearWaiting(now: number): boolean {
     if (this.waiting === null) return false
     this.waiting = null
-    this.nextDecisionAt = now + 1_000
+    this.nextDecisionAt = now + 250
     return true
   }
 

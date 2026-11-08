@@ -97,8 +97,13 @@ export type EvalCtx = {
    * snapshot; it never reaches the Agent payload.
    */
   observe?: (box: Box) => void
-  /** Bounded internal entity observation, used by escort/attack target checks. */
-  observeEntities?: (box: Box) => void
+  /**
+   * The one known target this evaluation is about, resolved by the mind from
+   * the current intent (escort target / attack order entity). Unlike a box
+   * scan it is not range-limited: identity resolution is fresh every tick, and
+   * the adapter's server-side tracking range remains the visibility limit.
+   */
+  focus?: EntityInfo
   /** Adapter visibility; absent means the caller may only use distance. */
   canSee?: (entityId: string) => boolean
   /** Last observed GOTO_STUCK terminal, for the bounded self-unstuck reflex. */

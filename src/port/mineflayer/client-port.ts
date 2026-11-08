@@ -410,21 +410,51 @@ export class MineflayerClientPort implements ClientPort {
       if (position.x < box.min.x || position.x > box.max.x) continue
       if (position.y < box.min.y || position.y > box.max.y) continue
       if (position.z < box.min.z || position.z > box.max.z) continue
-      const item = resolveDroppedItem(this.bot.registry, entity)
-      result.push({
-        id: String(entity.id ?? -1),
-        name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
-        position: { x: position.x, y: position.y, z: position.z },
-        ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
-        ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
-        ...(entity.type === undefined ? {} : { type: entity.type }),
-        ...(entity.kind === undefined ? {} : { kind: entity.kind }),
-        ...(typeof entity.health === 'number' ? { health: entity.health } : {}),
-        ...(entity.username === undefined ? {} : { username: entity.username }),
-        ...(item === undefined ? {} : { item }),
-      })
+      const info = entityInfo(entity, this.bot.registry)
+      if (info !== undefined) result.push(info)
     }
     return result
+  }
+
+  /**
+   * Players are already indexed by the tab list, so this is O(1) for them.
+   * Non-player names fall back to a tracked-entity scan (no box, no range).
+   */
+  entityByName(name: string): EntityInfo | undefined {
+    const wanted = name.replace(/^minecraft:/u, '')
+    if (wanted.length === 0) return undefined
+    const players = this.bot.players as unknown as Record<string, { entity?: EntityLike | null } | undefined>
+    const player = players[wanted]
+    if (player?.entity !== undefined && player.entity !== null) {
+      return entityInfo(player.entity, this.bot.registry)
+    }
+    const self = this.bot.entity as unknown as EntityLike | undefined
+    const origin = self?.position
+    let best: EntityLike | undefined
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (const entity of Object.values(this.bot.entities) as unknown as EntityLike[]) {
+      if (entity === self) continue
+      if (entity.username !== wanted && entity.name !== wanted) continue
+      const position = entity.position
+      if (position === undefined) continue
+      const distance = origin === undefined
+        ? 0
+        : (position.x - origin.x) ** 2 + (position.y - origin.y) ** 2 + (position.z - origin.z) ** 2
+      if (distance < bestDistance) {
+        best = entity
+        bestDistance = distance
+      }
+    }
+    return best === undefined ? undefined : entityInfo(best, this.bot.registry)
+  }
+
+  entityById(id: string): EntityInfo | undefined {
+    const entity = (this.bot.entities as unknown as Record<string, EntityLike | undefined>)[id]
+    return entity === undefined ? undefined : entityInfo(entity, this.bot.registry)
+  }
+
+  playerOnline(name: string): boolean {
+    return (this.bot.players as unknown as Record<string, unknown>)[name] !== undefined
   }
 
   async screen(): Promise<ScreenInfo | null> {
@@ -914,6 +944,24 @@ function blockInfo(
     ...(serverTags === undefined ? {} : { serverTags }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
+}
+
+function entityInfo(entity: EntityLike, registry: unknown): EntityInfo | undefined {
+  const position = entity.position
+  if (position === undefined) return undefined
+  const item = resolveDroppedItem(registry, entity)
+  return {
+    id: String(entity.id ?? -1),
+    name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
+    position: { x: position.x, y: position.y, z: position.z },
+    ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
+    ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
+    ...(entity.type === undefined ? {} : { type: entity.type }),
+    ...(entity.kind === undefined ? {} : { kind: entity.kind }),
+    ...(typeof entity.health === 'number' ? { health: entity.health } : {}),
+    ...(entity.username === undefined ? {} : { username: entity.username }),
+    ...(item === undefined ? {} : { item }),
+  }
 }
 
 function itemName(registry: unknown, id: string): string {

@@ -293,6 +293,32 @@ describe('mineflayer port reads', () => {
       ])
   })
 
+  it('resolves a player by tab-list index and an entity by id without a box scan', () => {
+    const { port, bot } = createPort()
+    const alice = { id: 7, name: 'Alice', username: 'Alice', position: { x: 30, y: 64, z: 0 } }
+    ;(bot.entities as unknown as Record<number, unknown>)[7] = alice
+    ;(bot as unknown as { players: unknown }).players = {
+      Alice: { entity: alice },
+      Bob: { entity: null },
+    }
+
+    expect(port.playerOnline?.('Alice')).toBe(true)
+    expect(port.playerOnline?.('Bob')).toBe(true)
+    expect(port.playerOnline?.('Nobody')).toBe(false)
+    expect(port.entityByName?.('Alice')).toMatchObject({
+      id: '7',
+      name: 'Alice',
+      username: 'Alice',
+      position: { x: 30, y: 64, z: 0 },
+    })
+    // Online but not tracked: the tab list does not invent a position.
+    expect(port.entityByName?.('Bob')).toBeUndefined()
+    // Non-player names fall back to the tracked-entity scan.
+    expect(port.entityByName?.('cow')).toMatchObject({ id: '1', name: 'cow' })
+    expect(port.entityById?.('2')).toMatchObject({ id: '2', name: 'far' })
+    expect(port.entityById?.('999')).toBeUndefined()
+  })
+
   it('reads block name and state, and keeps unloaded cells unknown', () => {
     const { port, bot } = createPort()
     bot.blocks.set('0,64,0', { name: 'oak_door', getProperties: () => ({ half: 'lower', open: false }) })

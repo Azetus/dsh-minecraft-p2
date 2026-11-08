@@ -28,7 +28,6 @@ const LOCK_QUERY_RADIUS = 40
 const FAILED_TARGET_MS = 10_000
 const FAILED_COOLDOWN_MS = 3_000
 const INTERRUPTED_COOLDOWN_MS = 1_000
-const LOOKUP_INTERVAL_MS = 1_000
 
 /**
  * Automatic defense gate. It only acquires an allowed hostile; approach and
@@ -38,7 +37,6 @@ const LOOKUP_INTERVAL_MS = 1_000
 export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFightGiver {
   let lock: Lock | undefined
   let cooldownUntil = 0
-  let lastLookupAt = 0
   const failed = new Map<string, number>()
 
   return {
@@ -75,13 +73,9 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         if (until <= ctx.now) failed.delete(id)
       }
 
-      const box = boxAround(self.pos, fight.radius, 6)
-      let targets = world.entitiesIn(box)
-      if (targets.length === 0 && ctx.observeEntities !== undefined && ctx.now >= lastLookupAt) {
-        lastLookupAt = ctx.now + LOOKUP_INTERVAL_MS
-        ctx.observeEntities(box)
-        targets = world.entitiesIn(box)
-      }
+      // The entity base sample covers every auto-fight radius (<=8), so no
+      // targeted re-read is needed here.
+      const targets = world.entitiesIn(boxAround(self.pos, fight.radius, 6))
       let best: EntityInfo | undefined
       let bestDistance = Number.POSITIVE_INFINITY
       for (const entity of targets) {
@@ -123,7 +117,6 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
     reset(): void {
       lock = undefined
       cooldownUntil = 0
-      lastLookupAt = 0
       failed.clear()
     },
   }

@@ -255,6 +255,21 @@ export type MindMetricsView = {
   updatedAt: number
 }
 
+/** Where the current intent's known target is: tracked, online but not sent, or gone. */
+export type MindFocusState = 'tracked' | 'online-out-of-range' | 'offline' | 'unknown'
+
+export type MindFocusView = {
+  /** Username for players, entity name/id for explicit attack orders. */
+  name: string
+  state: MindFocusState
+  /** Flat distance to the body; only present while tracked. */
+  distance?: number
+  /** Last time the target was actually resolved, epoch ms. */
+  lastSeenAt?: number
+  /** Milliseconds since the last resolution; absent when never seen. */
+  ageMs?: number
+}
+
 export type MindStatusView = {
   /** Recovery identity bound to this body; absent when the provider had none. */
   identity?: { worldId: string; characterId: string }
@@ -286,6 +301,8 @@ export type MindStatusView = {
   } | null
   duty?: DutyStatusView | null
   baseActivity?: BaseActivityView | null
+  /** The current intent's known target and its visibility, for diagnostics. */
+  focus?: MindFocusView | null
   activity?: MindActivityView | null
   reaction?: ReactionPolicyView | null
   metrics?: MindMetricsView

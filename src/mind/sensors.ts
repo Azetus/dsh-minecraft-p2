@@ -8,7 +8,9 @@ export type SensorOptions = {
   blockRadius?: number
   verticalMin?: number
   verticalMax?: number
+  /** Entity sample: horizontal radius and vertical half-extent around the feet. */
   entityRadius?: number
+  entityVertical?: number
   /** Full sample period; the constant tree may read a snapshot up to this old. */
   refreshMs?: number
   now?: () => number
@@ -30,6 +32,7 @@ export class Sensors {
   private readonly verticalMin: number
   private readonly verticalMax: number
   private readonly entityRadius: number
+  private readonly entityVertical: number
   private readonly refreshMs: number
   private readonly now: () => number
   private readonly observation = new Map<string, Box[]>()
@@ -42,7 +45,8 @@ export class Sensors {
     this.blockRadius = options.blockRadius ?? 10
     this.verticalMin = options.verticalMin ?? -6
     this.verticalMax = options.verticalMax ?? 8
-    this.entityRadius = options.entityRadius ?? 12
+    this.entityRadius = options.entityRadius ?? 15
+    this.entityVertical = options.entityVertical ?? this.entityRadius
     this.refreshMs = options.refreshMs ?? 100
     this.now = options.now ?? (() => Date.now())
   }
@@ -74,20 +78,9 @@ export class Sensors {
   }
 
   /**
-   * Targeted entity observation for a bounded follow/escort check. It merges
-   * into the current snapshot instead of replacing the block sample, so the
-   * caller keeps one evaluation snapshot. Failure leaves the snapshot intact.
+   * The current snapshot, refreshed within the sample budget. Observation
+   * groups force a refresh so their cells never go stale behind the cache.
    */
-  observeEntities(box: Box): SnapshotWorld {
-    const current = this.current ?? this.resample()
-    try {
-      current.addEntities(this.port.entities(box))
-    } catch {
-      // A transient entity query failure is not a world verdict.
-    }
-    return current
-  }
-
   read(now = this.now()): SnapshotWorld {
     const targeted = this.targetedBoxes()
     if (this.current !== undefined && targeted.length === 0 && now - this.sampledAt < this.refreshMs) {
@@ -130,8 +123,8 @@ export class Sensors {
       max: { x: feet.x + this.blockRadius, y: feet.y + this.verticalMax, z: feet.z + this.blockRadius },
     }
     const entityBox: Box = {
-      min: { x: feet.x - this.entityRadius, y: feet.y - 8, z: feet.z - this.entityRadius },
-      max: { x: feet.x + this.entityRadius, y: feet.y + 8, z: feet.z + this.entityRadius },
+      min: { x: feet.x - this.entityRadius, y: feet.y - this.entityVertical, z: feet.z - this.entityRadius },
+      max: { x: feet.x + this.entityRadius, y: feet.y + this.entityVertical, z: feet.z + this.entityRadius },
     }
     const blocks = this.port.blocksIn(blockBox)
     for (const box of this.targetedBoxes()) blocks.push(...this.port.blocksIn(box))

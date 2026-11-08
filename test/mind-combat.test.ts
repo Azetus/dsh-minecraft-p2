@@ -47,6 +47,7 @@ type Listener = { event: string; cb: (payload: unknown) => void }
 
 function combatPort(options: {
   target: () => EntityInfo | undefined
+  entityById?: () => EntityInfo | undefined
   attack: (listeners: Listener[]) => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
   canSee?: () => boolean
   attackSpeed?: () => number
@@ -61,6 +62,7 @@ function combatPort(options: {
   const port = {
     self: () => ({ ...world([]).self, pos: options.self?.() ?? { x: 0.5, y: 64, z: 0.5 } }),
     entities: () => (options.target() === undefined ? [] : [options.target()!]),
+    ...(options.entityById === undefined ? {} : { entityById: () => options.entityById!() }),
     inventory: () => options.inventory ?? [],
     equip: async (item: string) => {
       equips.push(item)
@@ -126,29 +128,33 @@ describe('combat ROE', () => {
     expect(giver.find({ now: 0 }, world([]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
-  it('targets an explicit entity up to 64 blocks and observes at most once per second', () => {
-    let observed = 0
+  it('targets an explicit entity up to 64 blocks through focus, with a snapshot fallback', () => {
     const giver = createAttackOrderGiver(() => ({
       order: { id: 'ord-far', verb: 'attack', params: { entityId: 'far' } },
     }))
     const empty = world([])
-    expect(giver.find({ now: 0, observeEntities: () => { observed += 1 } }, empty))
-      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
-    expect(observed).toBe(1)
-    expect(giver.find({ now: 500, observeEntities: () => { observed += 1 } }, empty))
-      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
-    expect(observed).toBe(1)
-    expect(giver.find({ now: 1_000, observeEntities: () => { observed += 1 } }, empty))
-      .toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
-    expect(observed).toBe(2)
+    expect(giver.find({ now: 0 }, empty)).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
 
     const far = entity({ id: 'far', name: 'zombie', position: { x: 60, y: 64, z: 0.5 } })
-    expect(giver.find({ now: 2_000 }, world([far]))).toMatchObject({
+    expect(giver.find({ now: 2_000, focus: far }, empty)).toMatchObject({
       driverId: 'attack',
       params: { entityId: 'far', locateRadius: 64 },
     })
+
+    const near = entity({ id: 'far', name: 'zombie', position: { x: 10, y: 64, z: 0.5 } })
+    expect(giver.find({ now: 3_000 }, world([near]))).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 'far' },
+    })
+
+    const other = entity({ id: 'other', name: 'zombie', position: { x: 10, y: 64, z: 0.5 } })
+    expect(giver.find({ now: 4_000, focus: other }, empty)).toMatchObject({
+      kind: 'hold',
+      reason: 'ATTACK_TARGET_LOST',
+    })
+
     const tooFar = entity({ id: 'far', name: 'zombie', position: { x: 70, y: 64, z: 0.5 } })
-    expect(giver.find({ now: 3_000 }, world([tooFar]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+    expect(giver.find({ now: 5_000 }, world([tooFar]))).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
   it('lets an explicit attack order target any entity', () => {
@@ -169,6 +175,24 @@ describe('combat ROE', () => {
       driverId: 'attack',
       params: { entityId: 'p1', allowAny: true },
     })
+  })
+
+  it('locates an attack target by id without a box scan', async () => {
+    const target = entity({ id: 'z9', name: 'zombie', position: { x: 2, y: 64, z: 0.5 } })
+    const { port, listeners } = combatPort({
+      target: () => undefined,
+      entityById: () => target,
+      attack: async current => {
+        emit(current, 'entityDead', 'z9')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(
+      job({ entityId: 'z9', targetName: 'zombie' }),
+      { port, now: () => 1 },
+    )
+    await waitFor(handle)
+    expect(handle.result().state).toBe('succeeded')
   })
 })
 

@@ -14,12 +14,11 @@ function activeOrder(active: () => OrderView | undefined, verb: string): OrderVi
 /**
  * Explicit `attack` order: exactly the Agent-named entity, no acquisition.
  * P2 never applies its own protection filter here; target choice belongs to
- * the Agent. The giver performs a bounded targeted entity observation so an
- * explicitly named target beyond the default 12-block sensor can still be
- * handed to the melee driver, which owns the approach itself.
+ * the Agent. The mind resolves the known id through the adapter's identity
+ * index (fresh every tick, no range box); the bounded snapshot scan is only a
+ * fallback for adapters without that index, and the melee driver owns approach.
  */
 export function createAttackOrderGiver(active: () => OrderView | undefined): WorkGiver {
-  let lastLookupAt = 0
   return {
     id: 'order.attack',
     find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
@@ -29,13 +28,9 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
       if (typeof entityId !== 'string' || entityId.length === 0) {
         return { kind: 'hold', reason: 'ATTACK_TARGET_INVALID' }
       }
-      const box = boxAround(world.self.pos, ATTACK_ACQUIRE_RADIUS, 16)
-      let entity = world.entitiesIn(box).find(candidate => candidate.id === entityId)
-      if (entity === undefined && ctx.observeEntities !== undefined && ctx.now >= lastLookupAt) {
-        lastLookupAt = ctx.now + ATTACK_LOOKUP_INTERVAL_MS
-        ctx.observeEntities(box)
-        entity = world.entitiesIn(box).find(candidate => candidate.id === entityId)
-      }
+      const entity = (ctx.focus?.id === entityId ? ctx.focus : undefined)
+        ?? world.entitiesIn(boxAround(world.self.pos, ATTACK_ACQUIRE_RADIUS, 16))
+          .find(candidate => candidate.id === entityId)
       if (entity === undefined) return { kind: 'hold', reason: 'ATTACK_TARGET_LOST' }
       return {
         driverId: 'attack',
@@ -59,5 +54,4 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
 }
 
 const ATTACK_ACQUIRE_RADIUS = 64
-const ATTACK_LOOKUP_INTERVAL_MS = 1_000
 

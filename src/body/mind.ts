@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 
 import { p2Error } from '../contracts/protocol.ts'
 import type { MindStatusView } from '../contracts/protocol.ts'
+import type { MindFocusView } from '../contracts/protocol.ts'
 import type { ProviderRuntimeStatus } from '../contracts/protocol.ts'
 import type { SuspensionState } from '../contracts/protocol.ts'
 import type { DutyStatusView } from '../contracts/protocol.ts'
@@ -38,7 +39,7 @@ import { DutyController } from '../mind/duty.ts'
 import { createDutyGiver } from '../mind/givers/duty.ts'
 import { BaseActivityController } from '../mind/base-activity.ts'
 import type { BaseActivitySpec } from '../mind/base-activity.ts'
-import { createBaseActivityGiver } from '../mind/givers/base-activity.ts'
+import { createBaseActivityGiver, ESCORT_LOST_GRACE_MS } from '../mind/givers/base-activity.ts'
 import { createThreatFightGiver } from '../mind/givers/threat.ts'
 import { createSelfEatGiver, createSelfUnstuckGiver } from '../mind/givers/self-care.ts'
 import { ReactionPolicyState } from '../mind/reaction-policy.ts'
@@ -90,7 +91,7 @@ import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
 import { verifyUsableRoom } from '../mind/verify/usable-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
-import type { ClientPort, Item, Vec3 } from '../port/index.ts'
+import type { ClientPort, EntityInfo, Item, Vec3 } from '../port/index.ts'
 
 export type MindOrderView = {
   id: string
@@ -340,6 +341,11 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let lastActivityKey = ''
   let lastBaseWaiting: string | null = null
   let lastStuckAt: number | undefined
+  let focusIntent: { name: string; kind: 'escort' | 'attack' } | undefined
+  let currentFocus: EntityInfo | undefined
+  let lastFocusAt = Number.NEGATIVE_INFINITY
+  /** True once the intent has resolved to a player entity; disambiguates offline. */
+  let focusWasPlayer = false
   let manualEquipPending = false
   const jobWorkItems = new Map<string, { workItemId: string; stands: Vec3[]; orderId?: string }>()
   let planOrderId: string | undefined
@@ -503,7 +509,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     materialPolicy: () => currentMaterialPolicy(),
     gatherCount: () => gatherCount,
     observe: box => sensors.observeBox(box),
-    observeEntities: box => sensors.observeEntities(box),
+    focus: () => currentFocus,
     ...(options.port.canSee === undefined ? {} : { canSee: (id: string) => options.port.canSee!(id) }),
     lastStuckAt: () => lastStuckAt,
     onEvent: event => {
@@ -1134,6 +1140,91 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     })
   }
 
+  /**
+   * Resolve the one known target for this tick. Intent comes from the current
+   * activity layer (escort target or an explicit attack order); the adapter's
+   * identity index is O(1) for players and never range-limited. A missing
+   * resolution does not clear the intent: the status view needs to distinguish
+   * "online but not sent" from "offline".
+   */
+  function resolveFocus(): EntityInfo | undefined {
+    const active = orders.active()
+    const view = base.view()
+    let intent: { name: string; kind: 'escort' | 'attack' } | undefined
+    if (active !== undefined && active.order.verb === 'attack') {
+      const entityId = active.order.params?.entityId
+      if (typeof entityId === 'string' && entityId.length > 0) intent = { name: entityId, kind: 'attack' }
+    } else if (base.isActive() && view.kind === 'escort'
+      && typeof view.params.target === 'string' && view.params.target.length > 0) {
+      intent = { name: view.params.target, kind: 'escort' }
+    }
+    if (intent === undefined) {
+      focusIntent = undefined
+      currentFocus = undefined
+      return undefined
+    }
+    if (focusIntent?.name !== intent.name || focusIntent.kind !== intent.kind) {
+      lastFocusAt = Number.NEGATIVE_INFINITY
+      focusWasPlayer = false
+    }
+    focusIntent = intent
+    const entity = intent.kind === 'attack'
+      ? options.port.entityById?.(intent.name)
+      : options.port.entityByName?.(intent.name)
+    if (entity !== undefined) {
+      lastFocusAt = now()
+      if (entity.type === 'player' || entity.username !== undefined) focusWasPlayer = true
+    }
+    currentFocus = entity
+    return entity
+  }
+
+  /** Diagnostics view of the resolved focus; never part of the decision snapshot. */
+  function focusView(): MindFocusView | null {
+    if (focusIntent === undefined) return null
+    if (currentFocus !== undefined) {
+      let self: Vec3 | undefined
+      try {
+        self = sensors.read().self.pos
+      } catch {
+        self = undefined
+      }
+      return {
+        name: currentFocus.name,
+        state: 'tracked',
+        ...(self === undefined
+          ? {}
+          : { distance: round2(Math.hypot(currentFocus.position.x - self.x, currentFocus.position.z - self.z)) }),
+        ...(Number.isFinite(lastFocusAt) ? { lastSeenAt: lastFocusAt } : {}),
+        ageMs: 0,
+      }
+    }
+    const online = focusIntent.kind === 'escort' ? options.port.playerOnline?.(focusIntent.name) : undefined
+    return {
+      name: focusIntent.name,
+      state: focusIntent.kind === 'attack'
+        ? 'unknown'
+        : online === true
+          ? 'online-out-of-range'
+          : online === false && focusWasPlayer ? 'offline' : 'unknown',
+      ...(Number.isFinite(lastFocusAt) ? { lastSeenAt: lastFocusAt, ageMs: now() - lastFocusAt } : {}),
+    }
+  }
+
+  /**
+   * The 2 s escort loss window must also end an in-flight chase. Without this
+   * the move job (up to 25 s) keeps the main tree cold, so `TARGET_LOST` would
+   * be delayed until the job times out instead of the promised 2 s.
+   */
+  function enforceEscortLoss(): void {
+    if (!base.isActive() || base.view().kind !== 'escort') return
+    if (currentFocus !== undefined) return
+    if (!Number.isFinite(lastFocusAt)) return
+    if (now() - lastFocusAt < ESCORT_LOST_GRACE_MS) return
+    const current = tracker.current()
+    if (current !== null && current.keys.startsWith('base:escort:')) tracker.abort('ESCORT_TARGET_LOST')
+  }
+
   const tick = (): void => {
     const suspension = options.port.suspension?.()
     if (suspension?.suspended === true) {
@@ -1158,6 +1249,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     refreshDuty()
     emitDutyTerminal()
     updateActivity()
+    resolveFocus()
+    enforceEscortLoss()
     loop.tick()
     if (activePlan === undefined) return
     try {
@@ -1297,6 +1390,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         plan: planView,
         duty: duty.view(now()) ?? null,
         baseActivity: base.view(),
+        focus: focusView(),
         activity: activityView ?? null,
         reaction: reaction.view(),
         metrics: metrics.view(),
@@ -1641,4 +1735,8 @@ function readAttempts(observed: JsonValue | undefined): Array<{ stance: Vec3; ok
     })
   }
   return result
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
 }

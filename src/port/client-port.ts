@@ -110,6 +110,17 @@ export interface ClientPort {
   findBlocks(query: FindBlocksQuery): BlockInfo[]
   inventory(): Item[]
   entities(box: Box): EntityInfo[]
+  /**
+   * Resolve one entity by username or entity name without a box scan. The
+   * adapter's identity index answers this without a range limit; the server's
+   * entity tracking range is still the only real visibility limit. Absent
+   * means the caller must fall back to a bounded snapshot scan.
+   */
+  entityByName?(name: string): EntityInfo | undefined
+  /** Resolve one entity by provider id; absent means no identity index. */
+  entityById?(id: string): EntityInfo | undefined
+  /** Whether a player with this exact username is in the tab list. */
+  playerOnline?(name: string): boolean
   screen(): Promise<ScreenInfo | null>
   time(): { timeOfDay: number; worldAge: number }
 

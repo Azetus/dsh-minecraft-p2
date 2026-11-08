@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { createMind } from '../src/body/mind.ts'
-import type { ClientPort, Item, SelfInfo } from '../src/port/index.ts'
+import type { ClientPort, EntityInfo, Item, SelfInfo } from '../src/port/index.ts'
 import type { Box } from '../src/port/index.ts'
 
 /**
@@ -481,6 +481,42 @@ describe('mind integration', () => {
     runtime.tick()
     expect(ticks).toBe(2)
     expect(runtime.status().mind).toMatchObject({ tracker: 'idle', queuedOrders: 0 })
+  })
+
+  it('reports the escort focus state from the identity index', () => {
+    const { port } = fakePort()
+    let tracked: EntityInfo | undefined = {
+      id: 'p1',
+      name: 'Alice',
+      username: 'Alice',
+      type: 'player',
+      position: { x: 30, y: 64, z: 0.5 },
+    }
+    let online = true
+    const trackingPort = {
+      ...(port as unknown as Record<string, unknown>),
+      entityByName: (name: string) => (name === 'Alice' ? tracked : undefined),
+      playerOnline: (name: string) => name === 'Alice' && online,
+    } as unknown as ClientPort
+    const mind = createMind({
+      port: trackingPort,
+      home: { x: 0, y: 64, z: 0 },
+      baseActivity: { kind: 'escort', target: 'Alice', distance: 3 },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+
+    mind.tick()
+    expect(mind.status().focus).toMatchObject({ name: 'Alice', state: 'tracked', distance: 29.5 })
+
+    tracked = undefined
+    mind.tick()
+    expect(mind.status().focus).toMatchObject({ name: 'Alice', state: 'online-out-of-range' })
+
+    online = false
+    mind.tick()
+    expect(mind.status().focus).toMatchObject({ name: 'Alice', state: 'offline' })
   })
 })
 

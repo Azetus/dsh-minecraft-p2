@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { Box, Vec3 } from '../port/index.ts'
+import type { Box, EntityInfo, Vec3 } from '../port/index.ts'
 import type { HazardPolicy } from '../port/policy.ts'
 import type { PlanInstance } from './plan.ts'
 import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
@@ -39,8 +39,8 @@ export type MindLoopOptions = {
   gatherCount?: () => number
   /** Bounded internal re-read for unknown plan cells; never an Agent payload. */
   observe?: (box: Box) => void
-  /** Bounded internal entity re-read for escort; never an Agent payload. */
-  observeEntities?: (box: Box) => void
+  /** The known target for this tick, resolved by the mind; never an Agent payload. */
+  focus?: () => EntityInfo | undefined
   /** Adapter visibility for automatic fight target checks. */
   canSee?: (entityId: string) => boolean
   /** Last GOTO_STUCK terminal time. */
@@ -72,7 +72,7 @@ export class MindLoop {
   private readonly materialPolicy: (() => MaterialPolicy | undefined) | undefined
   private readonly gatherCount: (() => number) | undefined
   private readonly observe: ((box: Box) => void) | undefined
-  private readonly observeEntities: ((box: Box) => void) | undefined
+  private readonly focus: (() => EntityInfo | undefined) | undefined
   private readonly canSee: ((entityId: string) => boolean) | undefined
   private readonly lastStuckAt: (() => number | undefined) | undefined
   private readonly mainIdleDelayMs: number
@@ -100,7 +100,7 @@ export class MindLoop {
     this.materialPolicy = options.materialPolicy
     this.gatherCount = options.gatherCount
     this.observe = options.observe
-    this.observeEntities = options.observeEntities
+    this.focus = options.focus
     this.canSee = options.canSee
     this.lastStuckAt = options.lastStuckAt
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
@@ -124,6 +124,7 @@ export class MindLoop {
     const conflictPolicy = this.conflictPolicy?.()
     const materialPolicy = this.materialPolicy?.()
     const gatherCount = this.gatherCount?.()
+    const focus = this.focus?.()
     const ctx: EvalCtx = {
       now,
       ...(this.home === undefined ? {} : { home: this.home }),
@@ -136,7 +137,7 @@ export class MindLoop {
       ...(gatherCount === undefined ? {} : { gatherCount }),
       isBlocked: key => this.tracker.isBlocked(key),
       ...(this.observe === undefined ? {} : { observe: this.observe }),
-      ...(this.observeEntities === undefined ? {} : { observeEntities: this.observeEntities }),
+      ...(focus === undefined ? {} : { focus }),
       ...(this.canSee === undefined ? {} : { canSee: this.canSee }),
       ...(this.lastStuckAt === undefined ? {} : { lastStuckAt: this.lastStuckAt() }),
     }

@@ -157,16 +157,71 @@ describe('base.work giver', () => {
     expect(Number(candidate.params.x)).not.toBe(10)
   })
 
-  it('uses a targeted entity observation before declaring a target lost', () => {
+  it('does not re-issue a corner goal that is outside the follow gap', () => {
     const controller = new BaseActivityController()
     controller.activate(0, { x: 0, y: 64, z: 0 })
-    controller.set({ kind: 'escort', target: 'Alice' }, 0, { x: 0, y: 64, z: 0 })
-    const world = flatWorld()
+    controller.set({ kind: 'escort', target: 'Alice', distance: 3 }, 0, { x: 0, y: 64, z: 0 })
+    const giver = createBaseActivityGiver(controller)
+    // A box reach around (4,64,4) would pick the corner (1,64,1), which is
+    // 4.24 blocks away. Standing there leaves `flat > distance + 1`, so the old
+    // logic re-issued the same instant move every 750ms.
+    const candidate = asCandidate(giver.find({
+      now: 1_000,
+      focus: player(4.5, 4.5),
+    }, flatWorld()))
+    const x = Number(candidate.params.x)
+    const z = Number(candidate.params.z)
+    expect(Math.hypot(x - 4, z - 4)).toBeLessThanOrEqual(3.5)
+
+    const arrived = flatWorld({
+      self: { pos: { x: x + 0.5, y: 64, z: z + 0.5 } },
+      entities: [player(4.5, 4.5)],
+    })
+    expect(giver.find({ now: 1_800 }, arrived)).toBeNull()
+  })
+
+  it('moves to a focused target that the block snapshot cannot see', () => {
+    const controller = new BaseActivityController()
+    controller.activate(0, { x: 0, y: 64, z: 0 })
+    controller.set({ kind: 'escort', target: 'Alice', distance: 3 }, 0, { x: 0, y: 64, z: 0 })
     const candidate = asCandidate(createBaseActivityGiver(controller).find({
       now: 1_000,
-      observeEntities: () => { world.addEntities([player(6.5, 0.5)]) },
-    }, world))
-    expect(candidate.keys.startsWith('base:escort:Alice:')).toBe(true)
+      focus: player(40.5, 0.5),
+    }, flatWorld()))
+    expect(candidate.driverId).toBe('move')
+    expect(candidate.keys).toBe('base:escort:Alice:40,64,0')
+    // The goal is the target point and the move driver's range owns the gap.
+    expect(candidate.params).toMatchObject({ x: 40, y: 64, z: 0, range: 3 })
+    expect(candidate.params.timeoutMs).toBe(25_000)
+  })
+
+  it('keeps following a focused target with no client-side distance cap', () => {
+    const controller = new BaseActivityController()
+    controller.activate(0, { x: 0, y: 64, z: 0 })
+    controller.set({ kind: 'escort', target: 'Alice', distance: 2 }, 0, { x: 0, y: 64, z: 0 })
+    const candidate = asCandidate(createBaseActivityGiver(controller).find({
+      now: 1_000,
+      focus: player(200.5, 0.5),
+    }, flatWorld()))
+    expect(candidate.params).toMatchObject({ x: 200, y: 64, z: 0, range: 2 })
+  })
+
+  it('chases the last known position for up to two seconds before TARGET_LOST', () => {
+    const controller = new BaseActivityController()
+    controller.activate(0, { x: 0, y: 64, z: 0 })
+    controller.set({ kind: 'escort', target: 'Alice', distance: 3 }, 0, { x: 0, y: 64, z: 0 })
+    const giver = createBaseActivityGiver(controller)
+    const seen = flatWorld({ entities: [player(10.5, 0.5)] })
+    expect(asCandidate(giver.find({ now: 1_000 }, seen)).keys.startsWith('base:escort:Alice:')).toBe(true)
+
+    const lost = flatWorld()
+    const chase = asCandidate(giver.find({ now: 1_800 }, lost))
+    expect(chase.keys.startsWith('base:escort:Alice:chase:')).toBe(true)
+    expect(chase.params).toMatchObject({ x: 10, y: 64, z: 0, range: 3 })
+    expect(controller.view().waitingReason).toBeNull()
+
+    expect(giver.find({ now: 3_200 }, lost)).toBeNull()
+    expect(controller.view()).toMatchObject({ kind: 'escort', state: 'active', waitingReason: 'TARGET_LOST' })
   })
 
   it('stays in escort when the target cannot be observed', () => {
