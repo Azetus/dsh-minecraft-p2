@@ -31,6 +31,10 @@ export type BodyHandle = {
   /** Force-kill the whole process tree where the platform supports it. */
   killTree?(): void
   waitForExit(): Promise<BodyExit>
+  /** Last non-empty stderr line, when the spawner captures it. */
+  lastStderrLine?(): string | undefined
+  /** Exit status once the child has exited. */
+  exitInfo?(): BodyExit | undefined
 }
 
 export type BodySpawner = (
@@ -268,8 +272,31 @@ export class BodyManager {
       await this.cleanup(handle)
       this.state = 'inactive'
       await this.releaseLock()
-      throw error
+      throw this.startFailure(handle, error)
     }
+  }
+
+  /**
+   * Turn the transport's generic close into a troubleshooting hint. The body
+   * writes its real startup failure to stderr; keep the last line (bounded by
+   * the spawner) and let the rest live in the DSH log.
+   */
+  private startFailure(handle: BodyHandle | undefined, error: unknown): Error {
+    const exit = handle?.exitInfo?.()
+    const exitText = exit === undefined
+      ? ''
+      : exit.code !== null
+        ? ` (exit ${exit.code})`
+        : exit.signal !== null ? ` (signal ${exit.signal})` : ''
+    const base = exit === undefined ? 'P2 body failed to start' : `P2 body exited before handshake${exitText}`
+    const last = handle?.lastStderrLine?.()
+    const message = error instanceof Error ? error.message : String(error)
+    const detail = last !== undefined && last.length > 0
+      ? last
+      : message !== 'body connection closed' ? message : undefined
+    return new Error(detail === undefined
+      ? `${base}; check body stderr in the DSH log`
+      : `${base}: ${detail}`)
   }
 
   async status(): Promise<BodyStatus> {
@@ -690,10 +717,24 @@ export function createProcessSpawner(log: (line: string) => void = line => proce
     if (child.stdout === null || child.stdin === null) {
       throw new Error('body process did not expose stdio pipes')
     }
-    child.stderr?.on('data', chunk => log(`body: ${String(chunk).trimEnd()}`))
+    let lastStderrLine: string | undefined
+    let exitInfo: BodyExit | undefined
+    child.once('exit', (code, signal) => {
+      exitInfo = { code, signal }
+    })
+    child.stderr?.on('data', chunk => {
+      for (const raw of String(chunk).split(/\r?\n/)) {
+        const line = raw.trim()
+        if (line.length === 0) continue
+        lastStderrLine = line.length > 300 ? `${line.slice(0, 300)}...` : line
+        log(`body: ${line}`)
+      }
+    })
     return {
       ...(child.pid === undefined ? {} : { pid: child.pid }),
       transport: createStdioTransport(child.stdout, child.stdin),
+      lastStderrLine: () => lastStderrLine,
+      exitInfo: () => exitInfo,
       kill(signal = 'SIGTERM') {
         if (child.exitCode === null) child.kill(signal)
       },

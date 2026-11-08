@@ -61,6 +61,29 @@ describe.skipIf(!built)('body process entry', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
-})
 
+  it('writes one fatal stderr line when startup fails before the server', () => {
+    const directory = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-body-'))
+    try {
+      const result = spawnSync(process.execPath, [BODY_ENTRY], {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          P2_JOURNAL_PATH: join(directory, 'journal.jsonl'),
+          P2_MC_HOST: '127.0.0.1',
+          P2_MC_PORT: '25575',
+          // Invalid value: loadProviderConfig throws before any MC connection.
+          P2_MC_CONNECT_TIMEOUT_MS: '0',
+        },
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('dsh-minecraft-p2 body: fatal:')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
 

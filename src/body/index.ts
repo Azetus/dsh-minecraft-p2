@@ -154,4 +154,10 @@ async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | unde
   }
 }
 
-await main()
+try {
+  await main()
+} catch (error) {
+  const message = error instanceof Error ? error.message : JSON.stringify(error)
+  process.stderr.write(`dsh-minecraft-p2 body: fatal: ${message}\n`)
+  process.exit(1)
+}
