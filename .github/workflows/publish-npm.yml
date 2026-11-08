@@ -1,4 +1,4 @@
-name: Build and publish npm package
+name: Build and stage npm package
 
 on:
   release:
@@ -92,7 +92,7 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish to npm
+    name: Stage release for approval
     needs: build
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-24.04
@@ -133,14 +133,24 @@ jobs:
           cd .release-artifacts
           sha256sum -c SHA256SUMS
 
-      - name: Publish with npm Trusted Publishing
+      - name: Stage with npm Trusted Publishing
         run: |
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           if npm view "$name@$version" version >/dev/null 2>&1; then
-            echo "$name@$version is already published; skipping"
+            echo "$name@$version is already published; nothing to stage"
+            echo "$name@$version is already published; nothing to stage" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           tgz=$(ls .release-artifacts/*.tgz)
-          npm publish "$tgz" --access public --tag latest --provenance \
-            --registry=https://registry.npmjs.org/
+          # Stage only: this workflow cannot publish directly. After the malware
+          # scan, a maintainer must approve the staged version with 2FA.
+          npm stage publish "$tgz" --access public --tag latest --provenance \
+            --registry=https://registry.npmjs.org/ | tee stage-output.txt
+          cat stage-output.txt >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "The version is staged, not published. Approve it with 2FA:"
+            echo "- npmjs.com package page -> Staged tab, or"
+            echo "- npm stage approve <stage-id>"
+          } >> "$GITHUB_STEP_SUMMARY"
