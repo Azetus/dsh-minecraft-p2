@@ -3,7 +3,7 @@ import type { JsonValue } from '../../contracts/types.ts'
 import type { Vec3 } from '../../port/index.ts'
 import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { pickupNearby } from '../pickup.ts'
-import type { PickupResult } from '../pickup.ts'
+import type { PickupItemOutcome, PickupResult } from '../pickup.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -101,6 +101,7 @@ function collectFailureCode(pickup: PickupResult): string | undefined {
   if (pickup.timedOut > 0) return 'COLLECT_TIMEOUT'
   if (pickup.full > 0) return 'COLLECT_INVENTORY_FULL'
   if (pickup.unreachable > 0) return 'COLLECT_UNREACHABLE'
+  if (pickup.noReturn > 0) return 'COLLECT_NO_RETURN'
   if (pickup.notCollected + pickup.gone + pickup.partial > 0) return 'COLLECT_INCOMPLETE'
   return undefined
 }
@@ -114,8 +115,9 @@ function collectObserved(
   pickup: PickupResult,
 ): JsonValue {
   const missed = pickup.notCollected + pickup.gone + pickup.full + pickup.partial + pickup.timedOut
-  const collectedDrops = Math.max(0, pickup.drops - missed - pickup.unreachable)
-  const unreachable = unreachableDrops(pickup)
+  const collectedDrops = Math.max(0, pickup.drops - missed - pickup.unreachable - pickup.noReturn)
+  const unreachable = failedDrops(pickup, 'unreachable')
+  const noReturn = failedDrops(pickup, 'noReturn')
   return {
     kind: 'collect',
     origin: { x: origin.x, y: origin.y, z: origin.z },
@@ -130,6 +132,7 @@ function collectObserved(
     collectedDrops,
     missed,
     unreachable: pickup.unreachable,
+    noReturn: pickup.noReturn,
     inventoryDelta: pickup.observed.inventory.after - pickup.observed.inventory.before,
     timedOut: pickup.timedOut,
     timeoutHit: pickup.timeoutHit,
@@ -152,13 +155,14 @@ function collectObserved(
       ? {}
       : { standQuery: pickup.observed.standQuery as unknown as JsonValue }),
     ...(unreachable.length === 0 ? {} : { unreachableDrops: unreachable }),
+    ...(noReturn.length === 0 ? {} : { noReturnDrops: noReturn }),
   }
 }
 
-function unreachableDrops(pickup: PickupResult): JsonValue[] {
+function failedDrops(pickup: PickupResult, outcome: PickupItemOutcome): JsonValue[] {
   const drops: JsonValue[] = []
   for (const item of pickup.observed.items) {
-    if (item.outcome !== 'unreachable') continue
+    if (item.outcome !== outcome) continue
     drops.push({
       id: item.id,
       name: item.item?.name ?? item.name,
@@ -180,6 +184,8 @@ function attachCollectFailure(result: DriverResult): DriverResult {
     facts.requiredDig = result.observed.standQuery.requiredDig.slice(0, 8) as unknown as JsonValue
   }
   const budget = code === 'COLLECT_TIMEOUT'
+  const noStand = code === 'COLLECT_UNREACHABLE'
+  const noReturn = code === 'COLLECT_NO_RETURN'
   return {
     ...result,
     observed: withFailure(result.observed, failureBody({
@@ -188,12 +194,12 @@ function attachCollectFailure(result: DriverResult): DriverResult {
       code,
       observed: result.observed,
       facts,
-      diagnosis: code === 'COLLECT_UNREACHABLE' ? 'NO_STAND_CELL' : 'UNKNOWN',
+      diagnosis: noStand ? 'NO_STAND_CELL' : noReturn ? 'NO_RETURN' : 'UNKNOWN',
       cause: {
         kind: budget ? 'budget' : 'world',
         code,
       },
-      recovery: budget ? 'reobserve' : code === 'COLLECT_UNREACHABLE' ? 'replan' : 'reobserve',
+      recovery: budget ? 'reobserve' : noStand || noReturn ? 'replan' : 'reobserve',
     })),
   }
 }

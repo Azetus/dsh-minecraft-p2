@@ -32,6 +32,24 @@ function groundAt(point: Vec3): BlockInfo | null {
   return { name: 'air', loaded: true }
 }
 
+/**
+ * A two-deep pit under the same surface as `groundAt` (rim feet 64, floor feet
+ * 62): the floor block is at y=61 and y=62..63 are air. With `step`, a block at
+ * (2,62,0) makes (2,63,0) a one-block step out of the pit.
+ */
+function pitWorld(columns: Array<[number, number]>, step = false) {
+  return (point: Vec3): BlockInfo | null => {
+    if (columns.some(([x, z]) => point.x === x && point.z === z)) {
+      return point.y === 61 ? { name: 'stone', loaded: true, solid: true } : { name: 'air', loaded: true }
+    }
+    if (step && point.x === 2 && point.z === 0) {
+      if (point.y === 62) return { name: 'stone', loaded: true, solid: true }
+      if (point.y === 63) return { name: 'air', loaded: true }
+    }
+    return groundAt(point)
+  }
+}
+
 describe('pickup', () => {
   it('walks to a drop and reads the inventory increase', async () => {
     const items: Item[] = []
@@ -52,10 +70,17 @@ describe('pickup', () => {
 
     const result = await pickupNearby(port, target)
 
-    expect(result).toMatchObject({ drops: 1, picked: 1, unreachable: 0, notCollected: 0 })
+    expect(result).toMatchObject({ drops: 1, picked: 1, unreachable: 0, notCollected: 0, noReturn: 0 })
     expect(result.observed.items[0]?.outcome).toBe('collected')
     expect(moves).toHaveLength(1)
     expect(Math.hypot(moves[0]!.x - 1, moves[0]!.z)).toBeLessThanOrEqual(3)
+    // Open ground: the chosen cell can walk back, so the return probe must not
+    // narrow the normal pickup path. Candidates past the 8-target cap are not
+    // probed, so only the evaluated ones carry a verdict.
+    expect(result.observed.standQuery?.returnReason).toBeUndefined()
+    expect(result.observed.standQuery?.candidateCells
+      ?.filter(cell => cell.returnable !== undefined)
+      .every(cell => cell.returnable === 'yes')).toBe(true)
   })
 
   it('reports an unreachable drop without walking to the item position', async () => {
@@ -231,6 +256,79 @@ describe('pickup', () => {
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 0, gone: 1, merged: 1 })
+  })
+})
+
+describe('pickup return path', () => {
+  it('refuses a 1x1x2 pit drop whose only pickup cell has no way back', async () => {
+    let moves = 0
+    const port = {
+      self: () => selfAt(),
+      blockAt: pitWorld([[1, 0]]),
+      inventory: () => [],
+      entities: () => [drop({ x: 1.5, y: 62, z: 0.5 })],
+      moveTo: async () => { moves += 1; return { state: 'ok' as const, elapsedMs: 1 } },
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
+
+    expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 0, noReturn: 1 })
+    expect(result.observed.items[0]?.outcome).toBe('noReturn')
+    // The drop is reachable only by falling in; the body must not move at all.
+    expect(moves).toBe(0)
+    expect(result.observed.standQuery).toMatchObject({
+      returnReason: 'no-return',
+      candidates: 1,
+      candidateCells: [
+        expect.objectContaining({ x: 1, y: 62, z: 0, reachable: 'yes', returnable: 'no' }),
+      ],
+    })
+  })
+
+  it('refuses a 2x2x2 pit drop even though every floor cell can reach it', async () => {
+    let moves = 0
+    const port = {
+      self: () => selfAt(),
+      blockAt: pitWorld([[1, 0], [2, 0], [1, 1], [2, 1]]),
+      inventory: () => [],
+      entities: () => [drop({ x: 1.5, y: 62, z: 0.5 })],
+      moveTo: async () => { moves += 1; return { state: 'ok' as const, elapsedMs: 1 } },
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
+
+    expect(result).toMatchObject({ drops: 1, picked: 0, unreachable: 0, noReturn: 1 })
+    expect(moves).toBe(0)
+    const stand = result.observed.standQuery
+    expect(stand).toMatchObject({ returnReason: 'no-return', candidates: 4 })
+    expect(stand?.candidateCells).toHaveLength(4)
+    expect(stand?.candidateCells?.every(cell => cell.reachable === 'yes' && cell.returnable === 'no')).toBe(true)
+  })
+
+  it('picks up from a 1x1x2 pit when a step gives the floor a way back', async () => {
+    const items: Item[] = []
+    let drops: EntityInfo[] = [drop({ x: 1.5, y: 62, z: 0.5 })]
+    const moves: Vec3[] = []
+    const port = {
+      self: () => selfAt(),
+      blockAt: pitWorld([[1, 0]], true),
+      inventory: () => items,
+      entities: () => drops,
+      moveTo: async (position: Vec3) => {
+        moves.push(position)
+        items.push({ slot: 36, name: 'cobblestone', count: 1 })
+        drops = []
+        return { state: 'ok' as const, elapsedMs: 1 }
+      },
+    } as unknown as ClientPort
+
+    const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
+
+    expect(result).toMatchObject({ drops: 1, picked: 1, unreachable: 0, noReturn: 0 })
+    expect(result.observed.items[0]?.outcome).toBe('collected')
+    expect(moves).toEqual([{ x: 1, y: 62, z: 0 }])
+    expect(result.observed.standQuery?.candidateCells?.[0]?.returnable).toBe('yes')
+    expect(result.observed.standQuery?.returnReason).toBeUndefined()
   })
 })
 

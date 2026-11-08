@@ -72,8 +72,10 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `hold(GO_NO_STAND)` | 目标 2 格内没有可站立格；换坐标，或先整理/确认目标高度 |
 | `failed(APPROACH_NO_STAND)` / `failed(APPROACH_NO_PATH)` | 目标方块周围没有可站立/可接近格；换目标面或先清理/接近 |
 | `failed(PICKUP_UNREACHABLE)` | 掉落物存在但走不到；读 `facts.requiredDig` 与 `unreachableDrops`；换落点、先整理地形，或接受掉落损失。不要自动追掉落物 |
+| `failed(PICKUP_NO_RETURN)` | 掉落物只能单向进入（例如 1×1×2 / 2×2×2 坑底）：pickup 在进入前拒绝，P2 不会被留在坑里。读 `facts.standQuery.returnReason`、`candidateCells[].returnable` 与 `noReturnDrops`；先开出口/换落点，或接受损失，不要重下同一条 dig |
 | `failed(PICKUP_NOT_COLLECTED)` | 已到掉落物旁但未拾取；检查背包空间/服务端延迟，不要重复同一 dig |
 | `failed(COLLECT_UNREACHABLE)` | 已观测掉落物里有走不到的；读 `observed.unreachable/items` 与 `facts.requiredDig`；清阻挡、换落点或接受损失，不要自动追 |
+| `failed(COLLECT_NO_RETURN)` | 已观测掉落物只有“可捡但回不来”的站位：collect 在移动前拒绝，读 `observed.noReturn/standQuery` 与 `noReturnDrops`；先开出口/换落点或接受损失，不要重试同一条 collect |
 | `failed(COLLECT_TIMEOUT)` | collect 到 deadline；读 `collected/collectedDrops/timedOut`；重新观察剩余掉落物后再发一次有界 collect |
 | `failed(COLLECT_INVENTORY_FULL)` | 背包没有空间；先整理/存放，不要重复 collect |
 | `failed(COLLECT_INCOMPLETE)` | 有 gone/partial/notCollected；读 `observed.items[].outcome`；消失的不要追，partial 按背包空间决定是否再发一次 |

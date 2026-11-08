@@ -107,9 +107,9 @@
 5. 原始 order 的 retry 策略：
    - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
    - `equip / traverse / check / collect` 是一次性，首次失败即终态；`collect` 的一次 job 已经把启动时观测到的掉落物跑完，重试只会重复已消耗的实体；
-   - `collect` 的部分/不可达/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/inventoryDelta`，不因 `failed` 丢掉已收集数量；
+   - `collect` 的部分/不可达/无返回/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/noReturn/inventoryDelta`，不因 `failed` 丢掉已收集数量；
    - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
-   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
+   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NO_RETURN / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_NO_RETURN / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
    - `place` 的 `PLACE_TARGET_OCCUPIED / PLACE_OFF_TARGET / PLACE_ITEM_CONSUMED / PLACE_READBACK_MISMATCH / PLACE_UNSUPPORTED / NO_SUPPORT` 不重试；`PLACE_FAILED` 只有在 provider 给出 `retrySafe:true` 时才可能换面，否则终态；
    - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
    - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。

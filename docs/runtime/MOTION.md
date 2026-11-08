@@ -328,6 +328,7 @@ interface Move {
   - `approach` 用它选站位：无候选 → `APPROACH_NO_STAND`；有候选但全部证明不可达 → `APPROACH_NO_PATH`；窗口未加载 → `APPROACH_UNKNOWN`（可重试）。
   - `pickup` 用它选拾取格，AABB/可拾取/合并/过期仍留在 pickup 层；谓词拿到真实 `feetY`，半砖上的掉落物按真实支撑高度处理，不用格底近似。
   - `pickup` 不把 item 位置当移动目标：只走 core 证明可站/未知的候选格；已证明不可达的格只作为证据。无候选时 `observed.standQuery.requiredDig` 给出 `Rules.standInfo` 的 `blockedBy`（`support/feet/head` + 方块名）；有候选但全部不可达时给 `unreachableReason:"path-blocked"` + `candidateCells`，不逐格重试 `GOTO_NO_PATH`。
+  - `pickup` 的候选格还要求**双向连通**：`standCells` 只证明 `起点→候选`，pickup 在进入前用同一套 move 边做有界 A* 证明 `候选→起点`（512 节点；A* 而不是 BFS，因为平地 BFS 在 4 格外就会耗尽预算）。证明不了 → `returnReason:"no-return"`，预算耗尽 → `returnReason:"return-unknown"`；两者都不进入，报 `PICKUP_NO_RETURN` / `COLLECT_NO_RETURN`，`candidateCells[].returnable` 给出每格判定。1×1×2 与 2×2×2 坑底只能“掉进去”，属于该拒绝路径。
   - `Rules.standInfo` 的 `no` 结果带可选 `blockedBy`（支撑/脚/头格 + 方块名），供 approach/pickup/place 直接给出“清哪格”。
   - `givers/common.nearestStandable/farthestStandable`、`escape.nearestCoveredStandable` 也走同一查询。
 - `moveTo` 始终走运动执行器；显式 `unstickDig` 作为 core break 白名单，不存在 `goto` 路径。

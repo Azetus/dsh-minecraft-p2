@@ -1,6 +1,15 @@
 import { standingCell } from '../motion/execute/index.ts'
-import { createRules, defaultConstraints, type StandBlock } from '../motion/model/index.ts'
-import { standCells, type StandCell, type StandResult } from '../motion/search/index.ts'
+import {
+  cellKey,
+  createRules,
+  defaultConstraints,
+  type Cell,
+  type MotionWorld,
+  type MoveContext,
+  type StandBlock,
+  type Tri,
+} from '../motion/model/index.ts'
+import { MotionSearch, standCells, type StandCell, type StandResult } from '../motion/search/index.ts'
 import { createReadOnlyMotionWorld } from './standing.ts'
 import type { Box, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
 import {
@@ -16,6 +25,7 @@ export type PickupItemOutcome =
   | 'collected'
   | 'partial'
   | 'unreachable'
+  | 'noReturn'
   | 'gone'
   | 'full'
   | 'notCollected'
@@ -57,10 +67,25 @@ export type PickupStandView = {
   candidates: number
   /** Why no movement was possible; absent when a cell was reached. */
   unreachableReason?: 'path-blocked' | 'reachability-unknown' | 'no-stand-cell' | 'unloaded-window' | 'positioning-failed'
+  /**
+   * Set when the drop had reachable candidates but none proved a way back to
+   * the body's pre-move cell. `no-return` means at least one candidate was
+   * proven unable; `return-unknown` means every rejected candidate was
+   * budget-limited, so neither direction was proven.
+   */
+  returnReason?: 'no-return' | 'return-unknown'
   /** Blocks that currently prevent standing where the drop is. */
   requiredDig?: Array<{ x: number; y: number; z: number; layer: 'support' | 'feet' | 'head'; name: string }>
   /** Every candidate with its reachability verdict, for diagnosis. */
-  candidateCells?: Array<{ x: number; y: number; z: number; reachable: string; steps?: number }>
+  candidateCells?: Array<{
+    x: number
+    y: number
+    z: number
+    reachable: string
+    steps?: number
+    /** Present only for candidates the return-path probe evaluated. */
+    returnable?: Tri
+  }>
 }
 
 export type PickupResult = {
@@ -75,6 +100,8 @@ export type PickupResult = {
   timeoutHit: boolean
   picked: number
   unreachable: number
+  /** Drops not attempted because no reachable stand cell could get back out. */
+  noReturn: number
   notCollected: number
   gone: number
   full: number
@@ -89,6 +116,7 @@ export type PickupResult = {
     timeoutHit: boolean
     picked: number
     unreachable: number
+    noReturn: number
     notCollected: number
     gone: number
     full: number
@@ -128,6 +156,9 @@ const HARD_MAX_PICKUP_RADIUS = 64
 const HARD_MAX_DROPS = 64
 const PICKUP_WAIT_MS = 1_500
 const MOVE_TIMEOUT_MS = 5_000
+/** Bounded search budget for the candidate -> start return proof. */
+const RETURN_MAX_NODES = 512
+const MAX_PICKUP_CELLS = 8
 const PLAYER_WIDTH = 0.6
 const PLAYER_HEIGHT = 1.8
 
@@ -171,6 +202,7 @@ export async function pickupNearby(
   let before = startCount
   let picked = 0
   let unreachable = 0
+  let noReturn = 0
   let notCollected = 0
   let gone = 0
   let full = 0
@@ -231,13 +263,17 @@ export async function pickupNearby(
         ...(found.query.cells.length === 0
           ? {}
           : {
-              candidateCells: found.query.cells.map(candidate => ({
-                x: candidate.cell.x,
-                y: candidate.cell.y,
-                z: candidate.cell.z,
-                reachable: candidate.reachable,
-                ...(candidate.steps === undefined ? {} : { steps: candidate.steps }),
-              })),
+              candidateCells: found.query.cells.map(candidate => {
+                const returnable = found.returnVerdicts.get(cellKey(candidate.cell))
+                return {
+                  x: candidate.cell.x,
+                  y: candidate.cell.y,
+                  z: candidate.cell.z,
+                  reachable: candidate.reachable,
+                  ...(candidate.steps === undefined ? {} : { steps: candidate.steps }),
+                  ...(returnable === undefined ? {} : { returnable }),
+                }
+              }),
             }),
       }
       let reached = false
@@ -279,6 +315,19 @@ export async function pickupNearby(
         continue
       }
       if (!reached) {
+        // The drop had reachable candidates, but every one was a one-way
+        // pocket: entering would leave the body with no route back out. Do not
+        // move. `return-unknown` is a budget result, not proof of escape, so it
+        // is rejected the same way as a proven dead end.
+        if (found.cells.length === 0 && found.returnRejected > 0) {
+          noReturn += 1
+          view.outcome = 'noReturn'
+          standView.returnReason = found.returnUnknown === found.returnRejected
+            ? 'return-unknown'
+            : 'no-return'
+          await requeryItem(port, requery, drop, view, center)
+          continue
+        }
         unreachable += 1
         view.outcome = 'unreachable'
         standView.unreachableReason = standUnreachableReason(found)
@@ -345,6 +394,7 @@ export async function pickupNearby(
     timeoutHit,
     picked,
     unreachable,
+    noReturn,
     notCollected,
     gone,
     full,
@@ -359,6 +409,7 @@ export async function pickupNearby(
       timeoutHit,
       picked,
       unreachable,
+      noReturn,
       notCollected,
       gone,
       full,
@@ -415,11 +466,23 @@ async function requeryItem(
   }
 }
 
+type PickupCellChoice = {
+  cells: Vec3[]
+  query: StandResult
+  blocked: StandBlock[]
+  /** Return-path verdicts for the candidates the probe evaluated. */
+  returnVerdicts: Map<string, Tri>
+  /** Candidates rejected by the return probe (proven dead end or unproven). */
+  returnRejected: number
+  /** Rejected candidates whose verdict was `unknown`, not a proven `no`. */
+  returnUnknown: number
+}
+
 function findPickupCells(
   port: ClientPort,
   item: EntityInfo,
   self: SelfInfo,
-): { cells: Vec3[]; query: StandResult; blocked: StandBlock[] } {
+): PickupCellChoice {
   const base = {
     x: Math.floor(item.position.x),
     y: Math.floor(item.position.y),
@@ -431,6 +494,7 @@ function findPickupCells(
   // unstandable. The query itself only returns verdicts.
   const info = rules.standInfo(base)
   const blocked = info.state === 'no' && info.blockedBy !== undefined ? info.blockedBy : []
+  const start = standingCell(rules, self.pos)
   // The AABB stays here: the core query only supplies standable cells and their
   // real feet height (a drop on a bottom slab sits at y-0.5, not y).
   const query = standCells(
@@ -442,12 +506,12 @@ function findPickupCells(
     },
     // A drop floating on water is a real pickup target: keep water cells
     // eligible here, unlike reflex/escape queries which must stand dry.
-    { from: standingCell(rules, self.pos), dry: false },
+    { from: start, dry: false },
   )
   const rank = (candidate: StandCell): number => candidate.reachable === 'yes'
     ? 0
     : candidate.reachable === 'unknown' ? 1 : 2
-  const cells = [...query.cells]
+  const ranked = [...query.cells]
     // A proven-unreachable candidate is evidence, not a move target: walking
     // to it only produces a second GOTO_NO_PATH for the same cell.
     .filter(candidate => candidate.reachable !== 'no')
@@ -457,9 +521,55 @@ function findPickupCells(
       || left.cell.y - right.cell.y
       || left.cell.x - right.cell.x
       || left.cell.z - right.cell.z)
-    .slice(0, 8)
-    .map(candidate => candidate.cell)
-  return { cells, query, blocked }
+  // A drop at the bottom of a pit is reachable by falling in, which is not a
+  // path out. Probe candidates in rank order and stop once enough can return.
+  const cells: Vec3[] = []
+  const returnVerdicts = new Map<string, Tri>()
+  let returnRejected = 0
+  let returnUnknown = 0
+  for (const candidate of ranked) {
+    if (cells.length >= MAX_PICKUP_CELLS) break
+    const verdict = returnVerdict(world, start, candidate.cell)
+    returnVerdicts.set(cellKey(candidate.cell), verdict)
+    if (verdict === 'yes') {
+      cells.push(candidate.cell)
+      continue
+    }
+    returnRejected += 1
+    if (verdict === 'unknown') returnUnknown += 1
+  }
+  return { cells, query, blocked, returnVerdicts, returnRejected, returnUnknown }
+}
+
+/**
+ * The stand query already proved start -> candidate. This proves
+ * candidate -> start over the same move edges, i.e. both cells are in the same
+ * two-way connected region, so a pickup cannot be a one-way trip into a pocket.
+ * A* is used instead of a breadth-first walk: in open terrain a BFS exhausts
+ * its node budget before reaching a cell four steps away, while the heuristic
+ * path is a handful of nodes. `timeout` (budget) is `unknown`, not `no`;
+ * callers must not enter on an unproven return.
+ */
+function returnVerdict(world: MotionWorld, start: Cell, cell: Cell): Tri {
+  if (cellKey(cell) === cellKey(start)) return 'yes'
+  const constraints = defaultConstraints()
+  const rules = createRules(world, constraints)
+  const context = (): MoveContext => ({
+    world,
+    rules,
+    constraints,
+    self: world.self(),
+    tick: 0,
+    now: 0,
+    position: cell,
+  })
+  const search = new MotionSearch(cell, start, context, {
+    maxNodes: RETURN_MAX_NODES,
+    timeoutMs: Number.POSITIVE_INFINITY,
+  })
+  let result = search.step(0)
+  while (result.status === 'running') result = search.step(0)
+  return result.status === 'success' ? 'yes' : result.status === 'noPath' ? 'no' : 'unknown'
 }
 
 function standUnreachableReason(found: { cells: Vec3[]; query: StandResult }): NonNullable<PickupStandView['unreachableReason']> {

@@ -37,6 +37,7 @@ export type FailureDiagnosis =
   | 'TARGET_OCCUPIED'
   | 'START_EMBEDDED'
   | 'NO_STAND_CELL'
+  | 'NO_RETURN'
   | 'EFFECT_UNCONFIRMED'
   | 'RELEASE_UNCONFIRMED'
   | 'TOOL_MISSING'
@@ -154,6 +155,7 @@ const FACT_KEYS = new Set([
   'elapsedMs',
   'elapsedGameAge',
   'unreachableDrops',
+  'noReturnDrops',
   'placedAt',
   'placedCells',
   'changedCells',
@@ -316,6 +318,9 @@ export function diagnoseFailure(input: {
   // PICKUP_UNREACHABLE is the drop-specific "no reachable stand cell" code;
   // its requiredDig lists the blocking cells, not a body head/support fault.
   if (code === 'PICKUP_UNREACHABLE' || code === 'COLLECT_UNREACHABLE') return 'NO_STAND_CELL'
+  // NO_RETURN is a topology fault: the only pickup cell is a one-way pocket.
+  // It must not fold into NO_STAND_CELL, which means "cannot get there".
+  if (code === 'PICKUP_NO_RETURN' || code === 'COLLECT_NO_RETURN') return 'NO_RETURN'
 
   const facts = input.facts ?? failureFacts(input.observed)
   const snapshot = isRecord(facts.snapshot) ? facts.snapshot : undefined

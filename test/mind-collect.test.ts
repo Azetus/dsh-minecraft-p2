@@ -220,6 +220,51 @@ describe('collect driver', () => {
     })
   })
 
+  it('refuses a pit drop whose only pickup cell has no way back', async () => {
+    const pit = (point: Vec3): BlockInfo | null => {
+      if (point.x === 3 && point.z === 0) {
+        return point.y === 61
+          ? { name: 'stone', loaded: true, solid: true }
+          : { name: 'air', loaded: true }
+      }
+      return ground(point)
+    }
+    const inPit = { ...drop('drop-pit', 3.5), position: { x: 3.5, y: 62, z: 0.5 } }
+    const fake = collectPort([inPit], { blockAt: pit })
+    const result = await driverResult(fake.port, { radius: 8 })
+
+    // The body must not step into the pit at all.
+    expect(fake.moves).toHaveLength(0)
+    expect(result).toMatchObject({
+      state: 'failed',
+      code: 'COLLECT_NO_RETURN',
+      observed: {
+        drops: 1,
+        collected: 0,
+        collectedDrops: 0,
+        missed: 0,
+        unreachable: 0,
+        noReturn: 1,
+      },
+    })
+    const observed = result.observed as {
+      failure?: { code?: string; diagnosis?: string; phase?: string; recovery?: string; cause?: { kind?: string } }
+      noReturnDrops?: unknown
+      standQuery?: { returnReason?: string }
+    }
+    expect(observed.failure).toMatchObject({
+      code: 'COLLECT_NO_RETURN',
+      diagnosis: 'NO_RETURN',
+      phase: 'pickup',
+      recovery: 'replan',
+      cause: { kind: 'world', code: 'COLLECT_NO_RETURN' },
+    })
+    expect(observed.standQuery?.returnReason).toBe('no-return')
+    expect(observed.noReturnDrops).toEqual([
+      { id: 'drop-pit', name: 'dirt', count: 1, position: { x: 3.5, y: 62, z: 0.5 } },
+    ])
+  })
+
   it('reports a full inventory instead of hiding the drop', async () => {
     const fake = collectPort([drop('drop-in-range', 0.5)], { full: true })
     const result = await driverResult(fake.port, { radius: 8 })

@@ -25,6 +25,7 @@ const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> =
   { match: /GOTO_NO_PATH|GOTO_TIMEOUT|^UNREACHABLE$/, category: 'reachability', hint: 'path is blocked or too long; choose a closer/standable target' },
   { match: /VANILLA_NO_PATH/, category: 'reachability', hint: 'the unvalidated vanilla path got no closer; retry with a closer target or the safe planner' },
   { match: /VANILLA_STUCK|VANILLA_TIMEOUT/, category: 'world', hint: 'unvalidated following made no progress; re-observe and decide whether to retry or give up' },
+  { match: /PICKUP_NO_RETURN|COLLECT_NO_RETURN/, category: 'reachability', hint: 'the only pickup stand cell has no proven route back; do not enter the pit, change the approach or accept the loss' },
   { match: /PICKUP_UNREACHABLE|PICKUP_NOT_COLLECTED|PICKUP_ENTITY_GONE|PICKUP_MERGED/, category: 'world', hint: 'drop is unreachable or not collected; adjust the landing/space' },
   { match: /PICKUP_INVENTORY_FULL|COLLECT_INVENTORY_FULL/, category: 'precondition', hint: 'inventory has no storage space; free a slot before harvesting' },
   { match: /COLLECT_TIMEOUT/, category: 'budget', hint: 'the collect pass hit its timeout; re-observe the remaining drops before a new bounded collect' },

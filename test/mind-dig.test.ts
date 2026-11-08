@@ -193,6 +193,36 @@ describe('dig driver tool handling', () => {
     expect(failure?.facts?.unreachableDrops).toEqual(drops)
   })
 
+  it('reports a pit-bottom harvest drop it will not enter without a way back', async () => {
+    const fake = portWith({
+      inventory: [{ slot: 36, name: 'stone_pickaxe', count: 1 }],
+      entities: [{
+        id: 'drop-1',
+        name: 'item',
+        position: { x: 1.5, y: 62, z: 0.5 },
+        width: 0.25,
+        height: 0.25,
+        item: { name: 'cobblestone', count: 1 },
+      }],
+      start: { x: 0.5, y: 64, z: 0.5 },
+    })
+    // A 1x1x2 pit under the dug block: floor at y=61, air at 62..63.
+    fake.blocks.set('1,63,0', { name: 'air', loaded: true })
+    fake.blocks.set('1,62,0', { name: 'air', loaded: true })
+    fake.blocks.set('1,61,0', stone({ pos: { x: 1, y: 61, z: 0 } }))
+    const result = await run(fake.port, 'harvest')
+
+    expect(result).toMatchObject({ state: 'failed', code: 'PICKUP_NO_RETURN' })
+    const failure = (result.observed as {
+      failure?: { diagnosis?: string; cause?: { kind?: string }; facts?: Record<string, unknown> }
+    }).failure
+    expect(failure?.diagnosis).toBe('NO_RETURN')
+    expect(failure?.cause).toMatchObject({ kind: 'world', code: 'PICKUP_NO_RETURN' })
+    expect(failure?.facts?.noReturnDrops).toEqual([
+      { name: 'cobblestone', count: 1, position: { x: 1.5, y: 62, z: 0.5 } },
+    ])
+  })
+
   it('keeps the provider observed data when the dig times out', async () => {
     const fake = portWith()
     const evidence = {

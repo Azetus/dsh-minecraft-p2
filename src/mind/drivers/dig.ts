@@ -186,7 +186,8 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, auto
     inventoryAfter: afterCount,
     dropDelta: afterCount - beforeCount,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
-    unreachableDrops: unreachableDrops(pickup),
+    unreachableDrops: pickupDrops(pickup, 'unreachable'),
+    noReturnDrops: pickupDrops(pickup, 'noReturn'),
   }
   if (pickup !== undefined && pickup.drops > 0 && pickup.picked === 0 && afterCount <= beforeCount) {
     const code = pickup.merged > 0
@@ -195,7 +196,9 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, auto
         ? 'PICKUP_ENTITY_GONE'
         : pickup.full > 0
           ? 'PICKUP_INVENTORY_FULL'
-          : pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED'
+          : pickup.noReturn > 0
+            ? 'PICKUP_NO_RETURN'
+            : pickup.unreachable > 0 ? 'PICKUP_UNREACHABLE' : 'PICKUP_NOT_COLLECTED'
     return { state: 'failed', code, observed }
   }
   return { state: 'succeeded', observed }
@@ -346,7 +349,8 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     inventoryAfter,
     dropDelta: inventoryAfter - inventoryBefore,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
-    unreachableDrops: unreachableDrops(pickup),
+    unreachableDrops: pickupDrops(pickup, 'unreachable'),
+    noReturnDrops: pickupDrops(pickup, 'noReturn'),
   }
   if (skipped.length > 0) {
     return {
@@ -477,7 +481,8 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     inventoryAfter,
     dropDelta: inventoryAfter - inventoryBefore,
     ...(pickup === undefined ? {} : { pickup: pickup.observed }),
-    unreachableDrops: unreachableDrops(pickup),
+    unreachableDrops: pickupDrops(pickup, 'unreachable'),
+    noReturnDrops: pickupDrops(pickup, 'noReturn'),
   }
   if (reason !== undefined) {
     return {
@@ -705,14 +710,21 @@ function isAirBlock(block: BlockInfo | null): boolean {
 }
 
 /**
- * Drops the body could not reach after a dig. `dug` is blocks, `drops` is item
- * entities and `picked` is inventory delta; they are different units, so this
- * only reports the observed entities and never infers from the block count.
+ * Drops the body could not pick up after a dig, split by outcome. `dug` is
+ * blocks, `drops` is item entities and `picked` is inventory delta; they are
+ * different units, so this only reports the observed entities and never infers
+ * from the block count.
  */
-function unreachableDrops(pickup: PickupResult | undefined): JsonValue {
-  if (pickup === undefined || pickup.unreachable <= 0) return []
+function pickupDrops(
+  pickup: PickupResult | undefined,
+  outcome: 'unreachable' | 'noReturn',
+): JsonValue {
+  if (pickup === undefined) return []
+  const count = outcome === 'unreachable' ? pickup.unreachable : pickup.noReturn
+  if (count <= 0) return []
   const drops: JsonValue[] = []
   for (const item of pickup.observed.items) {
+    if (item.outcome !== outcome) continue
     if (item.presentAfter === false) continue
     drops.push({
       name: item.item?.name ?? item.name,
@@ -740,9 +752,10 @@ function attachDigFailure(result: DriverResult, params: DigParams): DriverResult
   } else if (isCell(params.from) && isCell(params.to)) {
     facts.target = { from: params.from, to: params.to } as unknown as JsonValue
   }
-  // PICKUP_UNREACHABLE keeps its stand query nested under `pickup`; lift the
-  // same observation's requiredDig so the wake can name the blocking cells.
-  if (code === 'PICKUP_UNREACHABLE') {
+  // PICKUP_UNREACHABLE / PICKUP_NO_RETURN keep their stand query nested under
+  // `pickup`; lift the same observation's requiredDig so the wake can name the
+  // blocking cells.
+  if (code === 'PICKUP_UNREACHABLE' || code === 'PICKUP_NO_RETURN') {
     const pickup = isRecord(result.observed) && isRecord(result.observed.pickup)
       ? result.observed.pickup
       : undefined
