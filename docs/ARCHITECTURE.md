@@ -62,6 +62,13 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 - `.p2/` 是本机内部内容，由 `p2 start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有用户编辑。persona、config、memory、workspace skills 都在这里；`.p2` 不入库。
 - auto-wake 是 bridge 的调度能力，不进入 P2Mind：它只在 owner session 静默后注入一个 turn，不生成 order/duty，也不限制 Agent 的目标选择。默认 `skipActiveWork:false`；设为 `true` 才按 active order/plan/duty/armed goal 跳过唤醒，这是调度偏好，不是授权门。
 
+### 2.3 观测分层
+
+- **L1 Agent 观测**：`p2_observe` / `p2_entities` / `p2_status` 等工具，按需、有硬顶，是唯一进入模型上下文的世界数据。
+- **L2 决策快照**：`Sensors`（方块半径 10、实体半径 15 / 垂直 ±15，100ms 预算）；giver/plan/verify 只读同一份快照，不自行查询。
+- **L3 目标解析与动作读回**：已知目标走 `entityByName/entityById` 身份解析（无客户端距离上限，服务端实体追踪范围是可见性上限）；driver 的读回按动作边界有界。
+- 三者不能互相替代：不要用扩大 L2 盒子来解决“跟踪已知目标”，也不要把 L3 的解析结果写进模型上下文。
+
 ## 3. 接入
 
 ```text

@@ -99,7 +99,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `HOLD_ORDER` | 已知等待，不需要处理；取消 order 才结束 |
 | `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 找不到来源或工作项被反复阻塞；duty 变 blocked，base 保持 inactive。换物品/区域后重新 `p2_duty start`，或 `p2_duty stop` 后改用 order |
 | `blocked(DUTY_DEADLINE)` / `blocked(DUTY_JOB_BUDGET)` | duty 的 active 时间或 job 预算耗尽；duty 不自动继续，重新评估目标/预算 |
-| `TARGET_LOST` | escort 目标暂时不可观测；base 保持 escort 并原地等，不会自动切 idle/wandering；目标回来即恢复 |
+| `TARGET_LOST` | escort 目标连续 2s 不可观测（期间会追最后位置）；base 保持 escort，不会自动切 idle/wandering；目标回来即恢复 |
 | 反复同一根因 | 换蓝图、区域或 giver/driver 参数，不要重复下同一条 order |
 
 ## 6. 纪律

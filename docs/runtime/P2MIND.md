@@ -201,7 +201,7 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `Handoff` = 先做前置工作（清障 / 补支撑 / 站位），完成后重新 `find`。
 - `keys` 是续做键：同一个 `keys` 复活不重启 job。
 - 主树顺序：`check → order.* → material.gather → plan.work → duty.work → base.work`；`base.work` 最低，base inactive 时返回 `null`。
-- `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用玩家名/实体名找目标并选目标附近站位，不 teleport；目标丢失只标记 `TARGET_LOST`。
+- `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用 `EvalCtx.focus`（玩家名/实体名经身份解析）跟随目标，不 teleport、无客户端最大距离；目标格在方块快照内时选精确站位，否则直接 `move` 到目标点并用 `range=distance` 到达；目标 2s 不可见才标记 `TARGET_LOST`，期间追最后位置。
 - `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
 - `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
 - `dig`/`clear`/`attack` 启动前做一次自动装备：`dig`/`clear` 用 `chooseTool`，`attack` 用 `chooseWeapon`；最近一次显式 `equip` 成功后，下一次这类动作跳过自动选择，动作启动后恢复自动。

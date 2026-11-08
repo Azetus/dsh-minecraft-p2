@@ -121,7 +121,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 先做 64 格定向实体观测（1Hz），driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
+- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
@@ -132,8 +132,8 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - duty 持久化到 journal 同目录的 `duty.json` v2（含 worldId/characterId、baseline、activeMs、pausedMs、jobs、state）。start、暂停/恢复、每次 job start、terminal 时落盘；v1 sidecar 可读一次并在下次写入时迁移。
   - body 重启时只恢复 `state=active`、identity 匹配的 duty；`collected = max(0, 当前背包 - baseline)`，`activeMs` 从文件恢复（宕机时间不计入 active）；completed/blocked/failed/cancelled 不复活。过期/超出 job 预算的 duty 恢复为 `blocked`（`DUTY_DEADLINE` / `DUTY_JOB_BUDGET`）。
   - duty 被 order/plan/常驻威胁暂停时 `paused:true`，`activeMs` 不增长；`blocked/failed` 后 base activity 保持 inactive，等 Agent 处理。
-- **Base activity**：`p2_base_activity {action:"set"|"status", activity?:{kind:"idle"|"wandering"|"escort", radius?, target?, distance?}}`。默认 `idle`；`wandering` 半径 1–8（默认 8），不接受 `center`；escort 的 target 是玩家名/实体名，distance 1–8（默认 3），不 teleport。
-  - `state` 只有 `active | inactive`；escort 目标丢失时保持 `active`，`waitingReason:"TARGET_LOST"`，不自动切换。
+- **Base activity**：`p2_base_activity {action:"set"|"status", activity?:{kind:"idle"|"wandering"|"escort", radius?, target?, distance?}}`。默认 `idle`；`wandering` 半径 1–8（默认 8），不接受 `center`；escort 的 target 是玩家名/实体名，distance 1–8（默认 3），不 teleport。escort 通过 `EvalCtx.focus` 跟随已知目标，**没有客户端最大距离**；目标格在方块快照内时选精确站位，快照外直接 `move` 到目标点并用 `range=distance` 到达。
+  - `state` 只有 `active | inactive`；escort 目标在 2s 内不可见时保持 `active`、追最后位置，超过 2s 才 `waitingReason:"TARGET_LOST"`，不自动切换。
   - **不持久化**：body 重启后回到 `idle`；Agent 需要重新设置 `wandering`/`escort`/半径。
   - `wandering` 的 anchor 只在 base 接管时记录（启动、order/plan/duty/hold 结束、flee/fight 结束、Agent 在 active 时切换），固定不随身体漂移；`duty`/`hold` 暂停 base。
   - `mind.status.activity` 报告当前生效层：`{layer:"constant"|"order"|"duty"|"base", kind, state:"active"|"waiting"|"paused", pausedBy}`。order/plan 在跑时 layer=order；blocked/failed duty 报 layer=duty、state=waiting；base 被更高层暂停时不改变 activity 的 layer。
@@ -152,7 +152,14 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - `CLIENT_TIMEOUT`：兼容输入的超时码；provider 不产生该码，bridge/driver 收到后按“超时/效果未确认”处理，不重放。
 - 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
 
-### 2.1 移动与站位
+### 2.1 目标身份解析（L3）
+
+- 可选方法：`entityByName?(name)`、`entityById?(id)`、`playerOnline?(name)`。它们不是范围查询：返回 adapter 当前追踪集合里的那一个实体，**没有客户端距离上限**；服务器实体追踪范围是唯一的可见性限制。
+- 玩家走 tab list 索引（O(1)）；其它命名实体遍历 adapter 的追踪集合（O(entities)）。缺失的 adapter 回落到 L2 快照的 15 格实体盒。
+- `mind` 每 tick 从当前意图（escort target / attack order entityId）解析一次，放进 `EvalCtx.focus`；它不进入 `SnapshotWorld`，也不产生缓存或 TTL。目标消失后由使用方（escort）按 2s 迟滞判定 `TARGET_LOST`。
+- `p2_status.mind.focus` 只做诊断：`tracked / online-out-of-range / offline / unknown`，不是决策输入。
+
+### 2.2 移动与站位
 
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
 - `serverTags` 是适配器层的服务端 block tags（`ReadonlySet<string>`），不序列化到 bridge；`undefined` 表示 tags 尚未就绪，不是“没有 tag”。
