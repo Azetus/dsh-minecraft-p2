@@ -21,6 +21,7 @@ export type ClientAction =
   | 'place'
   | 'useItem'
   | 'equip'
+  | 'unequip'
   | 'useOn'
   | 'attack'
   | 'sleep'
@@ -35,6 +36,7 @@ export const ACTION_CAPABILITIES: Record<ClientAction, Capability | null> = {
   place: 'interact',
   useItem: 'interact',
   equip: 'interact',
+  unequip: 'interact',
   useOn: 'interact',
   attack: 'combat',
   sleep: 'interact',

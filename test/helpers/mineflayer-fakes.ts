@@ -76,6 +76,11 @@ export class FakeBot extends EventEmitter {
     items: (): Array<{ slot?: number; name: string; count: number }> => [
       { slot: 36, name: 'dirt', count: 3 },
     ],
+    slots: [] as Array<{ name?: string; count?: number } | null>,
+  }
+
+  getEquipmentDestSlot(destination: string): number {
+    return destination === 'off-hand' ? 45 : 36
   }
 
   blockAt(position: { x: number; y: number; z: number }): FakeBlock | null {

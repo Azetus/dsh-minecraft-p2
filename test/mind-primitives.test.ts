@@ -120,6 +120,67 @@ describe('finite primitive orders', () => {
       .toMatchObject({ state: 'failed', code: 'EQUIP_READBACK_MISMATCH' })
   })
 
+  it('equips an off-hand item using the destination-slot readback', async () => {
+    const calls: Array<{ item: string; destination: string }> = []
+    const port = {
+      inventory: () => [{ slot: 36, name: 'shield', count: 1 }],
+      equip: async (item: string, destination?: string) => {
+        calls.push({ item, destination: destination ?? 'hand' })
+        return { state: 'ok' as const, elapsedMs: 1, observed: { item, destination, equipped: item } }
+      },
+    } as unknown as ClientPort
+    const result = await driverResult(createEquipDriver(), port,
+      { driverId: 'equip', params: { item: 'shield', destination: 'offhand' } } as unknown as Job)
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { kind: 'equip', item: 'shield', destination: 'offhand', equipped: 'shield' },
+    })
+    expect(calls).toEqual([{ item: 'shield', destination: 'offhand' }])
+  })
+
+  it('unequips the off hand and requires an empty destination readback', async () => {
+    const calls: string[] = []
+    const ok = (observed?: Record<string, unknown>): ClientPort => ({
+      unequip: async (destination?: string) => {
+        calls.push(destination ?? 'hand')
+        return { state: 'ok' as const, elapsedMs: 1, ...(observed === undefined ? {} : { observed }) }
+      },
+    }) as unknown as ClientPort
+
+    const empty = await driverResult(createEquipDriver(), ok({ item: null, equipped: null }),
+      { driverId: 'equip', params: { unequip: true, destination: 'offhand' } } as unknown as Job)
+    expect(empty).toMatchObject({ state: 'succeeded', observed: { kind: 'unequip', item: null } })
+
+    const filled = await driverResult(createEquipDriver(), ok({ item: 'shield', equipped: null }),
+      { driverId: 'equip', params: { unequip: true, destination: 'offhand' } } as unknown as Job)
+    expect(filled).toMatchObject({ state: 'succeeded', observed: { kind: 'unequip', item: 'shield' } })
+
+    expect(await driverResult(createEquipDriver(), ok(),
+      { driverId: 'equip', params: { unequip: true, destination: 'offhand' } } as unknown as Job))
+      .toMatchObject({ state: 'failed', code: 'UNEQUIP_READBACK_UNKNOWN' })
+    expect(await driverResult(createEquipDriver(), ok({ item: 'shield', equipped: 'shield' }),
+      { driverId: 'equip', params: { unequip: true, destination: 'offhand' } } as unknown as Job))
+      .toMatchObject({ state: 'failed', code: 'UNEQUIP_READBACK_MISMATCH' })
+    expect(calls).toEqual(['offhand', 'offhand', 'offhand', 'offhand'])
+  })
+
+  it('passes destination and unequip through order.equip', () => {
+    const equip = createEquipOrderGiver(() => ({ order: {
+      id: 'e-off', verb: 'equip', params: { item: 'shield', destination: 'offhand' },
+    } }))
+    expect(equip.find({ now: 0 }, world())).toMatchObject({
+      driverId: 'equip',
+      params: { item: 'shield', destination: 'offhand' },
+    })
+    const unequip = createEquipOrderGiver(() => ({ order: {
+      id: 'e-unequip', verb: 'equip', params: { unequip: true, destination: 'offhand' },
+    } }))
+    expect(unequip.find({ now: 0 }, world())).toMatchObject({
+      driverId: 'equip',
+      params: { unequip: true, destination: 'offhand' },
+    })
+  })
+
   it('requires player/container movement before a transfer succeeds', async () => {
     const success = {
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),

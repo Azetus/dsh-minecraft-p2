@@ -1837,7 +1837,15 @@ class MineflayerActHandle implements ActHandle {
             await this.bot.equip(item, destination as EquipmentDestination)
             await this.syncInventoryWindow()
             const held = this.bot.heldItem
-            return { item: item.name, destination, held: held === null || held === undefined ? null : held.name }
+            const equipped = destination === 'hand'
+              ? this.bot.heldItem
+              : destination === 'off-hand' ? this.bot.inventory.slots[45] : undefined
+            return {
+              item: item.name,
+              destination,
+              held: held === null || held === undefined ? null : held.name,
+              equipped: equipped === null || equipped === undefined ? null : equipped.name,
+            }
           })().then(result => {
             this.result = result
             this.completed = true
@@ -1854,8 +1862,24 @@ class MineflayerActHandle implements ActHandle {
           if (!EQUIP_DESTINATIONS.includes(destination as EquipmentDestination)) {
             throw new Error(`unsupported unequip destination: ${destination}`)
           }
-          void this.bot.unequip(destination as EquipmentDestination).then(() => {
-            this.result = { destination }
+          void (async () => {
+            await this.syncInventoryWindow()
+            const before = destination === 'hand'
+              ? this.bot.heldItem
+              : destination === 'off-hand' ? this.bot.inventory.slots[45] : undefined
+            await this.bot.unequip(destination as EquipmentDestination)
+            await this.syncInventoryWindow()
+            const after = destination === 'hand'
+              ? this.bot.heldItem
+              : destination === 'off-hand' ? this.bot.inventory.slots[45] : undefined
+            return {
+              destination,
+              item: before === null || before === undefined ? null : before.name,
+              held: this.bot.heldItem === null || this.bot.heldItem === undefined ? null : this.bot.heldItem.name,
+              equipped: after === null || after === undefined ? null : after.name,
+            }
+          })().then(result => {
+            this.result = result
             this.completed = true
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))

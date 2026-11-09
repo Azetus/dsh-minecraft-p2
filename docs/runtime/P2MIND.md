@@ -204,7 +204,8 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用 `EvalCtx.focus`（玩家名/实体名经身份解析）跟随目标，不 teleport、无客户端最大距离；目标格在方块快照内时选精确站位，否则直接 `move` 到目标点并用 `range=distance` 到达；目标 2s 不可见才标记 `TARGET_LOST`，期间追最后位置。
 - `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
 - `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
-- `dig`/`clear`/`attack` 启动前做一次自动装备：`dig`/`clear` 用 `chooseTool`，`attack` 用 `chooseWeapon`；最近一次显式 `equip` 成功后，下一次这类动作跳过自动选择，动作启动后恢复自动。
+- `dig`/`clear`/`attack` 启动前做一次自动装备：`dig`/`clear` 用 `chooseTool`，`attack` 用 `chooseWeapon`；最近一次**主手**显式 `equip`/`unequip` 成功后，下一次这类动作跳过自动选择，动作启动后恢复自动。
+- `equip` order：`{item?, destination?: "hand"|"offhand", unequip?: boolean}`；`item` 与 `unequip:true` 二选一，`destination` 缺省 `hand`。offhand equip/unequip 不触发主手 override；offhand 已空时 unequip 成功。`attack` 开头若副手为空且背包有盾，自动换盾（不替换非空副手）。
 
 ### 4.5 Job
 

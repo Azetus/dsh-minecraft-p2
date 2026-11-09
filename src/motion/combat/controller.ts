@@ -34,6 +34,12 @@ export type CombatPort = {
   attackSpeed(): number
   attack(id: string): Promise<CombatAction>
   moveTo(pos: Vec3, range: number, timeoutMs: number): Promise<CombatAction>
+  /** Face the target for the shield/attack; absent means no shield window. */
+  lookAt?(pos: Vec3): Promise<CombatAction>
+  /** Whether the off hand currently holds a shield. */
+  hasShield?(): boolean
+  /** Hold the off-hand shield for durationMs before releasing. */
+  shield?(durationMs: number): Promise<CombatAction>
   onEntityHurt(cb: (entityId: string) => void): () => void
   onEntityDead(cb: (entityId: string) => void): () => void
 }
@@ -68,6 +74,10 @@ export type MeleeResult = {
     chases: number
     cooldownMs: number
     rejectedSwings: number
+    shieldUses: number
+    shieldFailures: number
+    /** Attached by the attack driver, not the controller. */
+    shieldAutoEquip?: 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shield'
     lostReason?: string
     targetHealth?: number
   }
@@ -79,6 +89,8 @@ const DEFAULT_MAX_ATTACKS = 24
 const DEFAULT_TOTAL_MS = 40_000
 const DEFAULT_CHASE_MS = 5_000
 const DEFAULT_MAX_MISSES = 6
+const SHIELD_MIN_MS = 250
+const SHIELD_MAX_MS = 600
 
 /**
  * One locked melee engagement. It never acquires a new target, never reports
@@ -101,7 +113,8 @@ export async function runMeleeCombat(
   const offDead = port.onEntityDead(id => evidence.dead(id, targetId, port.now()))
   let chases = 0
   let misses = 0
-  let rejectedSwings = 0
+  const stats = { rejectedSwings: 0, shieldUses: 0, shieldFailures: 0 }
+  let shieldDisabled = false
   let lastAttackAt: number | undefined
   let cooldown = attackCooldownMs(port.attackSpeed())
 
@@ -110,29 +123,29 @@ export async function runMeleeCombat(
       const check = await inspect(port, targetId, options, evidence)
       if (check.kind === 'dead') break
       if (check.kind === 'changed') {
-        return fail('ATTACK_TARGET_CHANGED', evidence, targetId, options, chases, cooldown, rejectedSwings, 'target-name-changed')
+        return fail('ATTACK_TARGET_CHANGED', evidence, targetId, options, chases, cooldown, stats, 'target-name-changed')
       }
       if (check.kind === 'lost') {
         evidence.lost()
-        return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, rejectedSwings, 'left-query-range')
+        return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, stats, 'left-query-range')
       }
       if (check.kind === 'protected') {
-        return fail(check.code, evidence, targetId, options, chases, cooldown, rejectedSwings, 'protected')
+        return fail(check.code, evidence, targetId, options, chases, cooldown, stats, 'protected')
       }
       if (check.distance > reach) {
-        if (chases >= maxChases) return fail('ATTACK_CHASE_LIMIT', evidence, targetId, options, chases, cooldown, rejectedSwings, 'chase-limit')
+        if (chases >= maxChases) return fail('ATTACK_CHASE_LIMIT', evidence, targetId, options, chases, cooldown, stats, 'chase-limit')
         const moved = await port.moveTo(check.entity.position, Math.max(1.5, reach - 1), chaseTimeoutMs)
         chases += 1
         if (moved.state !== 'ok') {
           misses += 1
-          if (misses >= maxMisses) return fail('ATTACK_NO_APPROACH', evidence, targetId, options, chases, cooldown, rejectedSwings, 'approach-failed')
+          if (misses >= maxMisses) return fail('ATTACK_NO_APPROACH', evidence, targetId, options, chases, cooldown, stats, 'approach-failed')
           await sleep(100)
         }
         continue
       }
       if (!check.visible) {
         misses += 1
-        if (misses >= maxMisses) return fail('ATTACK_NO_LINE_OF_SIGHT', evidence, targetId, options, chases, cooldown, rejectedSwings, 'no-line-of-sight')
+        if (misses >= maxMisses) return fail('ATTACK_NO_LINE_OF_SIGHT', evidence, targetId, options, chases, cooldown, stats, 'no-line-of-sight')
         await sleep(100)
         continue
       }
@@ -140,7 +153,26 @@ export async function runMeleeCombat(
       cooldown = attackCooldownMs(port.attackSpeed())
       if (lastAttackAt !== undefined) {
         const wait = cooldown - (port.now() - lastAttackAt)
-        if (wait > 0) await sleep(wait)
+        if (wait > 0) {
+          if (wait >= SHIELD_MIN_MS && shieldUsable(port, check, shieldDisabled, reach)) {
+            const faced = await port.lookAt!(aimPoint(check.entity))
+            if (faced.state === 'ok') {
+              const shielded = await port.shield!(Math.min(wait, SHIELD_MAX_MS))
+              if (shielded.state === 'ok') {
+                stats.shieldUses += 1
+                continue
+              }
+              stats.shieldFailures += 1
+              shieldDisabled = true
+              await sleep(wait)
+            } else {
+              // Facing failed: skip this shield window, retry next wait.
+              await sleep(wait)
+            }
+          } else {
+            await sleep(wait)
+          }
+        }
       }
 
       // Re-read after the wait: the target may have moved, died, or become
@@ -148,24 +180,28 @@ export async function runMeleeCombat(
       const fresh = await inspect(port, targetId, options, evidence)
       if (fresh.kind === 'dead') break
       if (fresh.kind === 'changed') {
-        return fail('ATTACK_TARGET_CHANGED', evidence, targetId, options, chases, cooldown, rejectedSwings, 'target-name-changed')
+        return fail('ATTACK_TARGET_CHANGED', evidence, targetId, options, chases, cooldown, stats, 'target-name-changed')
       }
       if (fresh.kind === 'lost') {
         evidence.lost()
-        return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, rejectedSwings, 'left-query-range')
+        return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, stats, 'left-query-range')
       }
       if (fresh.kind === 'protected') {
-        return fail(fresh.code, evidence, targetId, options, chases, cooldown, rejectedSwings, 'protected')
+        return fail(fresh.code, evidence, targetId, options, chases, cooldown, stats, 'protected')
       }
       if (fresh.distance > reach) {
-        rejectedSwings += 1
+        stats.rejectedSwings += 1
         continue
       }
       if (!fresh.visible) {
-        rejectedSwings += 1
+        stats.rejectedSwings += 1
         misses += 1
-        if (misses >= maxMisses) return fail('ATTACK_NO_LINE_OF_SIGHT', evidence, targetId, options, chases, cooldown, rejectedSwings, 'no-line-of-sight')
+        if (misses >= maxMisses) return fail('ATTACK_NO_LINE_OF_SIGHT', evidence, targetId, options, chases, cooldown, stats, 'no-line-of-sight')
         continue
+      }
+      if (shieldUsable(port, fresh, shieldDisabled, reach)) {
+        // Face the target before the swing; a failure does not cancel the attack.
+        await port.lookAt!(aimPoint(fresh.entity))
       }
 
       const hit = await port.attack(targetId)
@@ -175,7 +211,7 @@ export async function runMeleeCombat(
         misses = 0
       } else {
         misses += 1
-        if (misses >= maxMisses) return fail('ATTACK_NO_HIT', evidence, targetId, options, chases, cooldown, rejectedSwings, hit.code ?? 'attack-failed')
+        if (misses >= maxMisses) return fail('ATTACK_NO_HIT', evidence, targetId, options, chases, cooldown, stats, hit.code ?? 'attack-failed')
       }
       // Give the server a moment to emit entityHurt/entityDead before the next
       // decision; this is evidence collection, not a fixed attack interval.
@@ -189,14 +225,14 @@ export async function runMeleeCombat(
   if (evidence.deathConfirmed) {
     return {
       state: 'succeeded',
-      observed: snapshot(evidence, targetId, options, chases, cooldown, rejectedSwings),
+      observed: snapshot(evidence, targetId, options, chases, cooldown, stats),
     }
   }
   if (port.entity(targetId) === undefined) {
     evidence.lost()
-    return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, rejectedSwings, 'left-query-range')
+    return fail('ATTACK_TARGET_LOST', evidence, targetId, options, chases, cooldown, stats, 'left-query-range')
   }
-  return fail('ATTACK_NOT_KILLED', evidence, targetId, options, chases, cooldown, rejectedSwings, 'limit-reached')
+  return fail('ATTACK_NOT_KILLED', evidence, targetId, options, chases, cooldown, stats, 'limit-reached')
 }
 
 type InspectResult =
@@ -238,6 +274,25 @@ async function inspect(
   }
 }
 
+function shieldUsable(
+  port: CombatPort,
+  check: { distance: number; visible: boolean },
+  disabled: boolean,
+  reach: number,
+): boolean {
+  if (disabled) return false
+  if (check.distance > reach || !check.visible) return false
+  return port.hasShield?.() === true && port.lookAt !== undefined && port.shield !== undefined
+}
+
+function aimPoint(entity: CombatEntity): Vec3 {
+  return {
+    x: entity.position.x,
+    y: entity.position.y + Math.min(1.4, (entity.height ?? 1.8) * 0.8),
+    z: entity.position.z,
+  }
+}
+
 function guardTarget(target: CombatEntity, options: MeleeOptions): string | undefined {
   if (options.allowAny === true) return undefined
   if (target.type === 'player') return 'ATTACK_TARGET_PROTECTED'
@@ -247,6 +302,12 @@ function guardTarget(target: CombatEntity, options: MeleeOptions): string | unde
   return undefined
 }
 
+type MeleeStats = {
+  rejectedSwings: number
+  shieldUses: number
+  shieldFailures: number
+}
+
 function fail(
   code: string,
   evidence: CombatEvidence,
@@ -254,14 +315,14 @@ function fail(
   options: MeleeOptions,
   chases: number,
   cooldown: number,
-  rejectedSwings: number,
+  stats: MeleeStats,
   lostReason: string,
 ): MeleeResult {
   return {
     state: 'failed',
     code,
     observed: {
-      ...snapshot(evidence, targetId, options, chases, cooldown, rejectedSwings),
+      ...snapshot(evidence, targetId, options, chases, cooldown, stats),
       lostReason,
     },
   }
@@ -273,7 +334,7 @@ function snapshot(
   options: MeleeOptions,
   chases: number,
   cooldown: number,
-  rejectedSwings: number,
+  stats: MeleeStats,
 ): MeleeResult['observed'] {
   return {
     kind: 'attack',
@@ -284,7 +345,9 @@ function snapshot(
     ...(evidence.targetHealth === undefined ? {} : { targetHealth: evidence.targetHealth }),
     chases,
     cooldownMs: cooldown,
-    rejectedSwings,
+    rejectedSwings: stats.rejectedSwings,
+    shieldUses: stats.shieldUses,
+    shieldFailures: stats.shieldFailures,
   }
 }
 

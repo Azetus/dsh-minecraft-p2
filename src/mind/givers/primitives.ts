@@ -48,7 +48,7 @@ export function createPlaceOrderGiver(activeOrder: () => OrderView | undefined):
   }
 }
 
-/** Generic held-item selection. */
+/** Generic held-item selection or one-slot unequip. */
 export function createEquipOrderGiver(activeOrder: () => OrderView | undefined): WorkGiver {
   return {
     id: 'order.equip',
@@ -56,11 +56,24 @@ export function createEquipOrderGiver(activeOrder: () => OrderView | undefined):
       const current = active(activeOrder, 'equip')
       if (current === undefined) return null
       const item = current.order.params?.item
+      const unequip = current.order.params?.unequip === true
+      const destination = current.order.params?.destination
+      if (destination !== undefined && destination !== 'hand' && destination !== 'offhand') return null
+      if (unequip) {
+        if (typeof item === 'string' && item.length > 0) return null
+        return {
+          driverId: 'equip',
+          target: { kind: 'point', pos: world.self.pos },
+          params: { unequip: true, ...(destination === undefined ? {} : { destination }) },
+          keys: `order.equip:${current.order.id}`,
+          orderId: current.order.id,
+        }
+      }
       if (typeof item !== 'string' || item.length === 0) return null
       return {
         driverId: 'equip',
         target: { kind: 'point', pos: world.self.pos },
-        params: { item },
+        params: { item, ...(destination === undefined ? {} : { destination }) },
         keys: `order.equip:${current.order.id}`,
         orderId: current.order.id,
       }

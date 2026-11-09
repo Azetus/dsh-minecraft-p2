@@ -1,6 +1,6 @@
 import { isRecord } from '../../contracts/protocol.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import type { ClientPort, ClientEvent } from '../../port/index.ts'
+import type { ClientPort, ClientEvent, Vec3 } from '../../port/index.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import {
@@ -79,6 +79,7 @@ export function createAttackDriver(): Driver {
 }
 
 async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean): Promise<DriverResult> {
+  const shieldAutoEquip = await ensureOffhandShield(port)
   if (autoEquip) {
     const weapon = chooseWeapon(port.inventory())
     if (weapon !== undefined) {
@@ -87,7 +88,10 @@ async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean
         return {
           state: 'failed',
           code: equipped.code ?? 'EQUIP_FAILED',
-          observed: (equipped.observed ?? { kind: 'equip', item: weapon }) as unknown as JsonValue,
+          observed: {
+            ...(isRecord(equipped.observed) ? equipped.observed : {}),
+            shieldAutoEquip,
+          } as unknown as JsonValue,
         }
       }
     }
@@ -101,8 +105,34 @@ async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean
   return {
     state: result.state,
     ...(result.code === undefined ? {} : { code: result.code }),
-    observed: result.observed as unknown as JsonValue,
+    observed: {
+      ...(isRecord(result.observed) ? result.observed : {}),
+      shieldAutoEquip,
+    } as unknown as JsonValue,
   }
+}
+
+type ShieldAutoEquip = 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shield'
+
+/**
+ * Method-level convenience: if the off hand is empty and a shield is in the
+ * inventory, put it there before combat. A non-empty off hand is never
+ * replaced; the Agent's explicit off-hand choice wins.
+ */
+async function ensureOffhandShield(port: ClientPort): Promise<ShieldAutoEquip> {
+  if (port.offhand === undefined) return 'skipped'
+  const current = port.offhand()
+  if (normalizeName(current?.name) === 'shield') return 'present'
+  if (current !== undefined) return 'skipped'
+  const shield = port.inventory().find(item => normalizeName(item.name) === 'shield')
+  if (shield === undefined) return 'no-shield'
+  const equipped = await port.equip(shield.name, 'offhand')
+  if (equipped.state !== 'ok') return 'failed'
+  return normalizeName(port.offhand()?.name) === 'shield' ? 'equipped' : 'failed'
+}
+
+function normalizeName(name: string | undefined): string | undefined {
+  return name === undefined ? undefined : name.replace(/^minecraft:/u, '')
 }
 
 function combatPort(port: ClientPort, locateRadius: number): CombatPort {
@@ -121,6 +151,11 @@ function combatPort(port: ClientPort, locateRadius: number): CombatPort {
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     attack: id => asAction(port.attack(id)),
     moveTo: (pos, range, timeoutMs) => asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
+    ...(port.lookAt === undefined ? {} : { lookAt: (pos: Vec3) => asAction(port.lookAt!(pos)) }),
+    ...(port.offhand === undefined
+      ? {}
+      : { hasShield: () => normalizeName(port.offhand!()?.name) === 'shield' }),
+    shield: durationMs => asAction(port.useItem({ durationMs, offhand: true })),
     onEntityHurt: cb => subscribe(port, 'entityHurt', cb),
     onEntityDead: cb => subscribe(port, 'entityDead', cb),
   }

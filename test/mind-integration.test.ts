@@ -49,7 +49,13 @@ function fakePort(
   options: {
     emptyBlocks?: boolean
     autoMove?: boolean
-    blocks?: Map<string, { name: string; loaded: boolean; pos: { x: number; y: number; z: number } }>
+    blocks?: Map<string, {
+      name: string
+      loaded: boolean
+      pos: { x: number; y: number; z: number }
+      material?: string
+      harvestTools?: Record<string, boolean>
+    }>
     time?: { timeOfDay: number; worldAge: number }
   } = {},
 ): FakePort {
@@ -78,9 +84,18 @@ function fakePort(
     blockAt: (p: { x: number; y: number; z: number }) => blocks.get(key(p)) ?? null,
     entities: () => [],
     inventory: () => items,
-    equip: async (item: string) => {
+    equip: async (item: string, destination?: 'hand' | 'offhand') => {
       equips.push(item)
-      return { state: 'ok' as const, observed: { kind: 'equip', item, held: item }, elapsedMs: 1 }
+      return {
+        state: 'ok' as const,
+        observed: {
+          kind: 'equip',
+          item,
+          ...(destination === undefined ? {} : { destination }),
+          ...(destination === 'offhand' ? { equipped: item } : { held: item }),
+        },
+        elapsedMs: 1,
+      }
     },
     dig: async (p: { x: number; y: number; z: number }) => {
       blocks.set(key(p), { name: 'air', loaded: true, pos: { ...p } })
@@ -330,6 +345,52 @@ describe('mind integration', () => {
       if (mind.status().activeOrder === null) break
     }
     expect(fake.equips).toEqual(['stone_pickaxe'])
+    expect(mind.status().activeOrder).toBeNull()
+  })
+
+  it('does not let an off-hand equip suppress the next dig auto-equip', async () => {
+    const target = { x: 1, y: 64, z: 0 }
+    const blocks = new Map([
+      [`${target.x},${target.y},${target.z}`, {
+        name: 'stone',
+        loaded: true,
+        pos: target,
+        material: 'mineable/pickaxe',
+      }],
+    ])
+    const fake = fakePort(
+      [
+        { slot: 35, name: 'shield', count: 1 },
+        { slot: 36, name: 'stone_pickaxe', count: 1 },
+      ],
+      { autoMove: true, blocks },
+    )
+    const mind = createMind({
+      port: fake.port,
+      baseActivity: { kind: 'idle' },
+      plansDir: join(process.cwd(), 'content', 'plans'),
+      journalPath: join(tempDir(), 'journal.jsonl'),
+      now: () => 1_000,
+    })
+
+    mind.enqueueOrder({ verb: 'equip', params: { item: 'shield', destination: 'offhand' } })
+    mind.tick()
+    for (let index = 0; index < 40; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      mind.tick()
+      if (mind.status().activeOrder === null) break
+    }
+    expect(fake.equips).toEqual(['shield'])
+
+    mind.enqueueOrder({ verb: 'dig', params: target })
+    mind.tick()
+    for (let index = 0; index < 100; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+      mind.tick()
+      if (mind.status().activeOrder === null) break
+    }
+    // The off-hand equip is a separate slot; the dig still auto-equips the pick.
+    expect(fake.equips).toEqual(['shield', 'stone_pickaxe'])
     expect(mind.status().activeOrder).toBeNull()
   })
 

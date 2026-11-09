@@ -395,7 +395,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     },
     onEvent: event => {
       if (event.kind === 'job.terminal' && event.driverId === 'equip' && event.state === 'succeeded') {
-        manualEquipPending = true
+        const destination = isRecord(event.observed) && event.observed.destination === 'offhand' ? 'offhand' : 'hand'
+        if (destination === 'hand') manualEquipPending = true
       }
       if (event.kind === 'job.terminal' && event.orderId !== undefined) {
         const debug = orderDiagnostics.get(event.orderId) ?? { attempts: 0 }

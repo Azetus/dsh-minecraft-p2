@@ -53,6 +53,19 @@ describe('mineflayer port actions', () => {
     expect((await port.useItem()).state).toBe('ok')
     expect(source.calls.at(-1)?.name).toBe('use')
 
+    bot.inventory.slots[45] = { name: 'shield', count: 1 }
+    expect(port.offhand()).toEqual({ slot: 45, name: 'shield', count: 1 })
+    expect((await port.useItem({ durationMs: 400, offhand: true })).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({ name: 'use', args: { durationMs: 400, offhand: true } })
+    expect((await port.equip('shield', 'offhand')).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({ name: 'equip', args: { item: 'shield', destination: 'off-hand' } })
+    expect((await port.equip('dirt')).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({ name: 'equip', args: { item: 'dirt' } })
+    expect((await port.unequip('offhand')).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({ name: 'unequip', args: { destination: 'off-hand' } })
+    expect((await port.unequip()).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({ name: 'unequip', args: { destination: 'hand' } })
+
     expect((await port.useOn({ x: 1, y: 64, z: 2 })).state).toBe('ok')
     expect(source.calls.at(-1)?.name).toBe('activate')
 

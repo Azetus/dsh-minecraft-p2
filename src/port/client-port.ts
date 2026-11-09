@@ -109,6 +109,8 @@ export interface ClientPort {
    */
   findBlocks(query: FindBlocksQuery): BlockInfo[]
   inventory(): Item[]
+  /** Off-hand item; absent means the adapter does not expose the off hand. */
+  offhand?(): Item | undefined
   entities(box: Box): EntityInfo[]
   /**
    * Resolve one entity by username or entity name without a box scan. The
@@ -137,8 +139,9 @@ export interface ClientPort {
   lookYaw?(yaw: number): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
-  useItem(opts?: { durationMs?: number }): Promise<ActResult>
-  equip(item: string): Promise<ActResult>
+  useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
+  equip(item: string, destination?: 'hand' | 'offhand'): Promise<ActResult>
+  unequip(destination?: 'hand' | 'offhand'): Promise<ActResult>
   craft(item: string, count?: number): Promise<ActResult>
   useOn(p: Vec3): Promise<ActResult>
   attack(entityId: string): Promise<ActResult>

@@ -97,10 +97,21 @@ function fakeCombatPort(options: {
   attackSpeed?: () => number
   attack?: (emit: CombatEmit) => Promise<CombatAction>
   moveTo?: () => Promise<CombatAction>
-}): { port: CombatPort; attacks: () => number; moves: () => number } {
+  lookAt?: (pos: Vec3) => Promise<CombatAction>
+  hasShield?: () => boolean
+  shield?: (durationMs: number) => Promise<CombatAction>
+}): {
+  port: CombatPort
+  attacks: () => number
+  moves: () => number
+  lookAtPoints: () => Vec3[]
+  shieldDurations: () => number[]
+} {
   let attacks = 0
   let moves = 0
   let canSeeCalls = 0
+  const lookAtPoints: Vec3[] = []
+  const shieldDurations: number[] = []
   const hurtListeners: Array<(entityId: string) => void> = []
   const deadListeners: Array<(entityId: string) => void> = []
   const emit: CombatEmit = {
@@ -124,6 +135,23 @@ function fakeCombatPort(options: {
       moves += 1
       return options.moveTo?.() ?? { state: 'ok' }
     },
+    ...(options.hasShield === undefined ? {} : { hasShield: options.hasShield }),
+    ...(options.lookAt === undefined
+      ? {}
+      : {
+          lookAt: async (point: Vec3) => {
+            lookAtPoints.push(point)
+            return options.lookAt!(point)
+          },
+        }),
+    ...(options.shield === undefined
+      ? {}
+      : {
+          shield: async (durationMs: number) => {
+            shieldDurations.push(durationMs)
+            return options.shield!(durationMs)
+          },
+        }),
     onEntityHurt: cb => {
       hurtListeners.push(cb)
       return () => {}
@@ -133,7 +161,13 @@ function fakeCombatPort(options: {
       return () => {}
     },
   }
-  return { port, attacks: () => attacks, moves: () => moves }
+  return {
+    port,
+    attacks: () => attacks,
+    moves: () => moves,
+    lookAtPoints: () => lookAtPoints,
+    shieldDurations: () => shieldDurations,
+  }
 }
 
 describe('melee controller pre-swing recheck', () => {
@@ -203,5 +237,134 @@ describe('melee controller pre-swing recheck', () => {
       state: 'succeeded',
       observed: { attacksIssued: 1, killed: true, deathConfirmed: true, rejectedSwings: 0 },
     })
+  })
+})
+
+describe('melee controller shield window', () => {
+  const target = (): CombatEntity => ({
+    id: 'z1',
+    name: 'zombie',
+    position: pos(1, 64, 0.5),
+    width: 0.6,
+    height: 1.95,
+  })
+
+  it('holds the shield during the cooldown wait and faces before the swing', async () => {
+    let hits = 0
+    const calls: string[] = []
+    const fake = fakeCombatPort({
+      target,
+      attackSpeed: () => 2, // 500ms
+      hasShield: () => true,
+      lookAt: async () => {
+        calls.push('lookAt')
+        return { state: 'ok' }
+      },
+      shield: async durationMs => {
+        calls.push(`shield:${durationMs}`)
+        await new Promise(resolve => setTimeout(resolve, durationMs))
+        return { state: 'ok' }
+      },
+      attack: async emit => {
+        hits += 1
+        calls.push('attack')
+        if (hits === 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1')
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { attacksIssued: 2, shieldUses: 1, shieldFailures: 0 },
+    })
+    expect(calls[0]).toBe('lookAt')
+    expect(fake.shieldDurations()).toHaveLength(1)
+    expect(fake.shieldDurations()[0]).toBeGreaterThanOrEqual(250)
+    expect(fake.shieldDurations()[0]).toBeLessThanOrEqual(600)
+    expect(fake.lookAtPoints()[0]).toMatchObject({ x: 1, y: 65.4, z: 0.5 })
+  })
+
+  it('does not raise a shield when no shield is present', async () => {
+    const fake = fakeCombatPort({
+      target,
+      attackSpeed: () => 2,
+      hasShield: () => false,
+      lookAt: async () => {
+        throw new Error('lookAt must not be called')
+      },
+      shield: async () => {
+        throw new Error('shield must not be called')
+      },
+      attack: async emit => {
+        emit.dead('z1')
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1')
+    expect(result).toMatchObject({ state: 'succeeded', observed: { shieldUses: 0, shieldFailures: 0 } })
+    expect(fake.shieldDurations()).toHaveLength(0)
+  })
+
+  it('does not raise a shield when the wait is shorter than 250ms', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target,
+      attackSpeed: () => 4, // 250ms cooldown -> ~130ms wait after the 120ms evidence sleep
+      hasShield: () => true,
+      lookAt: async () => ({ state: 'ok' }),
+      shield: async () => ({ state: 'ok' }),
+      attack: async emit => {
+        hits += 1
+        if (hits === 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1')
+    expect(result).toMatchObject({ state: 'succeeded', observed: { shieldUses: 0, shieldFailures: 0 } })
+    expect(fake.shieldDurations()).toHaveLength(0)
+  })
+
+  it('disables the shield for the engagement after a useItem failure', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target,
+      attackSpeed: () => 2,
+      hasShield: () => true,
+      lookAt: async () => ({ state: 'ok' }),
+      shield: async () => ({ state: 'failed', code: 'USE_NO_ITEM' }),
+      attack: async emit => {
+        hits += 1
+        if (hits === 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1')
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { attacksIssued: 2, shieldUses: 0, shieldFailures: 1 },
+    })
+    expect(fake.shieldDurations()).toHaveLength(1)
+  })
+
+  it('skips the shield (without evidence) when lookAt fails', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target,
+      attackSpeed: () => 2,
+      hasShield: () => true,
+      lookAt: async () => ({ state: 'failed', code: 'LOOKAT_FAILED' }),
+      shield: async () => ({ state: 'ok' }),
+      attack: async emit => {
+        hits += 1
+        if (hits === 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1')
+    expect(result).toMatchObject({
+      state: 'succeeded',
+      observed: { attacksIssued: 2, shieldUses: 0, shieldFailures: 0 },
+    })
+    expect(fake.shieldDurations()).toHaveLength(0)
   })
 })

@@ -16,6 +16,8 @@ p2_observe {mode:"find", only:["crafting_table"], radius:16}
 p2_order {verb:"go", params:{x:48,y:64,z:30}}
 p2_order {verb:"build", blueprint:{blocks:[...]}, policy:{conflict:{mode:"clear"}, materials:{mode:"auto-gather"}}}
 p2_order {verb:"equip", params:{item:"stone_pickaxe"}}
+p2_order {verb:"equip", params:{destination:"offhand",item:"shield"}}
+p2_order {verb:"equip", params:{destination:"offhand",unequip:true}}
 p2_order {verb:"dig", params:{x:12,y:48,z:-3}}
 p2_order {verb:"collect", params:{radius:8}}
 p2_order {verb:"container", params:{x:47,y:64,z:29,action:"take-output",item:"charcoal",count:1}}
@@ -27,7 +29,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：当前 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，当前 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight **默认**不选玩家/被动/中立——这是自动选择的默认值，不是 Agent 的权限上限。policy 不持久化，重启后要重设。
 - 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体（包括玩家）。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。可选 `params.maxChases`（1–64，默认 12）控制追击预算；失败 facts 带 `damageObserved/chases`，provider 有血量时带 `targetHealth`。
-- `dig`/`clear`/`attack` 会自动选最佳工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换，动作启动后恢复自动。
+- `dig`/`clear`/`attack` 会自动选最佳工具/武器；**主手**显式 `equip`/`unequip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换，动作启动后恢复自动。副手 `equip {destination:"offhand"}` / `unequip` 不压制主手自动换武器；`attack` 开头若副手为空且背包有盾，会自动把盾换到副手（不替换非空副手）。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
 - 可带 `blueprint` 表达非标结构；可达性与冲突由 Planner 处理。
@@ -87,6 +89,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(BUDGET_EXCEEDED)` | job 超出 `maxWallMs`/`maxTicks`；看 `failure.layer="budget"` 与 `facts.budget/elapsedMs/elapsedGameAge`。不可原样重试；缩小/拆分任务或换目标后重新规划 |
 | `failed(ERR_ASSERTION)` | driver 内部断言/定义错误（`cause.kind="definition"`，`recovery="none"`）；不要重试，改参数/目标或上报定义问题 |
 | `failed(EQUIP_READBACK_UNKNOWN)` / `failed(EQUIP_READBACK_MISMATCH)` | provider 报 equip 成功但手持物缺失或不是请求物品；按未装备处理，先读背包/手持物再决定 |
+| `failed(UNEQUIP_READBACK_UNKNOWN)` / `failed(UNEQUIP_READBACK_MISMATCH)` | 卸载后目标槽位读回缺失或仍非空；先读副手/主手再决定，不要当成功。副手已空时 unequip 本身算成功 |
 | `failed(CONTAINER_READBACK_UNKNOWN)` / `failed(CONTAINER_INCOMPLETE)` | provider 完成传输但前后计数缺失/未达请求；重新打开容器核对，不要当成功 |
 | `failed(ATTACK_TARGET_LOST)` | 目标已离开 32 格/消失；重新获取 entityId 并确认，不要盲目追击 |
 | `failed(ATTACK_CHASE_LIMIT)` | 追击次数到预算；看 facts 的 `damageObserved/chases/targetHealth`，低血可重新 `attack` 或换方式，不要无限重下 |

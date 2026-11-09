@@ -55,6 +55,7 @@ const ACTION_TIMEOUTS = {
   place: 10_000,
   useItem: 5_000,
   equip: 5_000,
+  unequip: 5_000,
   useOn: 5_000,
   attack: 2_000,
   sleep: 30_000,
@@ -402,6 +403,21 @@ export class MineflayerClientPort implements ClientPort {
     }))
   }
 
+  offhand(): Item | undefined {
+    const bot = this.bot as unknown as {
+      getEquipmentDestSlot?: (destination: string) => number
+      inventory?: { slots?: Array<{ name?: string; count?: number } | null> }
+    }
+    const slot = typeof bot.getEquipmentDestSlot === 'function' ? bot.getEquipmentDestSlot('off-hand') : 45
+    const item = bot.inventory?.slots?.[slot]
+    if (item === null || item === undefined || typeof item.name !== 'string') return undefined
+    return {
+      slot,
+      name: item.name.replace(/^minecraft:/u, ''),
+      count: typeof item.count === 'number' ? item.count : 1,
+    }
+  }
+
   entities(box: Box): EntityInfo[] {
     const result: EntityInfo[] = []
     for (const entity of Object.values(this.bot.entities) as unknown as EntityLike[]) {
@@ -537,16 +553,24 @@ export class MineflayerClientPort implements ClientPort {
     return await this.run('place', { x: p.x, y: p.y, z: p.z, face, item }, this.timeouts.place)
   }
 
-  async useItem(opts: { durationMs?: number } = {}): Promise<ActResult> {
-    return await this.action(
-      'useItem',
-      'use',
-      opts.durationMs === undefined ? {} : { durationMs: opts.durationMs },
-    )
+  async useItem(opts: { durationMs?: number; offhand?: boolean } = {}): Promise<ActResult> {
+    const args: Record<string, JsonValue> = {}
+    if (opts.durationMs !== undefined) args.durationMs = opts.durationMs
+    if (opts.offhand === true) args.offhand = true
+    return await this.action('useItem', 'use', args)
   }
 
-  async equip(item: string): Promise<ActResult> {
-    return await this.action('equip', 'equip', { item })
+  async equip(item: string, destination: 'hand' | 'offhand' = 'hand'): Promise<ActResult> {
+    return await this.action('equip', 'equip', {
+      item,
+      ...(destination === 'offhand' ? { destination: 'off-hand' } : {}),
+    })
+  }
+
+  async unequip(destination: 'hand' | 'offhand' = 'hand'): Promise<ActResult> {
+    return await this.action('unequip', 'unequip', {
+      destination: destination === 'offhand' ? 'off-hand' : 'hand',
+    })
   }
 
   async craft(item: string, count = 1): Promise<ActResult> {
@@ -645,7 +669,7 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   private async action(
-    action: 'lookAt' | 'dig' | 'useItem' | 'equip' | 'useOn' | 'attack' | 'sleep' | 'containerTransfer',
+    action: 'lookAt' | 'dig' | 'useItem' | 'equip' | 'unequip' | 'useOn' | 'attack' | 'sleep' | 'containerTransfer',
     name: string,
     args: Record<string, JsonValue>,
   ): Promise<ActResult> {

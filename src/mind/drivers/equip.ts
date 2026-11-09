@@ -6,14 +6,22 @@ export const EQUIP_DRIVER_ID = 'equip'
 
 const EQUIP_SCHEMA: SchemaNode = {
   type: 'object',
-  properties: { item: { type: 'string' } },
-  required: ['item'],
+  properties: {
+    item: { type: 'string' },
+    destination: { type: 'string', enum: ['hand', 'offhand'] },
+    unequip: { type: 'boolean' },
+  },
   additionalProperties: false,
 }
 
-type EquipParams = { item: string }
+type EquipParams = {
+  item?: string
+  destination?: 'hand' | 'offhand'
+  /** Explicit Agent order: clear the destination slot instead of equipping. */
+  unequip?: boolean
+}
 
-/** Select one inventory item as the held item; no world mutation. */
+/** Select one inventory item as the held/off-hand item, or clear that slot. */
 export function createEquipDriver(): Driver {
   return {
     id: EQUIP_DRIVER_ID,
@@ -25,34 +33,105 @@ export function createEquipDriver(): Driver {
     },
     validate(job: Job, _world: WorldView): DriverValidation {
       const params = job.params as unknown as EquipParams
+      const destination = params.destination ?? 'hand'
+      if (destination !== 'hand' && destination !== 'offhand') return { ok: false, code: 'BAD_ARGS' }
+      if (params.unequip === true) {
+        return params.item === undefined ? { ok: true } : { ok: false, code: 'BAD_ARGS' }
+      }
       if (typeof params.item !== 'string' || params.item.length === 0) return { ok: false, code: 'BAD_ARGS' }
       return { ok: true }
     },
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as EquipParams
-      return new AsyncDriverHandle(`equip:${params.item}`, equip(ctx, params))
+      const destination = params.destination ?? 'hand'
+      const key = params.unequip === true
+        ? `equip:unequip:${destination}`
+        : `equip:${destination}:${params.item ?? ''}`
+      return new AsyncDriverHandle(key, equip(ctx, params))
     },
   }
 }
 
 async function equip(ctx: DriverCtx, params: EquipParams): Promise<DriverResult> {
-  const available = ctx.port.inventory().some(item => item.name === params.item)
+  const destination = params.destination ?? 'hand'
+  if (params.unequip === true) return await unequip(ctx, destination)
+
+  const item = params.item
+  if (item === undefined || item.length === 0) return { state: 'failed', code: 'BAD_ARGS' }
+  const available = ctx.port.inventory().some(entry => entry.name === item)
   if (!available) return { state: 'failed', code: 'EQUIP_ITEM_MISSING' }
-  const result = await ctx.port.equip(params.item)
-  if (result.state !== 'ok') return { state: 'failed', code: result.code ?? 'EQUIP_FAILED' }
-  const observed = result.observed
-  const held = isRecord(observed) && typeof observed.held === 'string' ? observed.held : undefined
-  if (held === undefined) {
-    return { state: 'failed', code: 'EQUIP_READBACK_UNKNOWN', observed: observed ?? { kind: 'equip', item: params.item } }
+
+  const result = await ctx.port.equip(item, destination)
+  if (result.state !== 'ok') {
+    return {
+      state: 'failed',
+      code: result.code ?? 'EQUIP_FAILED',
+      ...(result.observed === undefined ? {} : { observed: result.observed }),
+    }
   }
-  if (held !== params.item) {
+  const observed = isRecord(result.observed) ? result.observed : undefined
+  const equipped = typeof observed?.equipped === 'string' ? observed.equipped : undefined
+  const held = typeof observed?.held === 'string' ? observed.held : undefined
+  const actual = destination === 'offhand' ? equipped : equipped ?? held
+  if (actual === undefined) {
+    return {
+      state: 'failed',
+      code: 'EQUIP_READBACK_UNKNOWN',
+      observed: observed ?? { kind: 'equip', item, destination },
+    }
+  }
+  if (actual !== item) {
     return {
       state: 'failed',
       code: 'EQUIP_READBACK_MISMATCH',
-      observed: observed ?? { kind: 'equip', item: params.item },
+      observed: observed ?? { kind: 'equip', item, destination },
     }
   }
-  return { state: 'succeeded', observed: { kind: 'equip', item: params.item, held } }
+  return {
+    state: 'succeeded',
+    observed: {
+      kind: 'equip',
+      item,
+      destination,
+      equipped: actual,
+      ...(destination === 'hand' ? { held: actual } : {}),
+    },
+  }
+}
+
+async function unequip(ctx: DriverCtx, destination: 'hand' | 'offhand'): Promise<DriverResult> {
+  if (ctx.port.unequip === undefined) return { state: 'failed', code: 'UNEQUIP_FAILED' }
+  const result = await ctx.port.unequip(destination)
+  if (result.state !== 'ok') {
+    return {
+      state: 'failed',
+      code: result.code ?? 'UNEQUIP_FAILED',
+      ...(result.observed === undefined ? {} : { observed: result.observed }),
+    }
+  }
+  const observed = isRecord(result.observed) ? result.observed : undefined
+  if (!isRecord(observed) || !('equipped' in observed)) {
+    return {
+      state: 'failed',
+      code: 'UNEQUIP_READBACK_UNKNOWN',
+      observed: observed ?? { kind: 'unequip', destination },
+    }
+  }
+  if (observed.equipped !== null && observed.equipped !== undefined) {
+    return {
+      state: 'failed',
+      code: 'UNEQUIP_READBACK_MISMATCH',
+      observed,
+    }
+  }
+  return {
+    state: 'succeeded',
+    observed: {
+      kind: 'unequip',
+      destination,
+      item: typeof observed.item === 'string' ? observed.item : null,
+    },
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

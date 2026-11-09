@@ -58,6 +58,8 @@ interface ClientPort {
   blocksIn(box: { min: Vec3; max: Vec3 }, filter?: string[]): BlockInfo[]
   findBlocks(query: { near: Vec3; radius: number; names: string[]; count: number }): BlockInfo[]
   inventory(): Item[]
+  /** Off-hand item; absent means the adapter does not expose the off hand. */
+  offhand?(): Item | undefined
   entities(box: { min: Vec3; max: Vec3 }): EntityInfo[]
   screen(): ScreenInfo | null                  // 未支持时 null + capability 缺失
   time(): { timeOfDay: number; worldAge: number }
@@ -71,7 +73,9 @@ interface ClientPort {
   dig(p: Vec3): ActResult
   place(p: Vec3, face: Face, item: string): ActResult
   craft(item: string, count?: number): ActResult
-  useItem(): ActResult
+  useItem(opts?: { durationMs?: number; offhand?: boolean }): ActResult
+  equip(item: string, destination?: 'hand' | 'offhand'): ActResult
+  unequip(destination?: 'hand' | 'offhand'): ActResult
   useOn(p: Vec3): ActResult
   attack(entityId: string): ActResult
   sleep(bed: Vec3): ActResult
@@ -106,6 +110,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - 隧道：`{shape:"tunnel", to:{x,y,z}, height? 1–3 默认 2, preserveFloor? 默认 true, maxBlocks? 默认 24/上限 64}`。起点是当前脚格，`to` 只允许一个水平轴向、至多一次 y±1 台阶，不做竖井；逐格清脚/头、前进、两次读回，返回 `path`（含起点）与 `returnable`。每挖一格前检查目标格和行进方向后一格，遇水/岩浆、未加载或不可破坏立即停止，返回 `failed DIG_PARTIAL` + `stoppedAt` + `reason`（`fluid`/`unloaded`/`unbreakable`/`tool`/`dig`/`readback`/`move`/`equip`），不挖穿、不猜；
   - 逐格 `approachBlock` → 装备 → 挖 → 两次读回；`dig` 的 promise resolve 不是成功证据，目标格读回才是。不可达/未加载/被 `only` 过滤/会挖到自己脚下或身体的格进 `observed.skipped`，不整体失败；部分完成返回 `failed` + `DIG_PARTIAL` + `observed.partial{dug,skipped,stoppedAt}`，不自动重试；
   - 自动选最佳工具（`chooseTool`）并 `equip`；最近一次显式 `equip` 成功后，下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use`）不自动切换，动作启动后恢复自动（one-action override）。
+- `equip` order 参数：`{item?, destination?: "hand"|"offhand", unequip?: boolean}`；`item` 与 `unequip:true` 二选一，`destination` 缺省 `hand`。**hand** 成功（包括 hand unequip）设置 one-action override；offhand equip/unequip 不压制主手自动换武器。offhand 已空时 unequip 算成功；`UNEQUIP_FAILED`/`UNEQUIP_READBACK_UNKNOWN`/`UNEQUIP_READBACK_MISMATCH` 只影响该 order。
   - `harvest` 在整批结束后统一拾取一次（中心点）；单格 `harvest` 仍在挖后立即拾取；
   - driver 在挖掘前装备所选工具，挖掘后两次读回空气；`harvest` 会走到掉落物处拾取并读回背包增量；掉落已存在但不可达 → `PICKUP_UNREACHABLE`，走到后仍未拾取 → `PICKUP_NOT_COLLECTED`，只能单向进入（可捡但回不来）→ `PICKUP_NO_RETURN`。pickup 只走 `standCells` 的可站/未知候选格，绝不把 item 自身坐标当 `moveTo` 目标；候选格还必须是**双向连通**的：`standCells` 已证明 `起点→候选`，pickup 在进入前再用同一套 move 边证明 `候选→起点`（有界 A*，512 节点）；证明不了就不进入并报 `PICKUP_NO_RETURN`，预算耗尽只算 `unknown`，同样不进入。无候选时 `observed.standQuery.requiredDig` 指向要清的支撑/脚/头格，有候选但全部不可达时给 `unreachableReason:"path-blocked"` 与 `candidateCells`，有候选但全部无法返回时给 `returnReason:"no-return"|"return-unknown"` 与 `candidateCells[].returnable`。
 - `collect` order 是**一次有界的已观测掉落物拾取**：`{radius? 1–16 默认 8, item?, maxDrops? 1–16 默认 8, timeoutMs? 1000–90000 默认 30000}`。job 启动时以身体位置为球心读取一次 item 实体，按 AABB 距离近到远处理，最多 `maxDrops`；`item` 精确匹配 adapter 解析的 `entity.item.name`。每个实体只做一 pass（`standCells` 可站候选 → 双向连通检查 → `moveTo` → 背包总计数增量 → 按 entity id 复查询），不挖、不战斗、不预测落点；超出 `maxDrops` 的实体进 `skippedByCap`，不算失败，本次不追。终态：无匹配掉落 → `succeeded` + `drops:0`；全部确认收集 → `succeeded`；`timedOut>0` → `failed COLLECT_TIMEOUT`；`full>0` → `failed COLLECT_INVENTORY_FULL`；`unreachable>0` → `failed COLLECT_UNREACHABLE`；`noReturn>0` → `failed COLLECT_NO_RETURN`；其余 `missed>0` → `failed COLLECT_INCOMPLETE`。`collected` 是物品数（背包增量），`collectedDrops` 是确认收集的实体数；`collectedDrops + missed + unreachable + noReturn = drops`（`missed` 含 `gone/merged/full/partial/timedOut`，`unreachable`、`noReturn` 各单独一桶）。collect 是 primitive 但一次性，失败不进入 order 重试；被抢占后恢复的新 pass 以当时背包为 baseline。
@@ -121,7 +126,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算（适配器必须应用玩家属性 base 与物品 modifiers；如铁剑 4 + (-2.4) = 1.6）；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。攻击距离按**眼睛到目标 AABB 的最近点**计算：眼睛高度为 `self.height - 0.18`（缺失按 1.8），目标盒由 `EntityInfo.width/height` 构成（缺失按 0.6×1.8）；冷却等待结束后、真正发 `attack` 前用新鲜读回复核目标存在/名字/保护/死亡证据/距离/视线，复核拦下的挥击计入 `observed.rejectedSwings`（不消耗 `attacksIssued`），丢失/改名/保护仍用原失败码，终态语义不变。
+- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算（适配器必须应用玩家属性 base 与物品 modifiers；如铁剑 4 + (-2.4) = 1.6）；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。攻击距离按**眼睛到目标 AABB 的最近点**计算：眼睛高度为 `self.height - 0.18`（缺失按 1.8），目标盒由 `EntityInfo.width/height` 构成（缺失按 0.6×1.8）；冷却等待结束后、真正发 `attack` 前用新鲜读回复核目标存在/名字/保护/死亡证据/距离/视线，复核拦下的挥击计入 `observed.rejectedSwings`（不消耗 `attacksIssued`），丢失/改名/保护仍用原失败码，终态语义不变。副手有盾时，在冷却等待窗口先 `lookAt` 再 `useItem({offhand:true,durationMs:min(wait,600)})`（最小 250ms；长等待链式举盾）；`shieldUses`/`shieldFailures` 只作证据，`useItem` 失败本场禁用举盾，`lookAt` 失败不计数、不 disable；attack 开头若副手为空且背包有盾，自动换盾（不替换非空副手），结果写入 `observed.shieldAutoEquip`（`equipped`/`present`/`skipped`/`failed`/`no-shield`）。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
@@ -270,18 +275,19 @@ interface DriverHandle {
 | `dig` `tunnel` | 所有计划格清除且到达终点、`returnable:true` | `path`、`dug/planned`、`stoppedAt`、`reason`、`partial` |
 | `craft` | `produced >= requested`（不是 `crafted` 操作次数） | `attempted`、`crafted`、`produced`、`before/after`、`CRAFT_INCOMPLETE` |
 | `traverse` bridge/scaffold | 到达目标站位（`moveTo` 的 arrival 成立） | `observed.result`、motion `failure`/`snapshot` |
-| `equip` | 目标物品实际为当前手持物 | `EQUIP_NO_ITEM`、`item`、provider observed |
+| `equip` | 目标槽位实际为请求物品（hand 用 `held`，offhand 用 `equipped`） | `EQUIP_*`、`item`、`destination`、provider observed |
+| `unequip` | 目标槽位读回为空 | `UNEQUIP_*`、`item`、`destination`、provider observed |
 | `check` | 查询完成并拿到容器/熔炉结果 | `kind:"container"`、provider error/observed |
 | `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
 | `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
-| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`ATTACK_TARGET_LOST` |
+| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`shieldUses`、`shieldFailures`、`shieldAutoEquip`、`ATTACK_TARGET_LOST` |
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 
 读回要求：
 
 - `craft` 以 `produced >= requested` 为成功；provider 按配方产出数计算所需操作次数，driver 也接受 provider 早停但产出已足够的 `CRAFT_INCOMPLETE`。
-- `equip` 读 provider 的 `held` 回执；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。写动作前关闭已打开窗口；`held` 未确认前不得继续放置。
+- `equip` 读 provider 的目标槽位回执：hand 用 `held`，offhand 用 `equipped`；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。`unequip` 要求目标槽位 `equipped` 为空，否则 `UNEQUIP_READBACK_MISMATCH`；缺失回执报 `UNEQUIP_READBACK_UNKNOWN`，槽位本来就空算成功。写动作前关闭已打开窗口；`held` 未确认前不得继续放置。
 - `container` 读玩家/容器前后计数；缺失计数报 `CONTAINER_READBACK_UNKNOWN`，计数未移动/未达请求量报 `CONTAINER_INCOMPLETE`。
 - 任何 `state:'unknown'` 的动作只能以 `failed + ACT_UNCONFIRMED` 收尾，不得升格为 `succeeded`。
 

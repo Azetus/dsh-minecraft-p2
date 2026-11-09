@@ -306,8 +306,10 @@ interface Move {
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
 - `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。超出 `reach` 先接近；进入 `reach` 后停步攻击。
 - `recheck`：冷却等待结束后、真正发 `attack` 前重新读目标准确认存在/名字/保护/死亡证据/距离/视线；等待期间移动、遮挡或死亡的目标不补刀。被复核拦下的挥击计 `rejectedSwings`，不消耗攻击预算。
+- `shield`：冷却 `wait >= 250ms`、目标在 `reach` 内且可见、副手有盾时，先 `lookAt` 再 `useItem({offhand:true,durationMs:min(wait,600)})`；长等待链式举盾。`useItem` 失败本场禁用举盾；`lookAt` 失败只跳过本次。
+- `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 当前不包含走位、盾牌、远程、暴击（盾牌留给 1B）。
+- 当前不包含走位、远程、暴击。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 
@@ -318,6 +320,9 @@ interface Move {
 - `deathConfirmed`：观察到目标死亡（`entityDead`）。
 - `targetLost`：超出跟踪范围/卸载/视线丢失。
 - `rejectedSwings`：等待后的新鲜复核拦下的“本可发出”的挥击次数；只作证据，不改变终态。
+- `shieldUses`：成功完成的 offhand `useItem` 次数。
+- `shieldFailures`：offhand `useItem` 失败次数（不含 `lookAt` 失败）；本场失败后禁用举盾。
+- `shieldAutoEquip`：attack driver 的自动换盾结果（`equipped`/`present`/`skipped`/`failed`/`no-shield`）。
 - 只有死亡证据才报 `killed`；单纯从查询范围消失只能报 `targetLost` / `insufficient`。
 
 ## 8. 与 P2Mind 的接口

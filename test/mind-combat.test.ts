@@ -54,19 +54,32 @@ function combatPort(options: {
   moveTo?: () => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
   self?: () => { x: number; y: number; z: number }
   inventory?: Array<{ slot: number; name: string; count: number }>
-  equip?: (item: string) => Promise<{ state: 'ok' | 'failed'; code?: string; elapsedMs: number }>
-}): { port: ClientPort; listeners: Listener[]; times: number[]; equips: string[] } {
+  offhand?: () => { slot: number; name: string; count: number } | undefined
+  equip?: (
+    item: string,
+    destination?: 'hand' | 'offhand',
+  ) => Promise<{ state: 'ok' | 'failed'; code?: string; elapsedMs: number }>
+}): {
+  port: ClientPort
+  listeners: Listener[]
+  times: number[]
+  equips: string[]
+  equipCalls: Array<{ item: string; destination: 'hand' | 'offhand' }>
+} {
   const listeners: Listener[] = []
   const times: number[] = []
   const equips: string[] = []
+  const equipCalls: Array<{ item: string; destination: 'hand' | 'offhand' }> = []
   const port = {
     self: () => ({ ...world([]).self, pos: options.self?.() ?? { x: 0.5, y: 64, z: 0.5 } }),
     entities: () => (options.target() === undefined ? [] : [options.target()!]),
     ...(options.entityById === undefined ? {} : { entityById: () => options.entityById!() }),
     inventory: () => options.inventory ?? [],
-    equip: async (item: string) => {
+    ...(options.offhand === undefined ? {} : { offhand: options.offhand }),
+    equip: async (item: string, destination: 'hand' | 'offhand' = 'hand') => {
       equips.push(item)
-      return options.equip?.(item) ?? { state: 'ok' as const, elapsedMs: 1 }
+      equipCalls.push({ item, destination })
+      return options.equip?.(item, destination) ?? { state: 'ok' as const, elapsedMs: 1 }
     },
     attack: async () => {
       times.push(Date.now())
@@ -79,7 +92,7 @@ function combatPort(options: {
       listeners.push({ event, cb })
     },
   } as unknown as ClientPort
-  return { port, listeners, times, equips }
+  return { port, listeners, times, equips, equipCalls }
 }
 
 function emit(listeners: Listener[], event: string, entityId: string): void {
@@ -464,5 +477,68 @@ describe('combat evidence', () => {
     )
     await waitFor(chasing)
     expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
+  })
+
+  it('auto-swaps a shield into an empty off hand before the attack', async () => {
+    let offhand: { slot: number; name: string; count: number } | undefined
+    const fake = combatPort({
+      target: () => entity({ id: 'z1', name: 'zombie' }),
+      inventory: [
+        { slot: 36, name: 'shield', count: 1 },
+        { slot: 37, name: 'iron_sword', count: 1 },
+      ],
+      offhand: () => offhand,
+      equip: async (item, destination) => {
+        if (item === 'shield' && destination === 'offhand') offhand = { slot: 45, name: 'shield', count: 1 }
+        return { state: 'ok', elapsedMs: 1 }
+      },
+      attack: async listeners => {
+        emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fake.port, now: () => 1 })
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { shieldAutoEquip: 'equipped' },
+    })
+    expect(fake.equipCalls).toContainEqual({ item: 'shield', destination: 'offhand' })
+  })
+
+  it('leaves a non-empty off hand alone and reports the auto-swap state', async () => {
+    const shieldOffhand = { slot: 45, name: 'shield', count: 1 }
+    const torchOffhand = { slot: 45, name: 'torch', count: 1 }
+    const cases: Array<{
+      offhand: () => { slot: number; name: string; count: number } | undefined
+      inventory: Array<{ slot: number; name: string; count: number }>
+      expected: string
+      equip?: (item: string, destination?: 'hand' | 'offhand') => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
+    }> = [
+      { offhand: () => shieldOffhand, inventory: [], expected: 'present' },
+      { offhand: () => torchOffhand, inventory: [{ slot: 36, name: 'shield', count: 1 }], expected: 'skipped' },
+      { offhand: () => undefined, inventory: [], expected: 'no-shield' },
+      {
+        offhand: () => undefined,
+        inventory: [{ slot: 36, name: 'shield', count: 1 }],
+        expected: 'failed',
+        equip: async () => ({ state: 'failed', code: 'USE_NO_ITEM', elapsedMs: 1 }),
+      },
+    ]
+    for (const entry of cases) {
+      const fake = combatPort({
+        target: () => entity({ id: 'z1', name: 'zombie' }),
+        inventory: entry.inventory,
+        offhand: entry.offhand,
+        ...(entry.equip === undefined ? {} : { equip: entry.equip }),
+        attack: async listeners => {
+          emit(listeners, 'entityDead', 'z1')
+          return { state: 'ok', elapsedMs: 1 }
+        },
+      })
+      const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fake.port, now: () => 1 })
+      await waitFor(handle)
+      expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { shieldAutoEquip: entry.expected } })
+    }
   })
 })

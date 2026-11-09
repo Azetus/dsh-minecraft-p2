@@ -108,11 +108,12 @@ describe('capabilities', () => {
   it('maps actions to the capability they require', () => {
     expect(actionCapability('moveTo')).toBe('navigate')
     expect(actionCapability('dig')).toBe('interact')
+    expect(actionCapability('unequip')).toBe('interact')
     expect(actionCapability('attack')).toBe('combat')
     expect(actionCapability('screen')).toBe('observe.screen')
     expect(actionCapability('lookAt')).toBeNull()
     expect(actionCapability('fatalStep')).toBeNull()
-    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(12)
+    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(13)
   })
 
   it('fails with CAPABILITY_MISSING instead of degrading', () => {
