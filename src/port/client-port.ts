@@ -37,6 +37,17 @@ export type ClientEvent =
   | 'entityHurt'
   | 'entityDead'
 
+/** One bounded adjacent-cell combat step; keeps facing `face` while moving. */
+export type CombatStepOptions = {
+  /** Adjacent feet cell (Chebyshev 1). */
+  cell: Vec3
+  /** World point to keep facing; yaw uses x/z only. */
+  face: Vec3
+  /** Hold the off-hand shield for the duration of the step. */
+  shield?: boolean
+  timeoutMs?: number
+}
+
 export type MoveOptions = {
   range?: number
   timeoutMs?: number
@@ -130,6 +141,12 @@ export interface ClientPort {
   endWrite(token: WriteToken): void
 
   moveTo(target: Vec3 | Landmark, opts?: MoveOptions): Promise<ActResult>
+  /**
+   * One adjacent-cell step that keeps the body facing `face` (yaw fixed) and may
+   * hold the off-hand shield. Optional: adapters without it cannot do A-step;
+   * callers must hold instead of silently falling back to `moveTo`.
+   */
+  combatStep?(opts: CombatStepOptions): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
   /**
    * Set the horizontal look direction (radians, 0 = +z) for an oriented
@@ -156,6 +173,12 @@ export interface ClientPort {
   canSee?(entityId: string): boolean
   /** Current attacks per second from the player/item attributes. */
   attackSpeed?(): number
+  /**
+   * Effective entity interaction range (eye to target AABB) from the player
+   * attribute `player.entity_interaction_range`. Absent means the adapter does
+   * not expose it; callers fall back to 3.
+   */
+  attackReach?(): number
 
   on(event: ClientEvent, cb: (payload: JsonValue) => void): void
   /** Remove a listener registered with `on`; optional for simple adapters. */

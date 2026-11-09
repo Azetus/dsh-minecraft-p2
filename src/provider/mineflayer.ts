@@ -1186,6 +1186,9 @@ class MineflayerActHandle implements ActHandle {
   /** The async craft chain is still between recipes, so release is not proven. */
   private craftRunning = false
   private timer: ReturnType<typeof setTimeout> | undefined
+  private combatInterval: ReturnType<typeof setInterval> | undefined
+  private combatRelease: (() => void) | undefined
+  private combatShieldActive = false
   private readonly startedAt = Date.now()
   private motionRun: MotionRun | undefined
   private vanillaRun: VanillaRun | undefined
@@ -1291,6 +1294,17 @@ class MineflayerActHandle implements ActHandle {
       }
     }
     if (this.timer !== undefined) clearTimeout(this.timer)
+    if (this.combatInterval !== undefined) {
+      clearInterval(this.combatInterval)
+      this.combatInterval = undefined
+    }
+    if (this.name === 'combat-step') {
+      if (this.combatShieldActive) {
+        attempt(() => this.bot.deactivateItem())
+        this.combatShieldActive = false
+      }
+      this.combatRelease = undefined
+    }
     if (this.name === 'dig') {
       attempt(() => this.bot.stopDigging())
       attempt(() => { (this.bot as unknown as { targetDigBlock: unknown }).targetDigBlock = null })
@@ -1389,6 +1403,9 @@ class MineflayerActHandle implements ActHandle {
         if (getControlState.call(this.bot, state) === true) return false
       }
     }
+    // A combat step may still be holding the shield; release is unconfirmed
+    // until the client reports the item use ended.
+    if ((this.bot as unknown as { usingHeldItem?: boolean }).usingHeldItem === true) return false
     return true
   }
 
@@ -1919,6 +1936,145 @@ class MineflayerActHandle implements ActHandle {
             this.result = { item: held.name, offhand }
             this.completed = true
           }, duration)
+          return
+        }
+        case 'combat-step': {
+          const x = typeof this.args.x === 'number' ? this.args.x : undefined
+          const y = typeof this.args.y === 'number' ? this.args.y : undefined
+          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+          const faceX = typeof this.args.faceX === 'number' ? this.args.faceX : undefined
+          const faceZ = typeof this.args.faceZ === 'number' ? this.args.faceZ : undefined
+          if (x === undefined || y === undefined || z === undefined || faceX === undefined || faceZ === undefined) {
+            this.failed = new Error('combat-step requires numeric x/y/z and faceX/faceZ')
+            this.failedCode = 'BAD_ARGS'
+            return
+          }
+          const from = this.bot.entity.position
+          const cell = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
+          const chebyshev = Math.max(
+            Math.abs(cell.x - Math.floor(from.x)),
+            Math.abs(cell.z - Math.floor(from.z)),
+          )
+          if (chebyshev !== 1) {
+            this.failed = new Error(`combat-step target is not adjacent (chebyshev ${chebyshev})`)
+            this.failedCode = 'COMBAT_STEP_INVALID_CELL'
+            return
+          }
+          const feetDelta = y - from.y
+          if (feetDelta > 0.6 || feetDelta < -1.6) {
+            this.failed = new Error(`combat-step height ${feetDelta.toFixed(2)} is not supported`)
+            this.failedCode = 'COMBAT_STEP_UNSUPPORTED_HEIGHT'
+            return
+          }
+          const faceYaw = Math.atan2(-(faceX - from.x), -(faceZ - from.z))
+          const faceDirX = -Math.sin(faceYaw)
+          const faceDirZ = -Math.cos(faceYaw)
+          const rightDirX = Math.cos(faceYaw)
+          const rightDirZ = -Math.sin(faceYaw)
+          const toX = cell.x + 0.5 - from.x
+          const toZ = cell.z + 0.5 - from.z
+          const length = Math.hypot(toX, toZ) || 1
+          const forwardComponent = (toX / length) * faceDirX + (toZ / length) * faceDirZ
+          const rightComponent = (toX / length) * rightDirX + (toZ / length) * rightDirZ
+          const controls: Array<'forward' | 'back' | 'left' | 'right'> = []
+          if (forwardComponent > 0.25) controls.push('forward')
+          else if (forwardComponent < -0.25) controls.push('back')
+          if (rightComponent > 0.25) controls.push('right')
+          else if (rightComponent < -0.25) controls.push('left')
+          if (controls.length === 0) controls.push('forward')
+          const holdShield = this.args.shield === true
+          const timeoutMs = typeof this.args.timeoutMs === 'number'
+            ? Math.max(100, Math.min(3_000, this.args.timeoutMs))
+            : 900
+          const startedAt = Date.now()
+          const startPos = { x: from.x, y: from.y, z: from.z }
+          let lastPos = { x: from.x, y: from.y, z: from.z }
+          let lastProgressAt = startedAt
+          let shieldUsed = false
+          const release = (): void => {
+            try { this.bot.clearControlStates() } catch { /* connection may be gone */ }
+            if (this.combatShieldActive) {
+              try { this.bot.deactivateItem() } catch { /* connection may be gone */ }
+              this.combatShieldActive = false
+            }
+            this.combatRelease = undefined
+          }
+          const finish = (failed?: string): void => {
+            if (this.completed || this.failed !== undefined) return
+            if (this.combatInterval !== undefined) {
+              clearInterval(this.combatInterval)
+              this.combatInterval = undefined
+            }
+            if (this.timer !== undefined) {
+              clearTimeout(this.timer)
+              this.timer = undefined
+            }
+            release()
+            const pos = this.bot.entity.position
+            const observed = {
+              from: startPos,
+              to: { x: pos.x, y: pos.y, z: pos.z },
+              shieldUsed,
+              elapsedMs: Date.now() - startedAt,
+            }
+            if (failed !== undefined) {
+              this.failed = new Error(`combat-step ${failed}`)
+              this.failedCode = failed
+              return
+            }
+            this.result = observed
+            this.completed = true
+          }
+          this.combatRelease = release
+          const startControls = (): void => {
+            if (this.completed || this.failed !== undefined) return
+            for (const control of controls) this.bot.setControlState(control, true)
+            this.combatInterval = setInterval(() => {
+              if (this.completed || this.failed !== undefined) return
+              const pos = this.bot.entity.position
+              const moved = Math.hypot(pos.x - lastPos.x, pos.y - lastPos.y, pos.z - lastPos.z)
+              if (moved > 0.05) {
+                lastPos = { x: pos.x, y: pos.y, z: pos.z }
+                lastProgressAt = Date.now()
+              }
+              if (Math.hypot(pos.x - (cell.x + 0.5), pos.z - (cell.z + 0.5)) <= 0.5
+                && Math.abs(pos.y - y) <= 0.7) {
+                finish()
+                return
+              }
+              if (Date.now() - lastProgressAt > 300) {
+                finish('COMBAT_STEP_NO_PROGRESS')
+                return
+              }
+              const block = this.bot.blockAt(new Vec3(cell.x, cell.y, cell.z))
+              if (block !== null && ['lava', 'water', 'fire', 'soul_fire'].includes(block.name)) {
+                finish('COMBAT_STEP_UNSAFE')
+              }
+            }, 50)
+            this.timer = setTimeout(() => finish('COMBAT_STEP_TIMEOUT'), timeoutMs)
+          }
+          void this.bot.look(faceYaw, 0, true).then(() => {
+            if (this.completed || this.failed !== undefined) return
+            if (holdShield) {
+              const offhand = this.bot.inventory.slots[45]
+              if (offhand !== null && offhand !== undefined && /shield/u.test(offhand.name)) {
+                try {
+                  this.bot.activateItem(true)
+                  shieldUsed = true
+                  this.combatShieldActive = true
+                } catch {
+                  shieldUsed = false
+                }
+              }
+            }
+            // Let the server see the block state before the body starts moving.
+            if (shieldUsed) this.timer = setTimeout(startControls, 50)
+            else startControls()
+          }).catch((error: unknown) => {
+            release()
+            this.failed = error instanceof Error ? error : new Error(String(error))
+            this.failedCode = 'COMBAT_STEP_LOOK_FAILED'
+          })
           return
         }
         case 'lookAt': {

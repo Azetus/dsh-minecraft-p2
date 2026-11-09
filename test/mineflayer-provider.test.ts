@@ -5,6 +5,8 @@ import type { Bot } from 'mineflayer'
 
 import { MineflayerProvider } from '../src/provider/mineflayer.ts'
 
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
 function fakeBot() {
   const controls = new Map<string, boolean>()
   const bot = Object.assign(new EventEmitter(), {
@@ -121,6 +123,58 @@ describe('MineflayerProvider', () => {
     expect(provider.controlState()).toBe('idle')
     const stop = provider.start('stop', {})
     expect(stop.poll().status).toBe('succeeded')
+    expect(provider.controlState()).toBe('idle')
+  })
+
+  it('executes one fixed-yaw combat step and releases controls and shield', async () => {
+    const { bot, controls } = fakeBot()
+    let activated = 0
+    let deactivated = 0
+    ;(bot as unknown as { inventory: { slots: Array<unknown> } }).inventory.slots[45] = { name: 'shield', count: 1 }
+    ;(bot as unknown as { activateItem: (offhand?: boolean) => void }).activateItem = () => {
+      activated += 1
+      ;(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = true
+    }
+    ;(bot as unknown as { deactivateItem: () => void }).deactivateItem = () => {
+      deactivated += 1
+      ;(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = false
+    }
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('combat-step', {
+      x: 2, y: 64, z: 2, faceX: 0, faceZ: 2, shield: true, timeoutMs: 800,
+    })
+    await sleep(120)
+    const position = (bot as unknown as { entity: { position: { x: number; z: number } } }).entity.position
+    position.x = 2.5
+    position.z = 2.5
+    for (let index = 0; index < 60 && handle.poll().status === 'running'; index += 1) await sleep(25)
+    expect(handle.poll().status).toBe('succeeded')
+    expect(activated).toBe(1)
+    expect(deactivated).toBe(1)
+    expect(provider.controlState()).toBe('idle')
+    expect([...controls.entries()].filter(([, value]) => value)).toEqual([])
+  })
+
+  it('releases a running combat step on stop', async () => {
+    const { bot } = fakeBot()
+    let deactivated = 0
+    ;(bot as unknown as { inventory: { slots: Array<unknown> } }).inventory.slots[45] = { name: 'shield', count: 1 }
+    ;(bot as unknown as { activateItem: (offhand?: boolean) => void }).activateItem = () => {
+      ;(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = true
+    }
+    ;(bot as unknown as { deactivateItem: () => void }).deactivateItem = () => {
+      deactivated += 1
+      ;(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = false
+    }
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('combat-step', {
+      x: 2, y: 64, z: 2, faceX: 0, faceZ: 2, shield: true, timeoutMs: 5_000,
+    })
+    await sleep(120)
+    handle.stop()
+    for (let index = 0; index < 60 && handle.poll().status === 'running'; index += 1) await sleep(25)
+    expect(handle.poll().status).toBe('cancelled')
+    expect(deactivated).toBe(1)
     expect(provider.controlState()).toBe('idle')
   })
 

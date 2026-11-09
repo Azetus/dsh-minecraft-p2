@@ -41,6 +41,16 @@ describe('mineflayer port actions', () => {
       .toMatchObject({ state: 'ok' })
     expect(source.calls.at(-1)).toEqual({ name: 'motion-goto', args: { x: 1, y: 64, z: 2, range: 2, timeoutMs: 500 } })
 
+    expect((await port.combatStep({
+      cell: { x: 1, y: 64, z: 2 },
+      face: { x: 0, y: 64, z: 0 },
+      shield: true,
+    })).state).toBe('ok')
+    expect(source.calls.at(-1)).toEqual({
+      name: 'combat-step',
+      args: { x: 1, y: 64, z: 2, faceX: 0, faceZ: 0, shield: true },
+    })
+
     expect((await port.lookAt({ x: 1, y: 64, z: 2 })).state).toBe('ok')
     expect(source.calls.at(-1)?.name).toBe('lookAt')
 
@@ -306,6 +316,25 @@ describe('mineflayer port reads', () => {
       ])
   })
 
+  it('exposes entity yaw when the adapter has it', () => {
+    const { port, bot } = createPort()
+    ;(bot.entities as unknown as Record<number, unknown>)[9] = {
+      id: 9,
+      name: 'zombie',
+      type: 'hostile',
+      position: { x: 3, y: 64, z: 1 },
+      yaw: 1.25,
+    }
+    expect(port.entities({ min: { x: 0, y: 0, z: 0 }, max: { x: 8, y: 128, z: 8 } }))
+      .toContainEqual({
+        id: '9',
+        name: 'zombie',
+        position: { x: 3, y: 64, z: 1 },
+        yaw: 1.25,
+        type: 'hostile',
+      })
+  })
+
   it('resolves a player by tab-list index and an entity by id without a box scan', () => {
     const { port, bot } = createPort()
     const alice = { id: 7, name: 'Alice', username: 'Alice', position: { x: 30, y: 64, z: 0 } }
@@ -434,6 +463,43 @@ describe('mineflayer port attack speed', () => {
     expect(port.attackSpeed()).toBe(4)
     setAttackSpeed(bot, 4, [{ amount: -4, operation: 0 }])
     expect(port.attackSpeed()).toBe(4)
+  })
+})
+
+describe('mineflayer port attack reach', () => {
+  function setReach(
+    bot: FakeBot,
+    value: number,
+    modifiers: Array<{ amount: number; operation: number }> = [],
+  ): void {
+    ;(bot.entity as unknown as { attributes?: Record<string, unknown> }).attributes = {
+      'player.entity_interaction_range': { value, modifiers },
+    }
+  }
+
+  it('reads the player entity interaction range and defaults to 3', () => {
+    const { port, bot } = createPort()
+    expect(port.attackReach()).toBe(3)
+    setReach(bot, 3)
+    expect(port.attackReach()).toBeCloseTo(3)
+  })
+
+  it('applies held-item reach modifiers', () => {
+    const { port, bot } = createPort()
+    setReach(bot, 3, [{ amount: 1.5, operation: 0 }])
+    expect(port.attackReach()).toBeCloseTo(4.5)
+    setReach(bot, 4, [
+      { amount: 0.5, operation: 1 },
+      { amount: 0.25, operation: 2 },
+    ])
+    expect(port.attackReach()).toBeCloseTo(7.5)
+  })
+
+  it('falls back to 3 without the attribute or with a non-positive value', () => {
+    const { port, bot } = createPort()
+    expect(port.attackReach()).toBe(3)
+    setReach(bot, 0)
+    expect(port.attackReach()).toBe(3)
   })
 })
 

@@ -53,6 +53,8 @@ export type EntityInfo = {
   id: string
   name: string
   position: Vec3
+  /** Entity yaw in radians (mineflayer: 0 = -z); absent when the adapter cannot tell. */
+  yaw?: number
   /** Entity AABB width/height from the adapter; item fallback is 0.25x0.25. */
   width?: number
   height?: number

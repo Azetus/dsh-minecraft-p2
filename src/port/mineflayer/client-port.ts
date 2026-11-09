@@ -8,7 +8,13 @@ import type { ProviderSuspension } from '../../provider/mineflayer.ts'
 import type { ActHandle, ActPoll } from '../../provider/runtime.ts'
 import type { Capability, ClientAction } from '../capabilities.ts'
 import { checkCapability } from '../capabilities.ts'
-import type { ClientEvent, ClientPort, ContainerTransferAction, MoveOptions } from '../client-port.ts'
+import type {
+  ClientEvent,
+  ClientPort,
+  CombatStepOptions,
+  ContainerTransferAction,
+  MoveOptions,
+} from '../client-port.ts'
 import type {
   ActResult,
   BiomeInfo,
@@ -119,6 +125,7 @@ type EntityLike = {
   kind?: string
   health?: number
   position?: { x: number; y: number; z: number }
+  yaw?: number
   width?: number
   height?: number
   metadata?: Record<number, unknown>
@@ -526,6 +533,23 @@ export class MineflayerClientPort implements ClientPort {
     }, timeoutMs)
   }
 
+  /**
+   * One adjacent-cell step with a fixed yaw. No capability entry: the method is
+   * the contract; callers check its presence rather than a coarse `combat` flag.
+   */
+  async combatStep(opts: CombatStepOptions): Promise<ActResult> {
+    if (!isVec3(opts.cell) || !isVec3(opts.face)) return actFailed('INVALID_TARGET', 0)
+    const args: Record<string, JsonValue> = {
+      x: opts.cell.x,
+      y: opts.cell.y,
+      z: opts.cell.z,
+      faceX: opts.face.x,
+      faceZ: opts.face.z,
+      ...(opts.shield === true ? { shield: true } : {}),
+    }
+    return await this.run('combat-step', args, opts.timeoutMs ?? 2_000)
+  }
+
   async lookAt(p: Vec3): Promise<ActResult> {
     return await this.action('lookAt', 'lookAt', { x: p.x, y: p.y, z: p.z })
   }
@@ -644,6 +668,29 @@ export class MineflayerClientPort implements ClientPort {
       }
     }
     return 4
+  }
+
+  /**
+   * The server sends `player.entity_interaction_range` (default 3.0) with the
+   * held item's modifiers already folded in. Reading the effective attribute is
+   * more accurate than any static weapon table and survives datapack changes.
+   */
+  attackReach(): number {
+    const attributes = (this.bot.entity as unknown as {
+      attributes?: Record<string, AttributeEntry>
+    } | undefined)?.attributes
+    if (attributes !== undefined) {
+      for (const key of [
+        'player.entity_interaction_range',
+        'minecraft:player.entity_interaction_range',
+        'entity_interaction_range',
+        'generic.entity_interaction_range',
+      ]) {
+        const value = attributeValue(attributes[key])
+        if (value !== undefined) return value
+      }
+    }
+    return 3
   }
 
   on(event: ClientEvent, cb: (payload: JsonValue) => void): void {
@@ -974,6 +1021,7 @@ function entityInfo(entity: EntityLike, registry: unknown): EntityInfo | undefin
     id: String(entity.id ?? -1),
     name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
     position: { x: position.x, y: position.y, z: position.z },
+    ...(typeof entity.yaw === 'number' ? { yaw: entity.yaw } : {}),
     ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
     ...(typeof entity.height === 'number' ? { height: entity.height } : {}),
     ...(entity.type === undefined ? {} : { type: entity.type }),
