@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createAttackDriver } from '../src/mind/drivers/attack.ts'
 import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
-import type { Box, ClientPort, EntityInfo } from '../src/port/index.ts'
+import type { BlockInfo, Box, ClientPort, EntityInfo } from '../src/port/index.ts'
 
 /**
  * Category: data (combat ROE + evidence).
@@ -51,7 +51,15 @@ function combatPort(options: {
   attack: (listeners: Listener[]) => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
   canSee?: () => boolean
   attackSpeed?: () => number
+  attackReach?: () => number
+  blockAt?: (p: { x: number; y: number; z: number }) => BlockInfo | null
   moveTo?: () => Promise<{ state: 'ok' | 'failed'; elapsedMs: number }>
+  combatStep?: (opts: {
+    cell: { x: number; y: number; z: number }
+    face: { x: number; y: number; z: number }
+    shield?: boolean
+    timeoutMs?: number
+  }) => Promise<{ state: 'ok' | 'failed'; code?: string; observed?: unknown; elapsedMs: number }>
   self?: () => { x: number; y: number; z: number }
   inventory?: Array<{ slot: number; name: string; count: number }>
   offhand?: () => { slot: number; name: string; count: number } | undefined
@@ -65,11 +73,23 @@ function combatPort(options: {
   times: number[]
   equips: string[]
   equipCalls: Array<{ item: string; destination: 'hand' | 'offhand' }>
+  steps: Array<{
+    cell: { x: number; y: number; z: number }
+    face: { x: number; y: number; z: number }
+    shield?: boolean
+    timeoutMs?: number
+  }>
 } {
   const listeners: Listener[] = []
   const times: number[] = []
   const equips: string[] = []
   const equipCalls: Array<{ item: string; destination: 'hand' | 'offhand' }> = []
+  const steps: Array<{
+    cell: { x: number; y: number; z: number }
+    face: { x: number; y: number; z: number }
+    shield?: boolean
+    timeoutMs?: number
+  }> = []
   const port = {
     self: () => ({ ...world([]).self, pos: options.self?.() ?? { x: 0.5, y: 64, z: 0.5 } }),
     entities: () => (options.target() === undefined ? [] : [options.target()!]),
@@ -85,14 +105,29 @@ function combatPort(options: {
       times.push(Date.now())
       return options.attack(listeners)
     },
+    blockAt: options.blockAt ?? (() => null),
     moveTo: options.moveTo ?? (async () => ({ state: 'ok' as const, elapsedMs: 1 })),
+    combatStep: async (opts: {
+      cell: { x: number; y: number; z: number }
+      face: { x: number; y: number; z: number }
+      shield?: boolean
+      timeoutMs?: number
+    }) => {
+      steps.push(opts)
+      return options.combatStep?.(opts) ?? {
+        state: 'ok' as const,
+        elapsedMs: 1,
+        observed: { shieldUsed: opts.shield === true },
+      }
+    },
     canSee: options.canSee ?? (() => true),
     attackSpeed: options.attackSpeed ?? (() => 4),
+    ...(options.attackReach === undefined ? {} : { attackReach: options.attackReach }),
     on: (event: string, cb: (payload: unknown) => void) => {
       listeners.push({ event, cb })
     },
   } as unknown as ClientPort
-  return { port, listeners, times, equips, equipCalls }
+  return { port, listeners, times, equips, equipCalls, steps }
 }
 
 function emit(listeners: Listener[], event: string, entityId: string): void {
@@ -477,6 +512,72 @@ describe('combat evidence', () => {
     )
     await waitFor(chasing)
     expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
+  })
+
+  it('passes the adapter attack reach into the controller', async () => {
+    const reach4 = combatPort({
+      target: () => entity({ id: 'z1', name: 'zombie', position: { x: 1, y: 64, z: 0.5 } }),
+      attackReach: () => 4,
+      attack: async listeners => {
+        emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: reach4.port, now: () => 1 })
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { reach: 4, reachSource: 'attribute' },
+    })
+
+    const fallback = combatPort({
+      target: () => entity({ id: 'z1', name: 'zombie', position: { x: 1, y: 64, z: 0.5 } }),
+      attack: async listeners => {
+        emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const plain = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fallback.port, now: () => 1 })
+    await waitFor(plain)
+    expect(plain.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { reach: 3, reachSource: 'default' },
+    })
+  })
+
+  it('moves to a stand cell through the driver query on flat ground', async () => {
+    let hits = 0
+    let moves = 0
+    const flat = combatPort({
+      target: () => entity({
+        id: 'z1',
+        name: 'zombie',
+        position: { x: 3.3, y: 64, z: 0.5 },
+        width: 0.6,
+        height: 1.95,
+      }),
+      blockAt: p => (p.y <= 63
+        ? { name: 'stone', loaded: true }
+        : { name: 'air', loaded: true }),
+      attackSpeed: () => 2,
+      moveTo: async () => {
+        moves += 1
+        return { state: 'ok', elapsedMs: 1 }
+      },
+      attack: async listeners => {
+        hits += 1
+        if (hits >= 2) emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: flat.port, now: () => 1 })
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded',
+      observed: { combatMoves: 1, strafeMoves: 1, noSafeCell: 0, moveFailures: 0 },
+    })
+    expect(flat.steps).toHaveLength(1)
+    expect(moves).toBe(0)
   })
 
   it('auto-swaps a shield into an empty off hand before the attack', async () => {

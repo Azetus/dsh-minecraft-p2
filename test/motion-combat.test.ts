@@ -11,13 +11,20 @@ import { describe, expect, it } from 'vitest'
 import {
   attackCooldownMs,
   CombatEvidence,
+  decideCombatMove,
+  engageBand,
   entityBox,
   eyeHeight,
   eyeReach,
   runMeleeCombat,
+  tooCloseFor,
   type CombatAction,
   type CombatEntity,
+  type CombatMoveInput,
   type CombatPort,
+  type CombatStandCell,
+  type CombatStandQuery,
+  type CombatStepOptions,
 } from '../src/motion/combat/index.ts'
 import type { Vec3 } from '../src/motion/model/types.ts'
 
@@ -60,6 +67,81 @@ describe('combat geometry', () => {
   })
 })
 
+describe('combat spacing decision', () => {
+  const band = engageBand(3)
+  const input = (overrides: Partial<CombatMoveInput> = {}): CombatMoveInput => ({
+    distance: 2.5,
+    band,
+    tooClose: tooCloseFor(3),
+    visible: true,
+    recentlyHurt: false,
+    stalled: false,
+    strafeEnabled: true,
+    side: 'left',
+    ...overrides,
+  })
+
+  it('derives the band and too-close threshold from the current reach', () => {
+    const atThree = engageBand(3)
+    expect(atThree.min).toBeCloseTo(2.2)
+    expect(atThree.desired).toBeCloseTo(2.5)
+    expect(atThree.max).toBeCloseTo(2.8)
+    const atFour = engageBand(4)
+    expect(atFour.min).toBeCloseTo(3.2)
+    expect(atFour.desired).toBeCloseTo(3.5)
+    expect(atFour.max).toBeCloseTo(3.8)
+    expect(tooCloseFor(3)).toBeCloseTo(1.6)
+    expect(tooCloseFor(4)).toBeCloseTo(2.6)
+    const clampedLow = engageBand(0.5)
+    expect(clampedLow.min).toBeCloseTo(0.7)
+    expect(clampedLow.max).toBeCloseTo(1.3)
+    const clampedHigh = engageBand(10)
+    expect(clampedHigh.min).toBeCloseTo(5.2)
+    expect(clampedHigh.max).toBeCloseTo(5.8)
+  })
+
+  it('holds when the target is not visible, even when too close or hurt', () => {
+    expect(decideCombatMove(input({ distance: 1, recentlyHurt: true, visible: false }))).toBe('hold')
+  })
+
+  it('backs off below tooClose', () => {
+    expect(decideCombatMove(input({ distance: 1.5 }))).toBe('backoff')
+  })
+
+  it('holds in the dead zone instead of oscillating', () => {
+    expect(decideCombatMove(input({ distance: 2.0 }))).toBe('hold')
+  })
+
+  it('backs off to the band edge when hurt inside the band', () => {
+    expect(decideCombatMove(input({ distance: 2.4, recentlyHurt: true }))).toBe('backoff')
+  })
+
+  it('does not back off when hurt at the band edge', () => {
+    expect(decideCombatMove(input({ distance: 2.8, recentlyHurt: true }))).toBe('strafe-left')
+    expect(decideCombatMove(input({ distance: 2.8, recentlyHurt: true, strafeEnabled: false }))).toBe('hold')
+  })
+
+  it('approaches when outside the band but still inside reach', () => {
+    expect(decideCombatMove(input({ distance: 2.9 }))).toBe('approach')
+  })
+
+  it('strafes inside the band and follows the supplied side', () => {
+    expect(decideCombatMove(input())).toBe('strafe-left')
+    expect(decideCombatMove(input({ side: 'right' }))).toBe('strafe-right')
+    expect(decideCombatMove(input({ strafeEnabled: false }))).toBe('hold')
+  })
+
+  it('stops strafing when movement is stalled but still allows safety backoff', () => {
+    expect(decideCombatMove(input({ stalled: true }))).toBe('hold')
+    expect(decideCombatMove(input({ stalled: true, distance: 1.4 }))).toBe('backoff')
+  })
+
+  it('treats the band edges as inside the band', () => {
+    expect(decideCombatMove(input({ distance: 2.2 }))).toBe('strafe-left')
+    expect(decideCombatMove(input({ distance: 2.8 }))).toBe('strafe-left')
+  })
+})
+
 describe('attack cooldown', () => {
   it('derives milliseconds from attacks per second', () => {
     expect(attackCooldownMs(1.6)).toBe(625)
@@ -96,7 +178,10 @@ function fakeCombatPort(options: {
   canSee?: (calls: number) => boolean
   attackSpeed?: () => number
   attack?: (emit: CombatEmit) => Promise<CombatAction>
-  moveTo?: () => Promise<CombatAction>
+  moveTo?: (pos: Vec3, range: number, timeoutMs: number) => Promise<CombatAction>
+  combatStep?: (opts: CombatStepOptions) => Promise<CombatAction>
+  standCells?: (query: CombatStandQuery) => CombatStandCell[]
+  reach?: () => number
   lookAt?: (pos: Vec3) => Promise<CombatAction>
   hasShield?: () => boolean
   shield?: (durationMs: number) => Promise<CombatAction>
@@ -104,12 +189,16 @@ function fakeCombatPort(options: {
   port: CombatPort
   attacks: () => number
   moves: () => number
+  moveTargets: () => Array<{ pos: Vec3; range: number; timeoutMs: number }>
+  stepCalls: () => CombatStepOptions[]
   lookAtPoints: () => Vec3[]
   shieldDurations: () => number[]
 } {
   let attacks = 0
   let moves = 0
   let canSeeCalls = 0
+  const moveTargets: Array<{ pos: Vec3; range: number; timeoutMs: number }> = []
+  const stepCalls: CombatStepOptions[] = []
   const lookAtPoints: Vec3[] = []
   const shieldDurations: number[] = []
   const hurtListeners: Array<(entityId: string) => void> = []
@@ -131,10 +220,21 @@ function fakeCombatPort(options: {
       attacks += 1
       return options.attack?.(emit) ?? { state: 'ok' }
     },
-    moveTo: async () => {
+    moveTo: async (target, range, timeoutMs) => {
       moves += 1
-      return options.moveTo?.() ?? { state: 'ok' }
+      moveTargets.push({ pos: target, range, timeoutMs })
+      return options.moveTo?.(target, range, timeoutMs) ?? { state: 'ok' }
     },
+    ...(options.reach === undefined ? {} : { reach: options.reach }),
+    ...(options.combatStep === undefined
+      ? {}
+      : {
+          combatStep: async (step: CombatStepOptions) => {
+            stepCalls.push(step)
+            return options.combatStep!(step)
+          },
+        }),
+    ...(options.standCells === undefined ? {} : { standCells: options.standCells }),
     ...(options.hasShield === undefined ? {} : { hasShield: options.hasShield }),
     ...(options.lookAt === undefined
       ? {}
@@ -165,6 +265,8 @@ function fakeCombatPort(options: {
     port,
     attacks: () => attacks,
     moves: () => moves,
+    moveTargets: () => moveTargets,
+    stepCalls: () => stepCalls,
     lookAtPoints: () => lookAtPoints,
     shieldDurations: () => shieldDurations,
   }
@@ -366,5 +468,261 @@ describe('melee controller shield window', () => {
       observed: { attacksIssued: 2, shieldUses: 0, shieldFailures: 0 },
     })
     expect(fake.shieldDurations()).toHaveLength(0)
+  })
+})
+
+describe('melee controller spacing movement (A-step)', () => {
+  const zombie = (x: number, yaw?: number): CombatEntity => ({
+    id: 'z1',
+    name: 'zombie',
+    position: pos(x, 64, 0.5),
+    width: 0.6,
+    height: 1.95,
+    ...(yaw === undefined ? {} : { yaw }),
+  })
+  const cell = (x: number, z: number, y = 64): CombatStandCell => ({
+    cell: pos(x, y, z),
+    feetY: y,
+    distance: 1,
+    reachable: 'yes',
+  })
+  const stepOk = async (opts: CombatStepOptions): Promise<CombatAction> => ({
+    state: 'ok',
+    ...(opts.shield === true ? { shieldUsed: true } : {}),
+  })
+
+  it('takes one adjacent step with fixed facing and then attacks', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(fake.stepCalls()).toHaveLength(1)
+    expect(fake.stepCalls()[0]).toMatchObject({
+      cell: { x: 0, y: 64, z: 1 },
+      shield: false,
+      timeoutMs: 600,
+    })
+    expect(fake.stepCalls()[0]!.face).toMatchObject({ x: 3.3, z: 0.5 })
+    expect(fake.moveTargets()).toHaveLength(0)
+    expect(result.observed).toMatchObject({
+      combatMoves: 1,
+      strafeMoves: 1,
+      backoffMoves: 0,
+      shieldedSteps: 0,
+      moveFailures: 0,
+      noSafeCell: 0,
+      reach: 3,
+      reachSource: 'default',
+    })
+  })
+
+  it('keeps attacking from where it stands when no safe cell exists', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(fake.stepCalls()).toHaveLength(0)
+    expect(result.observed).toMatchObject({ combatMoves: 0, noSafeCell: 1, moveFailures: 0 })
+  })
+
+  it('keeps attacking when the step fails and never turns it into a job failure', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+      combatStep: async () => ({ state: 'failed', code: 'COMBAT_STEP_NO_PROGRESS' }),
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(result.observed).toMatchObject({
+      combatMoves: 1,
+      moveFailures: 1,
+      stepBlocked: 1,
+    })
+  })
+
+  it('does not step when the target is not visible', async () => {
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      canSee: () => false,
+      attackSpeed: () => 1.6,
+      standCells: () => [cell(0, 1)],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxMisses: 1 })
+    expect(result).toMatchObject({ state: 'failed', code: 'ATTACK_NO_LINE_OF_SIGHT' })
+    expect(fake.stepCalls()).toHaveLength(0)
+  })
+
+  it('does not start a step that would run past the next swing', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 4, // 250ms cooldown; estimate+margin is 350ms
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(fake.stepCalls()).toHaveLength(0)
+    expect(result.observed).toMatchObject({ combatMoves: 0 })
+  })
+
+  it('reports target loss that happens during a step', async () => {
+    let alive = true
+    const fake = fakeCombatPort({
+      target: () => (alive ? zombie(3.3) : undefined),
+      attackSpeed: () => 1.6,
+      standCells: () => [cell(0, 1)],
+      combatStep: async () => {
+        alive = false
+        return { state: 'ok' }
+      },
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_LOST' })
+    expect(fake.stepCalls()).toHaveLength(1)
+  })
+
+  it('backs off to the band edge when the target is too close', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(1.0),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(result.observed).toMatchObject({ combatMoves: 1, backoffMoves: 1, strafeMoves: 0 })
+  })
+
+  it('raises the step shield only when the target faces us and is close', async () => {
+    const runCase = async (x: number, yaw: number | undefined, expected: boolean): Promise<void> => {
+      let hits = 0
+      const fake = fakeCombatPort({
+        target: () => zombie(x, yaw),
+        attackSpeed: () => 1.6,
+        hasShield: () => true,
+        attack: async emit => {
+          hits += 1
+          if (hits >= 2) emit.dead('z1')
+          return { state: 'ok' }
+        },
+        standCells: () => [cell(0, 1)],
+        combatStep: stepOk,
+      })
+      const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+      expect(result.state).toBe('succeeded')
+      expect(fake.stepCalls()[0]?.shield).toBe(expected)
+      expect(result.observed.shieldedSteps).toBe(expected ? 1 : 0)
+    }
+
+    // Target at 3.3 faces west (towards the body) within the 60-degree cone.
+    await runCase(3.3, Math.PI / 2, true)
+    // Facing east: away from the body.
+    await runCase(3.3, -Math.PI / 2, false)
+    // No yaw: no shield, full speed.
+    await runCase(3.3, undefined, false)
+    // Facing us but outside band.desired (eye -> AABB 2.7).
+    await runCase(3.5, Math.PI / 2, false)
+  })
+
+  it('falls back to C for an up-1 cell', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1, 65)],
+      combatStep: stepOk,
+      moveTo: async () => ({ state: 'ok' }),
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(fake.stepCalls()).toHaveLength(0)
+    expect(fake.moveTargets()).toHaveLength(1)
+    expect(result.observed).toMatchObject({
+      combatMoves: 1,
+      stepFallbacks: 1,
+      strafeMoves: 1,
+    })
+  })
+
+  it('holds when the adapter has no combatStep', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(3.3),
+      attackSpeed: () => 1.6,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(result.observed).toMatchObject({ combatMoves: 0 })
+    expect(fake.moveTargets()).toHaveLength(0)
+  })
+
+  it('derives the band from the adapter reach attribute', async () => {
+    let hits = 0
+    const fake = fakeCombatPort({
+      target: () => zombie(4.0),
+      attackSpeed: () => 1.6,
+      reach: () => 4,
+      attack: async emit => {
+        hits += 1
+        if (hits >= 2) emit.dead('z1')
+        return { state: 'ok' }
+      },
+      standCells: () => [cell(0, 1)],
+      combatStep: stepOk,
+    })
+    const result = await runMeleeCombat(fake.port, 'z1', { maxAttacks: 2 })
+    expect(result.state).toBe('succeeded')
+    expect(result.observed).toMatchObject({ reach: 4, reachSource: 'attribute', combatMoves: 1 })
   })
 })

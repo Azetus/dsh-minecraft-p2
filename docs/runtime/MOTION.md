@@ -304,12 +304,13 @@ interface Move {
 - `targetId`：不换目标。
 - `attackCooldown`：由当前攻击速度属性的 **final value**（base + 物品 modifiers）计算，不用固定毫秒；如铁剑 1.6 → 625ms。
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
-- `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。超出 `reach` 先接近；进入 `reach` 后停步攻击。
+- `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。`reach` 来自 `attackReach?()`（玩家 `player.entity_interaction_range`，含物品 modifiers，默认 3）；带为 `[reach-0.8, reach-0.2]`，中值 `reach-0.5`，`tooClose=reach-1.4`。超出 `reach` 先接近（停距按 `desired + targetWidth/2`，不再固定 `reach-1`）；进入 `reach` 后按间距决策。
+- `spacing`：冷却窗口内 `decideCombatMove`（纯函数）在 `approach/hold/backoff/strafe-left/strafe-right` 中选择；`backoff` 只退到带边，`strafe` 在带内换角度。候选格由 attack driver 的 `standCells` 提供（3×3×3、`maxNodes:256`、dry、`feetY` 同层/下一层、`reachable:'yes'`、带内 eye→AABB），再用 `combatStep` 走**一个相邻格**（固定 yaw=目标瞄点，步进期间可举盾）。节流 250ms（无盾）/400ms（有盾）；剩余冷却 < 估计步长 + 100ms 时不起步。上一层候选回退 C 的 `moveTo`（`stepFallbacks`）；`combatStep` 不存在的适配器带内 hold。无安全格或步进失败时站桩继续，不产生 `ATTACK_*` 失败。语义是“保持交战间距”，不是撤离：不换目标、不找掩体、不出视线、不因低血退出。
 - `recheck`：冷却等待结束后、真正发 `attack` 前重新读目标准确认存在/名字/保护/死亡证据/距离/视线；等待期间移动、遮挡或死亡的目标不补刀。被复核拦下的挥击计 `rejectedSwings`，不消耗攻击预算。
 - `shield`：冷却 `wait >= 250ms`、目标在 `reach` 内且可见、副手有盾时，先 `lookAt` 再 `useItem({offhand:true,durationMs:min(wait,600)})`；长等待链式举盾。`useItem` 失败本场禁用举盾；`lookAt` 失败只跳过本次。
 - `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 当前不包含走位、远程、暴击。
+- 当前不包含 sprint、远程、暴击。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 
@@ -323,6 +324,9 @@ interface Move {
 - `shieldUses`：成功完成的 offhand `useItem` 次数。
 - `shieldFailures`：offhand `useItem` 失败次数（不含 `lookAt` 失败）；本场失败后禁用举盾。
 - `shieldAutoEquip`：attack driver 的自动换盾结果（`equipped`/`present`/`skipped`/`failed`/`no-shield`）。
+- `combatMoves` / `moveFailures` / `noSafeCell` / `strafeMoves` / `backoffMoves`：Step 2 间距移动的次数与失败；只作证据，不改变 `state/code`。
+- `shieldedSteps`：步进期间实际激活盾牌的 A-step 次数；`stepFallbacks`：上一层候选回退 C 的次数；`stepBlocked`：A-step 失败/无进展次数。
+- `reach` / `reachSource`：本次交战采用的 eye→AABB reach 及其来源（`attribute`/`default`/`override`）。
 - 只有死亡证据才报 `killed`；单纯从查询范围消失只能报 `targetLost` / `insufficient`。
 
 ## 8. 与 P2Mind 的接口

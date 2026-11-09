@@ -9,6 +9,10 @@ import {
   type CombatEntity,
   type CombatPort,
 } from '../../motion/combat/index.ts'
+import { defaultConstraints, createRules } from '../../motion/model/index.ts'
+import { standingCell } from '../../motion/execute/index.ts'
+import { standCells } from '../../motion/search/index.ts'
+import { createReadOnlyMotionWorld } from '../standing.ts'
 import { AsyncDriverHandle } from './handle.ts'
 import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { chooseWeapon } from '../tools.ts'
@@ -149,8 +153,57 @@ function combatPort(port: ClientPort, locateRadius: number): CombatPort {
     entity: id => locate(port, id, locateRadius),
     canSee: id => port.canSee?.(id) ?? true,
     attackSpeed: () => port.attackSpeed?.() ?? 4,
+    ...(port.attackReach === undefined ? {} : { reach: () => port.attackReach!() }),
     attack: id => asAction(port.attack(id)),
     moveTo: (pos, range, timeoutMs) => asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
+    ...(port.combatStep === undefined ? {} : {
+      combatStep: async opts => {
+        const result = await port.combatStep!({
+          cell: opts.cell,
+          face: opts.face,
+          ...(opts.shield === undefined ? {} : { shield: opts.shield }),
+          ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+        })
+        const observed = isRecord(result.observed) ? result.observed : undefined
+        return {
+          state: result.state,
+          ...(result.code === undefined ? {} : { code: result.code }),
+          ...(observed?.shieldUsed === true ? { shieldUsed: true } : {}),
+        }
+      },
+    }),
+    standCells: query => {
+      const world = createReadOnlyMotionWorld(point => port.blockAt(point))
+      const constraints = defaultConstraints()
+      const rules = createRules(world, constraints)
+      const self = port.self()
+      const near = {
+        x: Math.floor(query.near.x),
+        y: Math.floor(query.near.y),
+        z: Math.floor(query.near.z),
+      }
+      const result = standCells(world, {
+        near,
+        desired: near,
+        reach: { horizontal: 1, vertical: 1 },
+        accept: (cell, feetY) => query.accept(
+          { x: cell.x + 0.5, y: feetY, z: cell.z + 0.5 },
+          feetY,
+        ),
+      }, {
+        from: standingCell(rules, self.pos),
+        constraints,
+        reachability: { maxNodes: 256 },
+        dry: true,
+      })
+      return result.cells.map(cell => ({
+        cell: { x: cell.cell.x, y: cell.cell.y, z: cell.cell.z },
+        feetY: cell.feetY,
+        distance: cell.distance,
+        reachable: cell.reachable,
+        ...(cell.steps === undefined ? {} : { steps: cell.steps }),
+      }))
+    },
     ...(port.lookAt === undefined ? {} : { lookAt: (pos: Vec3) => asAction(port.lookAt!(pos)) }),
     ...(port.offhand === undefined
       ? {}
@@ -199,6 +252,7 @@ function locate(port: ClientPort, entityId: string, locateRadius: number): Comba
     id: entity.id,
     name: entity.name,
     position: entity.position,
+    ...(entity.yaw === undefined ? {} : { yaw: entity.yaw }),
     ...(entity.type === undefined ? {} : { type: entity.type }),
     ...(entity.kind === undefined ? {} : { kind: entity.kind }),
     ...(entity.health === undefined ? {} : { health: entity.health }),
