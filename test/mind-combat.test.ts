@@ -379,4 +379,90 @@ describe('combat evidence', () => {
       observed: { chases: 12 },
     })
   })
+
+  it('passes the entity width into the eye-to-AABB reach check', async () => {
+    const moves: number[] = []
+    const spider = entity({
+      id: 'z1',
+      name: 'spider',
+      position: { x: 3.9, y: 64, z: 0.5 },
+      width: 1.4,
+      height: 0.9,
+    })
+    const mapped = combatPort({
+      target: () => spider,
+      moveTo: async () => {
+        moves.push(1)
+        return { state: 'ok', elapsedMs: 1 }
+      },
+      attack: async listeners => {
+        emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'spider' }), { port: mapped.port, now: () => 1 })
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { chases: 0 } })
+    expect(moves).toHaveLength(0)
+
+    // Same position without dimensions: the default player box is too narrow,
+    // so the controller has to chase.
+    let unmappedAttacks = 0
+    const unmappedMoves: number[] = []
+    const plain = entity({ id: 'z1', name: 'spider', position: { x: 3.9, y: 64, z: 0.5 } })
+    const unmapped = combatPort({
+      target: () => plain,
+      moveTo: async () => {
+        unmappedMoves.push(1)
+        return { state: 'ok', elapsedMs: 1 }
+      },
+      attack: async () => {
+        unmappedAttacks += 1
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const chasing = createAttackDriver().start(
+      job({ entityId: 'z1', targetName: 'spider', maxChases: 1 }),
+      { port: unmapped.port, now: () => 1 },
+    )
+    await waitFor(chasing)
+    expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
+    expect(unmappedMoves).toHaveLength(1)
+    expect(unmappedAttacks).toBe(0)
+  })
+
+  it('passes the entity height into the eye-to-AABB reach check', async () => {
+    const enderman = entity({
+      id: 'z1',
+      name: 'enderman',
+      position: { x: 3.6, y: 62, z: 0.5 },
+      width: 0.6,
+      height: 2.9,
+    })
+    const mapped = combatPort({
+      target: () => enderman,
+      attack: async listeners => {
+        emit(listeners, 'entityDead', 'z1')
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'enderman' }), { port: mapped.port, now: () => 1 })
+    await waitFor(handle)
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { chases: 0 } })
+
+    // Without the reported height the default player box stops above the eye,
+    // adding ~1.1 blocks of vertical distance and forcing a chase.
+    const plain = entity({ id: 'z1', name: 'enderman', position: { x: 3.6, y: 62, z: 0.5 } })
+    const unmapped = combatPort({
+      target: () => plain,
+      moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
+      attack: async () => ({ state: 'ok', elapsedMs: 1 }),
+    })
+    const chasing = createAttackDriver().start(
+      job({ entityId: 'z1', targetName: 'enderman', maxChases: 1 }),
+      { port: unmapped.port, now: () => 1 },
+    )
+    await waitFor(chasing)
+    expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
+  })
 })

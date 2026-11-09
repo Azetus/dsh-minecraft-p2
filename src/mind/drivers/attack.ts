@@ -110,7 +110,11 @@ function combatPort(port: ClientPort, locateRadius: number): CombatPort {
     now: () => Date.now(),
     self: () => {
       const self = port.self()
-      return { pos: self.pos, health: self.health }
+      return {
+        pos: self.pos,
+        health: self.health,
+        ...(self.height === undefined ? {} : { height: self.height }),
+      }
     },
     entity: id => locate(port, id, locateRadius),
     canSee: id => port.canSee?.(id) ?? true,
@@ -163,6 +167,8 @@ function locate(port: ClientPort, entityId: string, locateRadius: number): Comba
     ...(entity.type === undefined ? {} : { type: entity.type }),
     ...(entity.kind === undefined ? {} : { kind: entity.kind }),
     ...(entity.health === undefined ? {} : { health: entity.health }),
+    ...(entity.width === undefined ? {} : { width: entity.width }),
+    ...(entity.height === undefined ? {} : { height: entity.height }),
   }
 }
 

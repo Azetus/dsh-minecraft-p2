@@ -304,9 +304,10 @@ interface Move {
 - `targetId`：不换目标。
 - `attackCooldown`：由当前攻击速度属性计算，不用固定毫秒。
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
-- `distanceBand`：超出 `reach` 先接近；进入 `reach` 后停步攻击。
+- `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。超出 `reach` 先接近；进入 `reach` 后停步攻击。
+- `recheck`：冷却等待结束后、真正发 `attack` 前重新读目标准确认存在/名字/保护/死亡证据/距离/视线；等待期间移动、遮挡或死亡的目标不补刀。被复核拦下的挥击计 `rejectedSwings`，不消耗攻击预算。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 当前不包含走位、盾牌、远程、暴击。
+- 当前不包含走位、盾牌、远程、暴击（盾牌留给 1B）。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 
@@ -316,6 +317,7 @@ interface Move {
 - `damageObserved`：短窗口内观察到目标受伤，且能归因到本方攻击。
 - `deathConfirmed`：观察到目标死亡（`entityDead`）。
 - `targetLost`：超出跟踪范围/卸载/视线丢失。
+- `rejectedSwings`：等待后的新鲜复核拦下的“本可发出”的挥击次数；只作证据，不改变终态。
 - 只有死亡证据才报 `killed`；单纯从查询范围消失只能报 `targetLost` / `insufficient`。
 
 ## 8. 与 P2Mind 的接口

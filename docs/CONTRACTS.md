@@ -121,7 +121,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。
+- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。攻击距离按**眼睛到目标 AABB 的最近点**计算：眼睛高度为 `self.height - 0.18`（缺失按 1.8），目标盒由 `EntityInfo.width/height` 构成（缺失按 0.6×1.8）；冷却等待结束后、真正发 `attack` 前用新鲜读回复核目标存在/名字/保护/死亡证据/距离/视线，复核拦下的挥击计入 `observed.rejectedSwings`（不消耗 `attacksIssued`），丢失/改名/保护仍用原失败码，终态语义不变。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
@@ -274,7 +274,7 @@ interface DriverHandle {
 | `check` | 查询完成并拿到容器/熔炉结果 | `kind:"container"`、provider error/observed |
 | `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
 | `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
-| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`ATTACK_TARGET_LOST` |
+| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`ATTACK_TARGET_LOST` |
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 
