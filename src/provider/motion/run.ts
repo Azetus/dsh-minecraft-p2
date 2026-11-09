@@ -1,8 +1,8 @@
 import type { Bot } from 'mineflayer'
 
 import type { JsonValue } from '../../contracts/types.ts'
-import { PathExecutor, standingCell } from '../execute/index.ts'
-import { WAYPOINT_TOLERANCE } from '../model/block.ts'
+import { PathExecutor, standingCell } from '../../motion/execute/index.ts'
+import { WAYPOINT_TOLERANCE } from '../../motion/model/block.ts'
 import {
   defaultConstraints,
   createGoal,
@@ -14,8 +14,8 @@ import {
   type MotionConstraints,
   type MotionGoal,
   type Move,
-} from '../model/types.ts'
-import { MotionSearch } from '../search/astar.ts'
+} from '../../motion/model/types.ts'
+import { MotionSearch } from '../../motion/search/astar.ts'
 import { MotionContextSource } from './context.ts'
 import { MineflayerMotionWorld } from './world.ts'
 

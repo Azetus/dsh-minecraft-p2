@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createMoveDriver } from '../src/mind/drivers/move.ts'
 import { AsyncDriverHandle } from '../src/mind/drivers/handle.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
-import type { ActResult, ClientPort } from '../src/port/index.ts'
+import type { ActResult, BodyApi } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M1-03, driver half).
@@ -32,7 +32,7 @@ function job(params: Record<string, unknown> = { x: 1, y: 64, z: 0, range: 2 }):
 }
 
 function portWith(promise: Promise<ActResult>): {
-  port: ClientPort
+  port: BodyApi
   calls: Array<{ target: unknown; opts: unknown }>
 } {
   const calls: Array<{ target: unknown; opts: unknown }> = []
@@ -43,7 +43,7 @@ function portWith(promise: Promise<ActResult>): {
     },
     self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
     blockAt: () => ({ name: 'air', loaded: true }),
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, calls }
 }
 
@@ -55,7 +55,7 @@ describe('move driver', () => {
     const pending = deferred<ActResult>()
     const { port, calls } = portWith(pending.promise)
     const driver = createMoveDriver()
-    const handle = driver.start(job(), { port, now: () => 0 })
+    const handle = driver.start(job(), { body: port, now: () => 0 })
 
     expect(calls).toEqual([{ target: { x: 1, y: 64, z: 0 }, opts: { range: 2, timeoutMs: 1_000 } }])
     expect(handle.result()).toEqual({ state: 'running' })
@@ -70,7 +70,7 @@ describe('move driver', () => {
   it('never reports an unknown ActResult as success', async () => {
     const pending = deferred<ActResult>()
     const { port } = portWith(pending.promise)
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     pending.resolve({ state: 'unknown', code: 'CLIENT_TIMEOUT', elapsedMs: 10 })
     await flush()
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'CLIENT_TIMEOUT' })
@@ -81,7 +81,7 @@ describe('move driver', () => {
   it('keeps a provider failure code', async () => {
     const pending = deferred<ActResult>()
     const { port } = portWith(pending.promise)
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     pending.resolve({ state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 10, observed: { pathStatus: 'noPath' } })
     await flush()
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'GOTO_NO_PATH', observed: { pathStatus: 'noPath' } })
@@ -101,8 +101,8 @@ describe('move driver', () => {
       self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
       blockAt: (p: { x: number; y: number; z: number }) =>
         blocks.get(`${p.x},${p.y},${p.z}`) ?? { name: 'air', loaded: true },
-    } as unknown as ClientPort
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    } as unknown as BodyApi
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     pending.resolve({
       state: 'failed',
       code: 'GOTO_NO_PATH',
@@ -135,8 +135,8 @@ describe('move driver', () => {
       moveTo: () => pending.promise,
       self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
       blockAt: () => ({ name: 'dirt', loaded: true }),
-    } as unknown as ClientPort
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    } as unknown as BodyApi
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     pending.resolve({
       state: 'failed',
       code: 'GOTO_STUCK',
@@ -160,7 +160,7 @@ describe('move driver', () => {
   it('never reports stopped when the port cannot confirm release', async () => {
     const pending = deferred<ActResult>()
     const { port } = portWith(pending.promise)
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     handle.requestStop()
     pending.resolve({ state: 'unknown', code: 'STOP_UNCONFIRMED', elapsedMs: 10 })
     await flush()
@@ -174,7 +174,7 @@ describe('move driver', () => {
   it('reports interrupted and stopped when stopped before completion', async () => {
     const pending = deferred<ActResult>()
     const { port } = portWith(pending.promise)
-    const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+    const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
     handle.requestStop()
     expect(handle.stopStatus()).toBe('stopping')
     pending.resolve({ state: 'ok', elapsedMs: 10 })

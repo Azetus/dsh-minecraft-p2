@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import type { SuspensionState } from '../src/contracts/protocol.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: state safety (F pause semantics).
@@ -39,7 +39,7 @@ function suspension(suspended: boolean, at = 0): SuspensionState {
   }
 }
 
-function fakePort(state: { suspension: SuspensionState; pos: Vec3 }): ClientPort {
+function fakePort(state: { suspension: SuspensionState; pos: Vec3 }): BodyApi {
   const blocks = new Map<string, BlockInfo>()
   for (let x = -1; x <= 2; x += 1) {
     for (let z = -1; z <= 1; z += 1) {
@@ -80,7 +80,7 @@ function fakePort(state: { suspension: SuspensionState; pos: Vec3 }): ClientPort
       blocks.set(key(p), { name: item, loaded: true, pos: { ...p } })
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
 }
 
 const flush = async (): Promise<void> => {
@@ -91,7 +91,7 @@ describe('pause semantics', () => {
   it('suspends the running job without consuming a retry, then resumes', async () => {
     const state = { suspension: suspension(false), pos: { x: 0.5, y: 64, z: 0.5 } }
     const mind = createMind({
-      port: fakePort(state),
+      body: fakePort(state),
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(root, 'content', 'plans'),
@@ -137,7 +137,7 @@ describe('pause semantics', () => {
     const state = { suspension: suspension(false), pos: { x: 0.5, y: 64, z: 0.5 } }
     let clock = 1_000
     const mind = createMind({
-      port: fakePort(state),
+      body: fakePort(state),
       now: () => clock,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },

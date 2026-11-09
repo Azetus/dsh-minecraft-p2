@@ -1,4 +1,4 @@
-import type { BlockInfo, Item } from '../port/index.ts'
+import type { BlockInfo, Item } from '../body/api.ts'
 
 export type DigPurpose = 'clear' | 'harvest'
 

@@ -1,56 +1,46 @@
 import type { Bot } from 'mineflayer'
 import { Vec3 as Vec3Class } from 'vec3'
 
-import { p2Error } from '../../contracts/protocol.ts'
-import type { JsonValue, P2Error } from '../../contracts/types.ts'
-import type { SuspensionState } from '../../contracts/protocol.ts'
-import type { ProviderSuspension } from '../../provider/mineflayer.ts'
-import type { ActHandle, ActPoll } from '../../provider/runtime.ts'
-import type { Capability, ClientAction } from '../capabilities.ts'
-import { checkCapability } from '../capabilities.ts'
-import type {
-  ClientEvent,
-  ClientPort,
-  CombatStepOptions,
-  ContainerTransferAction,
-  MoveOptions,
-} from '../client-port.ts'
+import { p2Error } from '../contracts/protocol.ts'
+import type { JsonValue, P2Error } from '../contracts/types.ts'
+import type { SuspensionState } from '../contracts/protocol.ts'
+import type { MineflayerProvider, ProviderSuspension } from './mineflayer.ts'
+import type { ActHandle, ActPoll } from './types.ts'
 import type {
   ActResult,
   BiomeInfo,
   BlockInfo,
+  BodyApi,
+  BodyEvent,
   Box,
+  CombatStepOptions,
   ContainerCheckResult,
+  ContainerTransferAction,
   EntityInfo,
   Face,
   FindBlocksQuery,
   Item,
   Landmark,
-  ScreenInfo,
+  MoveOptions,
   SelfInfo,
   Vec3,
-} from '../types.ts'
-import { PortErrorCodes, actFailed, actOk, actUnknown } from '../types.ts'
+  WriteToken,
+} from '../body/api.ts'
+import { BodyErrorCodes, actFailed, actOk, actUnknown } from '../body/api.ts'
 import { blockTagsFor, type BlockTagIndex } from './block-tags.ts'
-import { WriteGate, staleWriteResult, type WriteToken } from '../write-token.ts'
+import { WriteGate, staleWriteResult } from './control.ts'
 
-/** The act half of the provider; the port only starts bounded actions. */
-export type MineflayerActSource = {
-  capabilities: readonly string[]
-  start(name: string, args: Record<string, JsonValue>): ActHandle
-  /** Provider pause/resume transitions, when the adapter reports them. */
-  onSuspension?: (listener: (state: ProviderSuspension) => void) => () => void
-}
-
-export type MineflayerPortOptions = {
+export type MineflayerBodyOptions = {
   /** Monotonic clock; tests may substitute one. */
   now?: () => number
   pollIntervalMs?: number
-  /** Stable world id from config; dimension is appended by the port. */
+  /** Stable world id from config; dimension is appended by the body. */
   worldId?: string
   /** Hard caps may be lowered (never raised) by the body's configuration. */
-  timeouts?: Partial<Record<ClientAction, number>>
+  timeouts?: Partial<Record<BodyAction, number>>
 }
+
+type BodyAction = keyof typeof ACTION_TIMEOUTS
 
 /** Hard cap per action; the driver's budget can only lower it. */
 const ACTION_TIMEOUTS = {
@@ -65,7 +55,6 @@ const ACTION_TIMEOUTS = {
   useOn: 5_000,
   attack: 2_000,
   sleep: 30_000,
-  screen: 5_000,
   containerTransfer: 10_000,
 } as const
 
@@ -81,8 +70,8 @@ const RETRY_SAFE_TIMEOUT_ACTS: ReadonlySet<string> = new Set([
   'equip',
 ])
 
-function timeoutCode(name: string): typeof PortErrorCodes.ACT_TIMEOUT | typeof PortErrorCodes.ACT_UNCONFIRMED {
-  return RETRY_SAFE_TIMEOUT_ACTS.has(name) ? PortErrorCodes.ACT_TIMEOUT : PortErrorCodes.ACT_UNCONFIRMED
+function timeoutCode(name: string): typeof BodyErrorCodes.ACT_TIMEOUT | typeof BodyErrorCodes.ACT_UNCONFIRMED {
+  return RETRY_SAFE_TIMEOUT_ACTS.has(name) ? BodyErrorCodes.ACT_TIMEOUT : BodyErrorCodes.ACT_UNCONFIRMED
 }
 
 /**
@@ -137,25 +126,24 @@ type WaitResult =
       kind: 'timeout'
       released: boolean
       /** Only meaningful when `released`; unreleased timeouts are STOP_UNCONFIRMED. */
-      code: typeof PortErrorCodes.ACT_TIMEOUT | typeof PortErrorCodes.ACT_UNCONFIRMED
+      code: typeof BodyErrorCodes.ACT_TIMEOUT | typeof BodyErrorCodes.ACT_UNCONFIRMED
       /** Set only when a server message in the act window explicitly denied it. */
       denial?: { at: number; text: string }
       observed?: JsonValue
     }
 
 /**
- * ClientPort over one mineflayer bot. Reads come from the live bot; writes go
+ * Body over one mineflayer bot. Reads come from the live bot; writes go
  * through the provider's bounded act handles so the hard-won control release
  * and readback behaviour is reused instead of duplicated.
  */
-export class MineflayerClientPort implements ClientPort {
+export class MineflayerBody implements BodyApi {
   private readonly gate = new WriteGate()
   private readonly running = new Set<{ handle: ActHandle; epoch: number }>()
-  private readonly listeners = new Map<ClientEvent, Set<(payload: JsonValue) => void>>()
+  private readonly listeners = new Map<BodyEvent, Set<(payload: JsonValue) => void>>()
   /** Bounded server messages used as timeout/denial evidence. */
   private readonly serverMessages: Array<{ at: number; text: string }> = []
-  private readonly capabilityList: Capability[]
-  private readonly timeouts: Record<ClientAction, number>
+  private readonly timeouts: Record<BodyAction, number>
   private readonly now: () => number
   private readonly pollIntervalMs: number
   private readonly worldId: string
@@ -178,14 +166,13 @@ export class MineflayerClientPort implements ClientPort {
 
   constructor(
     private readonly bot: Bot,
-    private readonly acts: MineflayerActSource,
-    options: MineflayerPortOptions = {},
+    private readonly acts: MineflayerProvider,
+    options: MineflayerBodyOptions = {},
   ) {
     this.now = options.now ?? (() => performance.now())
     this.pollIntervalMs = options.pollIntervalMs ?? 20
     this.worldId = options.worldId ?? 'unknown'
     this.blockTags = blockTagsFor(bot)
-    this.capabilityList = portCapabilities(acts.capabilities)
     this.timeouts = { ...ACTION_TIMEOUTS, ...options.timeouts }
     this.wireEvents()
     acts.onSuspension?.(state => {
@@ -480,12 +467,6 @@ export class MineflayerClientPort implements ClientPort {
     return (this.bot.players as unknown as Record<string, unknown>)[name] !== undefined
   }
 
-  async screen(): Promise<ScreenInfo | null> {
-    // The mineflayer provider has no screen snapshot support yet; the declared
-    // capability list omits observe.screen, so `null` is not a silent success.
-    return null
-  }
-
   time(): { timeOfDay: number; worldAge: number } {
     const time = this.bot.time as unknown as { timeOfDay?: number | bigint; age?: number | bigint } | undefined
     const timeOfDay = numberOrUndefined(time?.timeOfDay)
@@ -507,8 +488,6 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   async moveTo(target: Vec3 | Landmark, opts: MoveOptions = {}): Promise<ActResult> {
-    const denied = this.deny('moveTo')
-    if (denied !== undefined) return denied
     if (!isVec3(target)) return actFailed('INVALID_TARGET', 0)
 
     const range = opts.exact === true ? 0 : opts.range ?? 1
@@ -534,7 +513,7 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   /**
-   * One adjacent-cell step with a fixed yaw. No capability entry: the method is
+   * One adjacent-cell step with a fixed yaw. The method is
    * the contract; callers check its presence rather than a coarse `combat` flag.
    */
   async combatStep(opts: CombatStepOptions): Promise<ActResult> {
@@ -569,9 +548,6 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   async place(p: Vec3, face: Face, item: string): Promise<ActResult> {
-    const denied = this.deny('place')
-    if (denied !== undefined) return denied
-
     const equipped = await this.ensureHeld(item)
     if (equipped !== undefined) return equipped
     return await this.run('place', { x: p.x, y: p.y, z: p.z, face, item }, this.timeouts.place)
@@ -598,8 +574,6 @@ export class MineflayerClientPort implements ClientPort {
   }
 
   async craft(item: string, count = 1): Promise<ActResult> {
-    const denied = this.deny('place')
-    if (denied !== undefined) return denied
     return await this.run('craft', { item, count }, this.timeouts.place)
   }
 
@@ -693,7 +667,7 @@ export class MineflayerClientPort implements ClientPort {
     return 3
   }
 
-  on(event: ClientEvent, cb: (payload: JsonValue) => void): void {
+  on(event: BodyEvent, cb: (payload: JsonValue) => void): void {
     let listeners = this.listeners.get(event)
     if (listeners === undefined) {
       listeners = new Set()
@@ -702,17 +676,8 @@ export class MineflayerClientPort implements ClientPort {
     listeners.add(cb)
   }
 
-  off(event: ClientEvent, cb: (payload: JsonValue) => void): void {
+  off(event: BodyEvent, cb: (payload: JsonValue) => void): void {
     this.listeners.get(event)?.delete(cb)
-  }
-
-  capabilities(): Capability[] {
-    return [...this.capabilityList]
-  }
-
-  private deny(action: ClientAction): ActResult | undefined {
-    const error = checkCapability(this.capabilityList, action)
-    return error === undefined ? undefined : actFailed(error.code, 0)
   }
 
   private async action(
@@ -720,8 +685,6 @@ export class MineflayerClientPort implements ClientPort {
     name: string,
     args: Record<string, JsonValue>,
   ): Promise<ActResult> {
-    const denied = this.deny(action)
-    if (denied !== undefined) return denied
     return await this.run(name, args, this.timeouts[action])
   }
 
@@ -770,7 +733,7 @@ export class MineflayerClientPort implements ClientPort {
         return actUnknown('STOP_UNCONFIRMED', this.now() - startedAt, observed)
       }
       // A result produced after the authority moved on is stale, not success.
-      if (!this.gate.isCurrent(epoch)) return actFailed(PortErrorCodes.STALE_WRITE, this.now() - startedAt)
+      if (!this.gate.isCurrent(epoch)) return actFailed(BodyErrorCodes.STALE_WRITE, this.now() - startedAt)
       if (waited.kind === 'timeout') {
         const denial = waited.denial
         const observed = denial === undefined
@@ -780,9 +743,9 @@ export class MineflayerClientPort implements ClientPort {
             : { denial } as JsonValue
         if (denial !== undefined) {
           if (isMove && this.gate.isCurrent(epoch)) {
-            this.emit('move.finished', { epoch, state: 'failed', code: PortErrorCodes.ACTION_DENIED, observed: observed ?? null })
+            this.emit('move.finished', { epoch, state: 'failed', code: BodyErrorCodes.ACTION_DENIED, observed: observed ?? null })
           }
-          return actFailed(PortErrorCodes.ACTION_DENIED, this.now() - startedAt, observed)
+          return actFailed(BodyErrorCodes.ACTION_DENIED, this.now() - startedAt, observed)
         }
         if (isMove) this.emit('move.finished', { epoch, state: 'unknown', code: waited.code, observed: waited.observed ?? null })
         return actUnknown(waited.code, this.now() - startedAt, waited.observed)
@@ -808,7 +771,7 @@ export class MineflayerClientPort implements ClientPort {
         // provider timeout means the effect may have landed even when the act
         // was released, so it is unconfirmed, never a retryable ACT_TIMEOUT.
         if (!isMove && (poll.error.code === 'ACT_TIMEOUT' || poll.error.code === 'ACT_UNCONFIRMED')) {
-          return actUnknown(PortErrorCodes.ACT_UNCONFIRMED, this.now() - startedAt, poll.error.details)
+          return actUnknown(BodyErrorCodes.ACT_UNCONFIRMED, this.now() - startedAt, poll.error.details)
         }
         return actFailed(poll.error.code, this.now() - startedAt, poll.error.details)
       }
@@ -960,25 +923,11 @@ export class MineflayerClientPort implements ClientPort {
     })
   }
 
-  private emit(event: ClientEvent, payload: JsonValue): void {
+  private emit(event: BodyEvent, payload: JsonValue): void {
     const listeners = this.listeners.get(event)
     if (listeners === undefined) return
     for (const listener of listeners) listener(payload)
   }
-}
-
-/** Map the provider's declared operations onto behavioural capabilities. */
-export function portCapabilities(providerCapabilities: readonly string[]): Capability[] {
-  const capabilities: Capability[] = []
-  if (providerCapabilities.includes('motion')) capabilities.push('navigate')
-  if (providerCapabilities.includes('dig')
-    && providerCapabilities.includes('place')
-    && providerCapabilities.includes('use')
-    && providerCapabilities.includes('interact')) {
-    capabilities.push('interact')
-  }
-  if (providerCapabilities.includes('attack')) capabilities.push('combat')
-  return capabilities
 }
 
 function blockInfo(

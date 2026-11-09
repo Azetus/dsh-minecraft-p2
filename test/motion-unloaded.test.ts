@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 
 import type { Bot } from 'mineflayer'
-import { MotionRun } from '../src/motion/mineflayer/run.ts'
+import { MotionRun } from '../src/provider/motion/run.ts'
 
 function unloadedTargetBot(): Bot {
   const bot = Object.assign(new EventEmitter(), {

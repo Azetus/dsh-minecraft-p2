@@ -104,7 +104,6 @@ export function normalizeBindingManifest(manifest: BindingManifest): BindingMani
         },
     irVersion: manifest.irVersion,
     opContractVersion: manifest.opContractVersion,
-    capabilities: [...new Set(manifest.capabilities)].sort(compareKeys),
     driver: manifest.driver ?? null,
     config: manifest.config,
   }

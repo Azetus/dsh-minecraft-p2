@@ -1,7 +1,7 @@
 import type { Bot } from 'mineflayer'
 import { Vec3 as Vec3Class } from 'vec3'
 
-import { blockTagsFor, type BlockTagIndex } from '../../port/mineflayer/block-tags.ts'
+import { blockTagsFor, type BlockTagIndex } from '../block-tags.ts'
 import type {
   Box,
   Cell,
@@ -11,7 +11,7 @@ import type {
   MotionWorld,
   RawBlock,
   SelfView,
-} from '../model/types.ts'
+} from '../../motion/model/types.ts'
 
 type BlockLike = {
   type?: number

@@ -7,7 +7,7 @@ import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '.
 import { MAIN_TREE } from '../src/mind/trees.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { EntityInfo, SelfInfo } from '../src/port/index.ts'
+import type { EntityInfo, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: state safety / contract.

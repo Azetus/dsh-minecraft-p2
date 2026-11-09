@@ -1,6 +1,6 @@
 import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import type { Vec3 } from '../../port/index.ts'
+import type { Vec3 } from '../../body/api.ts'
 import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { pickupNearby } from '../pickup.ts'
 import type { PickupItemOutcome, PickupResult } from '../pickup.ts'
@@ -80,11 +80,11 @@ export function createCollectDriver(): Driver {
 }
 
 async function collect(ctx: DriverCtx, params: CollectParams): Promise<DriverResult> {
-  const origin: Vec3 = { ...ctx.port.self().pos }
+  const origin: Vec3 = { ...ctx.body.self().pos }
   const radius = params.radius ?? DEFAULT_RADIUS
   const maxDrops = params.maxDrops ?? DEFAULT_MAX_DROPS
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const pickup = await pickupNearby(ctx.port, origin, {
+  const pickup = await pickupNearby(ctx.body, origin, {
     radius,
     maxDrops,
     timeoutMs,

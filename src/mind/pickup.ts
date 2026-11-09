@@ -11,7 +11,7 @@ import {
 } from '../motion/model/index.ts'
 import { MotionSearch, standCells, type StandCell, type StandResult } from '../motion/search/index.ts'
 import { createReadOnlyMotionWorld } from './standing.ts'
-import type { Box, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
+import type { Box, BodyApi, EntityInfo, Item, SelfInfo, Vec3 } from '../body/api.ts'
 import {
   boxDistance,
   canPickupAt,
@@ -172,7 +172,7 @@ const PLAYER_HEIGHT = 1.8
  * and returns; it never retries the same entity after that.
  */
 export async function pickupNearby(
-  port: ClientPort,
+  port: BodyApi,
   center: Vec3,
   options: PickupOptions = {},
 ): Promise<PickupResult> {
@@ -439,7 +439,7 @@ export async function pickupNearby(
 }
 
 async function requeryItem(
-  port: ClientPort,
+  port: BodyApi,
   query: Box,
   original: EntityInfo,
   view: PickupItemView,
@@ -479,7 +479,7 @@ type PickupCellChoice = {
 }
 
 function findPickupCells(
-  port: ClientPort,
+  port: BodyApi,
   item: EntityInfo,
   self: SelfInfo,
 ): PickupCellChoice {
@@ -580,7 +580,7 @@ function standUnreachableReason(found: { cells: Vec3[]; query: StandResult }): N
   return found.query.reason === 'unloaded-window' ? 'unloaded-window' : 'no-stand-cell'
 }
 
-function itemView(port: ClientPort, entity: EntityInfo, self: SelfInfo): PickupItemView {
+function itemView(port: BodyApi, entity: EntityInfo, self: SelfInfo): PickupItemView {
   const box = itemBox(entity)
   return {
     id: entity.id,
@@ -597,7 +597,7 @@ function itemView(port: ClientPort, entity: EntityInfo, self: SelfInfo): PickupI
 }
 
 function dropsIn(
-  port: ClientPort,
+  port: BodyApi,
   query: Box,
   center: Vec3,
   radius: number,
@@ -649,7 +649,7 @@ function freeSlots(items: Item[]): number | undefined {
 }
 
 async function waitForIncrease(
-  port: ClientPort,
+  port: BodyApi,
   before: number,
   timeoutMs: number,
   now: () => number,

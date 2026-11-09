@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { OrderStore } from '../src/mind/orders.ts'
-import type { ClientPort, EntityInfo, SelfInfo } from '../src/port/index.ts'
+import type { BodyApi, EntityInfo, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: state safety (order retry policy).
@@ -28,7 +28,7 @@ afterEach(() => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 function fakePort(outcomes: Array<{ state: 'ok' | 'failed'; code?: string }>): {
-  port: ClientPort
+  port: BodyApi
   attempts: () => number
   equips: () => number
 } {
@@ -63,7 +63,7 @@ function fakePort(outcomes: Array<{ state: 'ok' | 'failed'; code?: string }>): {
       equips += 1
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, attempts: () => attempts, equips: () => equips }
 }
 
@@ -76,13 +76,13 @@ async function runUntilTerminal(mind: ReturnType<typeof createMind>, id: string)
   }
 }
 
-function makeMind(port: ClientPort) {
+function makeMind(port: BodyApi) {
   return makeMindAt(port, tempJournal())
 }
 
-function makeMindAt(port: ClientPort, journalPath: string) {
+function makeMindAt(port: BodyApi, journalPath: string) {
   return createMind({
-    port,
+    body: port,
     home: { x: 0, y: 64, z: 0 },
     baseActivity: { kind: 'idle' },
     plansDir: join(process.cwd(), 'content', 'plans'),
@@ -98,7 +98,7 @@ describe('primitive order retry policy', () => {
     seed.enqueue({ id: 'old-go', verb: 'go', params: { x: 1, y: 64, z: 0 } })
 
     const mind = createMind({
-      port: fakePort([{ state: 'ok' }]).port,
+      body: fakePort([{ state: 'ok' }]).port,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -138,7 +138,7 @@ describe('primitive order retry policy', () => {
   it('expires a timed hold from its active slot as a succeeded pause', () => {
     let clock = 10_000
     const mind = createMind({
-      port: fakePort([{ state: 'ok' }]).port,
+      body: fakePort([{ state: 'ok' }]).port,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -212,7 +212,7 @@ describe('primitive order retry policy', () => {
       // A write-authority assertion is a definition error: the same order
       // must fail on the first job instead of retrying.
       beginWrite: () => { throw Object.assign(new Error('driver assertion'), { code: 'ERR_ASSERTION' }) },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const mind = makeMind(port)
     mind.enqueueOrder({ id: 'ord-assert', verb: 'go', params: { x: 1, y: 64, z: 0 } })
     await runUntilTerminal(mind, 'ord-assert')
@@ -252,7 +252,7 @@ describe('primitive order retry policy', () => {
       endWrite: () => {},
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       place: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const mind = makeMind(port)
     mind.enqueueOrder({ id: 'ord-self', verb: 'place', params: { x: 0, y: 64, z: 0, item: 'dirt' } })
     await runUntilTerminal(mind, 'ord-self')
@@ -277,7 +277,7 @@ describe('primitive order retry policy', () => {
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       equip: async () => ({ state: 'failed' as const, code: 'EQUIP_NO_ITEM', elapsedMs: 1 }),
       useItem: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const mind = makeMind(port)
     mind.enqueueOrder({ id: 'ord-noitem', verb: 'use', params: { item: 'dirt' } })
     await runUntilTerminal(mind, 'ord-noitem')
@@ -317,7 +317,7 @@ describe('primitive order retry policy', () => {
       beginWrite: () => {},
       endWrite: () => {},
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const mind = makeMind(port)
     mind.enqueueOrder({ id: 'ord-collect', verb: 'collect', params: { radius: 8 } })
     await runUntilTerminal(mind, 'ord-collect')

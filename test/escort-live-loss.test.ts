@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
-import { MineflayerClientPort } from '../src/port/mineflayer/index.ts'
+import { MineflayerBody } from '../src/provider/index.ts'
 import type { MindEvent } from '../src/mind/events.ts'
 
 /**
@@ -31,7 +31,7 @@ const GRACE_MS = 2_000
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-type LiveBot = { bot: Bot; provider: MineflayerProvider; port: MineflayerClientPort }
+type LiveBot = { bot: Bot; provider: MineflayerProvider; port: MineflayerBody }
 
 async function connect(username: string): Promise<LiveBot> {
   const bot = await connectMineflayer({
@@ -42,7 +42,7 @@ async function connect(username: string): Promise<LiveBot> {
     timeoutMs: 20_000,
   })
   const provider = new MineflayerProvider(bot, { serverIdleMs: 1500, providerVersion: 'escort-live-loss' })
-  const port = new MineflayerClientPort(bot, provider, { pollIntervalMs: 50 })
+  const port = new MineflayerBody(bot, provider, { pollIntervalMs: 50 })
   await sleep(1_500)
   return { bot, provider, port }
 }
@@ -72,7 +72,7 @@ describe.skipIf(!LIVE)('live escort loss and recovery', () => {
 
       const feet = escort.port.self().pos
       const mind = createMind({
-        port: escort.port,
+        body: escort.port,
         home: { x: Math.floor(feet.x), y: Math.floor(feet.y), z: Math.floor(feet.z) },
         baseActivity: { kind: 'escort', target: TARGET_USER, distance: 3 },
         plansDir: join(process.cwd(), 'content', 'plans'),

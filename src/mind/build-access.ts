@@ -1,4 +1,4 @@
-import type { Vec3 } from '../port/index.ts'
+import type { Vec3 } from '../body/api.ts'
 import { itemPosition } from './plan.ts'
 import type { PlanInstance, WorkItem } from './plan.ts'
 import type { WorldView } from './types.ts'

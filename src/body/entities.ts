@@ -12,7 +12,7 @@ import type {
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { P2Error } from '../contracts/types.ts'
-import type { ClientPort } from '../port/index.ts'
+import type { BodyApi } from '../body/api.ts'
 
 /**
  * Entity-only observation. It reuses the client's tracked entity set, so it
@@ -20,7 +20,7 @@ import type { ClientPort } from '../port/index.ts'
  * (not rendering) is the real limit.
  */
 export function observeEntities(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   at: number,
 ): WorldEntitiesResult {

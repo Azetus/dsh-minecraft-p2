@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Bot } from 'mineflayer'
 
 import { MineflayerProvider } from '../src/provider/mineflayer.ts'
-import type { ActPoll, QueryOutcome } from '../src/provider/runtime.ts'
+import type { ActPoll, QueryOutcome } from '../src/provider/types.ts'
 
 type Vec = { x: number; y: number; z: number }
 

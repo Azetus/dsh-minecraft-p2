@@ -4,7 +4,7 @@ import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate } from '../src/mind/plan.ts'
 import { verifyUsableRoom } from '../src/mind/verify/usable-room.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, SelfInfo } from '../src/body/api.ts'
 
 const self: SelfInfo = {
   pos: { x: 0.5, y: 64, z: 0.5 },

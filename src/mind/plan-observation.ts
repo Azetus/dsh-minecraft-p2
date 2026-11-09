@@ -1,4 +1,4 @@
-import type { Box, Vec3 } from '../port/index.ts'
+import type { Box, Vec3 } from '../body/api.ts'
 import { interiorBounds } from './build-access.ts'
 import { itemPosition } from './plan.ts'
 import type { PlanInstance, WorkItem } from './plan.ts'

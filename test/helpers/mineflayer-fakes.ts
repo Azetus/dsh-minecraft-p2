@@ -2,12 +2,11 @@ import { EventEmitter } from 'node:events'
 
 import { p2Error } from '../../src/contracts/protocol.ts'
 import type { JsonValue } from '../../src/contracts/types.ts'
-import type { ActHandle, ActPoll } from '../../src/provider/runtime.ts'
-import type { MineflayerActSource } from '../../src/port/mineflayer/index.ts'
-import type { WriteToken } from '../../src/port/index.ts'
+import type { ActHandle, ActPoll } from '../../src/provider/types.ts'
+import type { WriteToken } from '../../src/body/api.ts'
 
 /**
- * Boundary fakes for the mineflayer ClientPort. They provide only the inputs
+ * Boundary fakes for the mineflayer BodyApi. They provide only the inputs
  * the port contract defines (blocks, entities, provider acts); they do not
  * simulate the game.
  */
@@ -154,7 +153,7 @@ export class FakeHandle implements ActHandle {
   }
 }
 
-export class FakeActSource implements MineflayerActSource {
+export class FakeActSource {
   readonly calls: FakeCall[] = []
   readonly handles: FakeHandle[] = []
   mode: FakeMode = 'succeed'
@@ -162,8 +161,6 @@ export class FakeActSource implements MineflayerActSource {
   /** Set false to model a stop request the provider cannot prove has landed. */
   releaseOnStop = true
   onStart: ((name: string, args: Record<string, JsonValue>) => void) | undefined
-
-  constructor(readonly capabilities: readonly string[] = ['motion', 'dig', 'place', 'use', 'interact', 'attack']) {}
 
   start(name: string, args: Record<string, JsonValue>): ActHandle {
     if (this.mode === 'disconnected') {

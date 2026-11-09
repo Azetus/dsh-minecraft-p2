@@ -1,9 +1,9 @@
-import type { Box, ClientPort, Vec3 } from '../port/index.ts'
+import type { BodyApi, Box, Vec3 } from '../body/api.ts'
 import { SnapshotWorld } from './world.ts'
 import type { SnapshotData } from './world.ts'
 
 export type SensorOptions = {
-  port: ClientPort
+  body: BodyApi
   /** Block sample: horizontal radius and vertical range around the feet. */
   blockRadius?: number
   verticalMin?: number
@@ -27,7 +27,7 @@ export type SensorOptions = {
  * as the default box moved with the body.
  */
 export class Sensors {
-  private readonly port: ClientPort
+  private readonly body: BodyApi
   private readonly blockRadius: number
   private readonly verticalMin: number
   private readonly verticalMax: number
@@ -41,7 +41,7 @@ export class Sensors {
   private sampledAt = 0
 
   constructor(options: SensorOptions) {
-    this.port = options.port
+    this.body = options.body
     this.blockRadius = options.blockRadius ?? 10
     this.verticalMin = options.verticalMin ?? -6
     this.verticalMax = options.verticalMax ?? 8
@@ -111,8 +111,8 @@ export class Sensors {
   }
 
   private sample(extra?: Box[]): SnapshotData {
-    const self = this.port.self()
-    const time = this.port.time()
+    const self = this.body.self()
+    const time = this.body.time()
     const feet = {
       x: Math.floor(self.pos.x),
       y: Math.floor(self.pos.y),
@@ -126,11 +126,11 @@ export class Sensors {
       min: { x: feet.x - this.entityRadius, y: feet.y - this.entityVertical, z: feet.z - this.entityRadius },
       max: { x: feet.x + this.entityRadius, y: feet.y + this.entityVertical, z: feet.z + this.entityRadius },
     }
-    const blocks = this.port.blocksIn(blockBox)
-    for (const box of this.targetedBoxes()) blocks.push(...this.port.blocksIn(box))
-    for (const box of extra ?? []) blocks.push(...this.port.blocksIn(box))
-    const entities = this.port.entities(entityBox)
-    const inventory = this.port.inventory()
+    const blocks = this.body.blocksIn(blockBox)
+    for (const box of this.targetedBoxes()) blocks.push(...this.body.blocksIn(box))
+    for (const box of extra ?? []) blocks.push(...this.body.blocksIn(box))
+    const entities = this.body.entities(entityBox)
+    const inventory = this.body.inventory()
     return { self, time, entities, blocks, inventory }
   }
 }

@@ -1,4 +1,4 @@
-import type { ActResult, BlockInfo, ClientPort, MoveOptions, Vec3 } from '../../port/index.ts'
+import type { ActResult, BlockInfo, BodyApi, MoveOptions, Vec3 } from '../../body/api.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { isRecord } from '../../contracts/index.ts'
 import type { SchemaNode } from '../schema.ts'
@@ -113,7 +113,7 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
         observed: moveFailure(ctx, 'GOTO_TIMEOUT', last?.observed, params),
       }
     }
-    const result = await ctx.port.moveTo(goal, {
+    const result = await ctx.body.moveTo(goal, {
       range,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
       ...(params.exact === undefined ? {} : { exact: params.exact }),
@@ -162,14 +162,14 @@ function moveFailure(
   params: MoveParams,
 ): JsonValue {
   const facts: Record<string, JsonValue> = {
-    snapshot: failureSnapshot(ctx.port, params, observed) as unknown as JsonValue,
+    snapshot: failureSnapshot(ctx.body, params, observed) as unknown as JsonValue,
   }
   const blocked = [
     ...blockCells(observed, 'bodyOverlap'),
     ...blockCells(observed, 'blockedBy'),
   ]
   if (code === 'GOTO_STUCK') {
-    facts.probe = probeBody(ctx.port)
+    facts.probe = probeBody(ctx.body)
     // Only claim blockedAhead when the body itself overlaps a known block;
     // a sampled neighbour is evidence, but not proof of the blocking cell.
     if (blocked.length > 0) facts.blockedAhead = blocked as unknown as JsonValue
@@ -212,7 +212,7 @@ function blockCells(
   return cells
 }
 
-function probeBody(port: ClientPort): JsonValue {
+function probeBody(port: BodyApi): JsonValue {
   const pos = port.self().pos
   const x = Math.floor(pos.x)
   const y = Math.floor(pos.y)

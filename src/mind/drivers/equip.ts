@@ -58,10 +58,10 @@ async function equip(ctx: DriverCtx, params: EquipParams): Promise<DriverResult>
 
   const item = params.item
   if (item === undefined || item.length === 0) return { state: 'failed', code: 'BAD_ARGS' }
-  const available = ctx.port.inventory().some(entry => entry.name === item)
+  const available = ctx.body.inventory().some(entry => entry.name === item)
   if (!available) return { state: 'failed', code: 'EQUIP_ITEM_MISSING' }
 
-  const result = await ctx.port.equip(item, destination)
+  const result = await ctx.body.equip(item, destination)
   if (result.state !== 'ok') {
     return {
       state: 'failed',
@@ -100,8 +100,8 @@ async function equip(ctx: DriverCtx, params: EquipParams): Promise<DriverResult>
 }
 
 async function unequip(ctx: DriverCtx, destination: 'hand' | 'offhand'): Promise<DriverResult> {
-  if (ctx.port.unequip === undefined) return { state: 'failed', code: 'UNEQUIP_FAILED' }
-  const result = await ctx.port.unequip(destination)
+  if (ctx.body.unequip === undefined) return { state: 'failed', code: 'UNEQUIP_FAILED' }
+  const result = await ctx.body.unequip(destination)
   if (result.state !== 'ok') {
     return {
       state: 'failed',

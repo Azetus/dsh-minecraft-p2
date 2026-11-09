@@ -5,7 +5,7 @@ import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate, WorkItem } from '../src/mind/plan.ts'
 import type { EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, Item, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, Item, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M2-02).

@@ -1,4 +1,4 @@
-import type { Box, EntityInfo, SelfInfo, Vec3 } from '../port/index.ts'
+import type { Box, EntityInfo, SelfInfo, Vec3 } from '../body/api.ts'
 
 const PLAYER_WIDTH = 0.6
 const PLAYER_HEIGHT = 1.8

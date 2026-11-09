@@ -1,4 +1,4 @@
-import type { ContainerTransferAction } from '../../port/index.ts'
+import type { ContainerTransferAction } from '../../body/api.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -63,10 +63,10 @@ export function createContainerDriver(): Driver {
 
 async function transfer(ctx: DriverCtx, params: ContainerParams): Promise<DriverResult> {
   const chest = { x: params.x, y: params.y, z: params.z }
-  const moved = await ctx.port.moveTo(chest, { range: 2, timeoutMs: 20_000 })
+  const moved = await ctx.body.moveTo(chest, { range: 2, timeoutMs: 20_000 })
   if (moved.state !== 'ok') return { state: 'failed', code: moved.code ?? 'CONTAINER_MOVE_FAILED' }
   const requested = params.count ?? 1
-  const result = await ctx.port.containerTransfer(
+  const result = await ctx.body.containerTransfer(
     chest,
     params.action,
     params.item,

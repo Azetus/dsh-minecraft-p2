@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createCheckDriver } from '../src/mind/drivers/check.ts'
 import { checkPosition, createCheckGiver } from '../src/mind/givers/check.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { ClientPort } from '../src/port/index.ts'
+import type { BodyApi } from '../src/body/api.ts'
 
 /**
  * Category: data (M4-02 check job).
@@ -11,18 +11,18 @@ import type { ClientPort } from '../src/port/index.ts'
  * verifiers never need to open one.
  */
 
-function fakePort(result: unknown): ClientPort {
+function fakePort(result: unknown): BodyApi {
   return {
     self: () => ({ pos: { x: 1.5, y: 64, z: 1.5 } }),
     moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
     containerAt: async () => result,
-  } as unknown as ClientPort
+  } as unknown as BodyApi
 }
 
 async function runCheck(result: unknown) {
   const driver = createCheckDriver()
   const job = { driverId: 'check', params: { x: 1, y: 64, z: 1 } } as unknown as Job
-  const handle = driver.start(job, { port: fakePort(result), now: () => 1 })
+  const handle = driver.start(job, { body: fakePort(result), now: () => 1 })
   for (let index = 0; index < 50; index += 1) {
     handle.tick()
     if (handle.result().state !== 'running') break

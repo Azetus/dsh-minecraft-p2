@@ -23,7 +23,7 @@ const binding: BindingManifest = {
   provider: null,
   irVersion: 1,
   opContractVersion: '1',
-  capabilities: ['query.inventory', 'control.move'],
+
   driver: null,
   config: { tickMs: 100 },
 }
@@ -74,15 +74,6 @@ describe('manifest identities', () => {
   it('ignores audit metadata outside the declared manifest shape', () => {
     const audited = { ...binding, checkedAt: '2026-10-27T00:00:00Z' } as BindingManifest
     expect(bindingId(audited)).toBe(bindingId(binding))
-  })
-
-  it('does not depend on capability order or duplicates', () => {
-    const reordered = {
-      ...binding,
-      capabilities: ['control.move', 'query.inventory', 'query.inventory'],
-    }
-    expect(bindingId(reordered)).toBe(bindingId(binding))
-    expect(bindingId(binding)).toBe('c4616e39fd5dea53382b16ff0d3d76de4c6c21ade23268523e31679cb6a19dd8')
   })
 
   it('changes when body, provider, IR, contract or config changes', () => {

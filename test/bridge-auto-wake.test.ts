@@ -22,7 +22,7 @@ function status(
     health: 'ready',
     connection: 'connected',
     bindingId: null,
-    capabilities: [],
+
     provider: null,
     ...top,
     mind: {

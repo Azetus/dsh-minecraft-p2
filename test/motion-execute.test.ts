@@ -18,7 +18,7 @@ import {
   ParkourMove,
   reached,
 } from '../src/motion/execute/index.ts'
-import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
+import { MotionContextSource } from '../src/provider/motion/context.ts'
 import { defaultConstraints, resolveConstraints, type Cell, type MotionConstraints } from '../src/motion/model/index.ts'
 import { matrixFields } from '../src/motion/matrix/index.ts'
 import { buildFixture, FixtureWorld, FULL_CUBE, rawBlock } from './helpers/motion-world.ts'

@@ -1,7 +1,7 @@
 import type { ObserveVec3 } from '../contracts/protocol.ts'
 import { countItem, isAirName, matchesExpected } from '../mind/plan.ts'
 import { groupBlueprintBlocks, parseBlueprint } from '../mind/blueprint.ts'
-import type { ClientPort } from '../port/index.ts'
+import type { BodyApi } from '../body/api.ts'
 
 export type BlueprintConflict = {
   x: number
@@ -42,7 +42,7 @@ const PROTECTED = new Set([
  * inventory; no material is consumed and no block is cleared or placed.
  */
 export function previewBlueprint(
-  port: ClientPort,
+  port: BodyApi,
   value: unknown,
   at: number,
 ): BlueprintPreview {

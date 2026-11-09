@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { ClientPort, WriteToken } from '../port/index.ts'
+import type { BodyApi, WriteToken } from '../body/api.ts'
 import { validateParams } from './schema.ts'
 import type {
   Candidate,
@@ -27,7 +27,7 @@ export type TrackerEvent =
   | { kind: 'tracker.fault'; at: number; code: string }
 
 export type JobTrackerOptions = {
-  port: ClientPort
+  body: BodyApi
   driver: (id: string) => Driver
   world: () => WorldView
   now?: () => number
@@ -69,7 +69,7 @@ type StopInfo = {
  * late-result fence. It never selects targets and never executes.
  */
 export class JobTracker {
-  private readonly port: ClientPort
+  private readonly body: BodyApi
   private readonly driverLookup: (id: string) => Driver
   private readonly world: () => WorldView
   private readonly now: () => number
@@ -93,7 +93,7 @@ export class JobTracker {
   private pausedAt = 0
 
   constructor(options: JobTrackerOptions) {
-    this.port = options.port
+    this.body = options.body
     this.driverLookup = options.driver
     this.world = options.world
     this.now = options.now ?? (() => Date.now())
@@ -330,7 +330,7 @@ export class JobTracker {
 
     const token: WriteToken = { runId, jobId: `job-${this.seq}`, seq: this.seq }
     try {
-      this.port.beginWrite(token)
+      this.body.beginWrite(token)
     } catch (error) {
       this.reject(candidate, { state: 'failed', code: errorCode(error, 'STALE_WRITE') }, now)
       return
@@ -339,7 +339,7 @@ export class JobTracker {
     try {
       this.beforeStart?.(candidate, job)
     } catch (error) {
-      try { this.port.endWrite(token) } catch { /* best effort */ }
+      try { this.body.endWrite(token) } catch { /* best effort */ }
       this.reject(candidate, { state: 'failed', code: errorCode(error, 'JOURNAL_FAULT') }, now)
       return
     }
@@ -347,12 +347,12 @@ export class JobTracker {
     let handle: DriverHandle
     try {
       handle = driver.start(job, {
-        port: this.port,
+        body: this.body,
         now: this.now,
         ...(this.allowAutoEquip === undefined ? {} : { allowAutoEquip: this.allowAutoEquip }),
       })
     } catch (error) {
-      try { this.port.endWrite(token) } catch { /* best effort */ }
+      try { this.body.endWrite(token) } catch { /* best effort */ }
       this.reject(candidate, { state: 'failed', code: errorCode(error, 'DRIVER_FAULT') }, now)
       return
     }
@@ -386,7 +386,7 @@ export class JobTracker {
     }
     this.pending = undefined
     try {
-      this.port.endWrite(current.token)
+      this.body.endWrite(current.token)
     } catch {
       // The token may already be invalid; stop confirmation still decides.
     }

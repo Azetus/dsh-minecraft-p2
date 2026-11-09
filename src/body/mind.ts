@@ -77,8 +77,8 @@ import {
 import type { PlanInstance, VerifySpec } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
-import { parseHazardPolicy } from '../port/policy.ts'
-import type { HazardPolicy } from '../port/policy.ts'
+import { parseHazardPolicy } from '../mind/policy.ts'
+import type { HazardPolicy } from '../mind/policy.ts'
 import type { WorldView } from '../mind/types.ts'
 import { Registry } from '../mind/registry.ts'
 import { Sensors } from '../mind/sensors.ts'
@@ -91,7 +91,7 @@ import { verifyBlueprint } from '../mind/verify/blueprint.ts'
 import { verifySealedRoom } from '../mind/verify/sealed-room.ts'
 import { verifyUsableRoom } from '../mind/verify/usable-room.ts'
 import type { VerifyResult } from '../mind/verify/sealed-room.ts'
-import type { ClientPort, EntityInfo, Item, Vec3 } from '../port/index.ts'
+import type { BodyApi, EntityInfo, Item, Vec3 } from './api.ts'
 
 export type MindOrderView = {
   id: string
@@ -134,7 +134,7 @@ export type MindRuntime = {
 }
 
 export type CreateMindOptions = {
-  port: ClientPort
+  body: BodyApi
   home?: Vec3
   /** Initial base activity; defaults to idle and is never persisted. */
   baseActivity?: BaseActivitySpec
@@ -185,12 +185,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: 'prepare', driver: createStepDriver('prepare') })
   registry.registerDriver({ id: 'enter', driver: createStepDriver('enter') })
   registry.registerDriver({ id: FATAL_DRIVER_ID, driver: createFatalDriver() })
-  const areaResources = new AreaResourceIndex(options.port, {
+  const areaResources = new AreaResourceIndex(options.body, {
     radius: 32,
     vertical: 16,
     chunkBudget: 2,
   })
-  options.port.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
+  options.body.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
   const planLedger = new PlanItemLedger()
   const duty = new DutyController({
     statePath: join(dirname(options.journalPath), 'duty.json'),
@@ -236,7 +236,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const events = new MindEvents()
   const metrics = new MindMetrics()
   for (const event of ['move.started', 'move.progress', 'move.no_path', 'move.stuck', 'move.finished', 'move.door', 'move.unstick-dig'] as const) {
-    options.port.on(event, data => events.push(event, now(), data))
+    options.body.on(event, data => events.push(event, now(), data))
   }
   let lastReport: JsonValue | null = null
   let loopRef: MindLoop | undefined
@@ -311,7 +311,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     { verb: record.order.verb, state: record.state },
   ]))
   abandonRestoredOrders()
-  const restoredDuty = duty.restore(options.port.inventory(), now())
+  const restoredDuty = duty.restore(options.body.inventory(), now())
   if (restoredDuty !== undefined) {
     events.push('duty.restored', now(), restoredDuty as unknown as JsonValue)
     if (restoredDuty.state === 'active') {
@@ -325,7 +325,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
   activeOrderLookup = () => orders.active()
 
-  const sensors = new Sensors({ port: options.port, now })
+  const sensors = new Sensors({ body: options.body, now })
   const home = options.home
   let activePlan: PlanInstance | undefined
   let planStage = 0
@@ -357,7 +357,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   const crashMarker = join(dirname(options.journalPath), 'crash-after-pending.done')
   const crashOnce = options.crashAfterPending === true && !existsSync(crashMarker)
   const tracker = new JobTracker({
-    port: options.port,
+    body: options.body,
     driver: id => registry.driver(id),
     world: () => sensors.read(),
     now,
@@ -511,7 +511,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     gatherCount: () => gatherCount,
     observe: box => sensors.observeBox(box),
     focus: () => currentFocus,
-    ...(options.port.canSee === undefined ? {} : { canSee: (id: string) => options.port.canSee!(id) }),
+    ...(options.body.canSee === undefined ? {} : { canSee: (id: string) => options.body.canSee!(id) }),
     lastStuckAt: () => lastStuckAt,
     onEvent: event => {
       metrics.record(event.kind, event.data, event.at)
@@ -1170,8 +1170,8 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     }
     focusIntent = intent
     const entity = intent.kind === 'attack'
-      ? options.port.entityById?.(intent.name)
-      : options.port.entityByName?.(intent.name)
+      ? options.body.entityById?.(intent.name)
+      : options.body.entityByName?.(intent.name)
     if (entity !== undefined) {
       lastFocusAt = now()
       if (entity.type === 'player' || entity.username !== undefined) focusWasPlayer = true
@@ -1200,7 +1200,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         ageMs: 0,
       }
     }
-    const online = focusIntent.kind === 'escort' ? options.port.playerOnline?.(focusIntent.name) : undefined
+    const online = focusIntent.kind === 'escort' ? options.body.playerOnline?.(focusIntent.name) : undefined
     return {
       name: focusIntent.name,
       state: focusIntent.kind === 'attack'
@@ -1227,7 +1227,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
 
   const tick = (): void => {
-    const suspension = options.port.suspension?.()
+    const suspension = options.body.suspension?.()
     if (suspension?.suspended === true) {
       if (!suspended) enterSuspend(suspension)
       else if (now() - suspendedSince >= 60_000 && now() - lastPauseNoticeAt >= 60_000) {
@@ -1621,7 +1621,7 @@ const RETRYABLE_ORDER_VERBS = new Set([
 
 /** Failures that retrying the same target cannot fix. */
 const NON_RETRYABLE_CODES = new Set([
-  'BUDGET_EXCEEDED', 'BAD_ARGS', 'STALE_WRITE', 'CAPABILITY_MISSING', 'DEFINITION_ERROR',
+  'BUDGET_EXCEEDED', 'BAD_ARGS', 'STALE_WRITE', 'DEFINITION_ERROR',
   'ERR_ASSERTION',
   'TOOL_INSUFFICIENT', 'BLOCK_UNBREAKABLE', 'DIG_NO_BLOCK', 'APPROACH_NO_STAND',
   'EQUIP_NO_ITEM',

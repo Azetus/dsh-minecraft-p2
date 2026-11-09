@@ -2,7 +2,7 @@ import type { JsonValue } from '../contracts/types.ts'
 import { cellOf } from '../motion/model/index.ts'
 import { nearestStandCell, type StandCell, type StandResult } from '../motion/search/index.ts'
 import { createReadOnlyMotionWorld } from './standing.ts'
-import type { ClientPort, Vec3 } from '../port/index.ts'
+import type { BodyApi, Vec3 } from '../body/api.ts'
 
 export type ApproachResult =
   | { ok: true }
@@ -26,7 +26,7 @@ const STAND_REACH = { horizontal: 3, vertical: 2 } as const
  * `APPROACH_NO_PATH` instead of a generic move failure.
  */
 export async function approachBlock(
-  port: ClientPort,
+  port: BodyApi,
   target: Vec3,
   options: { range?: number; timeoutMs?: number; code?: string } = {},
 ): Promise<ApproachResult> {

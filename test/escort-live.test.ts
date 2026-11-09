@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
-import { MineflayerClientPort } from '../src/port/mineflayer/index.ts'
+import { MineflayerBody } from '../src/provider/index.ts'
 
 /**
  * Opt-in live escort probe. It connects a throwaway bot to a real server and
@@ -36,7 +36,7 @@ describe.skipIf(!LIVE)('live escort focus', () => {
       timeoutMs: 20_000,
     })
     const provider = new MineflayerProvider(bot, { serverIdleMs: 1500, providerVersion: 'escort-live' })
-    const port = new MineflayerClientPort(bot, provider, { pollIntervalMs: 50 })
+    const port = new MineflayerBody(bot, provider, { pollIntervalMs: 50 })
     const dir = mkdtempSync(join(process.cwd(), 'node_modules', '.p2-escort-live-'))
     try {
       await sleep(1_500)
@@ -49,7 +49,7 @@ describe.skipIf(!LIVE)('live escort focus', () => {
 
       const feet = port.self().pos
       const mind = createMind({
-        port,
+        body: port,
         home: { x: Math.floor(feet.x), y: Math.floor(feet.y), z: Math.floor(feet.z) },
         baseActivity: { kind: 'escort', target: target!, distance: 3 },
         plansDir: join(process.cwd(), 'content', 'plans'),

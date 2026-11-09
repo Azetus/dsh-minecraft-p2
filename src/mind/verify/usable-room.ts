@@ -1,4 +1,4 @@
-import type { BlockInfo, Vec3 } from '../../port/index.ts'
+import type { BlockInfo, Vec3 } from '../../body/api.ts'
 import { isAirName, itemCells, itemPosition, matchesExpected } from '../plan.ts'
 import type { PlanInstance, VerifySpec, WorkItem } from '../plan.ts'
 import { standingAt } from '../standing.ts'

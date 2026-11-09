@@ -19,7 +19,6 @@ export async function loadBodyInfo(entryUrl: string | URL = import.meta.url): Pr
     provider: null,
     irVersion: 1,
     opContractVersion: '1',
-    capabilities: [],
     driver: null,
     config: {},
   }
@@ -27,7 +26,6 @@ export async function loadBodyInfo(entryUrl: string | URL = import.meta.url): Pr
     manifest,
     manifestDigest,
     bindingId: computeBindingId(binding) as BindingId,
-    capabilities: [],
     provider: null,
   }
 }

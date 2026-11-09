@@ -1,5 +1,5 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { BlockInfo, Box, ClientPort, Vec3 } from '../port/index.ts'
+import type { BlockInfo, Box, BodyApi, Vec3 } from '../body/api.ts'
 import { materialSources, sourceNames } from './materials.ts'
 
 type Chunk = {
@@ -18,7 +18,7 @@ const CHUNK = 16
  * common case does not rescan the ring.
  */
 export class AreaResourceIndex {
-  private readonly port: ClientPort
+  private readonly port: BodyApi
   private readonly radius: number
   private readonly vertical: number
   private readonly chunkBudget: number
@@ -32,7 +32,7 @@ export class AreaResourceIndex {
   private staleFlag = true
 
   constructor(
-    port: ClientPort,
+    port: BodyApi,
     options: { radius?: number; vertical?: number; chunkBudget?: number; refreshMs?: number } = {},
   ) {
     this.port = port

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { chooseTool, chooseWeapon } from '../src/mind/tools.ts'
-import type { BlockInfo, Item } from '../src/port/index.ts'
+import type { BlockInfo, Item } from '../src/body/api.ts'
 
 const pickaxes: Item[] = [
   { slot: 36, name: 'wooden_pickaxe', count: 1 },

@@ -1,4 +1,4 @@
-import type { Vec3 } from '../port/index.ts'
+import type { Vec3 } from '../body/api.ts'
 import { reachableCells as coreReachableCells } from '../motion/search/index.ts'
 import { interiorBounds } from './build-access.ts'
 import { itemCells } from './plan.ts'

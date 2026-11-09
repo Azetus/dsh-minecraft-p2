@@ -1,4 +1,4 @@
-import type { ClientPort, Vec3 } from '../../port/index.ts'
+import type { BodyApi, Vec3 } from '../../body/api.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -51,9 +51,9 @@ async function fatal(ctx: DriverCtx, params: FatalParams): Promise<DriverResult>
   const target: Vec3 = { x: params.x, y: params.y, z: params.z }
   let died = false
   const onDied = (): void => { died = true }
-  ctx.port.on('died', onDied)
+  ctx.body.on('died', onDied)
   try {
-    const stepped = await ctx.port.fatalStep(target)
+    const stepped = await ctx.body.fatalStep(target)
     if (died || stepped.code === 'DEATH' || stepped.code === 'DIED_IN_ALLOWED_HAZARD') {
       return { state: 'succeeded', observed: { kind: 'fatal', target, died: true } }
     }
@@ -73,12 +73,12 @@ async function fatal(ctx: DriverCtx, params: FatalParams): Promise<DriverResult>
     }
     const waitMs = Math.max(0, params.waitMs ?? 5_000)
     if (!died && waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs))
-    const self = ctx.port.self()
+    const self = ctx.body.self()
     if (!died && self.health > 0) {
       return { state: 'failed', code: 'HAZARD_SURVIVED', observed: { target, health: self.health } }
     }
     return { state: 'succeeded', observed: { kind: 'fatal', target, died: true } }
   } finally {
-    ctx.port.off?.('died', onDied)
+    ctx.body.off?.('died', onDied)
   }
 }

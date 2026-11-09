@@ -5,7 +5,7 @@ import { DutyController } from '../src/mind/duty.ts'
 import { createDutyGiver } from '../src/mind/givers/duty.ts'
 import type { EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, Box, ClientPort, Item, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, Box, BodyApi, Item, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 const self: SelfInfo = {
   pos: { x: 0.5, y: 64, z: 0.5 },
@@ -34,10 +34,10 @@ function inside(point: Vec3, box: Box): boolean {
     && point.z >= box.min.z && point.z <= box.max.z
 }
 
-function portWith(blocks: BlockInfo[]): ClientPort {
+function portWith(blocks: BlockInfo[]): BodyApi {
   return {
     blocksIn: (box: Box) => blocks.filter(block => block.pos !== undefined && inside(block.pos, box)),
-  } as unknown as ClientPort
+  } as unknown as BodyApi
 }
 
 describe('duty controller', () => {

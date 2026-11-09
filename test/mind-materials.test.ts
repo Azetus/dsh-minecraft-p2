@@ -7,7 +7,7 @@ import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate } from '../src/mind/plan.ts'
 import type { EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, Box, ClientPort, Item, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, Box, BodyApi, Item, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (M3-03 material policy).
@@ -123,7 +123,7 @@ describe('material giver', () => {
     const port = {
       blocksIn: (box: Box) => [source, { name: 'stone', loaded: true, pos: { x: 30, y: 64, z: 0 } }]
         .filter(block => inside(block.pos, box)) as BlockInfo[],
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const area = new AreaResourceIndex(port, { radius: 32, vertical: 8, chunkBudget: 4 })
     const giver = createMaterialGiver(area)
     let result: unknown = null

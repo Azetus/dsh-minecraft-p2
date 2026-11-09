@@ -4,7 +4,7 @@ import type {
   SelfCarePolicy,
 } from '../contracts/protocol.ts'
 import { isRecord } from '../contracts/protocol.ts'
-import type { EntityInfo } from '../port/index.ts'
+import type { EntityInfo } from '../body/api.ts'
 import { HOSTILE_NAMES } from './givers/common.ts'
 
 /** Neutral mobs that minecraft-data may label as hostile. Auto-fight never picks them. */

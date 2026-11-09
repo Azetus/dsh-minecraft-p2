@@ -1,4 +1,4 @@
-import type { EntityInfo, Vec3 } from '../../port/index.ts'
+import type { EntityInfo, Vec3 } from '../../body/api.ts'
 import { nearestStandCell, standCells } from '../../motion/search/index.ts'
 import type { BaseActivityController } from '../base-activity.ts'
 import { boxAround } from '../sensors.ts'

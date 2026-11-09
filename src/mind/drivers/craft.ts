@@ -1,7 +1,7 @@
 import type { SchemaNode } from '../schema.ts'
 import { approachBlock } from '../approach.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import type { ClientPort, Vec3 } from '../../port/index.ts'
+import type { BodyApi, Vec3 } from '../../body/api.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { failureBody, readFailure, withFailure } from '../failure.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -47,14 +47,14 @@ export function createCraftDriver(): Driver {
 
 async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult> {
   const count = params.count ?? 1
-  const before = countItem(ctx.port.inventory(), params.item)
-  let result = await ctx.port.craft(params.item, count)
+  const before = countItem(ctx.body.inventory(), params.item)
+  let result = await ctx.body.craft(params.item, count)
   if (result.state === 'failed' && result.code === 'CRAFT_NO_TABLE') {
-    const table = findCraftingTable(ctx.port)
+    const table = findCraftingTable(ctx.body)
     if (table === undefined) {
-      return { state: 'failed', code: 'CRAFT_NO_TABLE', observed: craftEvidence(result.observed, params.item, count, before, countItem(ctx.port.inventory(), params.item)) }
+      return { state: 'failed', code: 'CRAFT_NO_TABLE', observed: craftEvidence(result.observed, params.item, count, before, countItem(ctx.body.inventory(), params.item)) }
     }
-    const approach = await approachBlock(ctx.port, table, {
+    const approach = await approachBlock(ctx.body, table, {
       range: 2,
       timeoutMs: 12_000,
       code: 'CRAFT_APPROACH_FAILED',
@@ -66,9 +66,9 @@ async function craft(ctx: DriverCtx, params: CraftParams): Promise<DriverResult>
         ...(approach.observed === undefined ? {} : { observed: approach.observed }),
       }
     }
-    result = await ctx.port.craft(params.item, count)
+    result = await ctx.body.craft(params.item, count)
   }
-  const after = countItem(ctx.port.inventory(), params.item)
+  const after = countItem(ctx.body.inventory(), params.item)
   const evidence = craftEvidence(result.observed, params.item, count, before, after)
   // The provider proves how many crafts ran and how many items it produced;
   // prefer that over a driver-side guess so a partial batch is never silent.
@@ -123,7 +123,7 @@ function numericField(upstream: JsonValue | undefined, key: string): number | un
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function findCraftingTable(port: ClientPort): Vec3 | undefined {
+function findCraftingTable(port: BodyApi): Vec3 | undefined {
   const self = port.self().pos
   const feet = { x: Math.floor(self.x), y: Math.floor(self.y), z: Math.floor(self.z) }
   const blocks = port.blocksIn({

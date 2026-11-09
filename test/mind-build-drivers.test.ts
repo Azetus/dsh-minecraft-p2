@@ -5,7 +5,7 @@ import { createPlaceDriver } from '../src/mind/drivers/place.ts'
 import { createStepDriver } from '../src/mind/drivers/step.ts'
 import type { JsonValue } from '../src/contracts/types.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
-import type { ActResult, BlockInfo, ClientPort, Face, Vec3 } from '../src/port/index.ts'
+import type { ActResult, BlockInfo, BodyApi, Face, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M2-03).
@@ -30,7 +30,7 @@ type PortOptions = {
 }
 
 function fakePort(options: PortOptions = {}): {
-  port: ClientPort
+  port: BodyApi
   world: FakeWorld
   places: Face[]
   digs: Vec3[]
@@ -81,7 +81,7 @@ function fakePort(options: PortOptions = {}): {
     beginWrite: () => {},
     endWrite: () => {},
     inventory: () => [],
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return {
     port,
     world,
@@ -113,7 +113,7 @@ describe('place driver', () => {
     const target = { x: 1, y: 64, z: 0 }
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', target))
-    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(30)
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { placedAt: { x: 1, y: 64, z: 0 }, alreadyPlaced: false } })
     expect(fake.world.get('1,64,0')?.name).toBe('dirt')
@@ -128,7 +128,7 @@ describe('place driver', () => {
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('2,64,0', block('stone', { x: 2, y: 64, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
-    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(300)
     expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.places).toContain('up')
@@ -148,7 +148,7 @@ describe('place driver', () => {
     })
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
-    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(30)
 
     expect(handle.result()).toMatchObject({
@@ -173,7 +173,7 @@ describe('place driver', () => {
       fake.world.set(`${candidate.x},${candidate.y},${candidate.z}`, block('air', candidate))
     }
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -214,7 +214,7 @@ describe('place driver', () => {
       }
     }
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -269,7 +269,7 @@ describe('place driver', () => {
       }
     }
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -292,7 +292,7 @@ describe('place driver', () => {
     const handle = createPlaceDriver().start(job({
       x: 0, y: 64, z: 0, item: 'dirt',
       stands: [{ x: 0, y: 64, z: 0 }, { x: 1, y: 64, z: 0 }],
-    }), { port: fake.port, now: () => 0 })
+    }), { body: fake.port, now: () => 0 })
     await wait(30)
     expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.moves).toEqual([{ x: 1, y: 64, z: 0 }])
@@ -309,7 +309,7 @@ describe('place driver', () => {
     const handle = createPlaceDriver().start(job({
       x: 0, y: 64, z: 0, item: 'dirt',
       stands: [{ x: 0, y: 64, z: 0 }],
-    }), { port: fake.port, now: () => 0 })
+    }), { body: fake.port, now: () => 0 })
     await wait(30)
     const result = handle.result()
     expect(result).toMatchObject({ state: 'failed', code: 'PLACE_BLOCKED_BY_SELF' })
@@ -330,7 +330,7 @@ describe('place driver', () => {
     const fake = fakePort()
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('water', { x: 1, y: 64, z: 0 }))
-    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(30)
     expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.places).toHaveLength(1)
@@ -341,7 +341,7 @@ describe('place driver', () => {
     const fake = fakePort({ placeWithoutEffect: true })
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
-    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(300)
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'PLACE_READBACK_MISMATCH' })
     expect((handle.result().observed as { failure?: unknown }).failure)
@@ -360,7 +360,7 @@ describe('place driver', () => {
       fake.world.set(`${x},65,0`, block('air', { x, y: 65, z: 0 }))
     }
     fake.world.set('10,64,0', block('air', target))
-    const handle = createPlaceDriver().start(job({ x: 10, y: 64, z: 0, item: 'dirt' }), { port: fake.port, now: () => 0 })
+    const handle = createPlaceDriver().start(job({ x: 10, y: 64, z: 0, item: 'dirt' }), { body: fake.port, now: () => 0 })
     await wait(30)
     expect(handle.result()).toMatchObject({ state: 'succeeded' })
     expect(fake.moves.length).toBeGreaterThanOrEqual(1)
@@ -371,7 +371,7 @@ describe('place driver', () => {
     const fake = fakePort()
     fake.world.set('1,64,0', block('grass_block', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -391,7 +391,7 @@ describe('place driver', () => {
     const fake = fakePort()
     fake.world.set('1,64,0', block('dirt', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -409,7 +409,7 @@ describe('place driver', () => {
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({
       x: 1, y: 64, z: 0, item: 'dirt', face: 'down',
-    }), { port: fake.port, now: () => 0 })
+    }), { body: fake.port, now: () => 0 })
     await wait(30)
 
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'PLACE_UNSUPPORTED' })
@@ -421,7 +421,7 @@ describe('place driver', () => {
     fake.world.set('1,63,0', block('dirt', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -450,7 +450,7 @@ describe('place driver', () => {
     fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
     const handle = createPlaceDriver().start(job({ x: 1, y: 64, z: 0, item: 'dirt' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 0,
     })
     await wait(30)
@@ -470,7 +470,7 @@ describe('clear driver', () => {
   it('digs one block and confirms air twice', async () => {
     const fake = fakePort()
     fake.world.set('1,64,0', block('stone', { x: 1, y: 64, z: 0 }))
-    const handle = createClearDriver().start(job({ x: 1, y: 64, z: 0 }), { port: fake.port, now: () => 0 })
+    const handle = createClearDriver().start(job({ x: 1, y: 64, z: 0 }), { body: fake.port, now: () => 0 })
     await wait(260)
     expect(handle.result()).toMatchObject({
       state: 'succeeded',
@@ -483,7 +483,7 @@ describe('clear driver', () => {
   it('is already satisfied for an air cell', async () => {
     const fake = fakePort()
     fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
-    const handle = createClearDriver().start(job({ x: 1, y: 64, z: 0 }), { port: fake.port, now: () => 0 })
+    const handle = createClearDriver().start(job({ x: 1, y: 64, z: 0 }), { body: fake.port, now: () => 0 })
     await wait(10)
     expect(handle.result()).toEqual({ state: 'succeeded' })
     expect(fake.digs).toHaveLength(0)
@@ -494,7 +494,7 @@ describe('step drivers', () => {
   it('moves to the selected enter cell with its own id', async () => {
     const fake = fakePort()
     const driver = createStepDriver('enter')
-    const handle = driver.start(job({ x: 1, y: 64, z: 0, range: 1 }), { port: fake.port, now: () => 0 })
+    const handle = driver.start(job({ x: 1, y: 64, z: 0, range: 1 }), { body: fake.port, now: () => 0 })
     await wait(10)
     expect(driver.id).toBe('enter')
     expect(fake.moves).toEqual([{ x: 1, y: 64, z: 0 }])
@@ -503,7 +503,7 @@ describe('step drivers', () => {
 
   it('reports interrupted when stopped before the move settles', async () => {
     const fake = fakePort({ deferred: true })
-    const handle = createStepDriver('prepare').start(job({ x: 1, y: 64, z: 0, range: 1 }), { port: fake.port, now: () => 0 })
+    const handle = createStepDriver('prepare').start(job({ x: 1, y: 64, z: 0, range: 1 }), { body: fake.port, now: () => 0 })
     handle.requestStop()
     expect(handle.stopStatus()).toBe('stopping')
     fake.resolveMove()

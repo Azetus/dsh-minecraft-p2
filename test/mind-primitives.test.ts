@@ -11,7 +11,7 @@ import {
   createPlaceOrderGiver,
   createUseOrderGiver,
 } from '../src/mind/givers/primitives.ts'
-import type { ClientPort, Item, SelfInfo } from '../src/port/index.ts'
+import type { BodyApi, Item, SelfInfo } from '../src/body/api.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
 
 const self: SelfInfo = {
@@ -39,9 +39,9 @@ function world(items: Item[] = [], blocks: Record<string, string> = {}): WorldVi
   }
 }
 
-function driverResult(driver: { start: (job: Job, ctx: { port: ClientPort; now: () => number }) => { result(): { state: string } } },
-  port: ClientPort, job: Job): Promise<{ state: string; [key: string]: unknown }> {
-  const handle = driver.start(job, { port, now: () => 1 })
+function driverResult(driver: { start: (job: Job, ctx: { body: BodyApi; now: () => number }) => { result(): { state: string } } },
+  port: BodyApi, job: Job): Promise<{ state: string; [key: string]: unknown }> {
+  const handle = driver.start(job, { body: port, now: () => 1 })
   return new Promise(resolve => {
     const timer = setInterval(() => {
       const result = handle.result()
@@ -89,13 +89,13 @@ describe('finite primitive orders', () => {
         calls.push(item)
         return { state: 'ok' as const, elapsedMs: 1, observed: { item, held: item } }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const result = await driverResult(createEquipDriver(), port,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job)
     expect(result).toMatchObject({ state: 'succeeded', observed: { kind: 'equip', item: 'stone_pickaxe' } })
     expect(calls).toEqual(['stone_pickaxe'])
 
-    const missing = { inventory: () => [], equip: async () => ({ state: 'ok' as const, elapsedMs: 1 }) } as unknown as ClientPort
+    const missing = { inventory: () => [], equip: async () => ({ state: 'ok' as const, elapsedMs: 1 }) } as unknown as BodyApi
     expect(await driverResult(createEquipDriver(), missing,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
       .toMatchObject({ state: 'failed', code: 'EQUIP_ITEM_MISSING' })
@@ -106,7 +106,7 @@ describe('finite primitive orders', () => {
     const unknown = {
       ...base,
       equip: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createEquipDriver(), unknown,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
       .toMatchObject({ state: 'failed', code: 'EQUIP_READBACK_UNKNOWN' })
@@ -114,7 +114,7 @@ describe('finite primitive orders', () => {
     const mismatch = {
       ...base,
       equip: async () => ({ state: 'ok' as const, elapsedMs: 1, observed: { held: 'dirt' } }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createEquipDriver(), mismatch,
       { driverId: 'equip', params: { item: 'stone_pickaxe' } } as unknown as Job))
       .toMatchObject({ state: 'failed', code: 'EQUIP_READBACK_MISMATCH' })
@@ -128,7 +128,7 @@ describe('finite primitive orders', () => {
         calls.push({ item, destination: destination ?? 'hand' })
         return { state: 'ok' as const, elapsedMs: 1, observed: { item, destination, equipped: item } }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const result = await driverResult(createEquipDriver(), port,
       { driverId: 'equip', params: { item: 'shield', destination: 'offhand' } } as unknown as Job)
     expect(result).toMatchObject({
@@ -140,12 +140,12 @@ describe('finite primitive orders', () => {
 
   it('unequips the off hand and requires an empty destination readback', async () => {
     const calls: string[] = []
-    const ok = (observed?: Record<string, unknown>): ClientPort => ({
+    const ok = (observed?: Record<string, unknown>): BodyApi => ({
       unequip: async (destination?: string) => {
         calls.push(destination ?? 'hand')
         return { state: 'ok' as const, elapsedMs: 1, ...(observed === undefined ? {} : { observed }) }
       },
-    }) as unknown as ClientPort
+    }) as unknown as BodyApi
 
     const empty = await driverResult(createEquipDriver(), ok({ item: null, equipped: null }),
       { driverId: 'equip', params: { unequip: true, destination: 'offhand' } } as unknown as Job)
@@ -189,7 +189,7 @@ describe('finite primitive orders', () => {
         elapsedMs: 1,
         observed: { playerBefore: 2, playerAfter: 1, containerBefore: 0, containerAfter: 1 },
       }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createContainerDriver(), success, {
       driverId: 'container',
       params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
@@ -205,7 +205,7 @@ describe('finite primitive orders', () => {
         elapsedMs: 1,
         observed: { playerBefore: 2, playerAfter: 2, containerBefore: 0, containerAfter: 0 },
       }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createContainerDriver(), incomplete, {
       driverId: 'container',
       params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
@@ -214,7 +214,7 @@ describe('finite primitive orders', () => {
     const unknown = {
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       containerTransfer: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createContainerDriver(), unknown, {
       driverId: 'container',
       params: { x: 2, y: 63, z: 0, action: 'deposit', item: 'stone', count: 1 },
@@ -226,7 +226,7 @@ describe('finite primitive orders', () => {
     const port = {
       inventory: () => (count === 0 ? [] : [{ slot: 36, name: 'stick', count }]),
       craft: async (_item: string, amount: number) => { count += amount; return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createCraftDriver(), port,
       { driverId: 'craft', params: { item: 'stick', count: 4 } } as unknown as Job))
       .toMatchObject({ state: 'succeeded', observed: { kind: 'craft', item: 'stick', count: 4 } })
@@ -253,7 +253,7 @@ describe('finite primitive orders', () => {
           elapsedMs: 1,
         }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const result = await driverResult(createCraftDriver(), port,
       { driverId: 'craft', params: { item: 'birch_planks', count: 20 } } as unknown as Job)
     expect(result).toMatchObject({
@@ -275,7 +275,7 @@ describe('finite primitive orders', () => {
           elapsedMs: 1,
         }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const result = await driverResult(createCraftDriver(), port,
       { driverId: 'craft', params: { item: 'stick', count: 3 } } as unknown as Job)
     expect(result).toMatchObject({
@@ -302,7 +302,7 @@ describe('finite primitive orders', () => {
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       blockAt: (p: { x: number; y: number; z: number }) => ({ name: 'red_bed', loaded: true, pos: p }),
       sleep: async () => { calls.push('sleep'); return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createUseDriver(), bedPort,
       { driverId: 'use', params: { x: 0, y: 64, z: 0 } } as unknown as Job))
       .toMatchObject({ state: 'succeeded', observed: { kind: 'sleep' } })
@@ -313,7 +313,7 @@ describe('finite primitive orders', () => {
       moveTo: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       blockAt: (p: { x: number; y: number; z: number }) => ({ name: 'oak_door', loaded: true, pos: p }),
       useOn: async () => { calls.push('useOn'); return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createUseDriver(), blockPort,
       { driverId: 'use', params: { x: 1, y: 64, z: 0 } } as unknown as Job))
       .toMatchObject({ state: 'succeeded', observed: { kind: 'use-on' } })
@@ -321,7 +321,7 @@ describe('finite primitive orders', () => {
     const itemPort = {
       equip: async () => ({ state: 'ok' as const, elapsedMs: 1 }),
       useItem: async () => { calls.push('useItem'); return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     expect(await driverResult(createUseDriver(), itemPort,
       { driverId: 'use', params: { item: 'bread' } } as unknown as Job))
       .toMatchObject({ state: 'succeeded', observed: { kind: 'use-item', item: 'bread' } })

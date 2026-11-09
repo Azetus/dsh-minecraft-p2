@@ -1,11 +1,9 @@
 import { p2Error } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
-import { PortErrorCodes, type ActResult } from './types.ts'
-
-export type WriteToken = { runId: string; jobId: string; seq: number }
+import { BodyErrorCodes, type ActResult, type WriteToken } from '../body/api.ts'
 
 /**
- * Single-writer authority. The JobTracker issues one token per run; the port
+ * Single-writer authority. The JobTracker issues one token per run; the body
  * captures `currentEpoch()` before doing async work and drops the result when
  * `isCurrent(epoch)` is false.
  */
@@ -55,10 +53,10 @@ export class WriteGate {
     this.stale += 1
     const active = this.active
     return p2Error(
-      PortErrorCodes.STALE_WRITE,
+      BodyErrorCodes.STALE_WRITE,
       'control',
       'write token does not match the active authority',
-      { module: 'port.write' },
+      { module: 'body.write' },
       {
         runId: actual.runId,
         jobId: actual.jobId,
@@ -71,11 +69,11 @@ export class WriteGate {
   }
 }
 
-/** The port-level result for a write attempted without an authority. */
+/** The body-level result for a write attempted without an authority. */
 export function staleWriteResult(elapsedMs: number): ActResult {
   return {
     state: 'failed',
-    code: PortErrorCodes.STALE_WRITE,
+    code: BodyErrorCodes.STALE_WRITE,
     elapsedMs,
   }
 }

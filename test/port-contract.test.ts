@@ -1,18 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  ACTION_CAPABILITIES,
-  CAPABILITIES,
-  PortErrorCodes,
-  WriteGate,
+  BodyErrorCodes,
   actFailed,
   actOk,
   actUnknown,
-  actionCapability,
-  checkCapability,
-  staleWriteResult,
-} from '../src/port/index.ts'
-import type { Capability, WriteToken } from '../src/port/index.ts'
+} from '../src/body/api.ts'
+import type { WriteToken } from '../src/body/api.ts'
+import { WriteGate, staleWriteResult } from '../src/provider/control.ts'
 
 /**
  * Category: cross-module contract (CONTRACTS §2/§10, P2MIND §1.1).
@@ -75,8 +70,8 @@ describe('write token', () => {
     const gate = new WriteGate()
     gate.begin(token(2, { jobId: 'job-new' }))
 
-    expect(errorCode(() => gate.begin(token(1, { jobId: 'job-old' })))).toBe(PortErrorCodes.STALE_WRITE)
-    expect(errorCode(() => gate.begin(token(2, { jobId: 'job-old' })))).toBe(PortErrorCodes.STALE_WRITE)
+    expect(errorCode(() => gate.begin(token(1, { jobId: 'job-old' })))).toBe(BodyErrorCodes.STALE_WRITE)
+    expect(errorCode(() => gate.begin(token(2, { jobId: 'job-old' })))).toBe(BodyErrorCodes.STALE_WRITE)
     expect(gate.token()).toMatchObject({ jobId: 'job-new', seq: 2 })
     expect(gate.staleWrites()).toBe(2)
   })
@@ -84,7 +79,7 @@ describe('write token', () => {
   it('rejects a stale end and keeps the active authority', () => {
     const gate = new WriteGate()
     const epoch = gate.begin(token(2))
-    expect(errorCode(() => gate.end(token(1)))).toBe(PortErrorCodes.STALE_WRITE)
+    expect(errorCode(() => gate.end(token(1)))).toBe(BodyErrorCodes.STALE_WRITE)
     expect(gate.currentEpoch()).toBe(epoch)
     expect(gate.staleWrites()).toBe(1)
     gate.end(token(2))
@@ -94,37 +89,9 @@ describe('write token', () => {
   it('reports a failed ActResult for a write attempted without a token', () => {
     expect(staleWriteResult(12)).toEqual({
       state: 'failed',
-      code: PortErrorCodes.STALE_WRITE,
+      code: BodyErrorCodes.STALE_WRITE,
       elapsedMs: 12,
     })
-  })
-})
-
-describe('capabilities', () => {
-  it('uses behavioural capability names only', () => {
-    expect([...CAPABILITIES]).toEqual(['navigate', 'interact', 'observe.screen', 'combat'])
-  })
-
-  it('maps actions to the capability they require', () => {
-    expect(actionCapability('moveTo')).toBe('navigate')
-    expect(actionCapability('dig')).toBe('interact')
-    expect(actionCapability('unequip')).toBe('interact')
-    expect(actionCapability('attack')).toBe('combat')
-    expect(actionCapability('screen')).toBe('observe.screen')
-    expect(actionCapability('lookAt')).toBeNull()
-    expect(actionCapability('fatalStep')).toBeNull()
-    expect(Object.keys(ACTION_CAPABILITIES)).toHaveLength(13)
-  })
-
-  it('fails with CAPABILITY_MISSING instead of degrading', () => {
-    const error = checkCapability([], 'moveTo')
-    expect(error?.code).toBe(PortErrorCodes.CAPABILITY_MISSING)
-    expect(error?.category).toBe('capability')
-    expect(error?.details).toMatchObject({ action: 'moveTo', missing: 'navigate' })
-
-    expect(checkCapability(['navigate'] as Capability[], 'moveTo')).toBeUndefined()
-    expect(checkCapability([], 'lookAt')).toBeUndefined()
-    expect(checkCapability(['interact'] as Capability[], 'attack')?.code).toBe(PortErrorCodes.CAPABILITY_MISSING)
   })
 })
 

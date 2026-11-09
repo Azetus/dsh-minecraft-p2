@@ -1,16 +1,16 @@
 import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
 import { Vec3 } from 'vec3'
-import { MotionRun } from '../motion/mineflayer/run.ts'
-import { VanillaRun } from '../motion/mineflayer/vanilla-run.ts'
-import { MineflayerMotionWorld } from '../motion/mineflayer/world.ts'
+import { MotionRun } from './motion/run.ts'
+import { VanillaRun } from './motion/vanilla-run.ts'
+import { MineflayerMotionWorld } from './motion/world.ts'
 import { cellOf } from '../motion/model/block.ts'
 import { defaultConstraints } from '../motion/model/types.ts'
 import type { Cell } from '../motion/model/types.ts'
 import { VanillaNodeReader } from '../motion/vanilla/classify.ts'
 import { planVanillaPath } from '../motion/vanilla/search.ts'
-import { attachBlockTags, blockTagsFor } from '../port/mineflayer/block-tags.ts'
-import { parseUnstickBlocks } from '../port/policy.ts'
+import { attachBlockTags, blockTagsFor } from './block-tags.ts'
+import { parseUnstickBlocks } from './unstick.ts'
 import { REPLACEABLE } from '../motion/model/semantics/vanilla.ts'
 import {
   countItem,
@@ -37,10 +37,9 @@ import { p2Error } from '../contracts/protocol.ts'
 import type {
   ActHandle,
   ActPoll,
-  ActPort,
   QueryOutcome,
   QueryPort,
-} from './runtime.ts'
+} from './types.ts'
 
 export type MineflayerProviderOptions = {
   actionTimeoutMs?: number
@@ -121,25 +120,6 @@ const PLACE_FACES: Record<string, readonly [number, number, number]> = {
 }
 
 const EQUIP_DESTINATIONS: readonly EquipmentDestination[] = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']
-
-/** Capabilities this provider actually implements; the op broker gates on them. */
-export const PROVIDER_CAPABILITIES: readonly string[] = Object.freeze([
-  'look',
-  'dig',
-  'place',
-  'attack',
-  'equip',
-  'use',
-  'craft',
-  'container',
-  'toss',
-  'sleep',
-  'interact',
-  'mount',
-  'trade',
-  'respawn',
-  'motion',
-])
 
 /** Provider identity reported in hello/describe/status. */
 export const PROVIDER_ID = 'mineflayer'
@@ -302,8 +282,7 @@ async function closeWindowQuietly(window: AnyWindow | null | undefined): Promise
 export type ProviderSuspension = SuspensionState
 
 /** Query/act adapter over one connected Mineflayer bot. */
-export class MineflayerProvider implements ActPort {
-  readonly capabilities = PROVIDER_CAPABILITIES
+export class MineflayerProvider {
   readonly providerId = PROVIDER_ID
   readonly providerVersion: string
 

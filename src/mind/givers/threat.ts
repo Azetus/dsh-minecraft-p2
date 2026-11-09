@@ -1,4 +1,4 @@
-import type { EntityInfo, Vec3 } from '../../port/index.ts'
+import type { EntityInfo, Vec3 } from '../../body/api.ts'
 import type { DriverResult } from '../types.ts'
 import { boxAround } from '../sensors.ts'
 import type { Candidate, EvalCtx, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'

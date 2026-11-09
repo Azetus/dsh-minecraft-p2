@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { AreaResourceIndex } from '../src/mind/area.ts'
-import type { BlockInfo, Box, ClientPort, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, Box, BodyApi, Vec3 } from '../src/body/api.ts'
 
 function inside(point: Vec3, box: Box): boolean {
   return point.x >= box.min.x && point.x <= box.max.x
@@ -9,14 +9,14 @@ function inside(point: Vec3, box: Box): boolean {
     && point.z >= box.min.z && point.z <= box.max.z
 }
 
-function fakePort(blocks: BlockInfo[]): { port: ClientPort; calls: () => number } {
+function fakePort(blocks: BlockInfo[]): { port: BodyApi; calls: () => number } {
   let calls = 0
   const port = {
     blocksIn: (box: Box) => {
       calls += 1
       return blocks.filter(block => block.pos !== undefined && inside(block.pos, box))
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, calls: () => calls }
 }
 

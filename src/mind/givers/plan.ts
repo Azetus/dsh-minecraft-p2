@@ -1,5 +1,5 @@
 import type { JsonValue } from '../../contracts/types.ts'
-import type { Vec3 } from '../../port/index.ts'
+import type { Vec3 } from '../../body/api.ts'
 import { interiorBounds, planBuildAccess } from '../build-access.ts'
 import { buildStage, currentStage, stageItems, stageSummaries } from '../build-stage.ts'
 import { evaluatePlan, isAirName, isFluidName, itemCells, itemPosition } from '../plan.ts'

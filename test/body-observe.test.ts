@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import type { BodyInfo, RequestEnvelope, WorldObserveResult } from '../src/contracts/index.ts'
-import type { BlockInfo, ClientPort, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (M3-01 observation).
@@ -20,7 +20,7 @@ const body: BodyInfo = {
   },
   manifestDigest: 'b'.repeat(64),
   bindingId: null,
-  capabilities: [],
+
   provider: null,
 }
 
@@ -49,7 +49,7 @@ const defaultBlocks: RawBlock[] = [
   { name: '', loaded: false, pos: { x: 1, y: 64, z: 0 } },
 ]
 
-function fakePort(blocks: RawBlock[] = defaultBlocks): { port: ClientPort; writes: number } {
+function fakePort(blocks: RawBlock[] = defaultBlocks): { port: BodyApi; writes: number } {
   let writes = 0
   const port = {
     self: () => self,
@@ -73,16 +73,16 @@ function fakePort(blocks: RawBlock[] = defaultBlocks): { port: ClientPort; write
     inventory: () => [{ slot: 0, name: 'dirt', count: 2 }],
     beginWrite: () => { writes += 1 },
     endWrite: () => {},
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, get writes() { return writes } }
 }
 
-function runtimeWith(port: ClientPort | undefined): BodyRuntime {
+function runtimeWith(port: BodyApi | undefined): BodyRuntime {
   return new BodyRuntime({
     body,
     owner: { sessionId: 's1', agentId: 'a1', cwd: 'C:/p2' },
     now: () => 1234,
-    ...(port === undefined ? {} : { port }),
+    ...(port === undefined ? {} : { game: port }),
   })
 }
 

@@ -1,4 +1,4 @@
-import type { ClientPort, Item, Vec3 } from '../../port/index.ts'
+import type { BodyApi, Item, Vec3 } from '../../body/api.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import { AsyncDriverHandle } from './handle.ts'
@@ -53,13 +53,13 @@ export function createTraverseDriver(): Driver {
       const params = job.params as unknown as TraverseParams
       return new AsyncDriverHandle(
         `traverse:${params.mode}:${params.x},${params.y},${params.z}`,
-        traverse(ctx.port, params),
+        traverse(ctx.body, params),
       )
     },
   }
 }
 
-async function traverse(port: ClientPort, params: TraverseParams): Promise<DriverResult> {
+async function traverse(port: BodyApi, params: TraverseParams): Promise<DriverResult> {
   const start = floor(port.self().pos)
   const target = { x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
   const dx = target.x - start.x
@@ -87,7 +87,7 @@ async function traverse(port: ClientPort, params: TraverseParams): Promise<Drive
 }
 
 async function moveWithPlacement(
-  port: ClientPort,
+  port: BodyApi,
   params: TraverseParams,
   start: Vec3,
   target: Vec3,

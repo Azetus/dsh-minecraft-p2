@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M2-01/02/03 runtime wiring).
@@ -31,7 +31,7 @@ function block(name: string, p: Vec3): BlockInfo {
   return { name, loaded: true, pos: p }
 }
 
-function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; selfPos: Vec3 } {
+function fakePort(): { port: BodyApi; blocks: Map<string, BlockInfo>; selfPos: Vec3 } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set('0,64,0', block('stone', { x: 0, y: 64, z: 0 }))
   blocks.set('0,63,0', block('stone', { x: 0, y: 63, z: 0 }))
@@ -68,7 +68,7 @@ function fakePort(): { port: ClientPort; blocks: Map<string, BlockInfo>; selfPos
       state.selfPos = { x: target.x + 0.5, y: target.y, z: target.z + 0.5 }
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, blocks, selfPos: state.selfPos }
 }
 
@@ -88,7 +88,7 @@ describe('plan runtime', () => {
 
     const { port } = fakePort()
     const mind = createMind({
-      port,
+      body: port,
       home: { x: 1, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir,

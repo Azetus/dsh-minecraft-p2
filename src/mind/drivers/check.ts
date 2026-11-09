@@ -1,4 +1,4 @@
-import type { ClientPort } from '../../port/index.ts'
+import type { BodyApi } from '../../body/api.ts'
 import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
@@ -43,12 +43,12 @@ export function createCheckDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as CheckParams
       const key = `check:${params.x},${params.y},${params.z}`
-      return new AsyncDriverHandle(key, checkContainer(ctx.port, params))
+      return new AsyncDriverHandle(key, checkContainer(ctx.body, params))
     },
   }
 }
 
-async function checkContainer(port: ClientPort, params: CheckParams): Promise<DriverResult> {
+async function checkContainer(port: BodyApi, params: CheckParams): Promise<DriverResult> {
   const target = { x: params.x, y: params.y, z: params.z }
   const approach = await approachBlock(port, target, {
     range: 2,

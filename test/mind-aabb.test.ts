@@ -8,7 +8,7 @@ import {
   pickupQueryBox,
   playerBox,
 } from '../src/mind/aabb.ts'
-import type { Box, EntityInfo, SelfInfo } from '../src/port/index.ts'
+import type { Box, EntityInfo, SelfInfo } from '../src/body/api.ts'
 
 const self: SelfInfo = {
   pos: { x: 0.5, y: 64, z: 0.5 },

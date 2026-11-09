@@ -1,11 +1,11 @@
 import type { Bot } from 'mineflayer'
 
 import type { JsonValue } from '../../contracts/types.ts'
-import { cellOf, sameCell } from '../model/block.ts'
-import type { Cell } from '../model/types.ts'
-import { VanillaNodeReader } from '../vanilla/classify.ts'
-import { WaypointFollower } from '../vanilla/follow.ts'
-import { planVanillaPath, type VanillaPlan } from '../vanilla/search.ts'
+import { cellOf, sameCell } from '../../motion/model/block.ts'
+import type { Cell } from '../../motion/model/types.ts'
+import { VanillaNodeReader } from '../../motion/vanilla/classify.ts'
+import { WaypointFollower } from '../../motion/vanilla/follow.ts'
+import { planVanillaPath, type VanillaPlan } from '../../motion/vanilla/search.ts'
 import { MineflayerMotionWorld } from './world.ts'
 
 export type VanillaRunState = 'running' | 'succeeded' | 'failed' | 'canceled'

@@ -1,7 +1,7 @@
 import { asP2Error, p2Error } from '../contracts/protocol.ts'
 import type { P2Error } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
-import type { BlockInfo, Item, Vec3 } from '../port/index.ts'
+import type { BlockInfo, Item, Vec3 } from '../body/api.ts'
 import type { ConflictPolicy } from './policy.ts'
 import { isStandable } from './standing.ts'
 import type { WorldView } from './types.ts'

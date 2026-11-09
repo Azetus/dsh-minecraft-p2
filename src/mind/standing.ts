@@ -9,7 +9,7 @@ import {
   type StandInfo,
 } from '../motion/model/index.ts'
 import { AIR_NAMES, isLegacySolidName } from '../motion/model/semantics/vanilla.ts'
-import type { BlockInfo, Vec3 } from '../port/index.ts'
+import type { BlockInfo, Vec3 } from '../body/api.ts'
 import type { WorldView } from './types.ts'
 
 /** Legacy-compatible standability result consumed by givers/drivers. */

@@ -1,4 +1,4 @@
-import type { BlockInfo, ClientPort, Face } from '../../port/index.ts'
+import type { BlockInfo, BodyApi, Face } from '../../body/api.ts'
 import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { standingCell } from '../../motion/execute/index.ts'
@@ -137,12 +137,12 @@ export function createPlaceDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as PlaceParams
       const key = `place:${params.x},${params.y},${params.z},${params.item}`
-      return new AsyncDriverHandle(key, placeCell(ctx.port, params).then(result => attachPlaceFailure(result, params, ctx.port)))
+      return new AsyncDriverHandle(key, placeCell(ctx.body, params).then(result => attachPlaceFailure(result, params, ctx.body)))
     },
   }
 }
 
-async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverResult> {
+async function placeCell(port: BodyApi, params: PlaceParams): Promise<DriverResult> {
   const target = { x: params.x, y: params.y, z: params.z }
   const expected: ExpectedBlock = {
     name: params.item,
@@ -234,7 +234,7 @@ async function placeCell(port: ClientPort, params: PlaceParams): Promise<DriverR
 }
 
 async function placeFromStances(
-  port: ClientPort,
+  port: BodyApi,
   cells: Cell[],
   params: PlaceParams,
   expected: ExpectedBlock,
@@ -365,7 +365,7 @@ async function placeFromStances(
 }
 
 function preflight(
-  port: ClientPort,
+  port: BodyApi,
   target: Cell,
   cells: Cell[],
   expected: ExpectedBlock,
@@ -415,7 +415,7 @@ function preflight(
 }
 
 function faceChoices(
-  port: ClientPort,
+  port: BodyApi,
   target: Cell,
   stand: Cell,
   requestedFace: Face | undefined,
@@ -450,7 +450,7 @@ function faceChoices(
 }
 
 function successObserved(
-  port: ClientPort,
+  port: BodyApi,
   target: Cell,
   cells: Cell[],
   params: PlaceParams,
@@ -530,7 +530,7 @@ function readPlaceEvidence(value: JsonValue | undefined): PlaceEvidence {
   }
 }
 
-async function confirmCells(port: ClientPort, cells: Cell[], expected: ExpectedBlock): Promise<boolean> {
+async function confirmCells(port: BodyApi, cells: Cell[], expected: ExpectedBlock): Promise<boolean> {
   if (cellsMatch(port, cells, expected)) return true
   await sleep(100)
   if (cellsMatch(port, cells, expected)) return true
@@ -538,14 +538,14 @@ async function confirmCells(port: ClientPort, cells: Cell[], expected: ExpectedB
   return cellsMatch(port, cells, expected)
 }
 
-function cellsMatch(port: ClientPort, cells: Cell[], expected: ExpectedBlock): boolean {
+function cellsMatch(port: BodyApi, cells: Cell[], expected: ExpectedBlock): boolean {
   return cells.every(cell => {
     const block = port.blockAt(cell)
     return block !== null && block.loaded && matchesName(block, expected)
   })
 }
 
-function cellViews(port: ClientPort, cells: Cell[]): JsonValue {
+function cellViews(port: BodyApi, cells: Cell[]): JsonValue {
   return cells.map(cell => {
     const block = port.blockAt(cell)
     return {
@@ -562,7 +562,7 @@ function matchesName(block: BlockInfo, expected: ExpectedBlock): boolean {
   return matchesExpected({ name: block.name, loaded: block.loaded }, { name: expected.name })
 }
 
-function expectedSupport(port: ClientPort, target: Cell, item: string): Cell | undefined {
+function expectedSupport(port: BodyApi, target: Cell, item: string): Cell | undefined {
   for (const face of FACES) {
     const reference = { x: target.x + face.dx, y: target.y + face.dy, z: target.z + face.dz }
     const block = port.blockAt(reference)
@@ -592,7 +592,7 @@ function isPlaceSupport(block: BlockInfo | null): block is BlockInfo {
   return true
 }
 
-function lineClear(port: ClientPort, from: Cell, to: Cell, allowed: Set<string>): boolean {
+function lineClear(port: BodyApi, from: Cell, to: Cell, allowed: Set<string>): boolean {
   const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z)
   const steps = Math.ceil(distance / 0.1)
   for (let step = 1; step < steps; step += 1) {
@@ -613,7 +613,7 @@ function lineClear(port: ClientPort, from: Cell, to: Cell, allowed: Set<string>)
 }
 
 /** Add the unified failure projection to every placement failure path. */
-function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: ClientPort): DriverResult {
+function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: BodyApi): DriverResult {
   if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
   const code = result.code ?? 'PLACE_FAILED'
   const target = { x: params.x, y: params.y, z: params.z }
@@ -680,7 +680,7 @@ function attachPlaceFailure(result: DriverResult, params: PlaceParams, port: Cli
 }
 
 /** All six faces of one target cell, true when that neighbour is a support. */
-function supportFacts(port: ClientPort, target: Cell): Record<Face, boolean> {
+function supportFacts(port: BodyApi, target: Cell): Record<Face, boolean> {
   const result = {} as Record<Face, boolean>
   for (const face of FACES) {
     result[face.name] = isPlaceSupport(port.blockAt({
@@ -698,7 +698,7 @@ function supportFacts(port: ClientPort, target: Cell): Record<Face, boolean> {
  * cells; the caller remains responsible for choosing and approaching them.
  */
 function suggestedPlaceCells(
-  port: ClientPort,
+  port: BodyApi,
   cells: readonly Cell[],
 ): Array<{ cell: [number, number, number]; support: Face }> {
   const target = cells[0]
@@ -746,7 +746,7 @@ function bodyCoversCells(pos: { x: number; y: number; z: number }, cells: readon
   return cells.some(cell => cell.x === x && cell.z === z && cell.y >= firstY && cell.y <= lastY)
 }
 
-async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefined> {
+async function lookYaw(port: BodyApi, yaw: number): Promise<string | undefined> {
   if (port.lookYaw === undefined) return undefined
   const result = await port.lookYaw(yaw)
   return result.state === 'ok' ? undefined : (result.code ?? 'PLACE_LOOK_FAILED')
@@ -756,7 +756,7 @@ async function lookYaw(port: ClientPort, yaw: number): Promise<string | undefine
  * Stand cells from which the target group is not inside the body. Evidence for
  * a PLACE_BLOCKED_BY_SELF failure, not an automatic placement policy.
  */
-function suggestedStances(port: ClientPort, cells: readonly Cell[]): Cell[] {
+function suggestedStances(port: BodyApi, cells: readonly Cell[]): Cell[] {
   const target = cells[0]
   if (target === undefined) return []
   const world = createReadOnlyMotionWorld(point => port.blockAt(point))

@@ -4,7 +4,7 @@ import type {
   BaseWaitingReason,
 } from '../contracts/protocol.ts'
 import { isRecord } from '../contracts/protocol.ts'
-import type { Vec3 } from '../port/index.ts'
+import type { Vec3 } from '../body/api.ts'
 
 /** A whole-block cell; the controller never keeps a floating-point position. */
 export type BaseCell = { x: number; y: number; z: number }

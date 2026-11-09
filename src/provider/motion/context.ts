@@ -1,11 +1,11 @@
-import { createRules, type RuleSet } from '../model/rules.ts'
+import { createRules, type RuleSet } from '../../motion/model/rules.ts'
 import {
   defaultConstraints,
   type BlockClassifier,
   type MotionConstraints,
   type MotionWorld,
   type MoveContext,
-} from '../model/types.ts'
+} from '../../motion/model/types.ts'
 
 /** One rules snapshot per tick; cached reads are invalidated at the boundary. */
 export class MotionContextSource {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate, VerifySpec } from '../src/mind/plan.ts'
 import { verifySealedRoom } from '../src/mind/verify/sealed-room.ts'
-import type { BlockInfo, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, SelfInfo } from '../src/body/api.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
 
 /**

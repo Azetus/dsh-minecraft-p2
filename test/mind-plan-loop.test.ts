@@ -12,7 +12,7 @@ import type { TreeMap } from '../src/mind/tree.ts'
 import type { Driver, DriverCtx, DriverHandle, Job, WorldView } from '../src/mind/types.ts'
 import { verifySealedRoom } from '../src/mind/verify/sealed-room.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M2-03/M2-02).
@@ -65,7 +65,7 @@ const self: SelfInfo = {
 }
 
 type Fake = {
-  port: ClientPort
+  port: BodyApi
   blocks: Map<string, BlockInfo>
   state: { selfPos: Vec3 }
   snapshot(): SnapshotWorld
@@ -93,7 +93,7 @@ function fakeWorld(): Fake {
     beginWrite: () => { writes += 1 },
     endWrite: () => {},
     blockAt: (p: Vec3) => blocks.get(key(p)) ?? null,
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return {
     port,
     blocks,
@@ -133,7 +133,7 @@ function buildLoop(fake: Fake, plan: ReturnType<typeof instantiatePlan>, drivers
   for (const driver of drivers) registry.registerDriver({ id: driver.id, driver })
   const trees: TreeMap = new Map([['main', { type: 'giver', ref: 'plan.work' }]])
   const tracker = new JobTracker({
-    port: fake.port,
+    body: fake.port,
     driver: id => registry.driver(id),
     world: () => fake.snapshot(),
     now: () => Date.now(),

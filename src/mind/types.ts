@@ -1,14 +1,14 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { HazardPolicy } from '../port/policy.ts'
+import type { HazardPolicy } from './policy.ts'
 import type {
   BlockInfo,
   Box,
-  ClientPort,
+  BodyApi,
   EntityInfo,
   Item,
   SelfInfo,
   Vec3,
-} from '../port/index.ts'
+} from '../body/api.ts'
 import type { SchemaNode } from './schema.ts'
 import type { PlanInstance } from './plan.ts'
 import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
@@ -154,7 +154,7 @@ export interface DriverHandle {
 export type DriverValidation = { ok: true } | { ok: false; code: string }
 
 export type DriverCtx = {
-  port: ClientPort
+  body: BodyApi
   now: () => number
   /**
    * Called once by dig/clear/attack before automatic tool selection. Returns

@@ -31,7 +31,7 @@ const body: BodyInfo = {
   manifest,
   manifestDigest: bodyManifestDigest(manifest),
   bindingId: null,
-  capabilities: [],
+
   provider: null,
 }
 

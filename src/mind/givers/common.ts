@@ -1,4 +1,4 @@
-import type { BlockInfo, EntityInfo, Vec3 } from '../../port/index.ts'
+import type { BlockInfo, EntityInfo, Vec3 } from '../../body/api.ts'
 import { nearestStandCell, standCells } from '../../motion/search/index.ts'
 import { boxAround } from '../sensors.ts'
 import { createReadOnlyMotionWorld, isStandable } from '../standing.ts'

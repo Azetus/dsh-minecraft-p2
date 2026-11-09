@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createTraverseDriver } from '../src/mind/drivers/traverse.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { ClientPort, Item, Vec3 } from '../src/port/index.ts'
+import type { BodyApi, Item, Vec3 } from '../src/body/api.ts'
 
 type Move = { target: Vec3; opts: Record<string, unknown> }
 
@@ -17,7 +17,7 @@ function fakePort(options: { items?: Item[]; start?: Vec3 } = {}) {
       return { state: 'ok' as const, elapsedMs: 1, observed: { plan: 'motion' } }
     },
   }
-  return { port: port as unknown as ClientPort, moves }
+  return { port: port as unknown as BodyApi, moves }
 }
 
 function job(params: Record<string, unknown>): Job {
@@ -30,8 +30,8 @@ function job(params: Record<string, unknown>): Job {
   }
 }
 
-async function run(port: ClientPort, params: Record<string, unknown>) {
-  const handle = createTraverseDriver().start(job(params), { port, now: () => 1 })
+async function run(port: BodyApi, params: Record<string, unknown>) {
+  const handle = createTraverseDriver().start(job(params), { body: port, now: () => 1 })
   for (let index = 0; index < 20; index++) {
     if (handle.result().state !== 'running') break
     await Promise.resolve()

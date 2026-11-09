@@ -1,4 +1,4 @@
-import type { Vec3 } from '../../port/index.ts'
+import type { Vec3 } from '../../body/api.ts'
 import type { AreaResourceIndex } from '../area.ts'
 import { materialSources, planShortage } from '../materials.ts'
 import { itemPosition } from '../plan.ts'

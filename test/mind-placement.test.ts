@@ -5,7 +5,7 @@ import { evaluatePlan, instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate, WorkItem } from '../src/mind/plan.ts'
 import { PlanItemLedger, placementStances, stepAsideStances } from '../src/mind/placement.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (B1 placement stance ledger).

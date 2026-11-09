@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDigDriver } from '../src/mind/drivers/dig.ts'
 import { pickupNearby } from '../src/mind/pickup.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { BlockInfo, ClientPort, EntityInfo, Item, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, EntityInfo, Item, Vec3 } from '../src/body/api.ts'
 
 const target = { x: 1, y: 64, z: 0 }
 
@@ -66,7 +66,7 @@ describe('pickup', () => {
         drops = []
         return { state: 'ok', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
 
@@ -91,7 +91,7 @@ describe('pickup', () => {
       entities: () => [drop({ x: 1.5, y: 64, z: 0.5 })],
       blockAt: () => null,
       moveTo: async () => { moves += 1; return { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
 
@@ -114,7 +114,7 @@ describe('pickup', () => {
       entities: () => [drop({ x: 0.5, y: 64, z: 0.5 })],
       blockAt: () => solid,
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
 
@@ -142,7 +142,7 @@ describe('pickup', () => {
       entities: () => [drop({ x: 0.5, y: 64, z: 5.5 })],
       blockAt: floor,
       moveTo: async () => { moves += 1; return { state: 'ok', elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
 
@@ -164,7 +164,7 @@ describe('pickup', () => {
         items.push({ slot: 36, name: 'dirt', count: 1 })
         return { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
 
@@ -178,7 +178,7 @@ describe('pickup', () => {
       inventory: () => [],
       entities: () => [],
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     expect(await pickupNearby(port, target)).toMatchObject({ drops: 0, picked: 0 })
   })
@@ -195,7 +195,7 @@ describe('pickup', () => {
       inventory: () => full,
       entities: () => [drop({ x: 1.5, y: 64, z: 0.5 })],
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 0, full: 1, notCollected: 0 })
@@ -212,7 +212,7 @@ describe('pickup', () => {
         return calls === 1 ? [drop({ x: 1.5, y: 64, z: 0.5 })] : []
       },
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 0, gone: 1 })
@@ -232,7 +232,7 @@ describe('pickup', () => {
         drops = [drop({ x: 1.5, y: 64, z: 0.5 }, 1)]
         return { state: 'ok', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 1, partial: 1, notCollected: 0 })
@@ -252,7 +252,7 @@ describe('pickup', () => {
           : [{ ...drop({ x: 1.6, y: 64, z: 0.6 }), id: 'merged-1' }]
       },
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, target)
     expect(result).toMatchObject({ drops: 1, picked: 0, gone: 1, merged: 1 })
@@ -268,7 +268,7 @@ describe('pickup return path', () => {
       inventory: () => [],
       entities: () => [drop({ x: 1.5, y: 62, z: 0.5 })],
       moveTo: async () => { moves += 1; return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
 
@@ -293,7 +293,7 @@ describe('pickup return path', () => {
       inventory: () => [],
       entities: () => [drop({ x: 1.5, y: 62, z: 0.5 })],
       moveTo: async () => { moves += 1; return { state: 'ok' as const, elapsedMs: 1 } },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
 
@@ -320,7 +320,7 @@ describe('pickup return path', () => {
         drops = []
         return { state: 'ok' as const, elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await pickupNearby(port, { x: 0, y: 64, z: 0 })
 
@@ -361,7 +361,7 @@ describe('pickup scan options', () => {
         }
         return { state: 'ok' as const, elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     return { port, drops, items, moves }
   }
 
@@ -446,14 +446,14 @@ describe('dig then pickup', () => {
         drops = []
         return { state: 'ok', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const job = {
       driverId: 'dig', target: { kind: 'point', pos: target },
       params: { ...target, purpose: 'harvest' }, runId: 'run-1', issuedAt: 0,
       budget: { maxTicks: 600, maxWallMs: 30_000 },
     } as unknown as Job
-    const handle = createDigDriver().start(job, { port, now: () => 0 })
+    const handle = createDigDriver().start(job, { body: port, now: () => 0 })
     for (let index = 0; index < 300 && handle.result().state === 'running'; index += 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
@@ -485,14 +485,14 @@ describe('dig then pickup', () => {
         item.push({ slot: 37, name: 'cobblestone', count: 1 })
         return { state: 'failed', code: 'GOTO_NO_PATH', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const job = {
       driverId: 'dig', target: { kind: 'point', pos: target },
       params: { ...target, purpose: 'harvest' }, runId: 'run-1', issuedAt: 0,
       budget: { maxTicks: 600, maxWallMs: 30_000 },
     } as unknown as Job
-    const handle = createDigDriver().start(job, { port, now: () => 0 })
+    const handle = createDigDriver().start(job, { body: port, now: () => 0 })
     for (let index = 0; index < 300 && handle.result().state === 'running'; index += 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }

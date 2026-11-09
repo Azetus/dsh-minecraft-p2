@@ -12,7 +12,7 @@ import type {
   Job,
   WorldView,
 } from '../src/mind/types.ts'
-import type { ClientPort, WriteToken } from '../src/port/index.ts'
+import type { BodyApi, WriteToken } from '../src/body/api.ts'
 
 /**
  * Category: state safety (todo M1-03, RUNTIME §4/§5).
@@ -114,9 +114,9 @@ function harness(options: { interrupt?: 'constant-only' | 'never' | 'any'; stopT
   const port = {
     beginWrite: (token: WriteToken) => { writes.push({ op: 'begin', token }) },
     endWrite: (token: WriteToken) => { writes.push({ op: 'end', token }) },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   const tracker = new JobTracker({
-    port,
+    body: port,
     driver: id => {
       if (id !== 'move') throw new Error(`unknown driver: ${id}`)
       return driver

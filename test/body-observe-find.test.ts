@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import type { BodyInfo, RequestEnvelope, WorldObserveResult } from '../src/contracts/index.ts'
-import type { BlockInfo, ClientPort, FindBlocksQuery, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, FindBlocksQuery, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (Phase B nearest-block observation).
@@ -20,7 +20,7 @@ const body: BodyInfo = {
   },
   manifestDigest: 'b'.repeat(64),
   bindingId: null,
-  capabilities: [],
+
   provider: null,
 }
 
@@ -44,7 +44,7 @@ type RawBlock = {
 }
 
 type FakeFindPort = {
-  port: ClientPort
+  port: BodyApi
   writes: number
   queries: FindBlocksQuery[]
 }
@@ -73,16 +73,16 @@ function fakePort(blocks: RawBlock[] = []): FakeFindPort {
     inventory: () => [{ slot: 0, name: 'dirt', count: 2 }],
     beginWrite: () => { writes += 1 },
     endWrite: () => {},
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, get writes() { return writes }, queries }
 }
 
-function runtimeWith(port: ClientPort | undefined): BodyRuntime {
+function runtimeWith(port: BodyApi | undefined): BodyRuntime {
   return new BodyRuntime({
     body,
     owner: { sessionId: 's1', agentId: 'a1', cwd: 'C:/p2' },
     now: () => 1234,
-    ...(port === undefined ? {} : { port }),
+    ...(port === undefined ? {} : { game: port }),
   })
 }
 

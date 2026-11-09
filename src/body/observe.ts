@@ -17,7 +17,7 @@ import type {
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { P2Error } from '../contracts/types.ts'
-import type { Box, ClientPort } from '../port/index.ts'
+import type { Box, BodyApi } from '../body/api.ts'
 
 const MAX_POINTS = 256
 
@@ -31,7 +31,7 @@ const MAX_POINTS = 256
  * silently truncated.
  */
 export function observeWorld(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   at: number,
 ): WorldObserveResult {
@@ -68,7 +68,7 @@ export function observeWorld(
 type Common = Pick<WorldObserveResult, 'at' | 'self' | 'inventory' | 'time' | 'biome'>
 
 function observeFind(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   common: Common,
   mode: 'find' | undefined,
@@ -146,7 +146,7 @@ function observeFind(
 }
 
 function observePoints(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   common: Common,
   mode: 'points' | undefined,
@@ -197,7 +197,7 @@ function observePoints(
 }
 
 function observeBox(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   common: Common,
   mode: 'box' | undefined,

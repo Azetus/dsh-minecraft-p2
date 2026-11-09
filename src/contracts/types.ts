@@ -65,7 +65,6 @@ export type BindingManifest = {
   } | null
   irVersion: number
   opContractVersion: string
-  capabilities: string[]
   driver: string | null
   config: JsonValue
 }

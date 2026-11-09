@@ -50,31 +50,31 @@ export function createUseDriver(): Driver {
 async function use(ctx: DriverCtx, params: UseParams): Promise<DriverResult> {
   const target = toTarget(params)
   if (target !== undefined) {
-    const block = ctx.port.blockAt(target)
-    const self = ctx.port.self().pos
+    const block = ctx.body.blockAt(target)
+    const self = ctx.body.self().pos
     // A bot already on/next to a bed cannot path to the bed block itself;
     // sleeping is still valid from this position.
     const alreadyAtBed = block !== null && block.loaded && block.name.endsWith('_bed')
       && Math.hypot(self.x - (target.x + 0.5), self.y - (target.y + 0.5), self.z - (target.z + 0.5)) <= 3
     if (!alreadyAtBed) {
-      const moved = await ctx.port.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000 })
+      const moved = await ctx.body.moveTo(target, { range: 3, intent: 'interact', timeoutMs: 20_000 })
       if (moved.state !== 'ok') return actFailure(moved, 'USE_MOVE_FAILED')
     }
     if (block !== null && block.loaded && block.name.endsWith('_bed')) {
-      const slept = await ctx.port.sleep(target)
+      const slept = await ctx.body.sleep(target)
       if (slept.state !== 'ok') return actFailure(slept, 'USE_SLEEP_FAILED')
       return { state: 'succeeded', observed: { kind: 'sleep', bed: target } }
     }
-    const activated = await ctx.port.useOn(target)
+    const activated = await ctx.body.useOn(target)
     if (activated.state !== 'ok') return actFailure(activated, 'USE_ON_FAILED')
     return { state: 'succeeded', observed: { kind: 'use-on', target } }
   }
 
   const item = params.item
   if (typeof item !== 'string' || item.length === 0) return { state: 'failed', code: 'BAD_ARGS' }
-  const equipped = await ctx.port.equip(item)
+  const equipped = await ctx.body.equip(item)
   if (equipped.state !== 'ok') return actFailure(equipped, 'USE_EQUIP_FAILED')
-  const used = await ctx.port.useItem({ durationMs: Math.max(1_000, params.durationMs ?? 1_800) })
+  const used = await ctx.body.useItem({ durationMs: Math.max(1_000, params.durationMs ?? 1_800) })
   if (used.state !== 'ok') return actFailure(used, 'USE_ITEM_FAILED')
   return { state: 'succeeded', observed: { kind: 'use-item', item } }
 }

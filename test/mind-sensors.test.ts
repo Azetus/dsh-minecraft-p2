@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { Sensors } from '../src/mind/sensors.ts'
-import type { BlockInfo, ClientPort, EntityInfo, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, EntityInfo, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (B1 observation).
@@ -12,7 +12,7 @@ import type { BlockInfo, ClientPort, EntityInfo, SelfInfo, Vec3 } from '../src/p
 const key = (p: Vec3): string => `${p.x},${p.y},${p.z}`
 
 function fakePort(): {
-  port: ClientPort
+  port: BodyApi
   state: { pos: Vec3; entities: EntityInfo[] }
   blocks: Map<string, BlockInfo>
 } {
@@ -51,7 +51,7 @@ function fakePort(): {
       && entity.position.y >= box.min.y && entity.position.y <= box.max.y
       && entity.position.z >= box.min.z && entity.position.z <= box.max.z),
     inventory: () => [],
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, state, blocks }
 }
 
@@ -59,7 +59,7 @@ describe('sensors observation groups', () => {
   it('re-reads a plan box on every sample instead of losing it', () => {
     const { port, state } = fakePort()
     let now = 0
-    const sensors = new Sensors({ port, now: () => now, refreshMs: 100 })
+    const sensors = new Sensors({ body: port, now: () => now, refreshMs: 100 })
 
     sensors.setObservation('plan', [{ min: { x: 38, y: 64, z: 38 }, max: { x: 42, y: 68, z: 42 } }])
     expect(sensors.read()?.blockAt({ x: 40, y: 66, z: 40 })?.name).toBe('dirt')
@@ -80,7 +80,7 @@ describe('sensors observation groups', () => {
   it('refreshes self and time when a targeted observation is requested', () => {
     const { port, state } = fakePort()
     let now = 0
-    const sensors = new Sensors({ port, now: () => now, refreshMs: 1_000 })
+    const sensors = new Sensors({ body: port, now: () => now, refreshMs: 1_000 })
     sensors.read()
     state.pos = { x: 5.5, y: 64, z: 5.5 }
     const fresh = sensors.observeBox({ min: { x: -1, y: 63, z: -1 }, max: { x: 1, y: 65, z: 1 } })
@@ -89,7 +89,7 @@ describe('sensors observation groups', () => {
 
   it('samples tracked entities inside the 15-block base box, including the vertical range', () => {
     const { port, state } = fakePort()
-    const sensors = new Sensors({ port, now: () => 0, refreshMs: 1_000 })
+    const sensors = new Sensors({ body: port, now: () => 0, refreshMs: 1_000 })
     state.entities = [
       { id: 'p-edge', name: 'Alice', username: 'Alice', type: 'player', position: { x: 14.5, y: 64, z: 0.5 } },
       { id: 'p-out', name: 'Bob', username: 'Bob', type: 'player', position: { x: 16.5, y: 64, z: 0.5 } },
@@ -105,7 +105,7 @@ describe('sensors observation groups', () => {
 
   it('honours an explicit entity vertical half-extent', () => {
     const { port, state } = fakePort()
-    const sensors = new Sensors({ port, now: () => 0, refreshMs: 1_000, entityVertical: 4 })
+    const sensors = new Sensors({ body: port, now: () => 0, refreshMs: 1_000, entityVertical: 4 })
     state.entities = [
       { id: 'p-near', name: 'Alice', username: 'Alice', type: 'player', position: { x: 0.5, y: 68, z: 0.5 } },
       { id: 'p-far', name: 'Bob', username: 'Bob', type: 'player', position: { x: 0.5, y: 70, z: 0.5 } },

@@ -1,5 +1,5 @@
 import { isRecord } from '../contracts/protocol.ts'
-import type { Vec3 } from '../port/index.ts'
+import type { Vec3 } from '../body/api.ts'
 import { instantiatePlan } from './plan.ts'
 import type { PlanInstance, PlanTemplate, WorkItem } from './plan.ts'
 

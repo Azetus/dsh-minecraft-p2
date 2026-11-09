@@ -3,8 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createStdioTransport } from '../contracts/index.ts'
 import type { BodyInfo, ProviderRuntimeStatus } from '../contracts/index.ts'
-import type { Vec3 } from '../port/index.ts'
-import { MineflayerClientPort } from '../port/mineflayer/index.ts'
+import type { BodyApi, Vec3 } from './api.ts'
 import { createMind } from './mind.ts'
 import type { MindRuntime } from './mind.ts'
 import { loadBodyInfo } from './manifest.ts'
@@ -19,7 +18,7 @@ console.log = (...args: unknown[]): void => { console.error(...args) }
 console.info = (...args: unknown[]): void => { console.error(...args) }
 
 type ConnectedProvider = {
-  port: MineflayerClientPort
+  body: BodyApi
   config: MinecraftProviderConfig
   liveStatus(): ProviderRuntimeStatus
   dispose(): void
@@ -51,15 +50,15 @@ async function main(): Promise<void> {
   let mind: MindRuntime | undefined
   if (provider !== undefined) {
     try {
-      const home = startHome(provider.port)
+      const home = startHome(provider.body)
       let identity: { worldId: string; characterId: string } | undefined
       try {
-        identity = provider.port.identity()
+        identity = provider.body.identity()
       } catch {
         identity = undefined
       }
       mind = createMind({
-        port: provider.port,
+        body: provider.body,
         ...(home === undefined ? {} : { home }),
         ...(identity === undefined ? {} : { identity }),
         providerStatus: () => provider.liveStatus(),
@@ -78,7 +77,7 @@ async function main(): Promise<void> {
     body,
     heartbeatTimeoutMs: 10_000,
     ...(provider === undefined ? {} : { providerStatus: () => provider.liveStatus() }),
-    ...(provider === undefined ? {} : { port: provider.port }),
+    ...(provider === undefined ? {} : { game: provider.body }),
     ...(mind === undefined ? {} : { mind }),
   })
   const transport = createStdioTransport(process.stdin, process.stdout)
@@ -99,9 +98,9 @@ async function main(): Promise<void> {
   serverReady = true
 }
 
-function startHome(port: MineflayerClientPort): Vec3 | undefined {
+function startHome(body: BodyApi): Vec3 | undefined {
   try {
-    const pos = port.self().pos
+    const pos = body.self().pos
     return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
   } catch {
     return undefined
@@ -114,39 +113,26 @@ async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | unde
 
   try {
     const providerUrl = new URL('../provider/minecraft.mjs', import.meta.url).href
-    const providerModule = await import(providerUrl) as typeof import('../provider/mineflayer.ts')
-    const bot = await providerModule.connectMineflayer({
+    const providerModule = await import(providerUrl) as typeof import('../provider/index.ts')
+    const opened = await providerModule.openMineflayerBody({
       host: loaded.config.host,
       port: loaded.config.port,
       username: loaded.config.username,
       version: loaded.config.version,
-      timeoutMs: loaded.config.connectTimeoutMs,
-    })
-    const provider = new providerModule.MineflayerProvider(bot, {
+      connectTimeoutMs: loaded.config.connectTimeoutMs,
       serverIdleMs: loaded.config.serverIdleMs,
+      worldId: loaded.config.worldId,
       providerVersion: body.manifest.bodyVersion,
     })
-    // The provider is the only component that knows which capabilities it really
-    // implements; report them so later layers can gate on the same list.
-    const capabilities = [...providerModule.PROVIDER_CAPABILITIES]
-    body.capabilities = capabilities
     body.provider = {
-      id: providerModule.PROVIDER_ID,
-      version: body.manifest.bodyVersion,
-      capabilities,
+      id: opened.providerId,
+      version: opened.providerVersion,
     }
-    const port = new MineflayerClientPort(bot, provider, { worldId: loaded.config.worldId })
     return {
-      port,
+      body: opened.body,
       config: loaded.config,
-      liveStatus: () => provider.liveStatus(),
-      dispose: () => {
-        try {
-          bot.quit('body shutdown')
-        } catch {
-          // The connection may already be gone; disposal is best effort.
-        }
-      },
+      liveStatus: opened.liveStatus,
+      dispose: opened.dispose,
     }
   } catch (error) {
     process.stderr.write(`dsh-minecraft-p2 body: provider connection failed: ${error instanceof Error ? error.message : String(error)}\n`)

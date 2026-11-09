@@ -39,7 +39,7 @@ import type {
 } from '../contracts/protocol.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { BodyEpoch, JsonValue, P2Error } from '../contracts/types.ts'
-import type { ClientPort } from '../port/index.ts'
+import type { BodyApi } from './api.ts'
 import { boxAround } from '../mind/sensors.ts'
 import { feetOf, HOSTILE_NAMES } from '../mind/givers/common.ts'
 import { previewBlueprint } from './blueprint-preview.ts'
@@ -59,12 +59,12 @@ export type BodyRuntimeOptions = {
   /** P2Mind loop; absent without a provider. */
   mind?: MindRuntime
   /** Read-only provider view for `world.observe`; absent without a provider. */
-  port?: ClientPort
+  game?: BodyApi
 }
 
 /**
  * Body-side lifecycle and health surface. Game access belongs to the provider
- * and the ClientPort adapter; P2Mind is wired through the mind runtime.
+ * and the body API; P2Mind is wired through the mind runtime.
  */
 export class BodyRuntime {
   private readonly body: BodyInfo
@@ -72,7 +72,7 @@ export class BodyRuntime {
   private readonly heartbeatTimeoutMs: number | undefined
   private readonly providerStatus: (() => ProviderRuntimeStatus) | undefined
   private readonly mind: MindRuntime | undefined
-  private readonly port: ClientPort | undefined
+  private readonly game: BodyApi | undefined
   private readonly chatMessages: Array<{ seq: number; at: number; username: string; message: string }> = []
   private chatSeq = 0
   private readonly perceptionNotices: PerceptionNotice[] = []
@@ -96,14 +96,14 @@ export class BodyRuntime {
     this.leaseTimeoutMs = options.heartbeatTimeoutMs
     this.providerStatus = options.providerStatus
     this.mind = options.mind
-    this.port = options.port
-    if (this.port !== undefined && typeof this.port.on === 'function') {
-      this.port.on('chat', payload => this.recordChat(payload))
-      this.port.on('damaged', payload => this.recordDamaged(payload))
-      this.port.on('died', () => this.recordDied())
-      this.port.on('blockUpdated', payload => this.recordBlockUpdate(payload))
+    this.game = options.game
+    if (this.game !== undefined && typeof this.game.on === 'function') {
+      this.game.on('chat', payload => this.recordChat(payload))
+      this.game.on('damaged', payload => this.recordDamaged(payload))
+      this.game.on('died', () => this.recordDied())
+      this.game.on('blockUpdated', payload => this.recordBlockUpdate(payload))
       try {
-        this.lastHealth = this.port.self().health
+        this.lastHealth = this.game.self().health
       } catch {
         this.lastHealth = undefined
       }
@@ -213,7 +213,6 @@ export class BodyRuntime {
       },
       owner: params.owner,
       bindingId: this.body.bindingId,
-      capabilities: this.body.capabilities,
       provider: this.body.provider,
     }
   }
@@ -234,7 +233,6 @@ export class BodyRuntime {
         manifestDigest: this.body.manifestDigest,
       },
       bindingId: this.body.bindingId,
-      capabilities: this.body.capabilities,
       provider: this.body.provider,
     }
   }
@@ -248,7 +246,6 @@ export class BodyRuntime {
       health: 'ready',
       connection: providerState?.connected === true ? 'connected' : 'disconnected',
       bindingId: this.body.bindingId,
-      capabilities: this.body.capabilities,
       provider: this.body.provider,
       ...(providerState === undefined ? {} : { providerState }),
       ...(this.mind === undefined ? {} : { mind: this.mind.status() }),
@@ -300,7 +297,7 @@ export class BodyRuntime {
 
   private worldObserve(params: Record<string, JsonValue>): WorldObserveResult {
     this.requireOwner()
-    if (this.port === undefined) {
+    if (this.game === undefined) {
       throw p2Error(
         ErrorCodes.NOT_INITIALIZED,
         'runtime',
@@ -308,12 +305,12 @@ export class BodyRuntime {
         { module: 'body.runtime' },
       )
     }
-    return observeWorld(this.port, params, this.now())
+    return observeWorld(this.game, params, this.now())
   }
 
   private worldEntities(params: Record<string, JsonValue>): WorldEntitiesResult {
     this.requireOwner()
-    if (this.port === undefined) {
+    if (this.game === undefined) {
       throw p2Error(
         ErrorCodes.NOT_INITIALIZED,
         'runtime',
@@ -321,12 +318,12 @@ export class BodyRuntime {
         { module: 'body.runtime' },
       )
     }
-    return observeEntities(this.port, params, this.now())
+    return observeEntities(this.game, params, this.now())
   }
 
   private blueprintPreview(params: Record<string, JsonValue>): BlueprintPreview {
     this.requireOwner()
-    if (this.port === undefined) {
+    if (this.game === undefined) {
       throw p2Error(
         ErrorCodes.NOT_INITIALIZED,
         'runtime',
@@ -334,7 +331,7 @@ export class BodyRuntime {
         { module: 'body.runtime' },
       )
     }
-    return previewBlueprint(this.port, params.blueprint, this.now())
+    return previewBlueprint(this.game, params.blueprint, this.now())
   }
 
   private recordChat(payload: JsonValue): void {
@@ -364,7 +361,7 @@ export class BodyRuntime {
 
   private chatSay(params: Record<string, JsonValue>): ChatSayResult {
     this.requireOwner()
-    if (this.port === undefined) {
+    if (this.game === undefined) {
       throw p2Error(ErrorCodes.NOT_INITIALIZED, 'runtime', 'body has no provider to chat', {
         module: 'body.runtime',
       })
@@ -376,7 +373,7 @@ export class BodyRuntime {
       })
     }
     try {
-      this.port.say(text)
+      this.game.say(text)
       return { sent: true }
     } catch (error) {
       throw p2Error(
@@ -439,11 +436,11 @@ export class BodyRuntime {
   }
 
   private sampleHostiles(): void {
-    if (this.port === undefined) return
+    if (this.game === undefined) return
     try {
-      const self = this.port.self()
+      const self = this.game.self()
       const feet = feetOf(self.pos)
-      const entities = this.port.entities(boxAround(feet, 8, 3))
+      const entities = this.game.entities(boxAround(feet, 8, 3))
       const current = new Set<string>()
       for (const entity of entities) {
         if (!HOSTILE_NAMES.has(entity.name)) continue

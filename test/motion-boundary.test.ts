@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import { boundaryFields, matrixCommands } from '../src/motion/matrix/index.ts'
 import type { BoundaryField, BoundaryStage } from '../src/motion/matrix/index.ts'
-import { MotionContextSource } from '../src/motion/mineflayer/context.ts'
+import { MotionContextSource } from '../src/provider/motion/context.ts'
 import {
   createRules,
   defaultConstraints,

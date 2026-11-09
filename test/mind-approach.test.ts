@@ -4,7 +4,7 @@ import { createCheckDriver } from '../src/mind/drivers/check.ts'
 import { createCraftDriver } from '../src/mind/drivers/craft.ts'
 import { createDigDriver } from '../src/mind/drivers/dig.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { BlockInfo, ClientPort, Item, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, Item, Vec3 } from '../src/body/api.ts'
 
 // These drivers sleep 200–700 ms on real timers. A fixed number of setTimeout(0)
 // flushes is enough on Windows (coarse timer granularity) but ends far too early
@@ -50,11 +50,11 @@ describe('interaction approach', () => {
         items.push({ slot: 37, name: 'cobblestone', count: 1 })
         return { state: 'ok', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const handle = createDigDriver().start(
       job('dig', { x: 10, y: 64, z: 0, purpose: 'harvest' }),
-      { port, now: () => 0 },
+      { body: port, now: () => 0 },
     )
     await settle(handle)
 
@@ -70,11 +70,11 @@ describe('interaction approach', () => {
       blockAt: (p: Vec3) => (p.y === 63 ? { name: 'stone', loaded: true } : { name: 'air', loaded: true }),
       moveTo: async (target: Vec3) => { moves.push(target); return { state: 'ok', elapsedMs: 1 } },
       containerAt: async () => ({ state: 'ok', block: 'chest', items: [] }),
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const handle = createCheckDriver().start(
       job('check', { x: 10, y: 64, z: 0 }),
-      { port, now: () => 0 },
+      { body: port, now: () => 0 },
     )
     await settle(handle)
 
@@ -99,11 +99,11 @@ describe('interaction approach', () => {
         items.push({ slot: 36, name: 'stick', count: 4 })
         return { state: 'ok', elapsedMs: 1 }
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const handle = createCraftDriver().start(
       job('craft', { item: 'stick', count: 4 }),
-      { port, now: () => 0 },
+      { body: port, now: () => 0 },
     )
     await settle(handle)
 

@@ -11,7 +11,7 @@ import {
 import type { ReactionPolicy } from '../src/mind/reaction-policy.ts'
 import type { Candidate } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { EntityInfo, Item, SelfInfo } from '../src/port/index.ts'
+import type { EntityInfo, Item, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: state safety / contract (M4 reaction policy).

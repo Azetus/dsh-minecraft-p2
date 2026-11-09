@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import type { DutyState, DutyStatusView } from '../contracts/protocol.ts'
-import type { Item } from '../port/index.ts'
+import type { Item } from '../body/api.ts'
 import { countItem } from './plan.ts'
 import { materialDropNames } from './materials.ts'
 

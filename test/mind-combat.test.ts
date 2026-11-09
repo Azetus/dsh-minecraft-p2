@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createAttackDriver } from '../src/mind/drivers/attack.ts'
 import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
 import type { Job, WorldView } from '../src/mind/types.ts'
-import type { BlockInfo, Box, ClientPort, EntityInfo } from '../src/port/index.ts'
+import type { BlockInfo, Box, BodyApi, EntityInfo } from '../src/body/api.ts'
 
 /**
  * Category: data (combat ROE + evidence).
@@ -68,7 +68,7 @@ function combatPort(options: {
     destination?: 'hand' | 'offhand',
   ) => Promise<{ state: 'ok' | 'failed'; code?: string; elapsedMs: number }>
 }): {
-  port: ClientPort
+  port: BodyApi
   listeners: Listener[]
   times: number[]
   equips: string[]
@@ -126,7 +126,7 @@ function combatPort(options: {
     on: (event: string, cb: (payload: unknown) => void) => {
       listeners.push({ event, cb })
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, listeners, times, equips, equipCalls, steps }
 }
 
@@ -155,7 +155,7 @@ describe('combat ROE', () => {
     })
     const handle = createAttackDriver().start(
       job({ entityId: 'z1', targetName: 'zombie', maxChases: 2 }),
-      { port, now: () => 1 },
+      { body: port, now: () => 1 },
     )
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
@@ -237,7 +237,7 @@ describe('combat ROE', () => {
     })
     const handle = createAttackDriver().start(
       job({ entityId: 'z9', targetName: 'zombie' }),
-      { port, now: () => 1 },
+      { body: port, now: () => 1 },
     )
     await waitFor(handle)
     expect(handle.result().state).toBe('succeeded')
@@ -261,7 +261,7 @@ describe('combat evidence', () => {
       },
     })
     const first = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 1,
     })
     await waitFor(first)
@@ -270,7 +270,7 @@ describe('combat evidence', () => {
 
     alive = true
     const second = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), {
-      port: fake.port,
+      body: fake.port,
       now: () => 1,
       allowAutoEquip: () => false,
     })
@@ -291,12 +291,12 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const explicit = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player', allowAny: true }), { port, now: () => 1 })
+    const explicit = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player', allowAny: true }), { body: port, now: () => 1 })
     await waitFor(explicit)
     expect(explicit.result()).toMatchObject({ state: 'succeeded', observed: { killed: true } })
 
     alive = true
-    const guarded = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player' }), { port, now: () => 1 })
+    const guarded = createAttackDriver().start(job({ entityId: 'p1', targetName: 'Human_Player' }), { body: port, now: () => 1 })
     await waitFor(guarded)
     expect(guarded.result()).toMatchObject({ state: 'failed', code: 'ATTACK_TARGET_PROTECTED' })
   })
@@ -312,7 +312,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'succeeded',
@@ -338,7 +338,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'failed',
@@ -365,7 +365,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(moves).toEqual([{ range: 2, intent: 'attack', timeoutMs: 5_000 }])
     expect(handle.result()).toMatchObject({
@@ -391,7 +391,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(times).toHaveLength(2)
     expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(450)
@@ -404,7 +404,7 @@ describe('combat evidence', () => {
       canSee: () => false,
       attack: async () => ({ state: 'ok', elapsedMs: 1 }),
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'failed',
@@ -419,7 +419,7 @@ describe('combat evidence', () => {
       moveTo: async () => ({ state: 'ok', elapsedMs: 1 }),
       attack: async () => ({ state: 'ok', elapsedMs: 1 }),
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'failed',
@@ -448,7 +448,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'spider' }), { port: mapped.port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'spider' }), { body: mapped.port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { chases: 0 } })
     expect(moves).toHaveLength(0)
@@ -471,7 +471,7 @@ describe('combat evidence', () => {
     })
     const chasing = createAttackDriver().start(
       job({ entityId: 'z1', targetName: 'spider', maxChases: 1 }),
-      { port: unmapped.port, now: () => 1 },
+      { body: unmapped.port, now: () => 1 },
     )
     await waitFor(chasing)
     expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
@@ -494,7 +494,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'enderman' }), { port: mapped.port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'enderman' }), { body: mapped.port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { chases: 0 } })
 
@@ -508,7 +508,7 @@ describe('combat evidence', () => {
     })
     const chasing = createAttackDriver().start(
       job({ entityId: 'z1', targetName: 'enderman', maxChases: 1 }),
-      { port: unmapped.port, now: () => 1 },
+      { body: unmapped.port, now: () => 1 },
     )
     await waitFor(chasing)
     expect(chasing.result()).toMatchObject({ state: 'failed', code: 'ATTACK_CHASE_LIMIT', observed: { chases: 1 } })
@@ -523,7 +523,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: reach4.port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: reach4.port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'succeeded',
@@ -537,7 +537,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const plain = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fallback.port, now: () => 1 })
+    const plain = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: fallback.port, now: () => 1 })
     await waitFor(plain)
     expect(plain.result()).toMatchObject({
       state: 'succeeded',
@@ -570,7 +570,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: flat.port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: flat.port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'succeeded',
@@ -598,7 +598,7 @@ describe('combat evidence', () => {
         return { state: 'ok', elapsedMs: 1 }
       },
     })
-    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fake.port, now: () => 1 })
+    const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: fake.port, now: () => 1 })
     await waitFor(handle)
     expect(handle.result()).toMatchObject({
       state: 'succeeded',
@@ -637,7 +637,7 @@ describe('combat evidence', () => {
           return { state: 'ok', elapsedMs: 1 }
         },
       })
-      const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { port: fake.port, now: () => 1 })
+      const handle = createAttackDriver().start(job({ entityId: 'z1', targetName: 'zombie' }), { body: fake.port, now: () => 1 })
       await waitFor(handle)
       expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { shieldAutoEquip: entry.expected } })
     }

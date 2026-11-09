@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createDigDriver } from '../src/mind/drivers/dig.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { BlockInfo, ClientPort, EntityInfo, Item, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, EntityInfo, Item, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (dig tool selection).
@@ -33,7 +33,7 @@ function portWith(options: {
   entities?: EntityInfo[]
   moveFails?: boolean
   start?: Vec3
-} = {}): { port: ClientPort; digs: () => number; equips: string[]; blocks: Map<string, BlockInfo> } {
+} = {}): { port: BodyApi; digs: () => number; equips: string[]; blocks: Map<string, BlockInfo> } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set(key(target), options.block ?? stone())
   const items = [...(options.inventory ?? [])]
@@ -64,19 +64,19 @@ function portWith(options: {
     },
     beginWrite: () => {},
     endWrite: () => {},
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, digs: () => digs, equips, blocks }
 }
 
 async function runJob(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
   allowAutoEquip?: boolean,
 ): Promise<{ state: string; code?: string; observed?: unknown }> {
   const driver = createDigDriver()
   const job = { driverId: 'dig', params } as unknown as Job
   const handle = driver.start(job, {
-    port,
+    body: port,
     now: () => 1,
     ...(allowAutoEquip === undefined ? {} : { allowAutoEquip: () => allowAutoEquip }),
   })
@@ -86,7 +86,7 @@ async function runJob(
   return handle.result() as { state: string; code?: string; observed?: unknown }
 }
 
-async function run(port: ClientPort, purpose: 'clear' | 'harvest'): Promise<{ state: string; code?: string; observed?: unknown }> {
+async function run(port: BodyApi, purpose: 'clear' | 'harvest'): Promise<{ state: string; code?: string; observed?: unknown }> {
   return runJob(port, { ...target, purpose })
 }
 

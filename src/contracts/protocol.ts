@@ -72,14 +72,12 @@ export type HelloResult = {
   }
   owner: OwnerContext
   bindingId: BindingId | null
-  capabilities: string[]
   provider: ProviderSummary | null
 }
 
 export type ProviderSummary = {
   id: string
   version: string
-  capabilities: string[]
 }
 
 /** One provider-level disconnect cause, bounded for status/wake output. */
@@ -148,7 +146,6 @@ export type DescribeResult = {
     manifestDigest: string
   }
   bindingId: BindingId | null
-  capabilities: string[]
   provider: ProviderSummary | null
 }
 
@@ -316,7 +313,6 @@ export type StatusResult = {
   health: 'ready' | 'faulted'
   connection: 'connected' | 'disconnected'
   bindingId: BindingId | null
-  capabilities: string[]
   provider: ProviderSummary | null
   providerState?: ProviderRuntimeStatus | null
   /** P2Mind state; null when this body has no provider/mind. */
@@ -560,7 +556,6 @@ export type BodyInfo = {
   manifest: BodyManifest
   manifestDigest: string
   bindingId: BindingId | null
-  capabilities: string[]
   provider: ProviderSummary | null
 }
 

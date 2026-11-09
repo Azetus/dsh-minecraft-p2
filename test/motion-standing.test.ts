@@ -4,7 +4,7 @@ import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
 import { standingCell } from '../src/motion/execute/index.ts'
-import { MotionRun } from '../src/motion/mineflayer/run.ts'
+import { MotionRun } from '../src/provider/motion/run.ts'
 import { createRules } from '../src/motion/model/rules.ts'
 import { defaultConstraints } from '../src/motion/model/types.ts'
 import { FULL_CUBE, HALF_CUBE, FixtureWorld, rawBlock } from './helpers/motion-world.ts'

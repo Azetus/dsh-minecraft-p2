@@ -2,13 +2,13 @@ import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
 import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
-import { MineflayerClientPort } from '../src/port/mineflayer/index.ts'
-import type { ActResult, Vec3 } from '../src/port/index.ts'
+import { MineflayerBody } from '../src/provider/index.ts'
+import type { ActResult, Vec3 } from '../src/body/api.ts'
 import { writeToken } from './helpers/mineflayer-fakes.ts'
 
 /**
  * Category: access consistency, live run (TODO M0-04).
- * Runs the ten ClientPort scenarios against the dev server. It is opt-in so
+ * Runs the ten BodyApi scenarios against the dev server. It is opt-in so
  * `npm run check` never depends on a game:
  *
  *   P2_PORT_LIVE=1 npx vitest run test/port-live.test.ts --pool=threads
@@ -21,7 +21,7 @@ const HOST = process.env.P2_MC_HOST ?? '127.0.0.1'
 const PORT = Number(process.env.P2_MC_PORT ?? 25566)
 const USERNAME = process.env.P2_MC_USERNAME ?? 'P2_Bot'
 
-type Connection = { bot: Bot; provider: MineflayerProvider; port: MineflayerClientPort }
+type Connection = { bot: Bot; provider: MineflayerProvider; port: MineflayerBody }
 
 type StepResult = { name: string; ok: boolean; detail: unknown }
 
@@ -46,16 +46,16 @@ async function connect(): Promise<Connection> {
     timeoutMs: 20_000,
   })
   const provider = new MineflayerProvider(bot, { serverIdleMs: 1500, providerVersion: 'live-probe' })
-  const port = new MineflayerClientPort(bot, provider, { pollIntervalMs: 50 })
+  const port = new MineflayerBody(bot, provider, { pollIntervalMs: 50 })
   return { bot, provider, port }
 }
 
-function feet(port: MineflayerClientPort): Vec3 {
+function feet(port: MineflayerBody): Vec3 {
   const pos = port.self().pos
   return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
 }
 
-function clearStand(port: MineflayerClientPort, p: Vec3): boolean {
+function clearStand(port: MineflayerBody, p: Vec3): boolean {
   const feetBlock = port.blockAt(p)
   const headBlock = port.blockAt({ x: p.x, y: p.y + 1, z: p.z })
   const below = port.blockAt({ x: p.x, y: p.y - 1, z: p.z })
@@ -69,7 +69,7 @@ function clearStand(port: MineflayerClientPort, p: Vec3): boolean {
     && !isFluid(below.name)
 }
 
-function walkTargets(port: MineflayerClientPort): Vec3[] {
+function walkTargets(port: MineflayerBody): Vec3[] {
   const start = feet(port)
   const directions: Array<[number, number]> = [
     [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1],
@@ -118,7 +118,7 @@ function itemDrop(bot: Bot, near: Vec3): Vec3 | undefined {
   return best?.position
 }
 
-function placeableItem(port: MineflayerClientPort): string | undefined {
+function placeableItem(port: MineflayerBody): string | undefined {
   return port.inventory().find(entry => PLACEABLE.includes(entry.name))?.name
 }
 

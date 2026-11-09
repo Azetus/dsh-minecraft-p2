@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { OrderStore } from '../src/mind/orders.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: recovery (M3-04).
@@ -27,7 +27,7 @@ afterEach(() => {
 
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
 
-function fakePort(targetName: string): { port: ClientPort; places: number } {
+function fakePort(targetName: string): { port: BodyApi; places: number } {
   const blocks = new Map<string, BlockInfo>()
   blocks.set('0,63,0', { name: 'stone', loaded: true, pos: { x: 0, y: 63, z: 0 } })
   blocks.set('0,64,0', { name: targetName, loaded: true, pos: { x: 0, y: 64, z: 0 } })
@@ -62,7 +62,7 @@ function fakePort(targetName: string): { port: ClientPort; places: number } {
       blocks.set(key(p), { name: 'dirt', loaded: true, pos: { ...p } })
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, get places() { return places } }
 }
 
@@ -83,9 +83,9 @@ function seed(journal: string): void {
   })
 }
 
-function mindWith(port: ClientPort, journal: string) {
+function mindWith(port: BodyApi, journal: string) {
   return createMind({
-    port,
+    body: port,
     home: { x: 1, y: 64, z: 0 },
     baseActivity: { kind: 'idle' },
     plansDir: join(process.cwd(), 'content', 'plans'),

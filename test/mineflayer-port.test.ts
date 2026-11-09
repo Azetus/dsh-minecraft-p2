@@ -1,9 +1,10 @@
 import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
-import type { MineflayerPortOptions } from '../src/port/mineflayer/index.ts'
-import { MineflayerClientPort, portCapabilities } from '../src/port/mineflayer/index.ts'
-import type { ClientEvent } from '../src/port/index.ts'
+import type { MineflayerBodyOptions } from '../src/provider/body.ts'
+import type { MineflayerProvider } from '../src/provider/mineflayer.ts'
+import { MineflayerBody } from '../src/provider/index.ts'
+import type { BodyEvent } from '../src/body/api.ts'
 import { FakeActSource, FakeBot, writeToken } from './helpers/mineflayer-fakes.ts'
 
 /**
@@ -17,13 +18,13 @@ import { FakeActSource, FakeBot, writeToken } from './helpers/mineflayer-fakes.t
 function createPort(
   source = new FakeActSource(),
   bot = new FakeBot(),
-  options: MineflayerPortOptions = {},
+  options: MineflayerBodyOptions = {},
 ): {
-  port: MineflayerClientPort
+  port: MineflayerBody
   bot: FakeBot
   source: FakeActSource
 } {
-  const port = new MineflayerClientPort(bot as unknown as Bot, source, {
+  const port = new MineflayerBody(bot as unknown as Bot, source as unknown as MineflayerProvider, {
     pollIntervalMs: 2,
     now: () => Date.now(),
     ...options,
@@ -248,7 +249,7 @@ describe('mineflayer port timeout and authority', () => {
 
   it('rejects writes without a token', async () => {
     const source = new FakeActSource()
-    const port = new MineflayerClientPort(new FakeBot() as unknown as Bot, source, { pollIntervalMs: 2 })
+    const port = new MineflayerBody(new FakeBot() as unknown as Bot, source as unknown as MineflayerProvider, { pollIntervalMs: 2 })
     expect(await port.dig({ x: 1, y: 64, z: 1 })).toMatchObject({ state: 'failed', code: 'STALE_WRITE' })
     expect(source.calls).toHaveLength(0)
   })
@@ -272,25 +273,6 @@ describe('mineflayer port timeout and authority', () => {
     port.endWrite(writeToken(1))
     expect((await pending).state).toBe('failed')
     expect(source.handles[0]?.stopped).toBe(true)
-  })
-})
-
-describe('mineflayer port capabilities', () => {
-  it('derives behavioural capabilities from provider operations', () => {
-    expect(portCapabilities(['motion', 'dig', 'place', 'use', 'interact', 'attack']))
-      .toEqual(['navigate', 'interact', 'combat'])
-    expect(portCapabilities(['move'])).toEqual([])
-  })
-
-  it('fails with CAPABILITY_MISSING instead of calling the provider', async () => {
-    const source = new FakeActSource([])
-    const { port } = createPort(source)
-    expect(await port.moveTo({ x: 1, y: 64, z: 1 })).toMatchObject({
-      state: 'failed',
-      code: 'CAPABILITY_MISSING',
-    })
-    expect(source.calls).toHaveLength(0)
-    expect(port.capabilities()).toEqual([])
   })
 })
 
@@ -423,11 +405,6 @@ describe('mineflayer port reads', () => {
     expect(bot.findCalls.length).toBe(before)
   })
 
-  it('has no screen capability yet', async () => {
-    const { port } = createPort()
-    await expect(port.screen()).resolves.toBeNull()
-    expect(port.capabilities()).not.toContain('observe.screen')
-  })
 })
 
 describe('mineflayer port attack speed', () => {
@@ -506,7 +483,7 @@ describe('mineflayer port attack reach', () => {
 describe('mineflayer port events', () => {
   it('forwards chat, damage, death, block updates and collection as data', () => {
     const { port, bot } = createPort()
-    const seen: Array<{ event: ClientEvent; payload: unknown }> = []
+    const seen: Array<{ event: BodyEvent; payload: unknown }> = []
     for (const event of ['chat', 'damaged', 'died', 'blockUpdated', 'inventoryChanged'] as const) {
       port.on(event, payload => seen.push({ event, payload }))
     }

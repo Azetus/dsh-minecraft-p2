@@ -6,9 +6,9 @@ import { EventEmitter } from 'node:events'
 import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
-import { attachBlockTags, blockTagsFor } from '../src/port/mineflayer/block-tags.ts'
-import { MineflayerClientPort } from '../src/port/mineflayer/client-port.ts'
-import { MineflayerMotionWorld } from '../src/motion/mineflayer/world.ts'
+import { attachBlockTags, blockTagsFor } from '../src/provider/block-tags.ts'
+import { MineflayerBody } from '../src/provider/body.ts'
+import { MineflayerMotionWorld } from '../src/provider/motion/world.ts'
 import { FakeActSource } from './helpers/mineflayer-fakes.ts'
 
 class FakeBot extends EventEmitter {
@@ -94,7 +94,7 @@ describe('BlockTagIndex', () => {
     expect(block?.serverTags?.has('minecraft:wooden_doors')).toBe(true)
   })
 
-  it('carries server tags through the ClientPort boundary', () => {
+  it('carries server tags through the BodyApi boundary', () => {
     const bot = new FakeBot()
     bot.registry = { blocks: { 195: { name: 'oak_door' } } }
     bot.blockAt = () => ({
@@ -105,7 +105,7 @@ describe('BlockTagIndex', () => {
     })
     attachBlockTags(bot as unknown as Bot)
     bot._client.emit('tags', tagsPacket([{ tagName: 'minecraft:wooden_doors', entries: [195] }]))
-    const port = new MineflayerClientPort(bot as unknown as Bot, new FakeActSource())
+    const port = new MineflayerBody(bot as unknown as Bot, new FakeActSource() as never)
     const block = port.blockAt({ x: 0, y: 64, z: 0 })
     expect(block?.serverTags?.has('minecraft:wooden_doors')).toBe(true)
   })

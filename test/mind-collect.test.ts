@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createCollectDriver } from '../src/mind/drivers/collect.ts'
 import { createCollectOrderGiver } from '../src/mind/givers/collect.ts'
 import type { DriverResult, Job, WorldView } from '../src/mind/types.ts'
-import type { BlockInfo, ClientPort, EntityInfo, Item, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, EntityInfo, Item, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 const self: SelfInfo = {
   pos: { x: 0.5, y: 64, z: 0.5 },
@@ -54,7 +54,7 @@ function drop(id: string, x: number, item = 'dirt', count = 1): EntityInfo {
 function collectPort(
   drops: EntityInfo[],
   options: { full?: boolean; blockAt?: (point: Vec3) => BlockInfo | null } = {},
-): { port: ClientPort; items: Item[]; remaining: EntityInfo[]; moves: Vec3[] } {
+): { port: BodyApi; items: Item[]; remaining: EntityInfo[]; moves: Vec3[] } {
   const items: Item[] = options.full === true
     ? Array.from({ length: 36 }, (_, index) => ({ slot: 9 + index, name: 'dirt', count: 1 }))
     : []
@@ -85,12 +85,12 @@ function collectPort(
       }
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, items, remaining, moves }
 }
 
 function driverResult(
-  port: ClientPort,
+  port: BodyApi,
   params: Record<string, unknown>,
 ): Promise<DriverResult> {
   const driver = createCollectDriver()
@@ -101,7 +101,7 @@ function driverResult(
     issuedAt: 0,
     budget: { maxTicks: 600, maxWallMs: 30_000 },
   } as unknown as Job
-  const handle = driver.start(job, { port, now: () => 1 })
+  const handle = driver.start(job, { body: port, now: () => 1 })
   return new Promise(resolve => {
     const timer = setInterval(() => {
       const result = handle.result()

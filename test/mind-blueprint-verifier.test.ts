@@ -4,7 +4,7 @@ import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate } from '../src/mind/plan.ts'
 import { verifyBlueprint } from '../src/mind/verify/blueprint.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: data (M3-03 final geometry).

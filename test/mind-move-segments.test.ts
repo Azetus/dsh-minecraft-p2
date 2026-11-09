@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createMoveDriver } from '../src/mind/drivers/move.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { ActResult, ClientPort } from '../src/port/index.ts'
+import type { ActResult, BodyApi } from '../src/body/api.ts'
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
@@ -17,7 +17,7 @@ function job(): Job {
   }
 }
 
-function source(results: ActResult[]): { port: ClientPort; calls: Array<{ target: unknown }> } {
+function source(results: ActResult[]): { port: BodyApi; calls: Array<{ target: unknown }> } {
   const calls: Array<{ target: unknown }> = []
   const port = {
     moveTo: (target: unknown) => {
@@ -27,12 +27,12 @@ function source(results: ActResult[]): { port: ClientPort; calls: Array<{ target
     },
     self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
     blockAt: () => ({ name: 'air', loaded: true }),
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, calls }
 }
 
-async function run(port: ClientPort): Promise<{ state: string; [key: string]: unknown }> {
-  const handle = createMoveDriver().start(job(), { port, now: () => 0 })
+async function run(port: BodyApi): Promise<{ state: string; [key: string]: unknown }> {
+  const handle = createMoveDriver().start(job(), { body: port, now: () => 0 })
   for (let index = 0; index < 20 && handle.result().state === 'running'; index += 1) await flush()
   return handle.result() as { state: string; [key: string]: unknown }
 }
@@ -74,7 +74,7 @@ describe('segmented move driver', () => {
         pos = { x: target.x + 0.5, y: target.y, z: target.z + 0.5 }
         return Promise.resolve({ state: 'ok', elapsedMs: 1 })
       },
-    } as unknown as ClientPort
+    } as unknown as BodyApi
 
     const result = await run(port)
 

@@ -4,7 +4,7 @@ import { BaseActivityController } from '../src/mind/base-activity.ts'
 import { createBaseActivityGiver } from '../src/mind/givers/base-activity.ts'
 import type { Candidate, EvalCtx } from '../src/mind/types.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { EntityInfo, SelfInfo } from '../src/port/index.ts'
+import type { EntityInfo, SelfInfo } from '../src/body/api.ts'
 
 /**
  * Category: state safety / cross-module contract.

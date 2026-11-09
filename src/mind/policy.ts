@@ -16,6 +16,31 @@ export type MaterialPolicy = {
   maxGatherBlocks?: number
 }
 
+/** Agent-level fatal-exit policy; never consumed by the motion core. */
+export const HAZARD_KINDS = ['void', 'lethal_fall', 'lava'] as const
+export type HazardKind = (typeof HAZARD_KINDS)[number]
+export type HazardPolicy = { allow: HazardKind[]; reason?: string }
+
+/** undefined = absent; null = invalid. */
+export function parseHazardPolicy(value: unknown): HazardPolicy | null | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) return null
+  for (const key of Object.keys(value)) {
+    if (key !== 'allow' && key !== 'reason') return null
+  }
+  if (!Array.isArray(value.allow) || value.allow.length === 0) return null
+  const allow: HazardKind[] = []
+  for (const entry of value.allow) {
+    if (typeof entry !== 'string' || !(HAZARD_KINDS as readonly string[]).includes(entry)) return null
+    if (!allow.includes(entry as HazardKind)) allow.push(entry as HazardKind)
+  }
+  if (value.reason !== undefined && typeof value.reason !== 'string') return null
+  return {
+    allow,
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
+  }
+}
+
 export const DEFAULT_DENY: ReadonlySet<string> = new Set([
   'chest', 'trapped_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker',
   'hopper', 'dropper', 'dispenser', 'brewing_stand', 'enchanting_table',

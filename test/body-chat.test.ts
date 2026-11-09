@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import type { BodyInfo, RequestEnvelope } from '../src/contracts/index.ts'
-import type { ClientEvent, ClientPort } from '../src/port/index.ts'
+import type { BodyEvent, BodyApi } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (M4 dialogue transport).
@@ -20,21 +20,21 @@ const body: BodyInfo = {
   },
   manifestDigest: 'b'.repeat(64),
   bindingId: null,
-  capabilities: [],
+
   provider: null,
 }
 
-function fakePort(): { port: ClientPort; chat(payload: unknown): void; emit(event: ClientEvent, payload: unknown): void; says: string[] } {
+function fakePort(): { port: BodyApi; chat(payload: unknown): void; emit(event: BodyEvent, payload: unknown): void; says: string[] } {
   const listeners = new Map<string, Array<(payload: unknown) => void>>()
   const says: string[] = []
   const port = {
-    on: (event: ClientEvent, cb: (payload: unknown) => void) => {
+    on: (event: BodyEvent, cb: (payload: unknown) => void) => {
       const list = listeners.get(event) ?? []
       list.push(cb)
       listeners.set(event, list)
     },
     say: (text: string) => { says.push(text) },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return {
     port,
     says,
@@ -47,12 +47,12 @@ function fakePort(): { port: ClientPort; chat(payload: unknown): void; emit(even
   }
 }
 
-function runtimeWith(port: ClientPort): BodyRuntime {
+function runtimeWith(port: BodyApi): BodyRuntime {
   return new BodyRuntime({
     body,
     owner: { sessionId: 's1', agentId: 'a1', cwd: 'C:/p2' },
     now: () => 100,
-    port,
+    game: port,
   })
 }
 

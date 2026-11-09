@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createFatalDriver } from '../src/mind/drivers/fatal.ts'
 import type { Job } from '../src/mind/types.ts'
-import type { ClientPort, Vec3 } from '../src/port/index.ts'
+import type { BodyApi, Vec3 } from '../src/body/api.ts'
 
 function job(waitMs = 0): Job {
   return {
@@ -14,7 +14,7 @@ function job(waitMs = 0): Job {
   }
 }
 
-function fakePort(health: number): { port: ClientPort; fatalCalls: Vec3[] } {
+function fakePort(health: number): { port: BodyApi; fatalCalls: Vec3[] } {
   const fatalCalls: Vec3[] = []
   const port = {
     fatalStep: async (target: Vec3) => {
@@ -24,12 +24,12 @@ function fakePort(health: number): { port: ClientPort; fatalCalls: Vec3[] } {
     self: () => ({ pos: { x: 0, y: 64, z: 0 }, yaw: 0, pitch: 0, health, food: 20, onGround: true, inWater: false, inLava: false }),
     on: () => {},
     off: () => {},
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, fatalCalls }
 }
 
-async function run(port: ClientPort, waitMs = 0) {
-  const handle = createFatalDriver().start(job(waitMs), { port, now: () => 0 })
+async function run(port: BodyApi, waitMs = 0) {
+  const handle = createFatalDriver().start(job(waitMs), { body: port, now: () => 0 })
   for (let index = 0; index < 20 && handle.result().state === 'running'; index += 1) {
     await new Promise(resolve => setTimeout(resolve, 0))
   }

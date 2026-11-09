@@ -1,6 +1,6 @@
 import type { JsonValue } from '../contracts/types.ts'
-import type { Box, EntityInfo, Vec3 } from '../port/index.ts'
-import type { HazardPolicy } from '../port/policy.ts'
+import type { Box, EntityInfo, Vec3 } from '../body/api.ts'
+import type { HazardPolicy } from './policy.ts'
 import type { PlanInstance } from './plan.ts'
 import type { ConflictPolicy, MaterialPolicy } from './policy.ts'
 import type { JobTracker } from './tracker.ts'

@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
 import { parseBlueprint } from '../src/mind/blueprint.ts'
-import type { BlockInfo, ClientPort, Item, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, Item, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (B1 build acceptance).
@@ -65,7 +65,7 @@ function blueprint(height: number): Record<string, unknown> {
 const key = (p: Vec3): string => `${p.x},${p.y},${p.z}`
 
 type Fake = {
-  port: ClientPort
+  port: BodyApi
   blocks: Map<string, BlockInfo>
   self: { pos: Vec3 }
   places: number
@@ -100,7 +100,7 @@ function fakeWorld(): Fake {
   let yaw = 0
   const failures: string[] = []
   const fake: Fake = {
-    port: undefined as unknown as ClientPort,
+    port: undefined as unknown as BodyApi,
     blocks,
     self: { pos: self.pos },
     places: 0,
@@ -157,7 +157,7 @@ function fakeWorld(): Fake {
       return { state: 'ok' as const, elapsedMs: 1 }
     },
   }
-  fake.port = port as unknown as ClientPort
+  fake.port = port as unknown as BodyApi
   return fake
 }
 
@@ -184,7 +184,7 @@ describe('7x7 build', () => {
       if (!parsed.ok) return
 
       const mind = createMind({
-        port: fake.port,
+        body: fake.port,
         home: { x: 0, y: 120, z: -4 },
         baseActivity: { kind: 'idle' },
         plansDir: join(root, 'content', 'plans'),

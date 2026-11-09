@@ -1,4 +1,4 @@
-import type { BlockInfo, ClientPort } from '../../port/index.ts'
+import type { BlockInfo, BodyApi } from '../../body/api.ts'
 import { approachBlock } from '../approach.ts'
 import type { SchemaNode } from '../schema.ts'
 import { chooseTool } from '../tools.ts'
@@ -43,12 +43,12 @@ export function createClearDriver(): Driver {
       const params = job.params as unknown as ClearParams
       const key = `clear:${params.x},${params.y},${params.z}`
       const autoEquip = ctx.allowAutoEquip?.() ?? true
-      return new AsyncDriverHandle(key, clearCell(ctx.port, params, autoEquip))
+      return new AsyncDriverHandle(key, clearCell(ctx.body, params, autoEquip))
     },
   }
 }
 
-async function clearCell(port: ClientPort, params: ClearParams, autoEquip: boolean): Promise<DriverResult> {
+async function clearCell(port: BodyApi, params: ClearParams, autoEquip: boolean): Promise<DriverResult> {
   const target = { x: params.x, y: params.y, z: params.z }
   const before = port.blockAt(target)
   if (before === null || !before.loaded) {

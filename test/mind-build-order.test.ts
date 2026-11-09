@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
-import type { BlockInfo, ClientPort, SelfInfo, Vec3 } from '../src/port/index.ts'
+import type { BlockInfo, BodyApi, SelfInfo, Vec3 } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (M3-02 order ingestion).
@@ -27,7 +27,7 @@ afterEach(() => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
 
-function fakePort(dirtCount = 2): { port: ClientPort; blocks: Map<string, BlockInfo>; places: number } {
+function fakePort(dirtCount = 2): { port: BodyApi; blocks: Map<string, BlockInfo>; places: number } {
   const blocks = new Map<string, BlockInfo>()
   for (let x = -1; x <= 2; x += 1) {
     for (let z = -1; z <= 1; z += 1) {
@@ -70,7 +70,7 @@ function fakePort(dirtCount = 2): { port: ClientPort; blocks: Map<string, BlockI
       blocks.set(key(p), { name: 'dirt', loaded: true, pos: { ...p } })
       return { state: 'ok' as const, elapsedMs: 1 }
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, blocks, get places() { return places } }
 }
 
@@ -78,7 +78,7 @@ describe('build order', () => {
   it('builds an inline blueprint without a template file', async () => {
     const fake = fakePort()
     const mind = createMind({
-      port: fake.port,
+      body: fake.port,
       home: { x: 1, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -107,7 +107,7 @@ describe('build order', () => {
   it('blocks a require-all order before placing when materials are missing', () => {
     const fake = fakePort(0)
     const mind = createMind({
-      port: fake.port,
+      body: fake.port,
       home: { x: 1, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -129,7 +129,7 @@ describe('build order', () => {
   it('blocks auto-gather when a missing item has no source', () => {
     const fake = fakePort(0)
     const mind = createMind({
-      port: fake.port,
+      body: fake.port,
       home: { x: 1, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),

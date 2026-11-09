@@ -1,4 +1,4 @@
-import type { Vec3 } from '../../port/index.ts'
+import type { Vec3 } from '../../body/api.ts'
 import type { AreaResourceIndex } from '../area.ts'
 import type { DutyController } from '../duty.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'

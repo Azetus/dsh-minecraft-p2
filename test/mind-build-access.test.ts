@@ -5,7 +5,7 @@ import { blueprintPlan, parseBlueprint } from '../src/mind/blueprint.ts'
 import { instantiatePlan } from '../src/mind/plan.ts'
 import type { PlanTemplate, WorkItem } from '../src/mind/plan.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
-import type { BlockInfo, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, SelfInfo } from '../src/body/api.ts'
 
 const self: SelfInfo = {
   pos: { x: 0.5, y: 64, z: -3.5 },

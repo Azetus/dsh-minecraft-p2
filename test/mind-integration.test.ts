@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { BodyRuntime } from '../src/body/runtime.ts'
 import { createMind } from '../src/body/mind.ts'
-import type { ClientPort, EntityInfo, Item, SelfInfo } from '../src/port/index.ts'
-import type { Box } from '../src/port/index.ts'
+import type { BodyApi, EntityInfo, Item, SelfInfo } from '../src/body/api.ts'
+import type { Box } from '../src/body/api.ts'
 
 /**
  * Category: cross-module contract (todo M1-05 wiring).
@@ -38,7 +38,7 @@ const self: SelfInfo = {
 }
 
 type FakePort = {
-  port: ClientPort
+  port: BodyApi
   moves: Array<{ x: number; y: number; z: number }>
   pending: Array<(value: { state: 'ok'; elapsedMs: number }) => void>
   equips: string[]
@@ -108,7 +108,7 @@ function fakePort(
       if (options.autoMove === true) return Promise.resolve({ state: 'ok' as const, elapsedMs: 1 })
       return new Promise<{ state: 'ok'; elapsedMs: number }>(resolve => { pending.push(resolve) })
     },
-  } as unknown as ClientPort
+  } as unknown as BodyApi
   return { port, moves, pending, equips }
 }
 
@@ -116,7 +116,7 @@ describe('mind integration', () => {
   it('holds still when no order is active', () => {
     const { port, moves } = fakePort()
     const mind = createMind({
-      port,
+      body: port,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -131,7 +131,7 @@ describe('mind integration', () => {
   it('reports the provider recovery identity in status', () => {
     const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       identity: { worldId: 'world:overworld', characterId: 'character-uuid' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
@@ -146,7 +146,7 @@ describe('mind integration', () => {
   it('reports the world clock including night', () => {
     const { port } = fakePort([], { time: { timeOfDay: 14_000, worldAge: 2 * 24_000 + 14_000 } })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -161,7 +161,7 @@ describe('mind integration', () => {
 
   it('starts idle and reports the base layer', () => {    const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -188,7 +188,7 @@ describe('mind integration', () => {
   it('lets an order preempt the base activity and restores it afterwards', () => {
     const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -210,7 +210,7 @@ describe('mind integration', () => {
   it('resets base activity to idle after a body restart', () => {
     const journalPath = join(tempDir(), 'journal.jsonl')
     const first = createMind({
-      port: fakePort([], { emptyBlocks: true }).port,
+      body: fakePort([], { emptyBlocks: true }).port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath,
@@ -220,7 +220,7 @@ describe('mind integration', () => {
     expect(first.status().baseActivity).toMatchObject({ kind: 'idle', state: 'active' })
 
     const second = createMind({
-      port: fakePort([], { emptyBlocks: true }).port,
+      body: fakePort([], { emptyBlocks: true }).port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath,
       now: () => 2_000,
@@ -232,7 +232,7 @@ describe('mind integration', () => {
   it('replaces an active duty with a terminal event and starts the new one', () => {
     const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -254,7 +254,7 @@ describe('mind integration', () => {
   it('pauses a duty behind an order and keeps base inactive', () => {
     const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -277,7 +277,7 @@ describe('mind integration', () => {
   it('blocks a duty without a source and keeps base inactive', () => {
     const { port } = fakePort([], { emptyBlocks: true })
     const mind = createMind({
-      port,
+      body: port,
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
       now: () => 1_000,
@@ -292,7 +292,7 @@ describe('mind integration', () => {
 
   it('sets and resets the body reaction policy without persistence', () => {
     const first = createMind({
-      port: fakePort([], { emptyBlocks: true }).port,
+      body: fakePort([], { emptyBlocks: true }).port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
@@ -304,7 +304,7 @@ describe('mind integration', () => {
     expect(first.status().reaction).toMatchObject({ mode: 'all-hostiles' })
 
     const second = createMind({
-      port: fakePort([], { emptyBlocks: true }).port,
+      body: fakePort([], { emptyBlocks: true }).port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal2.jsonl'),
@@ -321,7 +321,7 @@ describe('mind integration', () => {
     ])
     const fake = fakePort([{ slot: 36, name: 'stone_pickaxe', count: 1 }], { autoMove: true, blocks })
     const mind = createMind({
-      port: fake.port,
+      body: fake.port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
@@ -366,7 +366,7 @@ describe('mind integration', () => {
       { autoMove: true, blocks },
     )
     const mind = createMind({
-      port: fake.port,
+      body: fake.port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
@@ -397,7 +397,7 @@ describe('mind integration', () => {
   it('selects, starts and finishes one go job', async () => {
     const { port, moves, pending } = fakePort()
     const mind = createMind({
-      port,
+      body: port,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -421,7 +421,7 @@ describe('mind integration', () => {
   it('completes a traverse order through the motion move job', async () => {
     const { port, moves, pending } = fakePort([{ slot: 36, name: 'dirt', count: 2 }])
     const mind = createMind({
-      port,
+      body: port,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
@@ -443,7 +443,7 @@ describe('mind integration', () => {
   it('exposes active and queued orders in status', () => {
     const { port } = fakePort()
     const mind = createMind({
-      port,
+      body: port,
       baseActivity: { kind: 'idle' },
       plansDir: join(process.cwd(), 'content', 'plans'),
       journalPath: join(tempDir(), 'journal.jsonl'),
@@ -475,7 +475,7 @@ describe('mind integration', () => {
         },
         manifestDigest: 'b'.repeat(64),
         bindingId: null,
-        capabilities: [],
+
         provider: null,
       },
       mind: {
@@ -558,9 +558,9 @@ describe('mind integration', () => {
       ...(port as unknown as Record<string, unknown>),
       entityByName: (name: string) => (name === 'Alice' ? tracked : undefined),
       playerOnline: (name: string) => name === 'Alice' && online,
-    } as unknown as ClientPort
+    } as unknown as BodyApi
     const mind = createMind({
-      port: trackingPort,
+      body: trackingPort,
       home: { x: 0, y: 64, z: 0 },
       baseActivity: { kind: 'escort', target: 'Alice', distance: 3 },
       plansDir: join(process.cwd(), 'content', 'plans'),

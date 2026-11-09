@@ -1,4 +1,4 @@
-import type { BlockInfo } from '../../port/index.ts'
+import type { BlockInfo } from '../../body/api.ts'
 import { isRecord } from '../../contracts/index.ts'
 import type { JsonValue } from '../../contracts/types.ts'
 import { PLAYER_HEIGHT } from '../../motion/model/index.ts'
@@ -131,7 +131,7 @@ export function createDigDriver(): Driver {
 }
 
 async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, autoEquip: boolean): Promise<DriverResult> {
-  const before = ctx.port.blockAt(target)
+  const before = ctx.body.blockAt(target)
   if (before === null || !before.loaded) return { state: 'failed', code: 'OBSERVATION_UNAVAILABLE' }
   if (isAirName(before.name)) {
     return purpose === 'clear'
@@ -139,11 +139,11 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, auto
       : { state: 'failed', code: 'DIG_NO_BLOCK' }
   }
 
-  const inventoryBefore = ctx.port.inventory()
+  const inventoryBefore = ctx.body.inventory()
   const beforeCount = totalCount(inventoryBefore)
   const choice = chooseTool(before, inventoryBefore, purpose)
   if (choice.error !== undefined) return { state: 'failed', code: choice.error }
-  const approach = await approachBlock(ctx.port, target, {
+  const approach = await approachBlock(ctx.body, target, {
     range: 2,
     timeoutMs: 12_000,
     code: 'DIG_APPROACH_FAILED',
@@ -156,25 +156,25 @@ async function digOne(ctx: DriverCtx, target: DigCell, purpose: DigPurpose, auto
     }
   }
   if (choice.item !== undefined && autoEquip) {
-    const equipped = await ctx.port.equip(choice.item)
+    const equipped = await ctx.body.equip(choice.item)
     if (equipped.state !== 'ok') return actFailure(equipped, 'EQUIP_FAILED')
   }
 
-  const result = await ctx.port.dig(target)
+  const result = await ctx.body.dig(target)
   if (result.state !== 'ok') return actFailure(result, 'DIG_FAILED')
 
-  const first = ctx.port.blockAt(target)
+  const first = ctx.body.blockAt(target)
   await sleep(200)
-  const second = ctx.port.blockAt(target)
+  const second = ctx.body.blockAt(target)
   if (!isAirBlock(first) || !isAirBlock(second)) {
     return { state: 'failed', code: 'DIG_READBACK_UNSTABLE' }
   }
 
   const pickup = purpose === 'harvest'
-    ? await pickupNearby(ctx.port, target, { delayTicks: 12 })
+    ? await pickupNearby(ctx.body, target, { delayTicks: 12 })
     : undefined
   await sleep(300)
-  const inventoryAfter = ctx.port.inventory()
+  const inventoryAfter = ctx.body.inventory()
   const afterCount = totalCount(inventoryAfter)
   const observed = {
     kind: 'dig',
@@ -224,7 +224,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     }
   }
 
-  const inventoryBefore = totalCount(ctx.port.inventory())
+  const inventoryBefore = totalCount(ctx.body.inventory())
   const only = params.only
   const preserveFloor = params.preserveFloor !== false
   const skipped: Array<DigCell & { reason: string; code?: string }> = []
@@ -236,7 +236,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
   // `only:["oak_log"]` over a large box is rejected by the box size.
   const candidates: DigCell[] = []
   for (const cell of cells) {
-    const before = ctx.port.blockAt(cell)
+    const before = ctx.body.blockAt(cell)
     if (before === null || !before.loaded) {
       skipped.push({ ...cell, reason: 'unloaded' })
       continue
@@ -249,7 +249,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
       skipped.push({ ...cell, reason: 'filtered', code: before.name })
       continue
     }
-    if (preserveFloor && selfCovers(ctx.port.self().pos, cell)) {
+    if (preserveFloor && selfCovers(ctx.body.self().pos, cell)) {
       skipped.push({ ...cell, reason: 'preserve-floor' })
       continue
     }
@@ -268,7 +268,7 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
   }
 
   for (const cell of candidates) {
-    const before = ctx.port.blockAt(cell)
+    const before = ctx.body.blockAt(cell)
     if (before === null || !before.loaded) {
       skipped.push({ ...cell, reason: 'unloaded' })
       continue
@@ -281,16 +281,16 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
       skipped.push({ ...cell, reason: 'filtered', code: before.name })
       continue
     }
-    if (preserveFloor && selfCovers(ctx.port.self().pos, cell)) {
+    if (preserveFloor && selfCovers(ctx.body.self().pos, cell)) {
       skipped.push({ ...cell, reason: 'preserve-floor' })
       continue
     }
-    const choice = chooseTool(before, ctx.port.inventory(), purpose)
+    const choice = chooseTool(before, ctx.body.inventory(), purpose)
     if (choice.error !== undefined) {
       skipped.push({ ...cell, reason: 'tool', code: choice.error })
       continue
     }
-    const approach = await approachBlock(ctx.port, cell, {
+    const approach = await approachBlock(ctx.body, cell, {
       range: 2,
       timeoutMs: 12_000,
       code: 'DIG_APPROACH_FAILED',
@@ -300,20 +300,20 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
       continue
     }
     if (choice.item !== undefined && autoEquip) {
-      const equipped = await ctx.port.equip(choice.item)
+      const equipped = await ctx.body.equip(choice.item)
       if (equipped.state !== 'ok') {
         skipped.push({ ...cell, reason: 'equip', code: equipped.code ?? 'EQUIP_FAILED' })
         continue
       }
     }
-    const result = await ctx.port.dig(cell)
+    const result = await ctx.body.dig(cell)
     if (result.state !== 'ok') {
       skipped.push({ ...cell, reason: 'dig', code: result.code ?? 'DIG_FAILED' })
       continue
     }
-    const first = ctx.port.blockAt(cell)
+    const first = ctx.body.blockAt(cell)
     await sleep(120)
-    const second = ctx.port.blockAt(cell)
+    const second = ctx.body.blockAt(cell)
     if (!isAirBlock(first) || !isAirBlock(second)) {
       skipped.push({ ...cell, reason: 'readback', code: 'DIG_READBACK_UNSTABLE' })
       continue
@@ -328,9 +328,9 @@ async function digVolume(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     z: Math.floor((bounds.min.z + bounds.max.z) / 2),
   }
   const pickup = purpose === 'harvest' && dug > 0
-    ? await pickupNearby(ctx.port, center, { delayTicks: 8 })
+    ? await pickupNearby(ctx.body, center, { delayTicks: 8 })
     : undefined
-  const inventoryAfter = totalCount(ctx.port.inventory())
+  const inventoryAfter = totalCount(ctx.body.inventory())
   const stoppedAt = cells.at(-1) ?? null
   const observed: Record<string, JsonValue> = {
     kind: 'dig.volume',
@@ -386,13 +386,13 @@ type TunnelPlan = {
  * same list in reverse.
  */
 async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean): Promise<DriverResult> {
-  const planned = planTunnel(ctx.port, params)
+  const planned = planTunnel(ctx.body, params)
   if ('error' in planned) {
     return { state: 'failed', code: planned.code, observed: planned.observed }
   }
   const plan = planned.plan
   const purpose = params.purpose ?? 'harvest'
-  const inventoryBefore = totalCount(ctx.port.inventory())
+  const inventoryBefore = totalCount(ctx.body.inventory())
   let dug = 0
   let alreadyAir = 0
   let stoppedAt: DigCell | null = null
@@ -403,7 +403,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
   outer: for (let index = 1; index < plan.path.length; index += 1) {
     const cell = plan.path[index]!
     for (const block of plan.blocks[index - 1] ?? []) {
-      const check = inspectTunnelBlock(ctx.port, block, plan.direction, plan.preserveFloor)
+      const check = inspectTunnelBlock(ctx.body, block, plan.direction, plan.preserveFloor)
       if (check.stop === true) {
         stoppedAt = block
         reason = check.reason
@@ -414,7 +414,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
         alreadyAir += 1
         continue
       }
-      const choice = chooseTool(check.block!, ctx.port.inventory(), purpose)
+      const choice = chooseTool(check.block!, ctx.body.inventory(), purpose)
       if (choice.error !== undefined) {
         stoppedAt = block
         reason = choice.error === 'BLOCK_UNBREAKABLE' ? 'unbreakable' : 'tool'
@@ -422,7 +422,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
         break outer
       }
       if (autoEquip && choice.item !== undefined && choice.item !== equipped) {
-        const result = await ctx.port.equip(choice.item)
+        const result = await ctx.body.equip(choice.item)
         if (result.state !== 'ok') {
           stoppedAt = block
           reason = 'equip'
@@ -431,16 +431,16 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
         }
         equipped = choice.item
       }
-      const result = await ctx.port.dig(block)
+      const result = await ctx.body.dig(block)
       if (result.state !== 'ok') {
         stoppedAt = block
         reason = 'dig'
         causeCode = result.code ?? 'DIG_FAILED'
         break outer
       }
-      const first = ctx.port.blockAt(block)
+      const first = ctx.body.blockAt(block)
       await sleep(120)
-      const second = ctx.port.blockAt(block)
+      const second = ctx.body.blockAt(block)
       if (!isAirBlock(first) || !isAirBlock(second)) {
         stoppedAt = block
         reason = 'readback'
@@ -449,7 +449,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
       }
       dug += 1
     }
-    const moved = await ctx.port.moveTo(cell, { range: 0, timeoutMs: 15_000 })
+    const moved = await ctx.body.moveTo(cell, { range: 0, timeoutMs: 15_000 })
     if (moved.state !== 'ok') {
       stoppedAt = cell
       reason = 'move'
@@ -458,11 +458,11 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
     }
   }
 
-  const returnable = reason === undefined && tunnelReturnable(ctx.port, plan.path, plan.height)
+  const returnable = reason === undefined && tunnelReturnable(ctx.body, plan.path, plan.height)
   const pickup = purpose === 'harvest' && dug > 0
-    ? await pickupNearby(ctx.port, tunnelCenter(plan.path), { delayTicks: 8 })
+    ? await pickupNearby(ctx.body, tunnelCenter(plan.path), { delayTicks: 8 })
     : undefined
-  const inventoryAfter = totalCount(ctx.port.inventory())
+  const inventoryAfter = totalCount(ctx.body.inventory())
   const observed: Record<string, JsonValue> = {
     kind: 'dig.tunnel',
     shape: 'tunnel',
@@ -506,7 +506,7 @@ async function digTunnel(ctx: DriverCtx, params: DigParams, autoEquip: boolean):
 }
 
 function planTunnel(
-  port: DriverCtx['port'],
+  port: DriverCtx['body'],
   params: DigParams,
 ): { plan: TunnelPlan } | { error: true; code: string; observed: JsonValue } {
   const to = params.to
@@ -585,7 +585,7 @@ function planTunnel(
 }
 
 function inspectTunnelBlock(
-  port: DriverCtx['port'],
+  port: DriverCtx['body'],
   block: DigCell,
   direction: DigCell,
   preserveFloor: boolean,
@@ -607,7 +607,7 @@ function inspectTunnelBlock(
 }
 
 function tunnelReturnable(
-  port: DriverCtx['port'],
+  port: DriverCtx['body'],
   path: readonly DigCell[],
   height: number,
 ): boolean {

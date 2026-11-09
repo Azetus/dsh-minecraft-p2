@@ -61,7 +61,7 @@ export type CombatStandQuery = {
 
 /**
  * The controller's dependency boundary. It is deliberately narrower than
- * ClientPort so the melee loop is pure and testable; the driver wires it to the
+ * BodyApi so the melee loop is pure and testable; the driver wires it to the
  * real port.
  */
 export type CombatPort = {

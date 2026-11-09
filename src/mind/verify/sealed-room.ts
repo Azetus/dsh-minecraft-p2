@@ -1,4 +1,4 @@
-import type { Vec3 } from '../../port/index.ts'
+import type { Vec3 } from '../../body/api.ts'
 import { isAirName, isSolidBlock } from '../plan.ts'
 import type { PlanInstance, VerifySpec } from '../plan.ts'
 import type { WorldView } from '../types.ts'

@@ -11,7 +11,7 @@ import {
   matchesExpected,
 } from '../src/mind/plan.ts'
 import type { PlanTemplate, WorkItem } from '../src/mind/plan.ts'
-import type { BlockInfo, Item, SelfInfo } from '../src/port/index.ts'
+import type { BlockInfo, Item, SelfInfo } from '../src/body/api.ts'
 import { SnapshotWorld } from '../src/mind/world.ts'
 
 /**

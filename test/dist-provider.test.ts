@@ -13,17 +13,16 @@ import { describe, expect, it } from 'vitest'
 const builtProvider = join(process.cwd(), 'lib', 'provider', 'minecraft.mjs')
 
 describe('built provider bundle', () => {
-  it.skipIf(!existsSync(builtProvider))('loads as ESM and exposes the capability list', async () => {
+  it.skipIf(!existsSync(builtProvider))('loads as ESM and exposes the provider entry', async () => {
     // Import through a runtime URL so the test does not need type declarations
     // for the generated file.
     const module = await import(/* @vite-ignore */ pathToFileURL(builtProvider).href) as {
       MineflayerProvider?: unknown
-      PROVIDER_CAPABILITIES?: unknown
+      openMineflayerBody?: unknown
       PROVIDER_ID?: unknown
     }
     expect(typeof module.MineflayerProvider).toBe('function')
-    expect(Array.isArray(module.PROVIDER_CAPABILITIES)).toBe(true)
-    expect(module.PROVIDER_CAPABILITIES).toContain('motion')
+    expect(typeof module.openMineflayerBody).toBe('function')
     expect(typeof module.PROVIDER_ID).toBe('string')
   })
 })

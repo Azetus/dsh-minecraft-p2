@@ -1,8 +1,6 @@
 import type { JsonValue, P2Error, ValueMeta } from '../contracts/types.ts'
 
-/**
- * Provider-facing outcome shapes for the current adapter surface.
- */
+/** Internal provider outcome shapes; not part of the body API. */
 
 export type QueryOutcome =
   | { status: 'ok'; value: JsonValue; meta?: ValueMeta }
@@ -31,8 +29,4 @@ export type ActHandle = {
   /** True while a stop was requested but its release is not proven. */
   stopPending?(): boolean
   cleanup?(): ActPoll
-}
-
-export type ActPort = {
-  start(name: string, args: Record<string, JsonValue>): ActHandle
 }

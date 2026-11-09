@@ -1,13 +1,14 @@
 import type { Bot } from 'mineflayer'
 import { describe, expect, it } from 'vitest'
 
-import type { MineflayerPortOptions } from '../src/port/mineflayer/index.ts'
-import { MineflayerClientPort } from '../src/port/mineflayer/index.ts'
+import type { MineflayerBodyOptions } from '../src/provider/body.ts'
+import type { MineflayerProvider } from '../src/provider/mineflayer.ts'
+import { MineflayerBody } from '../src/provider/index.ts'
 import { FakeActSource, FakeBot, writeToken } from './helpers/mineflayer-fakes.ts'
 
 /**
  * Category: access consistency (TODO M0-04, AGENT §5.1).
- * Protects: the ten contract behaviours every ClientPort adapter must show.
+ * Protects: the ten contract behaviours every BodyApi adapter must show.
  * The fake provider supplies only the inputs the contract defines; these are
  * adapter conformance checks, not game acceptance.
  */
@@ -15,9 +16,9 @@ import { FakeActSource, FakeBot, writeToken } from './helpers/mineflayer-fakes.t
 function createPort(
   source = new FakeActSource(),
   bot = new FakeBot(),
-  options: MineflayerPortOptions = {},
-): { port: MineflayerClientPort; bot: FakeBot; source: FakeActSource } {
-  const port = new MineflayerClientPort(bot as unknown as Bot, source, {
+  options: MineflayerBodyOptions = {},
+): { port: MineflayerBody; bot: FakeBot; source: FakeActSource } {
+  const port = new MineflayerBody(bot as unknown as Bot, source as unknown as MineflayerProvider, {
     pollIntervalMs: 2,
     now: () => Date.now(),
     ...options,
@@ -26,7 +27,7 @@ function createPort(
   return { port, bot, source }
 }
 
-describe('ClientPort adapter consistency A', () => {
+describe('BodyApi adapter consistency A', () => {
   it('1. reads self and inventory as pure data', () => {
     const { port } = createPort()
     expect(port.self()).toMatchObject({ health: 20, food: 18, pos: { x: 0, y: 64, z: 0 } })

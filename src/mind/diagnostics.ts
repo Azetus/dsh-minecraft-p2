@@ -40,7 +40,7 @@ const RULES: Array<{ match: RegExp; category: FailureCategory; hint: string }> =
   { match: /ACT_UNCONFIRMED/, category: 'safety', hint: 'the request may have taken effect; re-observe before deciding, never replay blindly' },
   { match: /ACTION_DENIED/, category: 'precondition', hint: 'the server refused the action; check permission, protection or target rules' },
   { match: /BUDGET_EXCEEDED|ACT_TIMEOUT|CLIENT_TIMEOUT/, category: 'budget', hint: 'budget exhausted before the result could be proven; only retry-safe actions may be repeated' },
-  { match: /BAD_ARGS|STALE_WRITE|CAPABILITY_MISSING|DEFINITION_ERROR/, category: 'precondition', hint: 'invalid request, stale authority or missing capability' },
+  { match: /BAD_ARGS|STALE_WRITE|DEFINITION_ERROR/, category: 'precondition', hint: 'invalid request or stale authority' },
   // An assertion is a broken definition/assumption, not a world state: the
   // same job would fail again, so the Agent must change the definition.
   { match: /ERR_ASSERTION/, category: 'definition', hint: 'the driver hit an internal assertion; the definition/assumption is wrong, do not retry the same job' },

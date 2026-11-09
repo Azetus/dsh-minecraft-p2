@@ -1,4 +1,4 @@
-import type { BlockInfo, Box, EntityInfo, Item, SelfInfo, Vec3 } from '../port/index.ts'
+import type { BlockInfo, Box, EntityInfo, Item, SelfInfo, Vec3 } from '../body/api.ts'
 import type { WorldView } from './types.ts'
 
 export type SnapshotData = {

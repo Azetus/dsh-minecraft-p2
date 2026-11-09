@@ -1,6 +1,6 @@
 import { isRecord } from '../../contracts/protocol.ts'
 import type { JsonValue } from '../../contracts/types.ts'
-import type { ClientPort, ClientEvent, Vec3 } from '../../port/index.ts'
+import type { BodyApi, BodyEvent, Vec3 } from '../../body/api.ts'
 import type { SchemaNode } from '../schema.ts'
 import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
 import {
@@ -77,12 +77,12 @@ export function createAttackDriver(): Driver {
       const params = job.params as unknown as AttackParams
       const key = params.continuationKey ?? `attack:${params.entityId}`
       const autoEquip = ctx.allowAutoEquip?.() ?? true
-      return new AsyncDriverHandle(key, attack(ctx.port, params, autoEquip).then(result => attachAttackFailure(result, params)))
+      return new AsyncDriverHandle(key, attack(ctx.body, params, autoEquip).then(result => attachAttackFailure(result, params)))
     },
   }
 }
 
-async function attack(port: ClientPort, params: AttackParams, autoEquip: boolean): Promise<DriverResult> {
+async function attack(port: BodyApi, params: AttackParams, autoEquip: boolean): Promise<DriverResult> {
   const shieldAutoEquip = await ensureOffhandShield(port)
   if (autoEquip) {
     const weapon = chooseWeapon(port.inventory())
@@ -123,7 +123,7 @@ type ShieldAutoEquip = 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shiel
  * inventory, put it there before combat. A non-empty off hand is never
  * replaced; the Agent's explicit off-hand choice wins.
  */
-async function ensureOffhandShield(port: ClientPort): Promise<ShieldAutoEquip> {
+async function ensureOffhandShield(port: BodyApi): Promise<ShieldAutoEquip> {
   if (port.offhand === undefined) return 'skipped'
   const current = port.offhand()
   if (normalizeName(current?.name) === 'shield') return 'present'
@@ -139,7 +139,7 @@ function normalizeName(name: string | undefined): string | undefined {
   return name === undefined ? undefined : name.replace(/^minecraft:/u, '')
 }
 
-function combatPort(port: ClientPort, locateRadius: number): CombatPort {
+function combatPort(port: BodyApi, locateRadius: number): CombatPort {
   return {
     now: () => Date.now(),
     self: () => {
@@ -221,7 +221,7 @@ function asAction(result: Promise<{ state: 'ok' | 'failed' | 'unknown'; code?: s
   }))
 }
 
-function subscribe(port: ClientPort, event: ClientEvent, cb: (entityId: string) => void): () => void {
+function subscribe(port: BodyApi, event: BodyEvent, cb: (entityId: string) => void): () => void {
   let active = true
   const listener = (payload: unknown): void => {
     if (!active) return
@@ -234,7 +234,7 @@ function subscribe(port: ClientPort, event: ClientEvent, cb: (entityId: string) 
   }
 }
 
-function locate(port: ClientPort, entityId: string, locateRadius: number): CombatEntity | undefined {
+function locate(port: BodyApi, entityId: string, locateRadius: number): CombatEntity | undefined {
   const self = port.self().pos
   const inBox = (position: { x: number; y: number; z: number }): boolean =>
     Math.abs(position.x - self.x) <= locateRadius
