@@ -99,6 +99,7 @@ async function mainAsync() {
     'lib/bridge.js',
     'lib/body/body.mjs',
     'lib/body/body.manifest.json',
+    'lib/provider/minecraft.mjs',
   ]) {
     if (!existsSync(join(installedDir, relative))) {
       fail(`verify-dist: installed package is missing ${relative}`, home)

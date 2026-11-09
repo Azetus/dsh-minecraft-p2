@@ -53,18 +53,6 @@ await writeFile(join(root, 'lib/body/body.manifest.json'), `${JSON.stringify(bod
 
 if (existsSync(join(root, 'src/provider/index.ts'))) {
   compile('src/provider/index.ts', 'lib/provider/minecraft.mjs', ['--packages=external'])
-  const provider = await readFile(join(root, 'lib/provider/minecraft.mjs'))
-  const providerManifest = {
-    schemaVersion: 1,
-    providerId: 'mineflayer',
-    providerVersion: pkg.version,
-    opContractVersion: '1',
-    protocolVersion: 1,
-    capabilities: ['query.position', 'query.inventory', 'query.health', 'query.entities', 'query.blocks', 'query.time', 'query.block', 'control.look', 'control.move', 'control.moveTo', 'control.jump', 'control.stop', 'control.dig', 'control.place', 'control.attack', 'control.equip', 'control.use'],
-    entry: 'minecraft.mjs',
-    files: { 'minecraft.mjs': sha256(provider) },
-  }
-  await writeFile(join(root, 'lib/provider/provider.manifest.json'), `${JSON.stringify(providerManifest, null, 2)}\n`)
 }
 
 console.log('built lib/bridge.js, lib/body/body.mjs')
