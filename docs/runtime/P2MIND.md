@@ -18,7 +18,7 @@
 | 可验收 | 每个 order 有独立可复核的终态证据；证据不足不算成功 |
 | 可扩展 | 新结构 = 新计划模板；新策略 = 代码树节点；新原语才写 driver/giver |
 | 可对话 | 能接收游戏内对话并作出符合身份的回应，且不阻塞身体执行 |
-| 解耦接入 | 同一套 AI 通过 `ClientPort` 接入；当前只维护 mineflayer，mod 适配器不在计划内 |
+| 解耦接入 | 同一套 AI 通过 `BodyApi` 接入；当前只维护 mineflayer，mod 适配器不在计划内 |
 
 ### 1.1 三条不变量
 
@@ -30,7 +30,7 @@
 
 - **Agent**：决定目标、区域、材料与 order；只在 completion wake、危险和偏离时介入。
 - **P2Mind**：在 body 内选工作、执行、重试和恢复；不替 Agent 决定战略目标。
-- **body**：只通过 ClientPort 与游戏交互；单写者、结果三态、进度可重建。
+- **body**：只通过 BodyApi 与游戏交互；单写者、结果三态、进度可重建。
 - **order 面有限**：新增能力优先来自现有原语的组合；确需新原语时才扩展。
 
 ## 3. 分层
@@ -49,7 +49,7 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
                 JobTracker（续做 / 切换 / 停止确认 / 迟到围栏）
                     │  写令牌
                     ▼
-                Driver（toil 序列）──► ClientPort ──► 游戏
+                Driver（toil 序列）──► BodyApi ──► 游戏
                     │                        │
                     └────────► Verifier ◄────┘（只读观测；需新观测→check Job）
 ```
@@ -70,7 +70,7 @@ agent ──order(+可选 blueprint 模板)──► OrderStore ──► Planne
 | Job | 数据：driverId + target + params + 归属 + runId | 对象 | 一次尝试 |
 | JobTracker | 续做、切换、停止确认、迟到围栏、fault | 状态机 | 单例 |
 | Driver | 执行一个已定目标；toil 序列；读回确认 | 代码 | 有界 |
-| ClientPort | 查询/动作/事件/能力 | 契约 + 适配器 | 单连接 |
+| BodyApi | 查询/动作/事件/能力 | 契约 + 适配器 | 单连接 |
 | Verifier | 三态验证 | 代码 | 无状态 |
 
 ### 3.1 分工原则
@@ -268,7 +268,7 @@ interface DriverHandle {
 
 | 层 | 成功含义 |
 |---|---|
-| `ClientPort` / provider | `ActResult.state='ok'` 只表示动作效果被观测到（或服务端接受），是证据，不是 order 完成 |
+| `BodyApi` / provider | `ActResult.state='ok'` 只表示动作效果被观测到（或服务端接受），是证据，不是 order 完成 |
 | Driver | `DriverResult.state='succeeded'` 表示该 verb 的可验证后置条件已成立；`failed` 表示无法确认结果 |
 | JobTracker / metrics | 只把 driver 的 `succeeded` 计为 job/order 完成 |
 
@@ -334,18 +334,16 @@ chat → 归一化 → 意图路由：
 - 权限：`who`（owner / 他人 / 系统）→ 可下哪些 order、可否取消他人 order。
 - 不靠关键词拒绝 `/`；靠“可调用动作集合”从机制上禁止命令。
 
-## 8. 接入（ClientPort）
+## 8. 接入（BodyApi / src/provider）
 
 ```
-ClientPort（纯数据，版本化，能力协商）
-  └─ MineflayerAdapter（进程内，当前唯一适配器）
+src/body/api.ts  BodyApi（纯类型）
+  └─ src/provider  MineflayerBody（唯一 mineflayer I/O；独立动态 bundle）
 ```
 
-自研 mod 适配器不在当前计划内；保留 `ClientPort` 边界以便未来需要时重新评估。
-
-- 四类：`query / act / event / capabilities`；不传库对象（`Vec3/Block/Recipe/Goal`）。
-- 能力是行为契约（`navigate / interact / observe.screen`），不是实现名（不绑定具体导航库）。
-- 一致性场景：同一套场景描述 ClientPort 契约；新增适配器必须满足同一套行为，不能只实现子集。
+- 只有一个实现；不再保留多 provider、capability/action 表或适配器一致性测试。
+- 消费者只 `import type`；`src/provider` 是唯一允许 import mineflayer 的目录。
+- body bundle 不包含 mineflayer，运行时动态 import `lib/provider/minecraft.mjs`。
 
 ## 9. 扩展点
 
@@ -369,7 +367,7 @@ ClientPort（纯数据，版本化，能力协商）
 | driver 停止不可确认 | 写令牌 + `stopStatus` + fault 冻结；“1s”只是测量指标 |
 | 选址失败率高 | 模板多变体（flat/slope/dig-in）；失败即 blocked 唤醒 |
 | 对话成为第二控制路径 | 只产 order；走同一校验器；`say` 独立通道 |
-| 换 mod 返工 | ClientPort 行为契约 + capabilities + 双跑一致性测试 |
+| 换 mod 返工 | BodyApi 纯类型边界 + `src/provider` 单入口；换接入时整体替换实现 |
 
 ## 11. 术语
 
@@ -384,5 +382,5 @@ ClientPort（纯数据，版本化，能力协商）
 | JobTracker | Job 调度器 | 续做/切换/停止/围栏 |
 | BaseActivity | Idle / Wander / Follow | 默认活动与 anchor |
 | Activity layer | 调度优先级 | constant / order / duty / base |
-| ClientPort | —（游戏本体） | 接入 |
+| BodyApi | —（游戏本体） | 接入 |
 | Verifier | —（游戏内施工反馈） | 目标级验证 |

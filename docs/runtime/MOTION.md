@@ -16,7 +16,7 @@
 
 ```text
 P2Mind（order / plan / tree / giver / tracker）
-        │  ClientPort.moveTo / attack（现有语义不变）
+        │  BodyApi.moveTo / attack（现有语义不变）
         ▼
 src/motion/mineflayer（适配器：世界、实体、tick、输入、动作）
         │
@@ -331,7 +331,7 @@ interface Move {
 
 ## 8. 与 P2Mind 的接口
 
-- `ClientPort.moveTo(target, opts)` 与 `attack(entityId)` 的输入语义不变。
+- `BodyApi.moveTo(target, opts)` 与 `attack(entityId)` 的输入语义不变。
 - `move`/`attack` driver 只做：目标/约束/取消/结果。
 - giver 可调用只读的 `isReachable` / `pathTo` 做站位筛选；它不执行、不产生 job。
 - **最近可站查询收归 core**：`standCells` / `nearestStandCell`（`motion/search/stand.ts`）输入目标、`reach`（horizontal/vertical 包络）、可选业务谓词，输出按目标距离排序的可站格、每格 `feetY`、可达三态（`yes/no/unknown`）、`reason` 与 `coverage`。调用方只做排序/筛选策略，不复制半径、垂直窗口或 standability 判断。

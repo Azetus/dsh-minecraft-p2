@@ -7,12 +7,12 @@
 | 边界 | 传输 | 形状 |
 |---|---|---|
 | bridge ↔ body | JSON-lines stdio | `RequestEnvelope / ResponseEnvelope`（`src/contracts/protocol.ts`） |
-| body ↔ 游戏 | `ClientPort` | 纯数据；不传库对象 |
+| body ↔ 游戏 | `BodyApi` / `MineflayerBody` | 纯数据；不传库对象 |
 | content ↔ 运行时 | 注册表 + JSON | `content/plans/*.json`；树定义在 `src/mind/trees.ts` |
 
 **不变量**
 
-1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 ClientPort 层被拒绝并记 `stale-write`。
+1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 `MineflayerBody` 层被拒绝并记 `stale-write`。
 2. **结果三态**：`confirmed / refuted / insufficient`；`insufficient` 不得算成功。
 3. **进度可重建**：能从世界重建的优先重建；不能重建的写意图日志。
 4. **树不产坐标**：树只选 giver；目标由 giver 选；driver 不得自行推导目标。
@@ -21,7 +21,7 @@
 
 | 层 | 成功含义 | 失败含义 |
 |---|---|---|
-| `ClientPort` / provider | `ActResult.state='ok'`：动作效果被观测到，只是证据 | `failed`/`unknown`：动作未成功或效果未知 |
+| `BodyApi` / provider | `ActResult.state='ok'`：动作效果被观测到，只是证据 | `failed`/`unknown`：动作未成功或效果未知 |
 | Driver | `DriverResult.state='succeeded'`：该 verb 的可验证后置条件已成立 | `failed`：无法确认结果；**动作可能已生效或只完成一部分** |
 | JobTracker / metrics | 只把 driver 的 `succeeded` 计为完成 | `failed` 计入失败；按失败键重试/blocked |
 
@@ -29,7 +29,9 @@
 - `failed` 不等于“什么都没发生”。动作已生效、部分完成、效果未知都要用同一份 `observed` 证据（`partial`、`dug`、`crafted`、`effect` 等）表达。
 - Verifier 的 `confirmed / refuted / insufficient` 是独立的只读验证轴，不与 driver 的 `succeeded / failed` 混用。
 
-## 2. ClientPort
+## 2. BodyApi
+
+`src/body/api.ts` 的纯类型接口；唯一实现是 `src/provider` 的 `MineflayerBody`。消费者只 `import type`，不 import mineflayer。
 
 ```ts
 type Vec3 = { x: number; y: number; z: number }
@@ -38,71 +40,69 @@ type BlockInfo = {
   state?: Record<string, string>
   loaded: boolean
   collision?: number[][]
-  /** Adapter-only server block tags; not serialized to the bridge. Undefined = tags not ready. */
   serverTags?: ReadonlySet<string>
   material?: string
   diggable?: boolean
   hardness?: number
-  /** Raw block light 0–15; undefined = unknown. */
   light?: number
-  /** Raw sky light 0–15; undefined = unknown. */
   skyLight?: number
   harvestTools?: string[]
 }
 type Item = { slot: number; name: string; count: number }
+type WriteToken = { runId: string; jobId: string; seq: number }
+type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?: unknown; elapsedMs: number }
 
-interface ClientPort {
+type BodyApi = {
   // 查询
-  self(): { pos: Vec3; yaw: number; pitch: number; health: number; food: number; onGround: boolean; inWater: boolean; inLava: boolean }
+  self(): SelfInfo
+  identity(): { worldId: string; characterId: string }
   blockAt(p: Vec3): BlockInfo | null           // null = 未加载
+  biomeAt(p: Vec3): BiomeInfo | null
   blocksIn(box: { min: Vec3; max: Vec3 }, filter?: string[]): BlockInfo[]
   findBlocks(query: { near: Vec3; radius: number; names: string[]; count: number }): BlockInfo[]
   inventory(): Item[]
-  /** Off-hand item; absent means the adapter does not expose the off hand. */
   offhand?(): Item | undefined
   entities(box: { min: Vec3; max: Vec3 }): EntityInfo[]
-  screen(): ScreenInfo | null                  // 未支持时 null + capability 缺失
+  entityByName?(name: string): EntityInfo | undefined
+  entityById?(id: string): EntityInfo | undefined
+  playerOnline?(name: string): boolean
   time(): { timeOfDay: number; worldAge: number }
+  suspension?(): SuspensionState
 
   // 动作（写）：必须持令牌
   beginWrite(token: WriteToken): void
   endWrite(token: WriteToken): void
-  moveTo(target: Vec3 | Landmark, opts?: { range?: number; timeoutMs?: number }): ActResult
-  lookAt(p: Vec3): ActResult
-  lookYaw?(yaw: number): ActResult               // 定向放置（床 head 方向）；可选能力
-  dig(p: Vec3): ActResult
-  place(p: Vec3, face: Face, item: string): ActResult
-  craft(item: string, count?: number): ActResult
-  useItem(opts?: { durationMs?: number; offhand?: boolean }): ActResult
-  equip(item: string, destination?: 'hand' | 'offhand'): ActResult
-  unequip(destination?: 'hand' | 'offhand'): ActResult
-  useOn(p: Vec3): ActResult
-  attack(entityId: string): ActResult
-  sleep(bed: Vec3): ActResult
-  say(text: string): void                      // 独立限流通道，不受写令牌约束
+  moveTo(target: Vec3 | Landmark, opts?: MoveOptions): Promise<ActResult>
+  combatStep?(opts: CombatStepOptions): Promise<ActResult>
+  lookAt(p: Vec3): Promise<ActResult>
+  lookYaw?(yaw: number): Promise<ActResult>
+  dig(p: Vec3): Promise<ActResult>
+  place(p: Vec3, face: Face, item: string): Promise<ActResult>
+  useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
+  equip(item: string, destination?: 'hand' | 'offhand'): Promise<ActResult>
+  unequip?(destination?: 'hand' | 'offhand'): Promise<ActResult>
+  craft(item: string, count?: number): Promise<ActResult>
+  useOn(p: Vec3): Promise<ActResult>
+  attack(entityId: string): Promise<ActResult>
+  sleep(bed: Vec3): Promise<ActResult>
+  containerAt(p: Vec3): Promise<ContainerCheckResult>
+  containerTransfer(p: Vec3, action: ContainerTransferAction, item?: string, count?: number): Promise<ActResult>
+  fatalStep(target: Vec3): Promise<ActResult>
+  say(text: string): void
 
   // 事件
-  on(event: 'blockUpdated' | 'inventoryChanged' | 'screenOpened' | 'damaged' | 'died' | 'chat'
-    | 'provider.suspended' | 'provider.resumed' | 'move.started' | 'move.progress' | 'move.no_path'
-    | 'move.stuck' | 'move.finished' | 'entityHurt' | 'entityDead', cb: (payload: unknown) => void): void
+  on(event: BodyEvent, cb: (payload: unknown) => void): void
+  off?(event: BodyEvent, cb: (payload: unknown) => void): void
 
-  capabilities(): Capability[]                // 'navigate' | 'interact' | 'observe.screen' | 'combat'
-  /** 暂停是挂起，不是失败；缺省表示适配器不报告。 */
-  suspension?(): SuspensionState
-  /** 视线/遮挡；缺省表示适配器不能判断，调用方不得当作可见。 */
   canSee?(entityId: string): boolean
-  /** 当前攻击速度（次/秒）；适配器必须返回应用 base 与物品 modifiers 后的 final value。 */
   attackSpeed?(): number
-  /**
-   * 玩家当前有效实体交互距离（眼→目标 AABB），来自
-   * `player.entity_interaction_range` 属性（含物品 modifiers）；缺省回退 3。
-   */
   attackReach?(): number
 }
-
-type WriteToken = { runId: string; jobId: string; seq: number }
-type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?: unknown; elapsedMs: number }
 ```
+
+- 只有 `suspension`/`offhand`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`lookYaw`/`combatStep`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
+- 写门在 `src/provider/control.ts`（`WriteGate`），令牌由 `JobTracker` 发放；没有 capability/action 表。
+- `src/provider` 是唯一允许 import mineflayer 的目录；body bundle 动态 import `lib/provider/minecraft.mjs`。
 
 **语义**
 
@@ -160,7 +160,7 @@ type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?:
   - `ACTION_DENIED`：仅当同一 act 窗口内的服务端聊天/系统消息明确拒绝（权限、保护、adventure）时使用；`observed.serverMessages` 保留原文，`observed.denial` 指向命中项；没有命中就不猜。
   - `STOP_UNCONFIRMED`：停止/释放无法确认，保持 tracker fault。
   - `CLIENT_TIMEOUT`：兼容输入的超时码；provider 不产生该码，bridge/driver 收到后按“超时/效果未确认”处理，不重放。
-- 能力缺失时返回 `{state:'failed', code:'CAPABILITY_MISSING'}`，不做静默降级。
+- 不存在 capability 协商：`BodyApi` 没声明的方法调用方必须自己回退或报错。
 
 ### 2.1 目标身份解析（L3）
 
@@ -226,7 +226,6 @@ type Job = {
 ```ts
 interface WorkGiver {
   id: string
-  requires?: Capability[]
   score?(ctx: EvalCtx, world: WorldView): number
   find(ctx: EvalCtx, world: WorldView): Candidate | Handoff | Hold | null
 }
@@ -246,7 +245,6 @@ type Hold = { kind: 'hold'; reason: string; notify?: boolean }
 interface Driver {
   id: string
   schema: JSONSchema
-  requires?: Capability[]
   defaults: { budget: Budget; interrupt: 'constant-only' | 'never' | 'any'; suspendable: boolean }
   validate(job: Job, world: WorldView): { ok: true } | { ok: false; code: string }
   start(job: Job, ctx: DriverCtx): DriverHandle
@@ -399,7 +397,6 @@ type WorkState =
 
 | 码 | 含义 |
 |---|---|
-| `CAPABILITY_MISSING` | 端口不具备所需能力 |
 | `STALE_WRITE` | 写令牌不匹配（非当前实例） |
 | `ACT_TIMEOUT` | 动作在预算内无终态，释放已确认，且动作可安全重试（move/look/equip） |
 | `ACT_UNCONFIRMED` | 动作可能已生效但无终态；不重放，先读回/观察 |

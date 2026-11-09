@@ -19,7 +19,7 @@
 | [runtime/P2MIND.md](runtime/P2MIND.md) | P2Mind 控制结构（权威设计） |
 | [runtime/MOTION.md](runtime/MOTION.md) | 运动模块：规则集、规划器、执行器、战斗控制器 |
 | [runtime/AGENT-REACTION.md](runtime/AGENT-REACTION.md) | Agent 战逃反应提示词 |
-| [CONTRACTS.md](CONTRACTS.md) | ClientPort / Job / WorkGiver / Driver / Tracker / 树的契约 |
+| [CONTRACTS.md](CONTRACTS.md) | BodyApi / Job / WorkGiver / Driver / Tracker / 树的契约 |
 | [RUNTIME.md](RUNTIME.md) | tick 循环、预算、失败与恢复、owner session |
 | [OPERATOR-PLAYBOOK.md](OPERATOR-PLAYBOOK.md) | P2 运行纪律（Agent/P2Mind） |
 | [DEPENDENCIES.md](DEPENDENCIES.md) | 依赖、构建与开发环境 |

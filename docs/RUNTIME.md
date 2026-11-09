@@ -3,7 +3,7 @@
 ## 1. body 生命周期
 
 1. `p2_body start`（或 `/p2 start <host>:<port>`）→ bridge 先确保 `.p2` 工作区（缺失文件从 `content/templates/` 复制，不覆盖），再启动 body 子进程，并把 MC target 注入子进程环境。
-2. body 连接 provider（ClientPort 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。target 来自启动参数，不来自 `.p2/config.json`。
+2. body 连接 provider（BodyApi 适配器）→ 加载 `content/` 与注册表 → 读意图日志恢复未完成 order。target 来自启动参数，不来自 `.p2/config.json`。
 3. body active → bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、skill/persona/memory/auto-wake。
 4. 进入 tick 循环（50ms）。
 5. `p2_body stop`：冻结新 dispatch → 请求当前 driver 停止并等待 `stopped` → 落盘意图日志 → 退出；超时先 SIGTERM，再 killTree。bridge 停止 auto-wake 并 dispose owner 注册。
@@ -108,7 +108,7 @@
    - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
    - `equip / traverse / check / collect` 是一次性，首次失败即终态；`collect` 的一次 job 已经把启动时观测到的掉落物跑完，重试只会重复已消耗的实体；
    - `collect` 的部分/不可达/无返回/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/noReturn/inventoryDelta`，不因 `failed` 丢掉已收集数量；
-   - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / CAPABILITY_MISSING / DEFINITION_ERROR` 不重试；
+   - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / DEFINITION_ERROR` 不重试；
    - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NO_RETURN / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_NO_RETURN / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
    - `place` 的 `PLACE_TARGET_OCCUPIED / PLACE_OFF_TARGET / PLACE_ITEM_CONSUMED / PLACE_READBACK_MISMATCH / PLACE_UNSUPPORTED / NO_SUPPORT` 不重试；`PLACE_FAILED` 只有在 provider 给出 `retrySafe:true` 时才可能换面，否则终态；
    - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
@@ -260,7 +260,7 @@ order 可带 `policy.conflict`：
 
 ### 10.6 游戏内对话推送给 Agent
 
-- 对话**不由 body 解析**：`ClientPort` 的 `chat` 事件进入 body 有界队列（100 条），
+- 对话**不由 body 解析**：`BodyApi` 的 `chat` 事件进入 body 有界队列（100 条），
   通过 `chat.poll {afterSeq}` 暴露给 bridge；`chat.say {text}` 只负责发一句话。
 - bridge 每 300ms poll 一次；新消息交给 `ChatBatcher` 合并：
   - 单条等待 1s 防抖后推送；

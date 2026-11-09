@@ -9,14 +9,14 @@ DSH session (bridge plugin)
   ├─ p2_* tools / /p2 command / owner wake
   └─ BodyManager ── JSON-lines stdio ──> body process
                                            ├─ P2Mind（树 / giver / job / tracker / driver）
-                                           ├─ ClientPort（mineflayer 适配器）
+                                           ├─ BodyApi（纯类型边界）
                                            ├─ Verifier + 意图日志
-                                           └─ provider（唯一游戏 I/O）
+                                           └─ src/provider（唯一 mineflayer I/O：MineflayerBody）
 ```
 
 - **bridge**：工具、owner 校验、心跳/故障/重启、唤醒、汇总；不执行游戏动作。
-- **body**：P2Mind 与 ClientPort 适配器所在的进程；所有游戏 I/O 走 ClientPort。
-- **单写者**：只有持有写令牌的 Driver 能调用 ClientPort 的写操作。
+- **body**：P2Mind 与 `BodyApi` 消费者所在的进程；所有游戏 I/O 走 `src/provider` 的 `MineflayerBody`。
+- **单写者**：只有持有写令牌的 Driver 能调用 `BodyApi` 的写操作。
 
 ## 2. 控制结构
 
@@ -25,7 +25,7 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
                                               │
       常驻树（紧急） / 主树（常规） / 对话管线 ──► WorkGiver ──► Job
                                               │
-                                        JobTracker ──► Driver ──► ClientPort
+                                        JobTracker ──► Driver ──► BodyApi
                                               │
                                         Verifier ──► 证据/唤醒
 ```
@@ -40,11 +40,11 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 | Verifier | 三态验证（只读观测） | 抢交互、改世界 |
 
 ### 2.1 结果语义分层
-`ClientPort`、driver、tracker/metrics 回答的是三个不同问题，不能混用同一个“成功”：
+`BodyApi`、driver、tracker/metrics 回答的是三个不同问题，不能混用同一个“成功”：
 
 | 层 | 回答的问题 | “成功”的含义 |
 |---|---|---|
-| `ClientPort` / provider | 动作有没有被发出、有没有回执或效果观测 | `ActResult.state='ok'`：动作效果被观测到；**不是** order 目标完成 |
+| `BodyApi` / provider | 动作有没有被发出、有没有回执或效果观测 | `ActResult.state='ok'`：动作效果被观测到；**不是** order 目标完成 |
 | Driver | 这个 verb 的可验证后置条件有没有成立 | `DriverResult.state='succeeded'`：后置条件已确认；`failed`：无法确认结果 |
 | JobTracker / metrics | 这个 job/order 是否算完成 | 只把 driver 的 `succeeded` 计为完成 |
 
@@ -72,22 +72,23 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 ## 3. 接入
 
 ```text
-ClientPort（query / act / event / capabilities，纯数据）
-  └─ MineflayerAdapter   当前：进程内调用；唯一投入的适配器
+src/body/api.ts  BodyApi（query / act / event，纯类型）
+  └─ src/provider  MineflayerBody（唯一 mineflayer I/O；独立的动态 bundle）
+       ├─ mineflayer provider（bot / act 生命周期 / 查询 / 暂停重连）
+       └─ motion（bot 的 MotionWorld/MotionRun）
 ```
 
-- 换接入不换 AI：树、giver、plan、driver 都只依赖 ClientPort。
-- 能力是行为契约（`navigate / interact / observe.screen`），缺能力时 driver 声明 `requires` 并降级或报不支持。
-- `ClientPort` 一致性以同一套场景描述；当前只实现 mineflayer 适配器，自研客户端适配器不在计划内，但边界保留，未来需要时再评估。
+- 树、giver、plan、driver、verifier 只依赖 `BodyApi` 的纯类型；不 import mineflayer。
+- `src/provider` 是唯一允许 import mineflayer 的目录；`lib/body/body.mjs` 不包含 mineflayer，运行时动态 import `lib/provider/minecraft.mjs`。
+- 不再保留多 provider 抽象、capability/action 表；以后要么继续 mineflayer，要么整体替换，不并行支持。
 
 ## 4. 目录
 
 ```text
 src/
   bridge/          DSH 插件、owner session、persona/memory/auto-wake、进程管理、唤醒
-  body/            body 运行时（RPC、生命周期、装配）
-  port/            ClientPort 契约 + 能力 + 一致性场景
-  port/mineflayer/ mineflayer 适配器
+  body/            body 运行时（RPC、生命周期、装配）+ api.ts（BodyApi 纯类型）
+  provider/        唯一 mineflayer I/O（MineflayerBody / provider / motion / block-tags）
   mind/            P2Mind：tree / trees / giver / job / tracker / driver / plan / order
   mind/verify/     验证器
   contracts/       协议、framing、通用类型
