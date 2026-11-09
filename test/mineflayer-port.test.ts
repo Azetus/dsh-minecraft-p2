@@ -388,6 +388,42 @@ describe('mineflayer port reads', () => {
   })
 })
 
+describe('mineflayer port attack speed', () => {
+  function setAttackSpeed(
+    bot: FakeBot,
+    value: number,
+    modifiers: Array<{ amount: number; operation: number }>,
+  ): void {
+    ;(bot.entity as unknown as { attributes?: Record<string, unknown> }).attributes = {
+      'generic.attack_speed': { value, modifiers },
+    }
+  }
+
+  it('applies held-item ADD_VALUE modifiers (sword 1.6, iron axe 0.9)', () => {
+    const { port, bot } = createPort()
+    setAttackSpeed(bot, 4, [{ amount: -2.4, operation: 0 }])
+    expect(port.attackSpeed()).toBeCloseTo(1.6)
+    setAttackSpeed(bot, 4, [{ amount: -3.1, operation: 0 }])
+    expect(port.attackSpeed()).toBeCloseTo(0.9)
+  })
+
+  it('applies ADD_MULTIPLIED_BASE then ADD_MULTIPLIED_TOTAL', () => {
+    const { port, bot } = createPort()
+    setAttackSpeed(bot, 4, [
+      { amount: 0.1, operation: 1 },
+      { amount: 0.5, operation: 2 },
+    ])
+    expect(port.attackSpeed()).toBeCloseTo(6.6)
+  })
+
+  it('falls back to the base speed without attributes or with a non-positive result', () => {
+    const { port, bot } = createPort()
+    expect(port.attackSpeed()).toBe(4)
+    setAttackSpeed(bot, 4, [{ amount: -4, operation: 0 }])
+    expect(port.attackSpeed()).toBe(4)
+  })
+})
+
 describe('mineflayer port events', () => {
   it('forwards chat, damage, death, block updates and collection as data', () => {
     const { port, bot } = createPort()

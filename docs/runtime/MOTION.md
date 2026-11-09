@@ -302,7 +302,7 @@ interface Move {
 锁定目标后持续维护：
 
 - `targetId`：不换目标。
-- `attackCooldown`：由当前攻击速度属性计算，不用固定毫秒。
+- `attackCooldown`：由当前攻击速度属性的 **final value**（base + 物品 modifiers）计算，不用固定毫秒；如铁剑 1.6 → 625ms。
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
 - `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。超出 `reach` 先接近；进入 `reach` 后停步攻击。
 - `recheck`：冷却等待结束后、真正发 `attack` 前重新读目标准确认存在/名字/保护/死亡证据/距离/视线；等待期间移动、遮挡或死亡的目标不补刀。被复核拦下的挥击计 `rejectedSwings`，不消耗攻击预算。

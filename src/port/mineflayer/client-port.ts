@@ -611,16 +611,12 @@ export class MineflayerClientPort implements ClientPort {
 
   attackSpeed(): number {
     const attributes = (this.bot.entity as unknown as {
-      attributes?: Record<string, { value?: number } | number>
+      attributes?: Record<string, AttributeEntry>
     } | undefined)?.attributes
     if (attributes !== undefined) {
       for (const key of ['generic.attack_speed', 'minecraft:generic.attack_speed', 'attack_speed', 'generic.attackSpeed']) {
-        const entry = attributes[key]
-        if (typeof entry === 'number' && Number.isFinite(entry) && entry > 0) return entry
-        if (entry !== undefined && typeof entry === 'object'
-          && typeof entry.value === 'number' && Number.isFinite(entry.value) && entry.value > 0) {
-          return entry.value
-        }
+        const value = attributeValue(attributes[key])
+        if (value !== undefined) return value
       }
     }
     return 4
@@ -996,6 +992,42 @@ function numberOrUndefined(value: number | bigint | undefined): number | undefin
 
 function squaredDistance(left: Vec3, right: Vec3): number {
   return (left.x - right.x) ** 2 + (left.y - right.y) ** 2 + (left.z - right.z) ** 2
+}
+
+type AttributeModifier = { amount?: number; operation?: number }
+type AttributeEntry = { value?: number; modifiers?: AttributeModifier[] } | number
+
+/**
+ * Final attribute value after the server-sent modifiers. Vanilla applies
+ * ADD_VALUE, then ADD_MULTIPLIED_BASE, then ADD_MULTIPLIED_TOTAL; held items
+ * use ADD_VALUE (e.g. sword attack speed 4 + -2.4 = 1.6).
+ */
+function attributeValue(entry: AttributeEntry | undefined): number | undefined {
+  if (typeof entry === 'number') {
+    return Number.isFinite(entry) && entry > 0 ? entry : undefined
+  }
+  if (entry === undefined || typeof entry.value !== 'number' || !Number.isFinite(entry.value)) return undefined
+  const base = entry.value
+  let value = base
+  const modifiers = Array.isArray(entry.modifiers) ? entry.modifiers : []
+  const amountOf = (modifier: AttributeModifier): number | undefined =>
+    typeof modifier.amount === 'number' && Number.isFinite(modifier.amount) ? modifier.amount : undefined
+  for (const modifier of modifiers) {
+    if (modifier.operation !== 0) continue
+    const amount = amountOf(modifier)
+    if (amount !== undefined) value += amount
+  }
+  for (const modifier of modifiers) {
+    if (modifier.operation !== 1) continue
+    const amount = amountOf(modifier)
+    if (amount !== undefined) value += base * amount
+  }
+  for (const modifier of modifiers) {
+    if (modifier.operation !== 2) continue
+    const amount = amountOf(modifier)
+    if (amount !== undefined) value *= 1 + amount
+  }
+  return Number.isFinite(value) && value > 0 ? value : undefined
 }
 
 function errorCode(error: unknown): string {
