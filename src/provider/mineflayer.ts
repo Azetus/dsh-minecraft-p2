@@ -2,11 +2,14 @@ import type { Bot, EquipmentDestination } from 'mineflayer'
 import mineflayer from 'mineflayer'
 import { Vec3 } from 'vec3'
 import { MotionRun } from './motion/run.ts'
+import { MotionContextSource } from './motion/context.ts'
 import { VanillaRun } from './motion/vanilla-run.ts'
 import { MineflayerMotionWorld } from './motion/world.ts'
 import { cellOf } from '../motion/model/block.ts'
-import { defaultConstraints } from '../motion/model/types.ts'
+import { defaultConstraints, createGoal } from '../motion/model/types.ts'
 import type { Cell } from '../motion/model/types.ts'
+import { MotionSearch } from '../motion/search/astar.ts'
+import { standingCell } from '../motion/execute/moves.ts'
 import { VanillaNodeReader } from '../motion/vanilla/classify.ts'
 import { planVanillaPath } from '../motion/vanilla/search.ts'
 import { attachBlockTags, blockTagsFor } from './block-tags.ts'
@@ -378,6 +381,44 @@ export class MineflayerProvider {
       this.bot.clearControlStates()
     } catch {
       // The connection may already be gone; the next write also clears.
+    }
+  }
+
+  /**
+   * Plan a bounded path and return cell-center waypoints. This is read-only;
+   * the combat tick follows the waypoints as short inputs instead of a
+   * blocking `moveTo`.
+   */
+  pathTo(target: Cell, range: number, timeoutMs: number, maxNodes = 12_000): {
+    state: 'ok' | 'failed'
+    code?: string
+    path?: Array<{ x: number; y: number; z: number }>
+  } {
+    try {
+      const world = new MineflayerMotionWorld(this.bot)
+      const constraints = defaultConstraints('walk')
+      const context = new MotionContextSource(world, constraints)
+      const first = context.next()
+      const search = new MotionSearch(
+        standingCell(first.rules, world.self().pos),
+        createGoal(target, { kind: 'near', range }),
+        () => context.next(),
+        { sliceMs: 5, maxNodes, timeoutMs },
+      )
+      let result = search.result()
+      const deadline = Date.now() + timeoutMs
+      while (result.status === 'running' && Date.now() < deadline) {
+        result = search.step(Date.now())
+      }
+      if (result.status !== 'success') {
+        return { state: 'failed', code: result.status === 'noPath' ? 'GOTO_NO_PATH' : 'GOTO_SEARCH_TIMEOUT' }
+      }
+      return {
+        state: 'ok',
+        path: result.path.map(cell => ({ x: cell.x + 0.5, y: cell.y, z: cell.z + 0.5 })),
+      }
+    } catch {
+      return { state: 'failed', code: 'GOTO_ERROR' }
     }
   }
 

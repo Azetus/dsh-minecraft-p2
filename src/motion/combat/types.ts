@@ -43,6 +43,12 @@ export type CombatPort = {
   attackSpeed(): number
   reach?(): number
   attack(id: string): Promise<CombatAction>
+  /** Read-only path planning; the session follows the waypoints each tick. */
+  pathTo?(pos: Vec3, range: number, timeoutMs: number): Promise<{
+    state: 'ok' | 'failed'
+    code?: string
+    path?: Vec3[]
+  }>
   /** Navigation fallback for a target that is out of sight, not normal combat. */
   navigateTo?(pos: Vec3, range: number, timeoutMs: number): Promise<CombatAction>
   /** Persistent movement controls, updated by the 50ms tick. */

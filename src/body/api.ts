@@ -277,6 +277,12 @@ export type BodyApi = {
     right?: boolean
     jump?: boolean
   }): Promise<ActResult>
+  /** Read-only bounded path planning; combat follows the returned waypoints. */
+  pathTo?(target: Vec3, range: number, timeoutMs: number): Promise<{
+    state: 'ok' | 'failed'
+    code?: string
+    path?: Vec3[]
+  }>
   lookAt(p: Vec3): Promise<ActResult>
   /** Set the horizontal look direction (radians, 0 = +z) for oriented placement. */
   lookYaw?(yaw: number): Promise<ActResult>

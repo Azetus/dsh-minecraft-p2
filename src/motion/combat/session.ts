@@ -92,6 +92,7 @@ export class CombatSession {
   private detourDecision: CombatMove = 'strafe-left'
   private jumpNext = false
   private jumpTried = false
+  private waypoints: Vec3[] = []
   private shieldHeld = false
   private shieldFailed = false
   private shieldHeldSince: number | undefined
@@ -432,6 +433,7 @@ export class CombatSession {
 
   /** Pick the nearest remaining allowed target after the current one is gone. */
   private advanceTarget(): boolean {
+    this.waypoints = []
     if (this.allTargetsDead()) {
       this.finish('succeeded')
       return false
@@ -584,6 +586,51 @@ export class CombatSession {
     }
     const targetFacing = this.targetFacing(entity, self.pos)
 
+    // Waypoint path: plan once, then follow one cell-center per 50ms tick.
+    // Visible + in reach cancels the path and returns to attack normal.
+    if (this.waypoints.length > 0) {
+      if (visible && distance <= this.reach) {
+        this.waypoints = []
+      } else if (this.port.combatInput !== undefined) {
+        const next = this.waypoints[0]!
+        if (Math.hypot(next.x - self.pos.x, next.z - self.pos.z) < 0.8) {
+          this.waypoints.shift()
+          return
+        }
+        const pathJump = next.y > self.pos.y + 0.5
+        const moved = await this.port.combatInput({
+          face: next,
+          forward: true,
+          ...(pathJump ? { jump: true } : {}),
+        })
+        this.inputTicks += 1
+        this.approachMoves += 1
+        this.lastMoveWasInput = true
+        if (moved.state !== 'ok') {
+          this.waypoints = []
+          this.inputBlocked += 1
+        }
+        return
+      }
+    }
+
+    // A visible but repeatedly blocked approach also benefits from a path.
+    if (this.waypoints.length === 0
+      && this.stalledTicks >= STALLED_TICKS
+      && distance > this.reach
+      && this.port.pathTo !== undefined) {
+      const lastNav = this.lastNavigateAt.get(this.currentTargetId) ?? 0
+      if (now - lastNav >= 1_000) {
+        this.lastNavigateAt.set(this.currentTargetId, now)
+        const planned = await this.port.pathTo(entity.position, 2, 500)
+        if (planned.state === 'ok' && (planned.path?.length ?? 0) > 0) {
+          this.waypoints = planned.path!
+          this.stalledTicks = 0
+          return
+        }
+      }
+    }
+
     // Guard is movement-only: it holds position, but attack/shield continue.
     const guarding = this.guardMs > 0
       && this.lastHurtAt !== undefined
@@ -619,6 +666,16 @@ export class CombatSession {
         return
       }
       const lastNav = this.lastNavigateAt.get(this.currentTargetId) ?? 0
+      if (ticks >= 10 && this.port.pathTo !== undefined && now - lastNav >= 1_000) {
+        this.lastNavigateAt.set(this.currentTargetId, now)
+        const point = this.lastSeen.get(this.currentTargetId) ?? entity.position
+        const planned = await this.port.pathTo(point, 2, 500)
+        if (planned.state === 'ok' && (planned.path?.length ?? 0) > 0) {
+          this.waypoints = planned.path!
+          this.losTicks.set(this.currentTargetId, 0)
+          return
+        }
+      }
       if (ticks >= 10
         && this.port.navigateTo !== undefined
         && now - lastNav >= 1_000) {

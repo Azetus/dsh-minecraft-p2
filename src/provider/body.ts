@@ -556,6 +556,19 @@ export class MineflayerBody implements BodyApi {
     }, 1_000)
   }
 
+  async pathTo(target: Vec3, range: number, timeoutMs: number): Promise<{
+    state: 'ok' | 'failed'
+    code?: string
+    path?: Vec3[]
+  }> {
+    if (!isVec3(target)) return { state: 'failed', code: 'INVALID_TARGET' }
+    return this.acts.pathTo(
+      { x: Math.floor(target.x), y: Math.floor(target.y), z: Math.floor(target.z) },
+      Math.max(0, range),
+      Math.max(50, Math.min(2_000, timeoutMs)),
+    )
+  }
+
   async lookAt(p: Vec3): Promise<ActResult> {
     return await this.action('lookAt', 'lookAt', { x: p.x, y: p.y, z: p.z })
   }

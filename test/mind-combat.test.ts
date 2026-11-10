@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { createAttackDriver } from '../src/mind/drivers/attack.ts'
-import type { DriverCtx, Job } from '../src/mind/types.ts'
+import { createThreatFightGiver } from '../src/mind/givers/threat.ts'
+import { defaultReactionPolicy } from '../src/mind/reaction-policy.ts'
+import type { DriverCtx, EvalCtx, Job, WorldView } from '../src/mind/types.ts'
 import type { BodyApi, EntityInfo } from '../src/body/api.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -152,5 +154,32 @@ describe('attack tick driver', () => {
     const handle = createAttackDriver().start(job({ entityId: 'z1' }), ctx(fake.body))
     await run(handle)
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'ATTACK_NO_APPROACH' })
+  })
+
+  it('runs the threat.fight giver candidate through the tick driver', async () => {
+    const fake = fakeBody({ target: () => entity('z1', 2.5) })
+    const policy = defaultReactionPolicy()
+    policy.fight = { allowedTargets: [], retreatHealth: 8, radius: 8, leash: 12 }
+    const giver = createThreatFightGiver(() => policy)
+    const world = {
+      self: fake.body.self(),
+      entitiesIn: () => [entity('z1', 2.5)],
+      time: { timeOfDay: 1000, worldAge: 100 },
+      inventory: [],
+      blockAt: () => null,
+      blocksIn: () => [],
+    } as unknown as WorldView
+    const candidate = giver.find({ now: 0, home: { x: 0, y: 64, z: 0 } } as EvalCtx, world) as {
+      driverId: string
+      params: Record<string, unknown>
+    }
+    expect(candidate.params).toMatchObject({ engagement: true, chaseLeash: 12 })
+    const handle = createAttackDriver().start(
+      { driverId: 'attack', params: candidate.params } as Job,
+      ctx(fake.body),
+    )
+    await run(handle)
+    expect(handle.result().state).toBe('succeeded')
+    expect(handle.result().observed).toMatchObject({ resolution: 'killed', resolved: true })
   })
 })

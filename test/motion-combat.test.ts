@@ -44,6 +44,10 @@ function fakePort(options: {
   killOnAttack?: boolean
   canSee?: () => boolean
   combatInput?: (opts: CombatInput) => Promise<{ state: 'ok' | 'failed' | 'unknown'; code?: string }>
+  pathTo?: (pos: { x: number; y: number; z: number }, range: number, timeoutMs: number) => Promise<{
+    state: 'ok' | 'failed'
+    path?: Array<{ x: number; y: number; z: number }>
+  }>
 } = {}): Fake {
   let target: CombatEntity | undefined = options.target === undefined ? zombie() : options.target
   let self = { pos: { x: 0.5, y: 64, z: 0.5 }, health: options.selfHealth ?? 20, height: 1.8 }
@@ -70,6 +74,7 @@ function fakePort(options: {
       }
       return { state: 'ok' }
     },
+    ...(options.pathTo === undefined ? {} : { pathTo: options.pathTo }),
     ...(options.hasInput === false
       ? {}
       : {
@@ -382,5 +387,31 @@ describe('CombatSession tick', () => {
       code: 'ATTACK_CHASE_LIMIT',
       observed: { resolved: false, retryable: true },
     })
+  })
+
+  it('plans a path and follows waypoints when line of sight is missing', async () => {
+    let calls = 0
+    const fake = fakePort({
+      target: zombie(10),
+      canSee: () => false,
+      pathTo: async () => {
+        calls += 1
+        return {
+          state: 'ok',
+          path: [
+            { x: 6.5, y: 64, z: 0.5 },
+            { x: 8.5, y: 64, z: 0.5 },
+            { x: 9.5, y: 64, z: 0.5 },
+          ],
+        }
+      },
+    })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, losRecoveryTicks: 30 })
+    for (let index = 0; index < 14; index += 1) {
+      session.tick()
+      await sleep(0)
+    }
+    expect(calls).toBeGreaterThan(0)
+    expect(fake.inputs.some(input => input.forward === true)).toBe(true)
   })
 })

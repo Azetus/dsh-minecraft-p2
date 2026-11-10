@@ -132,6 +132,12 @@ function combatPort(port: BodyApi, locateRadius: number): CombatPort {
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     ...(port.attackReach === undefined ? {} : { reach: () => port.attackReach!() }),
     attack: id => asAction(port.attack(id)),
+    ...(port.pathTo === undefined
+      ? {}
+      : {
+          pathTo: (pos: Vec3, range: number, timeoutMs: number) =>
+            port.pathTo!(pos, range, timeoutMs),
+        }),
     ...(port.moveTo === undefined
       ? {}
       : {
