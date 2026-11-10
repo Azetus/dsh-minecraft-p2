@@ -1,6 +1,6 @@
 {
   "name": "dsh-minecraft-p2",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A DeepSeek Harness plugin that brings a second player into your Minecraft Java Edition world. Chat with it in-game and ask it to mine, gather materials, or place blocks.",
   "license": "MIT",
   "type": "module",
