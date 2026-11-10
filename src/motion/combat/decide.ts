@@ -16,10 +16,14 @@ export type CombatMoveInput = {
   band: CombatBand
   tooClose: number
   visible: boolean
-  /** Self health dropped within the hurt window. */
+  /** Self health dropped within the guard window (and a shield is available). */
   recentlyHurt: boolean
   /** Movement is not making progress; suppress strafing, not safety backoff. */
   stalled: boolean
+  /** Several attack windows produced no damage; stop strafing and close in. */
+  noDamage?: boolean
+  /** false = the target is not looking at us, so strafing buys little. */
+  targetFacing?: boolean
   strafeEnabled: boolean
   side: 'left' | 'right'
 }
@@ -49,10 +53,30 @@ export function tooCloseFor(reach: number): number {
 
 export function decideCombatMove(input: CombatMoveInput): CombatMove {
   if (!input.visible) return 'hold'
+  // Spacing backoff is the only retreat: the hurt guard itself never backs off.
   if (input.distance < input.tooClose) return 'backoff'
-  if (input.recentlyHurt && input.distance < input.band.max - 0.1) return 'backoff'
+  if (input.recentlyHurt) return 'hold'
   if (input.distance > input.band.max) return 'approach'
   if (input.stalled) return 'hold'
-  if (input.strafeEnabled && input.distance >= input.band.min) return `strafe-${input.side}`
+  if (input.noDamage) return input.distance > input.band.desired ? 'approach' : 'hold'
+  if (input.strafeEnabled && input.targetFacing !== false && input.distance >= input.band.min) {
+    return `strafe-${input.side}`
+  }
   return 'hold'
+}
+
+/**
+ * Keep one strafe direction for a few steps, then flip. Flipping every step
+ * makes the body jitter without changing the target's angle much.
+ */
+export function nextStrafeSide(
+  side: 'left' | 'right',
+  steps: number,
+  flipAt = 4,
+): { side: 'left' | 'right'; steps: number } {
+  const next = steps + 1
+  if (next >= Math.max(1, flipAt)) {
+    return { side: side === 'left' ? 'right' : 'left', steps: 0 }
+  }
+  return { side, steps: next }
 }

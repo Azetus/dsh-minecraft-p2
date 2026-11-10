@@ -1,20 +1,14 @@
 import { isRecord } from '../../contracts/protocol.ts'
-import type { JsonValue } from '../../contracts/types.ts'
 import type { BodyApi, BodyEvent, Vec3 } from '../../body/api.ts'
 import type { SchemaNode } from '../schema.ts'
-import type { Driver, DriverCtx, DriverResult, DriverValidation, Job, WorldView } from '../types.ts'
-import {
-  runMeleeCombat,
-  type CombatAction,
-  type CombatEntity,
-  type CombatPort,
+import type { Driver, DriverCtx, DriverValidation, Job, WorldView } from '../types.ts'
+import type {
+  CombatAction,
+  CombatEntity,
+  CombatPort,
+  MeleeOptions,
 } from '../../motion/combat/index.ts'
-import { defaultConstraints, createRules } from '../../motion/model/index.ts'
-import { standingCell } from '../../motion/execute/index.ts'
-import { standCells } from '../../motion/search/index.ts'
-import { createReadOnlyMotionWorld } from '../standing.ts'
-import { AsyncDriverHandle } from './handle.ts'
-import { failureBody, readFailure, withFailure } from '../failure.ts'
+import { CombatSessionHandle, type CombatPrep } from './combat-session.ts'
 import { chooseWeapon } from '../tools.ts'
 
 export const ATTACK_DRIVER_ID = 'attack'
@@ -29,7 +23,7 @@ const ATTACK_SCHEMA: SchemaNode = {
     allowAny: { type: 'boolean' },
     /** Bounded entity lookup box for a far explicit target; default 32. */
     locateRadius: { type: 'number', minimum: 8, maximum: 64 },
-    /** Optional per-order chase cap; default 12. */
+    /** Kept for order compatibility; no longer drives a separate chase. */
     maxChases: { type: 'integer', minimum: 1, maximum: 64 },
     /** Internal candidate keys, so a hot constant tree can renew instead of preempt. */
     continuationKey: { type: 'string' },
@@ -52,10 +46,9 @@ type AttackParams = {
 }
 
 /**
- * One explicit attack order with bounded tracking. The entity id is locked;
- * this driver never acquires a different target and never attacks a player or
- * an unauthorized passive/neutral entity. `killed` requires an observed death
- * event; a target that merely leaves the query range is `targetLost`.
+ * One explicit attack order with bounded tracking. The attack driver is a
+ * 50ms tick handle: the mind loop calls `tick()`, and `CombatSession` owns all
+ * combat behavior (movement, shield, guard, attack).
  */
 export function createAttackDriver(): Driver {
   return {
@@ -77,66 +70,37 @@ export function createAttackDriver(): Driver {
       const params = job.params as unknown as AttackParams
       const key = params.continuationKey ?? `attack:${params.entityId}`
       const autoEquip = ctx.allowAutoEquip?.() ?? true
-      return new AsyncDriverHandle(key, attack(ctx.body, params, autoEquip).then(result => attachAttackFailure(result, params)))
+      return new CombatSessionHandle(key, prepareCombat(ctx.body, params, autoEquip))
     },
   }
 }
 
-async function attack(port: BodyApi, params: AttackParams, autoEquip: boolean): Promise<DriverResult> {
+async function prepareCombat(
+  port: BodyApi,
+  params: AttackParams,
+  autoEquip: boolean,
+): Promise<CombatPrep> {
   const shieldAutoEquip = await ensureOffhandShield(port)
   if (autoEquip) {
     const weapon = chooseWeapon(port.inventory())
     if (weapon !== undefined) {
       const equipped = await port.equip(weapon)
       if (equipped.state !== 'ok') {
-        return {
-          state: 'failed',
-          code: equipped.code ?? 'EQUIP_FAILED',
-          observed: {
-            ...(isRecord(equipped.observed) ? equipped.observed : {}),
-            shieldAutoEquip,
-          } as unknown as JsonValue,
-        }
+        throw codedError(equipped.code ?? 'EQUIP_FAILED', `weapon equip failed: ${weapon}`)
       }
     }
   }
-  const result = await runMeleeCombat(combatPort(port, params.locateRadius ?? 32), params.entityId, {
+  const options: MeleeOptions = {
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
     ...(params.allowAny === true ? { allowAny: true } : {}),
     ...(params.allowPassive === true ? { allowPassive: true } : {}),
-    ...(params.maxChases === undefined ? {} : { maxChases: params.maxChases }),
-  })
-  return {
-    state: result.state,
-    ...(result.code === undefined ? {} : { code: result.code }),
-    observed: {
-      ...(isRecord(result.observed) ? result.observed : {}),
-      shieldAutoEquip,
-    } as unknown as JsonValue,
   }
-}
-
-type ShieldAutoEquip = 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shield'
-
-/**
- * Method-level convenience: if the off hand is empty and a shield is in the
- * inventory, put it there before combat. A non-empty off hand is never
- * replaced; the Agent's explicit off-hand choice wins.
- */
-async function ensureOffhandShield(port: BodyApi): Promise<ShieldAutoEquip> {
-  if (port.offhand === undefined) return 'skipped'
-  const current = port.offhand()
-  if (normalizeName(current?.name) === 'shield') return 'present'
-  if (current !== undefined) return 'skipped'
-  const shield = port.inventory().find(item => normalizeName(item.name) === 'shield')
-  if (shield === undefined) return 'no-shield'
-  const equipped = await port.equip(shield.name, 'offhand')
-  if (equipped.state !== 'ok') return 'failed'
-  return normalizeName(port.offhand()?.name) === 'shield' ? 'equipped' : 'failed'
-}
-
-function normalizeName(name: string | undefined): string | undefined {
-  return name === undefined ? undefined : name.replace(/^minecraft:/u, '')
+  return {
+    port: combatPort(port, params.locateRadius ?? 32),
+    targetId: params.entityId,
+    options,
+    shieldAutoEquip,
+  }
 }
 
 function combatPort(port: BodyApi, locateRadius: number): CombatPort {
@@ -155,60 +119,24 @@ function combatPort(port: BodyApi, locateRadius: number): CombatPort {
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     ...(port.attackReach === undefined ? {} : { reach: () => port.attackReach!() }),
     attack: id => asAction(port.attack(id)),
-    moveTo: (pos, range, timeoutMs) => asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
-    ...(port.combatStep === undefined ? {} : {
-      combatStep: async opts => {
-        const result = await port.combatStep!({
-          cell: opts.cell,
-          face: opts.face,
-          ...(opts.shield === undefined ? {} : { shield: opts.shield }),
-          ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
-        })
-        const observed = isRecord(result.observed) ? result.observed : undefined
-        return {
-          state: result.state,
-          ...(result.code === undefined ? {} : { code: result.code }),
-          ...(observed?.shieldUsed === true ? { shieldUsed: true } : {}),
-        }
-      },
-    }),
-    standCells: query => {
-      const world = createReadOnlyMotionWorld(point => port.blockAt(point))
-      const constraints = defaultConstraints()
-      const rules = createRules(world, constraints)
-      const self = port.self()
-      const near = {
-        x: Math.floor(query.near.x),
-        y: Math.floor(query.near.y),
-        z: Math.floor(query.near.z),
-      }
-      const result = standCells(world, {
-        near,
-        desired: near,
-        reach: { horizontal: 1, vertical: 1 },
-        accept: (cell, feetY) => query.accept(
-          { x: cell.x + 0.5, y: feetY, z: cell.z + 0.5 },
-          feetY,
-        ),
-      }, {
-        from: standingCell(rules, self.pos),
-        constraints,
-        reachability: { maxNodes: 256 },
-        dry: true,
-      })
-      return result.cells.map(cell => ({
-        cell: { x: cell.cell.x, y: cell.cell.y, z: cell.cell.z },
-        feetY: cell.feetY,
-        distance: cell.distance,
-        reachable: cell.reachable,
-        ...(cell.steps === undefined ? {} : { steps: cell.steps }),
-      }))
-    },
+    ...(port.combatInput === undefined
+      ? {}
+      : {
+          combatInput: (opts: {
+            face: Vec3
+            forward?: boolean
+            back?: boolean
+            left?: boolean
+            right?: boolean
+          }) => asAction(port.combatInput!(opts)),
+        }),
     ...(port.lookAt === undefined ? {} : { lookAt: (pos: Vec3) => asAction(port.lookAt!(pos)) }),
     ...(port.offhand === undefined
       ? {}
       : { hasShield: () => normalizeName(port.offhand!()?.name) === 'shield' }),
-    shield: durationMs => asAction(port.useItem({ durationMs, offhand: true })),
+    ...(port.offhandHold === undefined
+      ? {}
+      : { offhandHold: (active: boolean) => asAction(port.offhandHold!(active)) }),
     onEntityHurt: cb => subscribe(port, 'entityHurt', cb),
     onEntityDead: cb => subscribe(port, 'entityDead', cb),
   }
@@ -252,6 +180,7 @@ function locate(port: BodyApi, entityId: string, locateRadius: number): CombatEn
     id: entity.id,
     name: entity.name,
     position: entity.position,
+    ...(entity.velocity === undefined ? {} : { velocity: entity.velocity }),
     ...(entity.yaw === undefined ? {} : { yaw: entity.yaw }),
     ...(entity.type === undefined ? {} : { type: entity.type }),
     ...(entity.kind === undefined ? {} : { kind: entity.kind }),
@@ -261,22 +190,31 @@ function locate(port: BodyApi, entityId: string, locateRadius: number): CombatEn
   }
 }
 
-function attachAttackFailure(result: DriverResult, params: AttackParams): DriverResult {
-  if (result.state !== 'failed' || readFailure(result.observed) !== undefined) return result
-  const code = result.code ?? 'ATTACK_FAILED'
-  return {
-    ...result,
-    observed: withFailure(result.observed, failureBody({
-      layer: 'driver',
-      phase: 'execute',
-      code,
-      observed: result.observed,
-      facts: {
-        entityId: params.entityId,
-        ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
-      },
-      cause: { kind: code === 'ATTACK_TARGET_PROTECTED' ? 'authority' : 'world', code },
-      recovery: 'none',
-    })),
-  }
+type ShieldAutoEquip = 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shield'
+
+/**
+ * Method-level convenience: if the off hand is empty and a shield is in the
+ * inventory, put it there before combat. A non-empty off hand is never
+ * replaced; the Agent's explicit off-hand choice wins.
+ */
+async function ensureOffhandShield(port: BodyApi): Promise<ShieldAutoEquip> {
+  if (port.offhand === undefined) return 'skipped'
+  const current = port.offhand()
+  if (normalizeName(current?.name) === 'shield') return 'present'
+  if (current !== undefined) return 'skipped'
+  const shield = port.inventory().find(item => normalizeName(item.name) === 'shield')
+  if (shield === undefined) return 'no-shield'
+  const equipped = await port.equip(shield.name, 'offhand')
+  if (equipped.state !== 'ok') return 'failed'
+  return normalizeName(port.offhand()?.name) === 'shield' ? 'equipped' : 'failed'
+}
+
+function normalizeName(name: string | undefined): string | undefined {
+  return name === undefined ? undefined : name.replace(/^minecraft:/u, '')
+}
+
+function codedError(code: string, message: string): Error {
+  const error = new Error(message)
+  ;(error as { code?: string }).code = code
+  return error
 }

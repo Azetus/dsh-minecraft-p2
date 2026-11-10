@@ -1,5 +1,7 @@
 # 契约（P2Mind）
 
+> **2026-11-10 终态**：Combat 只有一个实现——50ms tick 的 `CombatSession`，由 `CombatSessionHandle` 的 `DriverHandle.tick()` 驱动。移动用 `combatInput` 持久控制、盾用 `offhandHold` 持久 stance；attack 不停止移动、不放下盾。`runMeleeCombat`、`combatStep`、`combatAdvance`、旧 A/B 开关已删除；下文出现这些名字的段落为历史记录，不再是 API。
+
 > 设计背景见 [P2Mind](runtime/P2MIND.md)。本文只列可实现的接口与不变量。
 
 ## 1. 边界
@@ -73,12 +75,27 @@ type BodyApi = {
   beginWrite(token: WriteToken): void
   endWrite(token: WriteToken): void
   moveTo(target: Vec3 | Landmark, opts?: MoveOptions): Promise<ActResult>
-  combatStep?(opts: CombatStepOptions): Promise<ActResult>
+  /**
+   * Persistent combat movement controls (forward/back/left/right) and facing.
+   * The body keeps them until the next input or endWrite.
+   */
+  combatInput?(opts: {
+    face: Vec3
+    forward?: boolean
+    back?: boolean
+    left?: boolean
+    right?: boolean
+  }): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
   lookYaw?(yaw: number): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
   useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
+  /**
+   * Persistent off-hand stance: true holds the item across acts, false
+   * releases it. Released on false, endWrite, a write-epoch change or reset.
+   */
+  offhandHold?(active: boolean): Promise<ActResult>
   equip(item: string, destination?: 'hand' | 'offhand'): Promise<ActResult>
   unequip?(destination?: 'hand' | 'offhand'): Promise<ActResult>
   craft(item: string, count?: number): Promise<ActResult>
@@ -100,7 +117,7 @@ type BodyApi = {
 }
 ```
 
-- 只有 `suspension`/`offhand`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`lookYaw`/`combatStep`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
+- 只有 `suspension`/`offhand`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`offhandHold`/`combatInput`/`lookYaw`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
 - 写门在 `src/provider/control.ts`（`WriteGate`），令牌由 `JobTracker` 发放；没有 capability/action 表。
 - `src/provider` 是唯一允许 import mineflayer 的目录；body bundle 动态 import `lib/provider/minecraft.mjs`。
 
@@ -131,8 +148,13 @@ type BodyApi = {
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`：有界追击默认最多 12 次（每次 ≤5s，可用 `attack.maxChases` 1–64 覆盖），最多 24 次攻击/40s；目标丢失或名字变化立即失败，绝不换目标。攻击间隔按 `attackSpeed` 计算（适配器必须应用玩家属性 base 与物品 modifiers；如铁剑 4 + (-2.4) = 1.6）；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`。失败 observed 带 `attacksIssued`、`damageObserved`、`chases`，provider 有实体血量时带 `targetHealth`。目标从查询范围消失只报 `ATTACK_TARGET_LOST`，不得报 `killed`。显式 `attack` order 传 `allowAny:true`，不做玩家/被动/中立保护过滤；giver 优先用 `ctx.focus`（身份解析，每 tick），无身份索引的适配器回退 15 格快照；driver 用 `locateRadius`（显式 64、自动 32）定位，靠近仍由 `moveTo`/追击完成；`ATTACK_TARGET_PROTECTED` 只用于自动 fight/未授权 driver 调用。攻击距离按**眼睛到目标 AABB 的最近点**计算：眼睛高度为 `self.height - 0.18`（缺失按 1.8），目标盒由 `EntityInfo.width/height` 构成（缺失按 0.6×1.8）；冷却等待结束后、真正发 `attack` 前用新鲜读回复核目标存在/名字/保护/死亡证据/距离/视线，复核拦下的挥击计入 `observed.rejectedSwings`（不消耗 `attacksIssued`），丢失/改名/保护仍用原失败码，终态语义不变。副手有盾时，在冷却等待窗口先 `lookAt` 再 `useItem({offhand:true,durationMs:min(wait,600)})`（最小 250ms；长等待链式举盾）；`shieldUses`/`shieldFailures` 只作证据，`useItem` 失败本场禁用举盾，`lookAt` 失败不计数、不 disable；attack 开头若副手为空且背包有盾，自动换盾（不替换非空副手），结果写入 `observed.shieldAutoEquip`（`equipped`/`present`/`skipped`/`failed`/`no-shield`）。**交战间距**：`reach` 缺省来自 `attackReach?()`（玩家 `player.entity_interaction_range`，含物品 modifiers，默认 3），带为 `[reach-0.8, reach-0.2]`、中值 `reach-0.5`、`tooClose=reach-1.4`；冷却窗口内按纯函数 `decideCombatMove` 选择 `approach/hold/backoff/strafe-left/strafe-right`，用 `standCells` 在环上选**相邻**格（3×3×3、`maxNodes:256`、dry、`feetY` 同层/下一层、`reachable:'yes'`、带内 eye→AABB），再 `combatStep({cell, face, shield})`（1 格、固定 yaw）。上一层候选回退 C 的 `moveTo` 并记 `stepFallbacks`；`combatStep` 不存在的适配器带内 hold，不回退 C。`shield` = 副手有盾 && 目标 60° 面向我们 && `distance <= band.desired`；yaw 缺失不举盾。节流 250ms（无盾）/400ms（有盾）；剩余冷却 < 估计步长 + 100ms 时不起步，攻击优先。`backoff` 只退到带边，不结束 job、不找掩体、不出视线；无安全格或步进失败时站桩继续，不改变 `ATTACK_*` 终态。`observed` 增加 `combatMoves`/`moveFailures`/`noSafeCell`/`strafeMoves`/`backoffMoves`/`shieldedSteps`/`stepFallbacks`/`stepBlocked`/`reach`/`reachSource`（`attribute`/`default`/`override`）。
-- `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear`（中间可有 `go`/`place`/`use`）使用手动手持，不自动切换；动作启动后恢复自动。`equip` 自身的 held 读回语义不变。
+- `attack` 锁定 `entityId`：战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
+- `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear` 使用手动手持，不自动切换；动作启动后恢复自动。
+- **CombatSession（唯一实现）**：每 50ms tick 读取 self/target/health/cooldown，选择 `approach/hold/backoff/strafe-left/strafe-right`；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance。attack/lookAt 是短动作，**不停止移动、不放下盾**；`lookAt` 失败不取消攻击。
+- **guard**：自血下降时进入 1000ms 窗口；窗口内移动 hold（tooClose 仍 backoff），攻击/盾照常；计时到期、无盾、目标丢失/死亡/job 结束退出。
+- **盾/开场**：副手有盾时 `offhandHold(true)` 持久保持，进入 `preShieldRange`（默认 12）提前举起；stop/endWrite/epoch/suspended/death/disconnect 释放。攻击不强制放下盾；若服务端行为拒绝，才做显式例外，不作为默认。
+- **移动安全**：`combat-input` provider 对下一格的脚/头/支撑/液体/火/岩浆/仙人掌做本地检查，不安全返回 `COMBAT_INPUT_BLOCKED`，session hold；不再有 `combatStep`/`combatAdvance`/战斗 `moveTo`。
+- **证据**：`inputTicks`/`inputBlocked`/`inputFailures`、`approachMoves`/`strafeMoves`/`backoffMoves`、`guardWindows`/`guardExits`、`stanceRaises`/`stanceDrops`/`stanceReleaseFailures`/`shieldHeldMs`、`preShieldRaises`、`reach`/`reachSource`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
 - `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`。它只读、不参与控制；bridge 用它给记忆/owner-session 分 scope。provider 没有 identity 时字段省略，调用方必须回退而不是猜测。
@@ -410,6 +432,8 @@ type WorkState =
 | `TOOL_INSUFFICIENT` | `harvest` 没有可用工具 |
 | `EQUIP_READBACK_UNKNOWN` | provider 报告 equip 成功，但没有当前手持物读回；按结果契约不得算成功 |
 | `EQUIP_READBACK_MISMATCH` | provider 报告 equip 成功，但读回的手持物不是请求物品 |
+| `OFFHAND_HOLD_UNSUPPORTED` | 适配器没有 `offhandHold`；调用方回退到 timed shield |
+| `OFFHAND_EMPTY` | 尝试持有空副手 |
 | `CONTAINER_READBACK_UNKNOWN` | provider 完成传输但没给玩家/容器前后计数；不得算成功 |
 | `CONTAINER_INCOMPLETE` | 传输动作已执行，但玩家/容器计数未达到请求数量 |
 | `BLOCK_UNBREAKABLE` | 方块不可破坏 |

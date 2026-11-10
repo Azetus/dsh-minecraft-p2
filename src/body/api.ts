@@ -54,6 +54,8 @@ export type EntityInfo = {
   id: string
   name: string
   position: Vec3
+  /** Adapter-reported velocity in blocks per tick; absent when unknown. */
+  velocity?: Vec3
   /** Entity yaw in radians (mineflayer: 0 = -z); absent when it cannot tell. */
   yaw?: number
   /** Entity AABB width/height; item fallback is 0.25x0.25. */
@@ -160,17 +162,6 @@ export function actUnknown(code: string, elapsedMs: number, observed?: JsonValue
 /** Dynamic, per-order break authorization. */
 export type UnstickBlock = Vec3 & { name: string }
 
-/** One bounded adjacent-cell combat step; keeps facing `face` while moving. */
-export type CombatStepOptions = {
-  /** Adjacent feet cell (Chebyshev 1). */
-  cell: Vec3
-  /** World point to keep facing; yaw uses x/z only. */
-  face: Vec3
-  /** Hold the off-hand shield for the duration of the step. */
-  shield?: boolean
-  timeoutMs?: number
-}
-
 export type MoveOptions = {
   range?: number
   timeoutMs?: number
@@ -273,14 +264,30 @@ export type BodyApi = {
   endWrite(token: WriteToken): void
 
   moveTo(target: Vec3 | Landmark, opts?: MoveOptions): Promise<ActResult>
-  /** One adjacent-cell step that keeps the body facing `face` and may hold a shield. */
-  combatStep?(opts: CombatStepOptions): Promise<ActResult>
+  /**
+   * Set the persistent combat movement controls (and facing) for the next
+   * 50ms tick. Controls stay active until the next input or `endWrite`.
+   */
+  combatInput?(opts: {
+    face: Vec3
+    forward?: boolean
+    back?: boolean
+    left?: boolean
+    right?: boolean
+  }): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
   /** Set the horizontal look direction (radians, 0 = +z) for oriented placement. */
   lookYaw?(yaw: number): Promise<ActResult>
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
   useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
+  /**
+   * Persistent off-hand stance: `true` holds the off-hand item across acts,
+   * `false` releases it. Unlike `useItem` the stance is not tied to one act's
+   * lifetime; it is released on `false`, a write-epoch change, `endWrite`, or
+   * a provider reset. Absent means the adapter cannot keep an item held.
+   */
+  offhandHold?(active: boolean): Promise<ActResult>
   equip(item: string, destination?: 'hand' | 'offhand'): Promise<ActResult>
   unequip?(destination?: 'hand' | 'offhand'): Promise<ActResult>
   craft(item: string, count?: number): Promise<ActResult>

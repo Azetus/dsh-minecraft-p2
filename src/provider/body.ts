@@ -13,7 +13,6 @@ import type {
   BodyApi,
   BodyEvent,
   Box,
-  CombatStepOptions,
   ContainerCheckResult,
   ContainerTransferAction,
   EntityInfo,
@@ -114,6 +113,7 @@ type EntityLike = {
   kind?: string
   health?: number
   position?: { x: number; y: number; z: number }
+  velocity?: { x: number; y: number; z: number }
   yaw?: number
   width?: number
   height?: number
@@ -177,6 +177,7 @@ export class MineflayerBody implements BodyApi {
     this.wireEvents()
     acts.onSuspension?.(state => {
       this.suspensionState = state
+      if (state.suspended) this.releaseOffhand()
       this.emit(state.suspended ? 'provider.suspended' : 'provider.resumed', state as unknown as JsonValue)
     })
   }
@@ -480,11 +481,33 @@ export class MineflayerBody implements BodyApi {
     for (const entry of [...this.running]) {
       if (entry.epoch !== epoch) this.stopHandle(entry.handle)
     }
+    this.releaseOffhand()
+    this.releaseControls()
   }
 
   endWrite(token: WriteToken): void {
     this.gate.end(token)
     for (const entry of [...this.running]) this.stopHandle(entry.handle)
+    this.releaseOffhand()
+    this.releaseControls()
+  }
+
+  /** Best-effort stance release on authority/stop paths; the next epoch retries. */
+  private releaseOffhand(): void {
+    try {
+      ;(this.acts as { offhandHold?: (active: boolean) => unknown }).offhandHold?.(false)
+    } catch {
+      // A disconnect/pause releases the server-side use state with the session.
+    }
+  }
+
+  /** Persistent combat input must not outlive the write that set it. */
+  private releaseControls(): void {
+    try {
+      ;(this.acts as { clearControls?: () => void }).clearControls?.()
+    } catch {
+      // The next write/stop also clears the body controls.
+    }
   }
 
   async moveTo(target: Vec3 | Landmark, opts: MoveOptions = {}): Promise<ActResult> {
@@ -512,21 +535,23 @@ export class MineflayerBody implements BodyApi {
     }, timeoutMs)
   }
 
-  /**
-   * One adjacent-cell step with a fixed yaw. The method is
-   * the contract; callers check its presence rather than a coarse `combat` flag.
-   */
-  async combatStep(opts: CombatStepOptions): Promise<ActResult> {
-    if (!isVec3(opts.cell) || !isVec3(opts.face)) return actFailed('INVALID_TARGET', 0)
-    const args: Record<string, JsonValue> = {
-      x: opts.cell.x,
-      y: opts.cell.y,
-      z: opts.cell.z,
+  async combatInput(opts: {
+    face: Vec3
+    forward?: boolean
+    back?: boolean
+    left?: boolean
+    right?: boolean
+  }): Promise<ActResult> {
+    if (!isVec3(opts.face)) return actFailed('INVALID_TARGET', 0)
+    return await this.run('combat-input', {
       faceX: opts.face.x,
+      faceY: opts.face.y,
       faceZ: opts.face.z,
-      ...(opts.shield === true ? { shield: true } : {}),
-    }
-    return await this.run('combat-step', args, opts.timeoutMs ?? 2_000)
+      ...(opts.forward === true ? { forward: true } : {}),
+      ...(opts.back === true ? { back: true } : {}),
+      ...(opts.left === true ? { left: true } : {}),
+      ...(opts.right === true ? { right: true } : {}),
+    }, 1_000)
   }
 
   async lookAt(p: Vec3): Promise<ActResult> {
@@ -558,6 +583,21 @@ export class MineflayerBody implements BodyApi {
     if (opts.durationMs !== undefined) args.durationMs = opts.durationMs
     if (opts.offhand === true) args.offhand = true
     return await this.action('useItem', 'use', args)
+  }
+
+  async offhandHold(active: boolean): Promise<ActResult> {
+    const startedAt = this.now()
+    if (this.gate.currentEpoch() === undefined) return staleWriteResult(0)
+    const hold = (this.acts as { offhandHold?: (value: boolean) => unknown }).offhandHold
+    if (typeof hold !== 'function') {
+      return actFailed('OFFHAND_HOLD_UNSUPPORTED', this.now() - startedAt)
+    }
+    try {
+      const result = hold.call(this.acts, active)
+      return actOk(this.now() - startedAt, result as unknown as JsonValue)
+    } catch (error) {
+      return actFailed(errorCode(error), this.now() - startedAt)
+    }
   }
 
   async equip(item: string, destination: 'hand' | 'offhand' = 'hand'): Promise<ActResult> {
@@ -905,7 +945,10 @@ export class MineflayerBody implements BodyApi {
       this.emit('blockUpdated', { x: position.x, y: position.y, z: position.z, name: newBlock.name })
     })
     this.bot.on('health', () => this.emit('damaged', { health: this.bot.health }))
-    this.bot.on('death', () => this.emit('died', {}))
+    this.bot.on('death', () => {
+      this.releaseOffhand()
+      this.emit('died', {})
+    })
     this.bot.on('entityHurt', entity => {
       const id = (entity as unknown as { id?: number }).id
       if (typeof id === 'number') this.emit('entityHurt', { entityId: String(id) })
@@ -966,10 +1009,15 @@ function entityInfo(entity: EntityLike, registry: unknown): EntityInfo | undefin
   const position = entity.position
   if (position === undefined) return undefined
   const item = resolveDroppedItem(registry, entity)
+  const velocity = entity.velocity
   return {
     id: String(entity.id ?? -1),
     name: entity.username ?? entity.name ?? entity.type ?? 'unknown',
     position: { x: position.x, y: position.y, z: position.z },
+    ...(velocity !== undefined
+      && Number.isFinite(velocity.x) && Number.isFinite(velocity.y) && Number.isFinite(velocity.z)
+      ? { velocity: { x: velocity.x, y: velocity.y, z: velocity.z } }
+      : {}),
     ...(typeof entity.yaw === 'number' ? { yaw: entity.yaw } : {}),
     ...(typeof entity.width === 'number' ? { width: entity.width } : {}),
     ...(typeof entity.height === 'number' ? { height: entity.height } : {}),

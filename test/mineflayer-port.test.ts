@@ -42,14 +42,10 @@ describe('mineflayer port actions', () => {
       .toMatchObject({ state: 'ok' })
     expect(source.calls.at(-1)).toEqual({ name: 'motion-goto', args: { x: 1, y: 64, z: 2, range: 2, timeoutMs: 500 } })
 
-    expect((await port.combatStep({
-      cell: { x: 1, y: 64, z: 2 },
-      face: { x: 0, y: 64, z: 0 },
-      shield: true,
-    })).state).toBe('ok')
+    expect((await port.combatInput!({ face: { x: 1, y: 64, z: 2 }, forward: true })).state).toBe('ok')
     expect(source.calls.at(-1)).toEqual({
-      name: 'combat-step',
-      args: { x: 1, y: 64, z: 2, faceX: 0, faceZ: 0, shield: true },
+      name: 'combat-input',
+      args: { faceX: 1, faceY: 64, faceZ: 2, forward: true },
     })
 
     expect((await port.lookAt({ x: 1, y: 64, z: 2 })).state).toBe('ok')
@@ -79,7 +75,6 @@ describe('mineflayer port actions', () => {
 
     expect((await port.useOn({ x: 1, y: 64, z: 2 })).state).toBe('ok')
     expect(source.calls.at(-1)?.name).toBe('activate')
-
     expect((await port.attack('12')).state).toBe('ok')
     expect(source.calls.at(-1)).toEqual({ name: 'attack', args: { entityId: 12 } })
 
@@ -88,6 +83,30 @@ describe('mineflayer port actions', () => {
 
     port.say('hello')
     expect(bot.chats).toEqual(['hello'])
+  })
+
+  it('maps the persistent off-hand stance and releases it on endWrite', async () => {
+    const { port, source } = createPort()
+    const calls: boolean[] = []
+    ;(source as unknown as { offhandHold: (active: boolean) => unknown }).offhandHold = active => {
+      calls.push(active)
+      return { active, item: active ? 'shield' : null }
+    }
+    expect(await port.offhandHold?.(true)).toMatchObject({
+      state: 'ok',
+      observed: { active: true, item: 'shield' },
+    })
+    expect(calls).toEqual([true])
+    port.endWrite(writeToken(1))
+    expect(calls).toEqual([true, false])
+  })
+
+  it('reports OFFHAND_HOLD_UNSUPPORTED when the adapter has no stance', async () => {
+    const { port } = createPort()
+    expect(await port.offhandHold?.(true)).toMatchObject({
+      state: 'failed',
+      code: 'OFFHAND_HOLD_UNSUPPORTED',
+    })
   })
 
   it('equips the requested item before placing it', async () => {
@@ -298,7 +317,7 @@ describe('mineflayer port reads', () => {
       ])
   })
 
-  it('exposes entity yaw when the adapter has it', () => {
+  it('exposes entity yaw and velocity when the adapter has them', () => {
     const { port, bot } = createPort()
     ;(bot.entities as unknown as Record<number, unknown>)[9] = {
       id: 9,
@@ -306,12 +325,14 @@ describe('mineflayer port reads', () => {
       type: 'hostile',
       position: { x: 3, y: 64, z: 1 },
       yaw: 1.25,
+      velocity: { x: 0.1, y: 0, z: -0.2 },
     }
     expect(port.entities({ min: { x: 0, y: 0, z: 0 }, max: { x: 8, y: 128, z: 8 } }))
       .toContainEqual({
         id: '9',
         name: 'zombie',
         position: { x: 3, y: 64, z: 1 },
+        velocity: { x: 0.1, y: 0, z: -0.2 },
         yaw: 1.25,
         type: 'hostile',
       })

@@ -1,5 +1,7 @@
 # 运动模块（Motion）
 
+> **2026-11-10 终态**：Combat 由 50ms tick `CombatSession` 独占；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance，attack 不停止移动/不放下盾。`runMeleeCombat`、`combatStep`、`combatAdvance`、`moveTo` 战斗追击、旧 A/B 开关已删除；下文相关段落为历史记录。
+
 > 运动模块在真实服务端与当前适配器下执行原版移动/战斗语义；方块语义优先读服务端 block tags。当前边界：水默认 `swim`，梯子/藤蔓可上下，脚手架只作为支撑/放置方块（不做柱内攀爬与侧穿），不安装也不依赖客户端 mod。
 > 本文只描述运动模块的当前契约与实现边界。
 
@@ -305,10 +307,12 @@ interface Move {
 - `attackCooldown`：由当前攻击速度属性的 **final value**（base + 物品 modifiers）计算，不用固定毫秒；如铁剑 1.6 → 625ms。
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
 - `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。`reach` 来自 `attackReach?()`（玩家 `player.entity_interaction_range`，含物品 modifiers，默认 3）；带为 `[reach-0.8, reach-0.2]`，中值 `reach-0.5`，`tooClose=reach-1.4`。超出 `reach` 先接近（停距按 `desired + targetWidth/2`，不再固定 `reach-1`）；进入 `reach` 后按间距决策。
-- `spacing`：冷却窗口内 `decideCombatMove`（纯函数）在 `approach/hold/backoff/strafe-left/strafe-right` 中选择；`backoff` 只退到带边，`strafe` 在带内换角度。候选格由 attack driver 的 `standCells` 提供（3×3×3、`maxNodes:256`、dry、`feetY` 同层/下一层、`reachable:'yes'`、带内 eye→AABB），再用 `combatStep` 走**一个相邻格**（固定 yaw=目标瞄点，步进期间可举盾）。节流 250ms（无盾）/400ms（有盾）；剩余冷却 < 估计步长 + 100ms 时不起步。上一层候选回退 C 的 `moveTo`（`stepFallbacks`）；`combatStep` 不存在的适配器带内 hold。无安全格或步进失败时站桩继续，不产生 `ATTACK_*` 失败。语义是“保持交战间距”，不是撤离：不换目标、不找掩体、不出视线、不因低血退出。
-- `recheck`：冷却等待结束后、真正发 `attack` 前重新读目标准确认存在/名字/保护/死亡证据/距离/视线；等待期间移动、遮挡或死亡的目标不补刀。被复核拦下的挥击计 `rejectedSwings`，不消耗攻击预算。
-- `shield`：冷却 `wait >= 250ms`、目标在 `reach` 内且可见、副手有盾时，先 `lookAt` 再 `useItem({offhand:true,durationMs:min(wait,600)})`；长等待链式举盾。`useItem` 失败本场禁用举盾；`lookAt` 失败只跳过本次。
+- `guard`：自血下降后进入 `GUARD_MS=1000ms` 的原地保护窗（每次掉血刷新；要求副手有盾）。窗口内移动 `hold`，但攻击和盾照常；`distance < tooClose` 仍 backoff，`distance > reach` 仍 approach。退出条件为计时到期、无盾、目标丢失/死亡/job 结束。
+- `spacing`：`CombatSession` 每 50ms 用 `decideCombatMove` 选择 `approach/hold/backoff/strafe-left/strafe-right`；移动通过 `combatInput` 持久控制，body 保持到下一拍。目标不面向我们时不 strafe；同一方向保持 4 步后 `nextStrafeSide` 换向；连续 4 个攻击窗口无伤害时停止侧移，移动无进展只抑制侧移。没有 `combatStep`、`standCells` 选格或战斗 `moveTo`。
+- `movement safety`：`combat-input` provider 检查下一格的脚/头/支撑/液体/火/岩浆/仙人掌；不安全返回 `COMBAT_INPUT_BLOCKED`，session hold。1 格方向 + 每 tick 重新评估，不做 2 格 burst。
+- `shield`：`offhandHold(true)` 持久保持副手盾；进入 `preShieldRange`（默认 12）提前举起。attack 不停止移动、不放下盾；stop/endWrite/epoch/suspended/death/disconnect 释放。适配器没有 `offhandHold` 时 `shield:false`，不退回 timed useItem。
 - `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
+- `recheck`：冷却结束后、真正发 `attack` 前重新读目标；等待期间移动、遮挡或死亡的目标不补刀。每次挥击前 `lookAt`；失败不取消攻击。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
 - 当前不包含 sprint、远程、暴击。
 
@@ -321,8 +325,10 @@ interface Move {
 - `deathConfirmed`：观察到目标死亡（`entityDead`）。
 - `targetLost`：超出跟踪范围/卸载/视线丢失。
 - `rejectedSwings`：等待后的新鲜复核拦下的“本可发出”的挥击次数；只作证据，不改变终态。
-- `shieldUses`：成功完成的 offhand `useItem` 次数。
-- `shieldFailures`：offhand `useItem` 失败次数（不含 `lookAt` 失败）；本场失败后禁用举盾。
+- `shieldUses`：成功完成的 timed offhand `useItem` 次数。
+- `shieldFailures`：timed offhand `useItem` 失败次数（不含 `lookAt` 失败）；本场失败后禁用 timed 举盾。
+- `stanceRaises` / `stanceDrops` / `stanceReleaseFailures` / `shieldHeldMs`：持久 off-hand stance 的举起/放下/释放失败次数与累计持有时间。
+- `guardWindows` / `guardExits`：hurt guard 的决策窗口数与按计时退出次数。
 - `shieldAutoEquip`：attack driver 的自动换盾结果（`equipped`/`present`/`skipped`/`failed`/`no-shield`）。
 - `combatMoves` / `moveFailures` / `noSafeCell` / `strafeMoves` / `backoffMoves`：Step 2 间距移动的次数与失败；只作证据，不改变 `state/code`。
 - `shieldedSteps`：步进期间实际激活盾牌的 A-step 次数；`stepFallbacks`：上一层候选回退 C 的次数；`stepBlocked`：A-step 失败/无进展次数。

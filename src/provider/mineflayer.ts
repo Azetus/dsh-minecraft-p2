@@ -281,12 +281,19 @@ async function closeWindowQuietly(window: AnyWindow | null | undefined): Promise
 /** A pause is `suspended`, never a failed action. */
 export type ProviderSuspension = SuspensionState
 
+/**
+ * Shared, act-independent off-hand use state. Act handles read it so a managed
+ * stance is not mistaken for an unreleased per-act item use.
+ */
+type OffhandStance = { active: boolean }
+
 /** Query/act adapter over one connected Mineflayer bot. */
 export class MineflayerProvider {
   readonly providerId = PROVIDER_ID
   readonly providerVersion: string
 
   private current: ActHandle | undefined
+  private readonly offhandStance: OffhandStance = { active: false }
   private disconnected: Error | undefined
   private lastDisconnect: LastDisconnect | undefined
   private paused = false
@@ -346,6 +353,7 @@ export class MineflayerProvider {
     })
     bot.on('death', () => {
       this.bot.clearControlStates()
+      this.releaseOffhand()
       const position = this.bot.entity?.position
       this.lastDeath = {
         at: Date.now(),
@@ -364,10 +372,20 @@ export class MineflayerProvider {
     })
   }
 
+  /** Clear persistent combat inputs at write/authority boundaries. */
+  clearControls(): void {
+    try {
+      this.bot.clearControlStates()
+    } catch {
+      // The connection may already be gone; the next write also clears.
+    }
+  }
+
   private markDisconnected(error: Error): void {
     clearInterval(this.pauseTimer)
     this.disconnected = error
     this.bot.clearControlStates()
+    this.releaseOffhand()
     const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
     current?.abort?.(this.disconnected, 'CONNECTION_LOST')
   }
@@ -486,6 +504,7 @@ export class MineflayerProvider {
       this.packetsAtSuspend = this.timePackets
       this.ageChangesAtSuspend = this.ageChanges
       this.bot.clearControlStates()
+      this.releaseOffhand()
       const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
       current?.abort?.(new Error('server ticks are paused'), 'GAME_PAUSED')
       this.emitSuspension(true, now)
@@ -521,6 +540,7 @@ export class MineflayerProvider {
   private requestReset(): void {
     if (this.resetRequested || this.disconnected !== undefined) return
     this.resetRequested = true
+    this.releaseOffhand()
     this.recordDisconnect('reset', 'p2: act release unconfirmed; requesting body rebuild')
     try {
       this.bot.quit('p2: act release unconfirmed; requesting body rebuild')
@@ -564,6 +584,54 @@ export class MineflayerProvider {
       throw p2Error('RESCUE_COMMAND_INVALID', 'validation', 'rescue command is not a single chat command', { module: 'provider.mineflayer' })
     }
     this.bot.chat(command)
+  }
+
+  /**
+   * Hold (true) or release (false) the off-hand item without an act lifetime.
+   * The shared stance flag lets act handles tell a managed stance apart from
+   * their own item use, so ordinary stops keep their release semantics.
+   */
+  offhandHold(active: boolean): { active: boolean; item: string | null } {
+    if (this.disconnected !== undefined || this.resetRequested) {
+      const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
+      throw p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' })
+    }
+    if (this.paused) {
+      throw p2Error('GAME_PAUSED', 'environment', 'cannot hold the off hand while server ticks are paused', { module: 'provider.mineflayer' })
+    }
+    const slots = this.bot.inventory.slots as Array<{ name?: string } | null | undefined>
+    const offhand = slots[45]
+    const item = offhand !== null && offhand !== undefined && typeof offhand.name === 'string'
+      ? offhand.name
+      : null
+    if (active) {
+      if (item === null) {
+        throw p2Error('OFFHAND_EMPTY', 'validation', 'no off-hand item to hold', { module: 'provider.mineflayer' })
+      }
+      if (!this.offhandStance.active) {
+        this.bot.activateItem(true)
+        this.offhandStance.active = true
+      }
+      return { active: true, item }
+    }
+    if (this.offhandStance.active) {
+      this.bot.deactivateItem()
+      this.offhandStance.active = false
+    }
+    return { active: false, item }
+  }
+
+  offhandActive(): boolean {
+    return this.offhandStance.active
+  }
+
+  private releaseOffhand(): void {
+    try {
+      if (this.offhandStance.active) this.bot.deactivateItem()
+    } catch {
+      // The connection may already be gone; the server clears use state.
+    }
+    this.offhandStance.active = false
   }
 
   private entityView(entity: unknown, origin: { x: number; y: number; z: number } | undefined): {
@@ -1134,7 +1202,7 @@ export class MineflayerProvider {
     if (name !== 'stop' && this.current?.controlState?.() !== undefined && this.current.controlState() !== 'idle') {
       throw p2Error('STOP_UNCONFIRMED', 'runtime', 'previous act has not released control', { module: 'provider.mineflayer' })
     }
-    const handle = new MineflayerActHandle(name, args, this.bot, this.options)
+    const handle = new MineflayerActHandle(name, args, this.bot, this.offhandStance, this.options)
     this.current = handle
     return handle
   }
@@ -1165,9 +1233,6 @@ class MineflayerActHandle implements ActHandle {
   /** The async craft chain is still between recipes, so release is not proven. */
   private craftRunning = false
   private timer: ReturnType<typeof setTimeout> | undefined
-  private combatInterval: ReturnType<typeof setInterval> | undefined
-  private combatRelease: (() => void) | undefined
-  private combatShieldActive = false
   private readonly startedAt = Date.now()
   private motionRun: MotionRun | undefined
   private vanillaRun: VanillaRun | undefined
@@ -1178,6 +1243,7 @@ class MineflayerActHandle implements ActHandle {
     private readonly name: string,
     private readonly args: Record<string, JsonValue>,
     private readonly bot: Bot,
+    private readonly offhandStance: OffhandStance,
     private readonly options: Required<MineflayerProviderOptions>,
   ) {
     this.run()
@@ -1262,6 +1328,44 @@ class MineflayerActHandle implements ActHandle {
    * `abort()` share it so a timeout, a death or a connection loss leave the
    * same observable state instead of an act-specific residue.
    */
+  /**
+   * Conservative local gate for the next movement cell. It rejects a solid
+   * feet/head cell, an unsupported edge, and liquid/fire hazards.
+   */
+  private moveCellSafe(
+    from: Vec3,
+    yaw: number,
+    movement: { forward: boolean; back: boolean; left: boolean; right: boolean },
+  ): boolean {
+    const forward = (movement.forward ? 1 : 0) - (movement.back ? 1 : 0)
+    const right = (movement.right ? 1 : 0) - (movement.left ? 1 : 0)
+    if (forward === 0 && right === 0) return true
+    const faceX = -Math.sin(yaw)
+    const faceZ = -Math.cos(yaw)
+    const rightX = Math.cos(yaw)
+    const rightZ = -Math.sin(yaw)
+    const dx = faceX * forward + rightX * right
+    const dz = faceZ * forward + rightZ * right
+    const length = Math.hypot(dx, dz)
+    if (length < 1e-6) return true
+    const aheadX = Math.floor(from.x + (dx / length) * 0.7)
+    const aheadZ = Math.floor(from.z + (dz / length) * 0.7)
+    const feetY = Math.floor(from.y)
+    const aheadFeet = this.bot.blockAt(new Vec3(aheadX, feetY, aheadZ))
+    const aheadHead = this.bot.blockAt(new Vec3(aheadX, feetY + 1, aheadZ))
+    const aheadBelow = this.bot.blockAt(new Vec3(aheadX, feetY - 1, aheadZ))
+    if (aheadFeet === null || aheadHead === null || aheadBelow === null) return false
+    const passable = (block: { boundingBox?: string }): boolean => block.boundingBox === 'empty'
+    const supported = (block: { boundingBox?: string }): boolean => block.boundingBox !== 'empty'
+    const hazard = /^(?:lava|water|fire|soul_fire|cactus|magma_block|sweet_berry_bush|powder_snow)$/u
+    return passable(aheadFeet)
+      && passable(aheadHead)
+      && supported(aheadBelow)
+      && !hazard.test(aheadFeet.name)
+      && !hazard.test(aheadHead.name)
+      && !hazard.test(aheadBelow.name)
+  }
+
   private forceAbort(): void {
     let unknown = false
     const attempt = (fn: () => void): void => {
@@ -1273,17 +1377,6 @@ class MineflayerActHandle implements ActHandle {
       }
     }
     if (this.timer !== undefined) clearTimeout(this.timer)
-    if (this.combatInterval !== undefined) {
-      clearInterval(this.combatInterval)
-      this.combatInterval = undefined
-    }
-    if (this.name === 'combat-step') {
-      if (this.combatShieldActive) {
-        attempt(() => this.bot.deactivateItem())
-        this.combatShieldActive = false
-      }
-      this.combatRelease = undefined
-    }
     if (this.name === 'dig') {
       attempt(() => this.bot.stopDigging())
       attempt(() => { (this.bot as unknown as { targetDigBlock: unknown }).targetDigBlock = null })
@@ -1382,9 +1475,11 @@ class MineflayerActHandle implements ActHandle {
         if (getControlState.call(this.bot, state) === true) return false
       }
     }
-    // A combat step may still be holding the shield; release is unconfirmed
-    // until the client reports the item use ended.
-    if ((this.bot as unknown as { usingHeldItem?: boolean }).usingHeldItem === true) return false
+    // A managed off-hand stance is intentionally held across acts; only the
+    // act's own item use must be released before this handle reports idle.
+    if (!this.offhandStance.active
+      && (this.name === 'use' || this.name === 'fish')
+      && (this.bot as unknown as { usingHeldItem?: boolean }).usingHeldItem === true) return false
     return true
   }
 
@@ -1917,142 +2012,40 @@ class MineflayerActHandle implements ActHandle {
           }, duration)
           return
         }
-        case 'combat-step': {
-          const x = typeof this.args.x === 'number' ? this.args.x : undefined
-          const y = typeof this.args.y === 'number' ? this.args.y : undefined
-          const z = typeof this.args.z === 'number' ? this.args.z : undefined
+        case 'combat-input': {
           const faceX = typeof this.args.faceX === 'number' ? this.args.faceX : undefined
+          const faceY = typeof this.args.faceY === 'number' ? this.args.faceY : undefined
           const faceZ = typeof this.args.faceZ === 'number' ? this.args.faceZ : undefined
-          if (x === undefined || y === undefined || z === undefined || faceX === undefined || faceZ === undefined) {
-            this.failed = new Error('combat-step requires numeric x/y/z and faceX/faceZ')
+          if (faceX === undefined || faceY === undefined || faceZ === undefined) {
+            this.failed = new Error('combat-input requires numeric faceX/faceY/faceZ')
             this.failedCode = 'BAD_ARGS'
             return
           }
           const from = this.bot.entity.position
-          const cell = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
-          const chebyshev = Math.max(
-            Math.abs(cell.x - Math.floor(from.x)),
-            Math.abs(cell.z - Math.floor(from.z)),
-          )
-          if (chebyshev !== 1) {
-            this.failed = new Error(`combat-step target is not adjacent (chebyshev ${chebyshev})`)
-            this.failedCode = 'COMBAT_STEP_INVALID_CELL'
-            return
+          const yaw = Math.atan2(-(faceX - from.x), -(faceZ - from.z))
+          const desired = {
+            forward: this.args.forward === true,
+            back: this.args.back === true,
+            left: this.args.left === true,
+            right: this.args.right === true,
           }
-          const feetDelta = y - from.y
-          if (feetDelta > 0.6 || feetDelta < -1.6) {
-            this.failed = new Error(`combat-step height ${feetDelta.toFixed(2)} is not supported`)
-            this.failedCode = 'COMBAT_STEP_UNSUPPORTED_HEIGHT'
-            return
-          }
-          const faceYaw = Math.atan2(-(faceX - from.x), -(faceZ - from.z))
-          const faceDirX = -Math.sin(faceYaw)
-          const faceDirZ = -Math.cos(faceYaw)
-          const rightDirX = Math.cos(faceYaw)
-          const rightDirZ = -Math.sin(faceYaw)
-          const toX = cell.x + 0.5 - from.x
-          const toZ = cell.z + 0.5 - from.z
-          const length = Math.hypot(toX, toZ) || 1
-          const forwardComponent = (toX / length) * faceDirX + (toZ / length) * faceDirZ
-          const rightComponent = (toX / length) * rightDirX + (toZ / length) * rightDirZ
-          const controls: Array<'forward' | 'back' | 'left' | 'right'> = []
-          if (forwardComponent > 0.25) controls.push('forward')
-          else if (forwardComponent < -0.25) controls.push('back')
-          if (rightComponent > 0.25) controls.push('right')
-          else if (rightComponent < -0.25) controls.push('left')
-          if (controls.length === 0) controls.push('forward')
-          const holdShield = this.args.shield === true
-          const timeoutMs = typeof this.args.timeoutMs === 'number'
-            ? Math.max(100, Math.min(3_000, this.args.timeoutMs))
-            : 900
-          const startedAt = Date.now()
-          const startPos = { x: from.x, y: from.y, z: from.z }
-          let lastPos = { x: from.x, y: from.y, z: from.z }
-          let lastProgressAt = startedAt
-          let shieldUsed = false
-          const release = (): void => {
-            try { this.bot.clearControlStates() } catch { /* connection may be gone */ }
-            if (this.combatShieldActive) {
-              try { this.bot.deactivateItem() } catch { /* connection may be gone */ }
-              this.combatShieldActive = false
-            }
-            this.combatRelease = undefined
-          }
-          const finish = (failed?: string): void => {
-            if (this.completed || this.failed !== undefined) return
-            if (this.combatInterval !== undefined) {
-              clearInterval(this.combatInterval)
-              this.combatInterval = undefined
-            }
-            if (this.timer !== undefined) {
-              clearTimeout(this.timer)
-              this.timer = undefined
-            }
-            release()
-            const pos = this.bot.entity.position
-            const observed = {
-              from: startPos,
-              to: { x: pos.x, y: pos.y, z: pos.z },
-              shieldUsed,
-              elapsedMs: Date.now() - startedAt,
-            }
-            if (failed !== undefined) {
-              this.failed = new Error(`combat-step ${failed}`)
-              this.failedCode = failed
+          void this.bot.look(yaw, 0, true).then(() => {
+            if (this.stopRequested || this.completed || this.failed !== undefined) return
+            if (!this.moveCellSafe(from, yaw, desired)) {
+              this.bot.clearControlStates()
+              this.failed = new Error('combat-input next cell is not safe')
+              this.failedCode = 'COMBAT_INPUT_BLOCKED'
               return
             }
-            this.result = observed
-            this.completed = true
-          }
-          this.combatRelease = release
-          const startControls = (): void => {
-            if (this.completed || this.failed !== undefined) return
-            for (const control of controls) this.bot.setControlState(control, true)
-            this.combatInterval = setInterval(() => {
-              if (this.completed || this.failed !== undefined) return
-              const pos = this.bot.entity.position
-              const moved = Math.hypot(pos.x - lastPos.x, pos.y - lastPos.y, pos.z - lastPos.z)
-              if (moved > 0.05) {
-                lastPos = { x: pos.x, y: pos.y, z: pos.z }
-                lastProgressAt = Date.now()
-              }
-              if (Math.hypot(pos.x - (cell.x + 0.5), pos.z - (cell.z + 0.5)) <= 0.5
-                && Math.abs(pos.y - y) <= 0.7) {
-                finish()
-                return
-              }
-              if (Date.now() - lastProgressAt > 300) {
-                finish('COMBAT_STEP_NO_PROGRESS')
-                return
-              }
-              const block = this.bot.blockAt(new Vec3(cell.x, cell.y, cell.z))
-              if (block !== null && ['lava', 'water', 'fire', 'soul_fire'].includes(block.name)) {
-                finish('COMBAT_STEP_UNSAFE')
-              }
-            }, 50)
-            this.timer = setTimeout(() => finish('COMBAT_STEP_TIMEOUT'), timeoutMs)
-          }
-          void this.bot.look(faceYaw, 0, true).then(() => {
-            if (this.completed || this.failed !== undefined) return
-            if (holdShield) {
-              const offhand = this.bot.inventory.slots[45]
-              if (offhand !== null && offhand !== undefined && /shield/u.test(offhand.name)) {
-                try {
-                  this.bot.activateItem(true)
-                  shieldUsed = true
-                  this.combatShieldActive = true
-                } catch {
-                  shieldUsed = false
-                }
-              }
+            for (const control of ['forward', 'back', 'left', 'right'] as const) {
+              this.bot.setControlState(control, desired[control])
             }
-            // Let the server see the block state before the body starts moving.
-            if (shieldUsed) this.timer = setTimeout(startControls, 50)
-            else startControls()
+            this.result = { ...desired, yaw }
+            this.completed = true
           }).catch((error: unknown) => {
-            release()
+            this.bot.clearControlStates()
             this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = 'COMBAT_STEP_LOOK_FAILED'
+            this.failedCode = 'COMBAT_INPUT_LOOK_FAILED'
           })
           return
         }
