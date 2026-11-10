@@ -43,6 +43,8 @@ export type CombatPort = {
   attackSpeed(): number
   reach?(): number
   attack(id: string): Promise<CombatAction>
+  /** Navigation fallback for a target that is out of sight, not normal combat. */
+  navigateTo?(pos: Vec3, range: number, timeoutMs: number): Promise<CombatAction>
   /** Persistent movement controls, updated by the 50ms tick. */
   combatInput?(opts: CombatInput): Promise<CombatAction>
   lookAt?(pos: Vec3): Promise<CombatAction>
@@ -82,6 +84,8 @@ export type MeleeOptions = {
   creeperBackpedal?: boolean
   /** LOS recovery budget before ATTACK_NO_LINE_OF_SIGHT (default 40 ticks). */
   losRecoveryTicks?: number
+  /** Optional engagement leash from the session start (blocks/targets). */
+  chaseLeash?: number
   /** A fight engagement resolves when no allowed target remains alive. */
   engagement?: boolean
 }
@@ -95,6 +99,10 @@ export type MeleeResult = {
     targets: string[]
     kills: number
     neutralized: number
+    escaped: number
+    resolution: 'killed' | 'neutralized' | 'escaped' | 'lost' | 'protected' | 'unresolved'
+    resolved: boolean
+    retryable: boolean
     targetSwitches: number
     lostTargets: number
     threatCount: number

@@ -34,6 +34,7 @@ type Fake = {
   setSelfHealth: (health: number) => void
   hurt: (id: string) => void
   dead: (id: string) => void
+  explode: (pos: { x: number; y: number; z: number }, radius?: number) => void
 }
 
 function fakePort(options: {
@@ -51,6 +52,7 @@ function fakePort(options: {
   let attacks = 0
   const hurtListeners = new Set<(id: string) => void>()
   const deadListeners = new Set<(id: string) => void>()
+  const explosionListeners = new Set<(pos: { x: number; y: number; z: number }, radius?: number) => void>()
   const emitHurt = (id: string): void => { for (const cb of hurtListeners) cb(id) }
   const emitDead = (id: string): void => { for (const cb of deadListeners) cb(id) }
   const port: CombatPort = {
@@ -92,6 +94,10 @@ function fakePort(options: {
       deadListeners.add(cb)
       return () => deadListeners.delete(cb)
     },
+    onExplosion: cb => {
+      explosionListeners.add(cb)
+      return () => explosionListeners.delete(cb)
+    },
   }
   return {
     port,
@@ -102,6 +108,9 @@ function fakePort(options: {
     setSelfHealth: value => { self = { ...self, health: value } },
     hurt: id => emitHurt(id),
     dead: id => emitDead(id),
+    explode: (pos, radius) => {
+      for (const cb of explosionListeners) cb(pos, radius)
+    },
   }
 }
 
@@ -335,5 +344,43 @@ describe('CombatSession tick', () => {
       await sleep(0)
     }
     expect(fake.inputs.some(input => input.left === true || input.right === true)).toBe(true)
+  })
+
+  it('marks an explicit creeper explosion as neutralized, not killed', async () => {
+    const fake = fakePort({ target: zombie(2.5, { name: 'creeper' }), killOnAttack: false })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
+    session.tick()
+    await sleep(0)
+    fake.explode({ x: 2.5, y: 64, z: 0.5 }, 3)
+    await sleep(0)
+    expect(session.result()).toMatchObject({
+      state: 'failed',
+      code: 'ATTACK_TARGET_NEUTRALIZED',
+      observed: { killed: false, resolution: 'neutralized', resolved: true, retryable: false, neutralized: 1 },
+    })
+  })
+
+  it('resolves an engagement when all allowed targets are gone', async () => {
+    const fake = fakePort()
+    fake.setTarget(undefined)
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, engagement: true })
+    session.tick()
+    await sleep(0)
+    expect(session.result()).toMatchObject({
+      state: 'succeeded',
+      code: 'ATTACK_TARGETS_RESOLVED',
+      observed: { killed: false, resolution: 'lost', resolved: true, retryable: false },
+    })
+  })
+
+  it('honors an optional chase leash', async () => {
+    const fake = fakePort({ target: zombie(20), killOnAttack: false })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, chaseLeash: 5 })
+    await run(session)
+    expect(session.result()).toMatchObject({
+      state: 'failed',
+      code: 'ATTACK_CHASE_LIMIT',
+      observed: { resolved: false, retryable: true },
+    })
   })
 })

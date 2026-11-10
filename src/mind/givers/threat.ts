@@ -65,7 +65,14 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         // Keep the lock through short observation gaps. The attack driver owns
         // target location/line-of-sight; yielding here would let escape/base
         // preempt and restart the same engagement in a loop.
-        return candidate(lock.entityId, lock.name, lock.lastPos, engagementIds(world, self.pos, policy, lock.entityId))
+        const fightNow = policy().fight
+        return candidate(
+          lock.entityId,
+          lock.name,
+          lock.lastPos,
+          engagementIds(world, self.pos, policy, lock.entityId),
+          fightNow === null ? undefined : fightNow.leash,
+        )
       }
 
       if (ctx.now < cooldownUntil) return null
@@ -98,7 +105,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         origin: { x: self.pos.x, y: self.pos.y, z: self.pos.z },
         lastPos: best.position,
       }
-      return candidate(best.id, best.name, best.position, ids)
+      return candidate(best.id, best.name, best.position, ids, fight.leash)
     },
     noteTerminal(event: FightTerminal): void {
       const entityId = event.keys.slice('threat.fight:'.length)
@@ -124,7 +131,13 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
   }
 }
 
-function candidate(entityId: string, name: string, position: Vec3, entityIds: string[] = []): Candidate {
+function candidate(
+  entityId: string,
+  name: string,
+  position: Vec3,
+  entityIds: string[] = [],
+  chaseLeash?: number,
+): Candidate {
   const targets = [...new Set([entityId, ...entityIds])].slice(0, 8)
   return {
     driverId: 'attack',
@@ -133,7 +146,8 @@ function candidate(entityId: string, name: string, position: Vec3, entityIds: st
       entityId,
       entityIds: targets,
       engagement: true,
-      targetName: name,
+      ...(targets.length === 1 ? { targetName: name } : {}),
+      ...(chaseLeash === undefined ? {} : { chaseLeash }),
       continuationKey: `threat.fight:${entityId}`,
     },
     keys: `threat.fight:${entityId}`,

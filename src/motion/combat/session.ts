@@ -51,13 +51,17 @@ export class CombatSession {
   private readonly shieldSupported: boolean
   private readonly targetIds: string[]
   private currentTargetId: string
+  private readonly startOrigin: Vec3
+  private readonly chaseLeash: number | undefined
   private readonly deadTargets = new Set<string>()
   private readonly neutralizedTargets = new Set<string>()
+  private readonly escapedTargets = new Set<string>()
   private readonly lostTargets = new Set<string>()
   private readonly protectedTargets = new Set<string>()
   private targetSwitches = 0
   private readonly lastSeen = new Map<string, Vec3>()
   private readonly losTicks = new Map<string, number>()
+  private readonly lastNavigateAt = new Map<string, number>()
   private threatCount = 0
   private rangedThreat = false
   private explosionThreat = false
@@ -108,6 +112,8 @@ export class CombatSession {
     this.startedAt = port.now()
     this.lastHealth = port.self().health
     this.lastPos = { ...port.self().pos }
+    this.startOrigin = { ...port.self().pos }
+    this.chaseLeash = options.chaseLeash
     this.reach = clampReach(options.reach ?? port.reach?.() ?? DEFAULT_REACH)
     this.band = engageBand(this.reach)
     this.tooClose = tooCloseFor(this.reach)
@@ -208,6 +214,8 @@ export class CombatSession {
       targets: [...this.targetIds],
       kills: this.deadTargets.size,
       neutralized: this.neutralizedTargets.size,
+      escaped: this.escapedTargets.size,
+      ...this.resolution(code),
       targetSwitches: this.targetSwitches,
       lostTargets: this.lostTargets.size,
       threatCount: this.threatCount,
@@ -394,8 +402,25 @@ export class CombatSession {
     return this.targetIds.every(id =>
       this.deadTargets.has(id)
       || this.neutralizedTargets.has(id)
+      || this.escapedTargets.has(id)
       || this.lostTargets.has(id)
       || this.protectedTargets.has(id))
+  }
+
+  private resolution(code?: string): Pick<MeleeResult['observed'], 'resolution' | 'resolved' | 'retryable'> {
+    if (this.state === 'succeeded') {
+      if (this.allTargetsDead()) return { resolution: 'killed', resolved: true, retryable: false }
+      if (this.neutralizedTargets.size > 0) return { resolution: 'neutralized', resolved: true, retryable: false }
+      if (this.escapedTargets.size > 0) return { resolution: 'escaped', resolved: true, retryable: false }
+      if (this.lostTargets.size > 0) return { resolution: 'lost', resolved: true, retryable: false }
+      return { resolution: 'killed', resolved: true, retryable: false }
+    }
+    if (code === 'ATTACK_TARGET_NEUTRALIZED') return { resolution: 'neutralized', resolved: true, retryable: false }
+    if (code === 'ATTACK_TARGET_PROTECTED') return { resolution: 'protected', resolved: true, retryable: false }
+    if (code === 'ATTACK_TARGET_LOST') {
+      return { resolution: 'lost', resolved: true, retryable: this.options.engagement !== true }
+    }
+    return { resolution: 'unresolved', resolved: false, retryable: true }
   }
 
   /** Engagement semantics: no live target left, even if not every one was killed. */
@@ -417,6 +442,7 @@ export class CombatSession {
     for (const id of this.targetIds) {
       if (this.deadTargets.has(id)
         || this.neutralizedTargets.has(id)
+        || this.escapedTargets.has(id)
         || this.lostTargets.has(id)
         || this.protectedTargets.has(id)) continue
       const entity = this.port.entity(id)
@@ -457,6 +483,7 @@ export class CombatSession {
     for (const id of this.targetIds) {
       if (this.deadTargets.has(id)
         || this.neutralizedTargets.has(id)
+        || this.escapedTargets.has(id)
         || this.lostTargets.has(id)
         || this.protectedTargets.has(id)) continue
       const entity = this.port.entity(id)
@@ -495,12 +522,28 @@ export class CombatSession {
     }
     if (self.health < this.lastHealth) this.lastHurtAt = now
     this.lastHealth = self.health
+    if (this.chaseLeash !== undefined
+      && Math.hypot(self.pos.x - this.startOrigin.x, self.pos.z - this.startOrigin.z) > this.chaseLeash) {
+      this.finish('failed', 'ATTACK_CHASE_LIMIT', 'chase leash exceeded')
+      return
+    }
 
     const entity = this.port.entity(this.currentTargetId)
     if (entity === undefined) {
       this.lostTargets.add(this.currentTargetId)
       if (this.finishIfResolved()) return
       if (!this.advanceTarget()) return
+      return
+    }
+    if (this.chaseLeash !== undefined
+      && Math.hypot(entity.position.x - this.startOrigin.x, entity.position.z - this.startOrigin.z) > this.chaseLeash) {
+      if (this.options.engagement === true) {
+        this.escapedTargets.add(this.currentTargetId)
+        if (this.finishIfResolved()) return
+        if (!this.advanceTarget()) return
+        return
+      }
+      this.finish('failed', 'ATTACK_CHASE_LIMIT', 'target left chase leash')
       return
     }
     if (this.options.targetName !== undefined && entity.name !== this.options.targetName) {
@@ -573,6 +616,18 @@ export class CombatSession {
       this.losTicks.set(this.currentTargetId, ticks)
       if (ticks > (this.options.losRecoveryTicks ?? 40)) {
         this.finish('failed', 'ATTACK_NO_LINE_OF_SIGHT', 'LOS recovery budget')
+        return
+      }
+      const lastNav = this.lastNavigateAt.get(this.currentTargetId) ?? 0
+      if (ticks >= 10
+        && this.port.navigateTo !== undefined
+        && now - lastNav >= 1_000) {
+        this.lastNavigateAt.set(this.currentTargetId, now)
+        const point = this.lastSeen.get(this.currentTargetId) ?? entity.position
+        const moved = await this.port.navigateTo(point, 2, 500)
+        if (moved.state === 'ok') {
+          this.losTicks.set(this.currentTargetId, 0)
+        }
         return
       }
       decision = this.options.movement === false

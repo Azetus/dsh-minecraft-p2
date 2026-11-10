@@ -27,8 +27,8 @@ const ATTACK_SCHEMA: SchemaNode = {
     allowAny: { type: 'boolean' },
     /** Bounded entity lookup box for a far explicit target; default 32. */
     locateRadius: { type: 'number', minimum: 8, maximum: 64 },
-    /** Kept for order compatibility; no longer drives a separate chase. */
-    maxChases: { type: 'integer', minimum: 1, maximum: 64 },
+    /** Optional distance leash from the order start. */
+    chaseLeash: { type: 'number', minimum: 2, maximum: 256 },
     /** Internal candidate keys, so a hot constant tree can renew instead of preempt. */
     continuationKey: { type: 'string' },
     /** Deprecated compatibility flag; explicit orders now use allowAny. */
@@ -46,7 +46,7 @@ type AttackParams = {
   orderId?: string
   allowAny?: boolean
   locateRadius?: number
-  maxChases?: number
+  chaseLeash?: number
   continuationKey?: string
   allowPassive?: boolean
 }
@@ -103,6 +103,7 @@ async function prepareCombat(
   const options: MeleeOptions = {
     targetIds: [...new Set([params.entityId, ...(params.entityIds ?? [])])],
     ...(params.engagement === true ? { engagement: true } : {}),
+    ...(params.chaseLeash === undefined ? {} : { chaseLeash: params.chaseLeash }),
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
     ...(params.allowAny === true ? { allowAny: true } : {}),
     ...(params.allowPassive === true ? { allowPassive: true } : {}),
@@ -131,6 +132,12 @@ function combatPort(port: BodyApi, locateRadius: number): CombatPort {
     attackSpeed: () => port.attackSpeed?.() ?? 4,
     ...(port.attackReach === undefined ? {} : { reach: () => port.attackReach!() }),
     attack: id => asAction(port.attack(id)),
+    ...(port.moveTo === undefined
+      ? {}
+      : {
+          navigateTo: (pos: Vec3, range: number, timeoutMs: number) =>
+            asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
+        }),
     ...(port.combatInput === undefined
       ? {}
       : {

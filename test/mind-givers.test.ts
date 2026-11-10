@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
 import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
+import { createThreatFightGiver } from '../src/mind/givers/threat.ts'
+import { defaultReactionPolicy } from '../src/mind/reaction-policy.ts'
 import { createDigOrderGiver } from '../src/mind/givers/dig.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../src/mind/givers/orders.ts'
 import { MAIN_TREE } from '../src/mind/trees.ts'
@@ -280,6 +282,26 @@ describe('order and traverse givers', () => {
       driverId: 'dig',
       params: { x: 2, y: 64, z: 0, purpose: 'clear' },
     })
+  })
+
+  it('passes a threat.fight engagement target set and leash', () => {
+    const policy = defaultReactionPolicy()
+    policy.fight = { allowedTargets: [], retreatHealth: 8, radius: 8, leash: 12 }
+    const giver = createThreatFightGiver(() => policy)
+    const candidate = asCandidate(giver.find(ctx, flatWorld({
+      entities: [
+        { id: 'z1', name: 'zombie', type: 'hostile', kind: 'Hostile mobs', position: { x: 2, y: 64, z: 0 } },
+        { id: 's1', name: 'skeleton', type: 'hostile', kind: 'Hostile mobs', position: { x: 3, y: 64, z: 1 } },
+        { id: 'c1', name: 'creeper', type: 'hostile', kind: 'Hostile mobs', position: { x: 4, y: 64, z: 0 } },
+      ],
+    })))
+    expect(candidate.driverId).toBe('attack')
+    expect(candidate.params).toMatchObject({ engagement: true, chaseLeash: 12 })
+    expect(Array.isArray(candidate.params.entityIds)).toBe(true)
+    // creeper is in the auto-avoid set, so threat.fight must not include it.
+    expect((candidate.params.entityIds as string[]).length).toBe(2)
+    expect(candidate.params.entityIds).not.toContain('c1')
+    expect(candidate.params).not.toHaveProperty('targetName')
   })
 
   it('passes a bounded dig tunnel through with its target and bounds', () => {

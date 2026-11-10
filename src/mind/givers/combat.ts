@@ -41,8 +41,8 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
           orderId: current.order.id,
           allowAny: true,
           locateRadius: ATTACK_ACQUIRE_RADIUS,
-          ...(typeof current.order.params?.maxChases === 'number'
-            ? { maxChases: current.order.params.maxChases }
+          ...(typeof current.order.params?.chaseLeash === 'number'
+            ? { chaseLeash: current.order.params.chaseLeash }
             : {}),
           continuationKey: `order.attack:${current.order.id}:${entity.id}`,
         },
