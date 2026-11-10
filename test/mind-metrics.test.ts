@@ -25,7 +25,7 @@ describe('run metrics', () => {
     metrics.record('order.terminal', { orderId: 'a', state: 'blocked' }, 5)
     metrics.record('order.accepted', { orderId: 'b' }, 6)
     metrics.record('job.started', { runId: 'r2' }, 7)
-    metrics.record('job.terminal', { state: 'succeeded' }, 8)
+    metrics.record('job.terminal', { state: 'succeeded', code: 'ATTACK_TARGETS_RESOLVED' }, 8)
     metrics.record('order.terminal', { orderId: 'b', state: 'succeeded' }, 9)
 
     const view = metrics.view()

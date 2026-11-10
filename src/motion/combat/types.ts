@@ -49,8 +49,6 @@ export type CombatPort = {
     code?: string
     path?: Vec3[]
   }>
-  /** Navigation fallback for a target that is out of sight, not normal combat. */
-  navigateTo?(pos: Vec3, range: number, timeoutMs: number): Promise<CombatAction>
   /** Persistent movement controls, updated by the 50ms tick. */
   combatInput?(opts: CombatInput): Promise<CombatAction>
   lookAt?(pos: Vec3): Promise<CombatAction>

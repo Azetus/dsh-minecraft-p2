@@ -36,7 +36,10 @@ export class MindMetrics {
       else if (state === 'failed') this.jobs.failed += 1
       if (value.retry === true) this.jobs.retried += 1
       const code = typeof value.code === 'string' ? value.code : undefined
-      if (code !== undefined) {
+      // A successful job may carry an informational terminal code (for
+      // example ATTACK_TARGETS_RESOLVED). It is not a failure and must not
+      // poison lastFailure or the failure-code table.
+      if (state !== 'succeeded' && code !== undefined) {
         this.failureCodes[code] = (this.failureCodes[code] ?? 0) + 1
         this.lastFailure = classifyFailure(code)
       }

@@ -138,12 +138,6 @@ function combatPort(port: BodyApi, locateRadius: number): CombatPort {
           pathTo: (pos: Vec3, range: number, timeoutMs: number) =>
             port.pathTo!(pos, range, timeoutMs),
         }),
-    ...(port.moveTo === undefined
-      ? {}
-      : {
-          navigateTo: (pos: Vec3, range: number, timeoutMs: number) =>
-            asAction(port.moveTo(pos, { range, intent: 'attack', timeoutMs })),
-        }),
     ...(port.combatInput === undefined
       ? {}
       : {

@@ -274,6 +274,24 @@ describe('order and traverse givers', () => {
     expect(attack.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
+  it('terminates an explicit attack target that was seen and then vanished', () => {
+    const attack = createAttackOrderGiver(() => ({
+      order: { id: 'a-lost', verb: 'attack', params: { entityId: 'zombie-1' } },
+    }))
+    const seen = flatWorld({
+      entities: [{ id: 'zombie-1', name: 'zombie', type: 'hostile', position: { x: 2, y: 64, z: 0 } }],
+    })
+    expect(attack.find({ ...ctx, now: 1_000 }, seen)).toMatchObject({ driverId: 'attack' })
+    expect(attack.find({ ...ctx, now: 2_000 }, flatWorld())).toMatchObject({
+      kind: 'hold',
+      reason: 'ATTACK_TARGET_LOST',
+    })
+    expect(attack.find({ ...ctx, now: 7_000 }, flatWorld())).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 'zombie-1' },
+    })
+  })
+
   it('passes the dig purpose through to the driver', () => {
     const dig = createDigOrderGiver(() => ({
       order: { id: 'd-1', verb: 'dig', params: { x: 2, y: 64, z: 0, purpose: 'clear' } },

@@ -676,17 +676,6 @@ export class CombatSession {
           return
         }
       }
-      if (ticks >= 10
-        && this.port.navigateTo !== undefined
-        && now - lastNav >= 1_000) {
-        this.lastNavigateAt.set(this.currentTargetId, now)
-        const point = this.lastSeen.get(this.currentTargetId) ?? entity.position
-        const moved = await this.port.navigateTo(point, 2, 500)
-        if (moved.state === 'ok') {
-          this.losTicks.set(this.currentTargetId, 0)
-        }
-        return
-      }
       decision = this.options.movement === false
         ? 'hold'
         : distance > this.tooClose ? 'approach' : 'backoff'
