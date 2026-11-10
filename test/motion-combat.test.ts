@@ -239,15 +239,19 @@ describe('CombatSession tick', () => {
     expect(session.result()?.code).toBe('ATTACK_NO_APPROACH')
   })
 
+  // Category: state safety.
+  // Protects: CONTRACTS.md target set / CombatSession terminal state.
+  // Failure mode: target switch stalls in running after the first death.
   it('switches to the next allowed target when the first dies', async () => {
     const targets = new Map<string, CombatEntity>([
       ['z1', zombie(6)],
       ['z2', zombie(4)],
     ])
     let self = { pos: { x: 0.5, y: 64, z: 0.5 }, health: 20, height: 1.8 }
+    let now = 0
     const deadListeners = new Set<(id: string) => void>()
     const port: CombatPort = {
-      now: () => Date.now(),
+      now: () => now,
       self: () => self,
       entity: id => targets.get(id),
       canSee: () => true,
@@ -270,7 +274,11 @@ describe('CombatSession tick', () => {
       },
     }
     const session = new CombatSession(port, ['z1', 'z2'], { totalMs: 5_000, shield: false })
-    await run(session)
+    for (let index = 0; index < 60 && session.state === 'running'; index += 1) {
+      session.tick()
+      now += 50
+      await Promise.resolve()
+    }
     expect(session.state).toBe('succeeded')
     expect(session.result()?.observed.kills).toBe(2)
     expect(session.result()?.observed.targetSwitches).toBeGreaterThanOrEqual(1)
