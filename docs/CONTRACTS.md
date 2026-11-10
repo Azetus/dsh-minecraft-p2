@@ -1,6 +1,6 @@
 # 契约（P2Mind）
 
-> **2026-11-10 终态**：Combat 只有一个实现——50ms tick 的 `CombatSession`，由 `CombatSessionHandle` 的 `DriverHandle.tick()` 驱动。移动用 `combatInput` 持久控制、盾用 `offhandHold` 持久 stance；attack 不停止移动、不放下盾。`runMeleeCombat`、`combatStep`、`combatAdvance`、旧 A/B 开关已删除；下文出现这些名字的段落为历史记录，不再是 API。
+> **当前实现**：Combat 只有一个实现——50ms tick 的 `CombatSession`，由 `CombatSessionHandle` 的 `DriverHandle.tick()` 驱动。移动用 `combatInput` 持久控制、盾用 `offhandHold` 持久 stance；attack 不停止移动、不放下盾。
 
 > 设计背景见 [P2Mind](runtime/P2MIND.md)。本文只列可实现的接口与不变量。
 
@@ -148,18 +148,18 @@ type BodyApi = {
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`，可选 `entityIds` 扩展为允许的目标集合；`threat.fight` 以 `engagement:true` 传入一次 engagement 的集合，`attack` order 保持单目标严格 kill。`maxChases` 已删除（旧的 pathfinder 次数语义不适用于 tick 控制），改用可选 `chaseLeash`（从 order 起点算的水平距离）。战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
+- `attack` 锁定 `entityId`，可选 `entityIds` 扩展为允许的目标集合；`threat.fight` 以 `engagement:true` 传入一次 engagement 的集合，`attack` order 保持单目标严格 kill。追击距离由可选 `chaseLeash`（从 order 起点算的水平距离）限制；战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear` 使用手动手持，不自动切换；动作启动后恢复自动。
 - **CombatSession（唯一实现）**：每 50ms tick 读取 self/target/health/cooldown，维护 `entityId + entityIds` 允许集合；只在集合内选主目标，当前目标死亡/丢失/受保护时切到最近可用目标，带 `targetSwitches` 证据，不自行扩大集合。移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance。attack/lookAt 是短动作，**不停止移动、不放下盾**；`lookAt` 失败不取消攻击。
-- **LOS 恢复**：`canSee=false` 时不立即失败；向目标/最后可见位置短距重定位，`losRecoveryTicks`（默认 40）预算内恢复视线；超时才报 `ATTACK_NO_LINE_OF_SIGHT`。
+- **LOS 恢复**：`canSee=false` 时不立即失败；向目标/最后可见位置短距重定位，`losRecoveryTicks`（默认 40）预算内恢复视线；丢失超过短预算时用 `pathTo` 规划 waypoint，按 50ms tick 跟随；超时才报 `ATTACK_NO_LINE_OF_SIGHT`。
 - **威胁反馈**：`threatCount`/`rangedThreat`/`explosionThreat` 仅作观测；Combat 不自动 escape。creeper backpedal 是 opt-in 的短距 backoff（`creeperBackpedal:true`），默认关闭。
 - **engagement 终态**：`threat.fight` 在无存活目标时以 `ATTACK_TARGETS_RESOLVED` 结束；`killed` 仍只认 `entityDead`，creeper 爆炸记 `neutralized`（有 evidence 时）或 `lost`（兜底），不混入 killed。显式 `attack` 单目标仍要求 killed；neutralized 报 `ATTACK_TARGET_NEUTRALIZED`，但带 `resolution:'neutralized'`/`resolved:true`/`retryable:false`，避免 Agent 误重试。`chaseLeash` 超界：target 记 `escaped`（engagement）或 `ATTACK_CHASE_LIMIT`（显式）。
-- **LOS/长距离**：`combatInput` 是局部控制；`canSee=false` 超过短预算时，若 adapter 有 `navigateTo`，用一次 500ms 导航 fallback 到 last-seen，再回 tick；普通可见追击不使用阻塞 `moveTo`。路径仍不可达则 `ATTACK_NO_LINE_OF_SIGHT`/`ATTACK_NO_APPROACH`，不无限追。
+- **LOS/长距离**：`combatInput` 是局部控制；`canSee=false` 超过短预算或持续 blocked 时，若 adapter 有 `pathTo`，用 `MotionSearch` 规划 waypoint，再由 50ms tick 逐点跟随；普通可见追击不使用阻塞 `moveTo`。路径仍不可达则 `ATTACK_NO_LINE_OF_SIGHT`/`ATTACK_NO_APPROACH`，不无限追。
 - **观测**：`resolution`/`resolved`/`retryable`/`escaped` 与 `kills`/`neutralized`/`lostTargets` 分开；`killed` 只在全部目标都有 `entityDead` 时为 true。
 - **guard**：自血下降时进入 1000ms 窗口；窗口内移动 hold（tooClose 仍 backoff），攻击/盾照常；计时到期、无盾、目标丢失/死亡/job 结束退出。
 - **盾/开场**：副手有盾时 `offhandHold(true)` 持久保持，进入 `preShieldRange`（默认 12）提前举起；stop/endWrite/epoch/suspended/death/disconnect 释放。攻击不强制放下盾；若服务端行为拒绝，才做显式例外，不作为默认。
-- **移动安全**：`combat-input` provider 对下一格的脚/头/支撑/液体/火/岩浆/仙人掌做本地检查；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先尝试 jump/短 detour，再 hold。不再有 `combatStep`/`combatAdvance`/战斗 `moveTo`。
-- **证据**：`inputTicks`/`inputBlocked`/`inputFailures`、`approachMoves`/`strafeMoves`/`backoffMoves`、`guardWindows`/`guardExits`、`stanceRaises`/`stanceDrops`/`stanceReleaseFailures`/`shieldHeldMs`、`preShieldRaises`、`targets`/`kills`/`targetSwitches`/`lostTargets`、`threatCount`/`rangedThreat`/`explosionThreat`、`reach`/`reachSource`。
+- **移动安全**：`combat-input` provider 对下一格的脚/头/支撑/液体/火/岩浆/仙人掌做本地检查；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先尝试 jump/短 detour，持续 blocked 时改用 `pathTo` waypoint，都不可达才 hold。
+- **证据**：`inputTicks`/`inputBlocked`/`inputFailures`、`approachMoves`/`strafeMoves`/`backoffMoves`、`guardWindows`/`guardExits`、`stanceRaises`/`stanceDrops`/`stanceReleaseFailures`/`shieldHeldMs`、`preShieldRaises`、`targets`/`kills`/`neutralized`/`escaped`/`targetSwitches`/`lostTargets`、`resolution`/`resolved`/`retryable`、`threatCount`/`rangedThreat`/`explosionThreat`、`reach`/`reachSource`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
 - `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`。它只读、不参与控制；bridge 用它给记忆/owner-session 分 scope。provider 没有 identity 时字段省略，调用方必须回退而不是猜测。

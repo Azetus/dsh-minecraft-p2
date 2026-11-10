@@ -28,7 +28,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 - 默认活动用 `p2_base_activity`：默认 `{kind:"idle"}`（静止）；`{kind:"wandering"}` 需显式设置，只在 anchor 半径 8 内移动；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 idle；要完全停住用 `p2_order {verb:"hold"}`。
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：当前 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，当前 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight **默认**不选玩家/被动/中立——这是自动选择的默认值，不是 Agent 的权限上限。policy 不持久化，重启后要重设。
-- 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体（包括玩家）。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。可选 `params.maxChases`（1–64，默认 12）控制追击预算；失败 facts 带 `damageObserved/chases`，provider 有血量时带 `targetHealth`。
+- 显式 `attack` order 是 Agent 的目标决策：P2 **不做玩家/被动/中立保护拦截**，可以指定任何实体（包括玩家）。显式 attack 期间自动 fight 关闭，常驻树只保留岩浆/深水等致命环境反射。可选 `params.chaseLeash`（从 order 起点算的水平距离）限制追击；失败 facts 带 `damageObserved`，provider 有血量时带 `targetHealth`。
 - `dig`/`clear`/`attack` 会自动选最佳工具/武器；**主手**显式 `equip`/`unequip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物（中间可有其他非装备动作），不自动切换，动作启动后恢复自动。副手 `equip {destination:"offhand"}` / `unequip` 不压制主手自动换武器；`attack` 开头若副手为空且背包有盾，会自动把盾换到副手（不替换非空副手）。
 - `p2_status` 的 `mind.metrics` 给出本轮 run 的 order/job/hold/失败码/完成率；`lastFailure` 带 category/hint。它不包含 Agent 工具调用数或人工救场数，这两项看 DSH session 日志/操作记录。
 - 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
@@ -91,8 +91,8 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(EQUIP_READBACK_UNKNOWN)` / `failed(EQUIP_READBACK_MISMATCH)` | provider 报 equip 成功但手持物缺失或不是请求物品；按未装备处理，先读背包/手持物再决定 |
 | `failed(UNEQUIP_READBACK_UNKNOWN)` / `failed(UNEQUIP_READBACK_MISMATCH)` | 卸载后目标槽位读回缺失或仍非空；先读副手/主手再决定，不要当成功。副手已空时 unequip 本身算成功 |
 | `failed(CONTAINER_READBACK_UNKNOWN)` / `failed(CONTAINER_INCOMPLETE)` | provider 完成传输但前后计数缺失/未达请求；重新打开容器核对，不要当成功 |
-| `failed(ATTACK_TARGET_LOST)` | 目标已离开 32 格/消失；重新获取 entityId 并确认，不要盲目追击 |
-| `failed(ATTACK_CHASE_LIMIT)` | 追击次数到预算；看 facts 的 `damageObserved/chases/targetHealth`，低血可重新 `attack` 或换方式，不要无限重下 |
+| `failed(ATTACK_TARGET_LOST)` | 目标消失或超出定位范围；显式 attack 在 5s 丢失宽限后终结。重新获取 entityId 并确认，不要盲目追击 |
+| `failed(ATTACK_CHASE_LIMIT)` | 超过 `chaseLeash` 或目标离开允许追击距离；看 facts 的 `damageObserved/targetHealth`，低血可重新 `attack` 或换方式，不要无限重下 |
 | `failed(ATTACK_TARGET_PROTECTED)` | 自动 fight/未授权 driver 遇到受保护目标；显式 attack order 不会返回此码，玩家/中立也可由 Agent 明确指定 |
 | `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |

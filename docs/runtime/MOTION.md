@@ -1,6 +1,6 @@
 # 运动模块（Motion）
 
-> **2026-11-10 终态**：Combat 由 50ms tick `CombatSession` 独占；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance，attack 不停止移动/不放下盾。`runMeleeCombat`、`combatStep`、`combatAdvance`、`moveTo` 战斗追击、旧 A/B 开关已删除；下文相关段落为历史记录。
+> **当前实现**：Combat 由 50ms tick `CombatSession` 独占；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance，attack 不停止移动/不放下盾。
 
 > 运动模块在真实服务端与当前适配器下执行原版移动/战斗语义；方块语义优先读服务端 block tags。当前边界：水默认 `swim`，梯子/藤蔓可上下，脚手架只作为支撑/放置方块（不做柱内攀爬与侧穿），不安装也不依赖客户端 mod。
 > 本文只描述运动模块的当前契约与实现边界。
@@ -18,16 +18,16 @@
 
 ```text
 P2Mind（order / plan / tree / giver / tracker）
-        │  BodyApi.moveTo / attack（现有语义不变）
+        │  BodyApi（moveTo / attack / combatInput 等）
         ▼
-src/motion/mineflayer（适配器：世界、实体、tick、输入、动作）
+src/provider/mineflayer.ts + src/provider/motion（适配器：世界、实体、tick、输入、动作）
         │
 src/motion/model / search / execute / combat（纯 TS，不 import 适配器）
 ```
 
 - `src/motion` 核心只依赖自己的 `MotionWorld` 接口，不 import 具体客户端库。
 - 适配器负责把客户端的状态、tick、输入和动作映射到 `MotionWorld`。
-- `src/mind/drivers/move.ts` 与 `attack.ts` 退化为薄包装：提交目标/约束/取消，接收结果。
+- `src/mind/drivers/move.ts` 负责移动 job；`attack.ts` 准备武器/盾后返回 `CombatSessionHandle`，由 50ms tick 驱动。
 - 同一时刻仍只有一个执行者；运动模块不绕过 JobTracker 的写令牌、停止确认与暂停语义。
 
 ### 1.2 复用点
@@ -303,16 +303,16 @@ interface Move {
 
 锁定目标后持续维护：
 
-- `targetId`：不换目标。
+- `targetId`：当前目标；目标死亡/丢失/受保护时由 session 在允许集合内切到最近可用目标，见 `targets`。
 - `attackCooldown`：由当前攻击速度属性的 **final value**（base + 物品 modifiers）计算，不用固定毫秒；如铁剑 1.6 → 625ms。
 - `visible`：适配器视线/遮挡；看不到时不隔墙攻击。
 - `distanceBand`：**眼→目标 AABB 最近点**距离；目标盒由适配器 `width/height` 构成（缺失按 0.6×1.8），眼睛高度 `height-0.18`。`reach` 来自 `attackReach?()`（玩家 `player.entity_interaction_range`，含物品 modifiers，默认 3）；带为 `[reach-0.8, reach-0.2]`，中值 `reach-0.5`，`tooClose=reach-1.4`。超出 `reach` 先接近（停距按 `desired + targetWidth/2`，不再固定 `reach-1`）；进入 `reach` 后按间距决策。
 - `guard`：自血下降后进入 `GUARD_MS=1000ms` 的原地保护窗（每次掉血刷新；要求副手有盾）。窗口内移动 `hold`，但攻击和盾照常；`distance < tooClose` 仍 backoff，`distance > reach` 仍 approach。退出条件为计时到期、无盾、目标丢失/死亡/job 结束。
-- `spacing`：`CombatSession` 每 50ms 用 `decideCombatMove` 选择 `approach/hold/backoff/strafe-left/strafe-right`；移动通过 `combatInput` 持久控制，body 保持到下一拍。目标不面向我们时不 strafe；同一方向保持 4 步后 `nextStrafeSide` 换向；连续 4 个攻击窗口无伤害时停止侧移，移动无进展只抑制侧移。没有 `combatStep`、`standCells` 选格或战斗 `moveTo`。
+- `spacing`：`CombatSession` 每 50ms 用 `decideCombatMove` 选择 `approach/hold/backoff/strafe-left/strafe-right`；移动通过 `combatInput` 持久控制，body 保持到下一拍。目标不面向我们时不 strafe；同一方向保持 4 步后 `nextStrafeSide` 换向；连续 4 个攻击窗口无伤害时停止侧移，移动无进展只抑制侧移。持续 blocked 或 LOS 丢失时改用 `pathTo` waypoint 跟随。
 - `targets`：`entityId + entityIds` 是允许集合；当前目标死亡/丢失/受保护时切到最近可用目标，记录 `targetSwitches`；不自行扩大集合。`chaseLeash` 限制从起点算的追击距离；target 超界记 `escaped`（engagement）或 `ATTACK_CHASE_LIMIT`（显式）。
-- `LOS`：`canSee=false` 时向目标/最后可见位置短距重定位，`losRecoveryTicks` 预算内恢复；若 adapter 有 `navigateTo`，超过短预算后用一次 500ms 导航 fallback，再回 50ms tick；超时才 `ATTACK_NO_LINE_OF_SIGHT`。普通可见追击不使用阻塞 `moveTo`。
+- `LOS`：`canSee=false` 时向目标/最后可见位置短距重定位，`losRecoveryTicks` 预算内恢复；超过短预算时用 `pathTo` 规划 waypoint，再由 50ms tick 跟随；超时才 `ATTACK_NO_LINE_OF_SIGHT`。普通可见追击不使用阻塞 `moveTo`。
 - `threat`：`threatCount`/`rangedThreat`/`explosionThreat` 只作观测，不自动 escape。`creeperBackpedal` 为 opt-in 短距 backoff，默认关闭；有盾时无额外生存收益，无盾时只方向性减少爆炸伤害。
-- `movement safety`：`combat-input` provider 检查下一格的脚/头/支撑/液体/火/岩浆/仙人掌；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先 jump/短 detour，再 hold。1 格方向 + 每 tick 重新评估，不做 2 格 burst。
+- `movement safety`：`combat-input` provider 检查下一格的脚/头/支撑/液体/火/岩浆/仙人掌；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先 jump/短 detour，持续 blocked 时改用 `pathTo` waypoint，都不可达才 hold。1 格方向 + 每 tick 重新评估，不做 2 格 burst。
 - `shield`：`offhandHold(true)` 持久保持副手盾；进入 `preShieldRange`（默认 12）提前举起。attack 不停止移动、不放下盾；stop/endWrite/epoch/suspended/death/disconnect 释放。适配器没有 `offhandHold` 时 `shield:false`，不退回 timed useItem。
 - `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
 - `recheck`：冷却结束后、真正发 `attack` 前重新读目标；等待期间移动、遮挡或死亡的目标不补刀。每次挥击前 `lookAt`；失败不取消攻击。
