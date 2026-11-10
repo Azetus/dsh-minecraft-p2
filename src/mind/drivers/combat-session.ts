@@ -5,7 +5,7 @@ import type { DriverHandle, DriverResult } from '../types.ts'
 
 export type CombatPrep = {
   port: CombatPort
-  targetId: string
+  targetIds: string[]
   options: MeleeOptions
   shieldAutoEquip?: MeleeResult['observed']['shieldAutoEquip']
 }
@@ -33,7 +33,7 @@ export class CombatSessionHandle implements DriverHandle {
           this.settled = true
           return
         }
-        this.session = new CombatSession(ready.port, ready.targetId, ready.options)
+        this.session = new CombatSession(ready.port, ready.targetIds, ready.options)
       },
       (error: unknown) => {
         this.resultValue = {

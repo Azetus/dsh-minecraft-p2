@@ -214,6 +214,7 @@ export type BodyEvent =
   | 'move.unstick-dig'
   | 'entityHurt'
   | 'entityDead'
+  | 'explosion'
 
 export type WriteToken = { runId: string; jobId: string; seq: number }
 
@@ -274,6 +275,7 @@ export type BodyApi = {
     back?: boolean
     left?: boolean
     right?: boolean
+    jump?: boolean
   }): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
   /** Set the horizontal look direction (radians, 0 = +z) for oriented placement. */

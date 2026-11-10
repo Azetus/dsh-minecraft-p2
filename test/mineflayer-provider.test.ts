@@ -230,6 +230,21 @@ describe('MineflayerProvider combat input', () => {
       error: { code: 'COMBAT_INPUT_BLOCKED' },
     })
   })
+
+  it('walks off a one-block step without a down control', async () => {
+    const { bot } = fakeBot()
+    ;(bot as unknown as { entity: { position: { x: number; y: number; z: number } } }).entity.position.y = 65
+    ;(bot as unknown as { blockAt: (p: { y: number }) => unknown }).blockAt = point =>
+      point.y <= 63
+        ? { name: 'stone', boundingBox: 'block' }
+        : { name: 'air', boundingBox: 'empty' }
+    const provider = new MineflayerProvider(bot)
+    const handle = provider.start('combat-input', {
+      faceX: 3, faceY: 65, faceZ: 2, forward: true,
+    })
+    await sleep(100)
+    expect(handle.poll().status).toBe('succeeded')
+  })
 })
 
 describe('MineflayerProvider off-hand stance', () => {

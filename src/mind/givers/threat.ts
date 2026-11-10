@@ -65,7 +65,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         // Keep the lock through short observation gaps. The attack driver owns
         // target location/line-of-sight; yielding here would let escape/base
         // preempt and restart the same engagement in a loop.
-        return candidate(lock.entityId, lock.name, lock.lastPos)
+        return candidate(lock.entityId, lock.name, lock.lastPos, engagementIds(world, self.pos, policy, lock.entityId))
       }
 
       if (ctx.now < cooldownUntil) return null
@@ -76,6 +76,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
       // The entity base sample covers every auto-fight radius (<=8), so no
       // targeted re-read is needed here.
       const targets = world.entitiesIn(boxAround(self.pos, fight.radius, 6))
+      const ids: string[] = []
       let best: EntityInfo | undefined
       let bestDistance = Number.POSITIVE_INFINITY
       for (const entity of targets) {
@@ -84,6 +85,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         if (ctx.canSee?.(entity.id) === false) continue
         const range = distance(self.pos, entity.position)
         if (range > fight.radius) continue
+        ids.push(entity.id)
         if (range < bestDistance) {
           best = entity
           bestDistance = range
@@ -96,7 +98,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         origin: { x: self.pos.x, y: self.pos.y, z: self.pos.z },
         lastPos: best.position,
       }
-      return candidate(best.id, best.name, best.position)
+      return candidate(best.id, best.name, best.position, ids)
     },
     noteTerminal(event: FightTerminal): void {
       const entityId = event.keys.slice('threat.fight:'.length)
@@ -122,12 +124,15 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
   }
 }
 
-function candidate(entityId: string, name: string, position: Vec3): Candidate {
+function candidate(entityId: string, name: string, position: Vec3, entityIds: string[] = []): Candidate {
+  const targets = [...new Set([entityId, ...entityIds])].slice(0, 8)
   return {
     driverId: 'attack',
     target: { kind: 'point', pos: position },
     params: {
       entityId,
+      entityIds: targets,
+      engagement: true,
       targetName: name,
       continuationKey: `threat.fight:${entityId}`,
     },
@@ -138,6 +143,19 @@ function candidate(entityId: string, name: string, position: Vec3): Candidate {
 function findEntity(world: WorldView, entityId: string): EntityInfo | undefined {
   return world.entitiesIn(boxAround(world.self.pos, LOCK_QUERY_RADIUS, 16))
     .find(entity => entity.id === entityId)
+}
+
+function engagementIds(world: WorldView, self: Vec3, policy: () => ReactionPolicy, primary: string): string[] {
+  const fight = policy().fight
+  if (fight === null) return [primary]
+  const ids = [primary]
+  for (const entity of world.entitiesIn(boxAround(self, fight.radius, 6))) {
+    if (ids.length >= 8) break
+    if (entity.id === primary || !isAutoFightTarget(entity, policy())) continue
+    if (distance(self, entity.position) > fight.radius) continue
+    ids.push(entity.id)
+  }
+  return ids
 }
 
 function distance(left: Vec3, right: Vec3): number {

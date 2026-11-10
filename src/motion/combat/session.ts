@@ -27,6 +27,7 @@ const DEFAULT_PRE_SHIELD_RANGE = 12
 const STALLED_TICKS = 3
 const NO_DAMAGE_WINDOWS = 4
 const FACING_CONE = Math.PI / 3
+const BLAST_RANGE = 4.5
 
 export type CombatSessionState = 'running' | 'succeeded' | 'failed' | 'interrupted'
 
@@ -48,6 +49,19 @@ export class CombatSession {
   private readonly guardMs: number
   private readonly preShieldRange: number
   private readonly shieldSupported: boolean
+  private readonly targetIds: string[]
+  private currentTargetId: string
+  private readonly deadTargets = new Set<string>()
+  private readonly neutralizedTargets = new Set<string>()
+  private readonly lostTargets = new Set<string>()
+  private readonly protectedTargets = new Set<string>()
+  private targetSwitches = 0
+  private readonly lastSeen = new Map<string, Vec3>()
+  private readonly losTicks = new Map<string, number>()
+  private threatCount = 0
+  private rangedThreat = false
+  private explosionThreat = false
+  private creeperThreatId: string | undefined
   private lastHealth: number
   private lastHurtAt: number | undefined
   private guarding = false
@@ -70,6 +84,10 @@ export class CombatSession {
   private stalledTicks = 0
   private lastPos: Vec3
   private lastMoveWasInput = false
+  private detourTicks = 0
+  private detourDecision: CombatMove = 'strafe-left'
+  private jumpNext = false
+  private jumpTried = false
   private shieldHeld = false
   private shieldFailed = false
   private shieldHeldSince: number | undefined
@@ -80,10 +98,11 @@ export class CombatSession {
   private resultValue: MeleeResult | undefined
   private disposeDead: (() => void) | undefined
   private disposeHurt: (() => void) | undefined
+  private disposeExplosion: (() => void) | undefined
 
   constructor(
     private readonly port: CombatPort,
-    private readonly targetId: string,
+    targetIdOrIds: string | string[],
     private readonly options: MeleeOptions = {},
   ) {
     this.startedAt = port.now()
@@ -97,13 +116,43 @@ export class CombatSession {
     this.shieldSupported = options.shield !== false
       && port.offhandHold !== undefined
       && port.hasShield?.() === true
+    const requested = Array.isArray(targetIdOrIds) ? targetIdOrIds : [targetIdOrIds]
+    this.targetIds = [...new Set([...requested, ...(options.targetIds ?? [])])].filter(id => id.length > 0)
+    if (this.targetIds.length === 0) throw new Error('CombatSession requires at least one target')
+    this.currentTargetId = this.targetIds[0]!
     this.disposeDead = port.onEntityDead(id => {
-      if (id === this.targetId) this.finish('succeeded')
+      if (!this.targetIds.includes(id)) return
+      this.deadTargets.add(id)
+      if (this.allTargetsDead()) {
+        this.finish('succeeded')
+        return
+      }
+      if (this.finishIfResolved()) return
+      if (id === this.currentTargetId) this.advanceTarget()
     })
     this.disposeHurt = port.onEntityHurt(id => {
-      if (id !== this.targetId) return
+      if (id !== this.currentTargetId) return
       this.damageObserved += 1
       this.attacksSinceDamage = 0
+    })
+    this.disposeExplosion = port.onExplosion?.((pos, radius) => {
+      const blast = radius === undefined ? 6 : radius + 2
+      for (const id of this.targetIds) {
+        if (this.deadTargets.has(id) || this.neutralizedTargets.has(id) || this.lostTargets.has(id) || this.protectedTargets.has(id)) continue
+        const entity = this.port.entity(id)
+        if (entity === undefined || !/creeper/iu.test(entity.name)) continue
+        if (Math.hypot(entity.position.x - pos.x, entity.position.y - pos.y, entity.position.z - pos.z) > blast) continue
+        this.neutralizedTargets.add(id)
+      }
+      if (this.currentTargetId !== undefined && this.neutralizedTargets.has(this.currentTargetId)) {
+        if (this.options.engagement === true && this.allTargetsResolved()) {
+          this.finish('succeeded', 'ATTACK_TARGETS_RESOLVED', 'engagement resolved')
+        } else if (this.options.engagement !== true) {
+          this.finish('failed', 'ATTACK_TARGET_NEUTRALIZED', 'target exploded')
+        } else {
+          this.advanceTarget()
+        }
+      }
     })
   }
 
@@ -133,8 +182,10 @@ export class CombatSession {
     this.state = state
     this.disposeDead?.()
     this.disposeHurt?.()
+    this.disposeExplosion?.()
     this.disposeDead = undefined
     this.disposeHurt = undefined
+    this.disposeExplosion = undefined
     this.stopInput()
     const observed = this.observed(code, reason)
     this.releaseShield()
@@ -153,14 +204,22 @@ export class CombatSession {
         : 'attribute'
     return {
       kind: 'attack',
-      entityId: this.targetId,
+      entityId: this.currentTargetId,
+      targets: [...this.targetIds],
+      kills: this.deadTargets.size,
+      neutralized: this.neutralizedTargets.size,
+      targetSwitches: this.targetSwitches,
+      lostTargets: this.lostTargets.size,
+      threatCount: this.threatCount,
+      rangedThreat: this.rangedThreat,
+      explosionThreat: this.explosionThreat,
       ...(this.options.targetName === undefined ? {} : { targetName: this.options.targetName }),
       attacks: this.attacks,
       attacksIssued: this.attacksIssued,
       damageObserved: this.damageObserved,
-      deathConfirmed: this.state === 'succeeded',
-      targetLost: this.state === 'failed' && code === 'ATTACK_TARGET_LOST',
-      killed: this.state === 'succeeded',
+      deathConfirmed: this.allTargetsDead(),
+      targetLost: this.state === 'failed' && (code === 'ATTACK_TARGET_LOST' || code === 'ATTACK_TARGETS_LOST'),
+      killed: this.state === 'succeeded' && this.allTargetsDead(),
       guardWindows: this.guardWindows,
       guardExits: this.guardExits,
       stanceRaises: this.stanceRaises,
@@ -196,7 +255,7 @@ export class CombatSession {
 
   private stopInput(): void {
     if (this.port.combatInput === undefined) return
-    const entity = this.port.entity(this.targetId)
+    const entity = this.port.entity(this.currentTargetId)
     const face = entity === undefined
       ? { x: this.port.self().pos.x, y: this.port.self().pos.y, z: this.port.self().pos.z - 1 }
       : this.aim(entity)
@@ -257,11 +316,17 @@ export class CombatSession {
   }
 
   private inputFor(decision: CombatMove): CombatInput {
-    const entity = this.port.entity(this.targetId)
+    const entity = this.port.entity(this.currentTargetId)
     const face = entity === undefined
       ? { x: this.port.self().pos.x, y: this.port.self().pos.y, z: this.port.self().pos.z - 1 }
       : this.aim(entity)
-    if (decision === 'approach') return { face, forward: true }
+    if (decision === 'approach') {
+      return {
+        face,
+        forward: true,
+        ...(this.jumpNext ? { jump: true } : {}),
+      }
+    }
     if (decision === 'backoff') return { face, back: true }
     if (decision === 'strafe-left') return { face, left: true }
     if (decision === 'strafe-right') return { face, right: true }
@@ -281,16 +346,34 @@ export class CombatSession {
     }
     this.inputTicks += 1
     this.countMove(decision)
+    const attemptedJump = this.jumpNext
+    if (attemptedJump) this.jumpTried = true
     const result = await this.port.combatInput(this.inputFor(decision))
     if (result.state === 'ok') {
       this.lastMoveWasInput = decision !== 'hold'
+      if (this.jumpNext) {
+        this.jumpNext = false
+      } else if (decision === 'approach') {
+        this.jumpTried = false
+      }
       return true
     }
     if (result.code === 'COMBAT_INPUT_BLOCKED') {
       this.inputBlocked += 1
-      this.stalledTicks += 1
-      this.side = this.side === 'left' ? 'right' : 'left'
-      this.strafeSteps = 0
+      this.stalledTicks = 0
+      if (decision === 'approach' && !this.jumpTried) {
+        // Try a one-block jump before committing to a lateral detour.
+        this.jumpNext = true
+        this.detourTicks = 1
+        this.detourDecision = 'approach'
+      } else {
+        this.detourTicks = 6
+        this.detourDecision = this.side === 'left' ? 'strafe-left' : 'strafe-right'
+        this.side = this.side === 'left' ? 'right' : 'left'
+        this.strafeSteps = 0
+        this.jumpNext = false
+        this.jumpTried = false
+      }
       // Keep the prior movement controls from being assumed safe.
       await this.port.combatInput(this.inputFor('hold'))
       return false
@@ -301,6 +384,98 @@ export class CombatSession {
       this.finish('failed', 'ATTACK_NO_APPROACH', 'combat input failed')
     }
     return false
+  }
+
+  private allTargetsDead(): boolean {
+    return this.targetIds.every(id => this.deadTargets.has(id))
+  }
+
+  private allTargetsResolved(): boolean {
+    return this.targetIds.every(id =>
+      this.deadTargets.has(id)
+      || this.neutralizedTargets.has(id)
+      || this.lostTargets.has(id)
+      || this.protectedTargets.has(id))
+  }
+
+  /** Engagement semantics: no live target left, even if not every one was killed. */
+  private finishIfResolved(): boolean {
+    if (this.options.engagement !== true || !this.allTargetsResolved()) return false
+    this.finish('succeeded', 'ATTACK_TARGETS_RESOLVED', 'engagement resolved')
+    return true
+  }
+
+  /** Pick the nearest remaining allowed target after the current one is gone. */
+  private advanceTarget(): boolean {
+    if (this.allTargetsDead()) {
+      this.finish('succeeded')
+      return false
+    }
+    if (this.finishIfResolved()) return false
+    const self = this.port.self()
+    let best: { id: string; distance: number; visible: boolean } | undefined
+    for (const id of this.targetIds) {
+      if (this.deadTargets.has(id)
+        || this.neutralizedTargets.has(id)
+        || this.lostTargets.has(id)
+        || this.protectedTargets.has(id)) continue
+      const entity = this.port.entity(id)
+      if (entity === undefined) {
+        this.lostTargets.add(id)
+        continue
+      }
+      const distance = eyeReach(self, entity)
+      const visible = this.port.canSee(id)
+      if (best === undefined
+        || (visible && !best.visible)
+        || (visible === best.visible && distance < best.distance)) {
+        best = { id, distance, visible }
+      }
+    }
+    if (best === undefined) {
+      if (this.finishIfResolved()) return false
+      if (this.neutralizedTargets.size > 0) this.finish('failed', 'ATTACK_TARGET_NEUTRALIZED', 'targets exhausted')
+      else if (this.lostTargets.size > 0) this.finish('failed', 'ATTACK_TARGET_LOST', 'targets exhausted')
+      else if (this.protectedTargets.size > 0) this.finish('failed', 'ATTACK_TARGET_PROTECTED', 'targets exhausted')
+      else this.finish('failed', 'ATTACK_TARGET_LOST', 'no remaining target')
+      return false
+    }
+    if (best.id !== this.currentTargetId) {
+      this.currentTargetId = best.id
+      this.targetSwitches += 1
+    }
+    return true
+  }
+
+  private updateThreats(): void {
+    const self = this.port.self()
+    let count = 0
+    let ranged = false
+    let explosion = false
+    let creeperThreat: string | undefined
+    let creeperDistance = Number.POSITIVE_INFINITY
+    for (const id of this.targetIds) {
+      if (this.deadTargets.has(id)
+        || this.neutralizedTargets.has(id)
+        || this.lostTargets.has(id)
+        || this.protectedTargets.has(id)) continue
+      const entity = this.port.entity(id)
+      if (entity === undefined) continue
+      count += 1
+      if (/(?:skeleton|stray|pillager|witch)/iu.test(entity.name)) ranged = true
+      if (/creeper/iu.test(entity.name) && eyeReach(self, entity) <= 8) {
+        explosion = true
+        const range = eyeReach(self, entity)
+        if (range <= BLAST_RANGE && range < creeperDistance) {
+          creeperDistance = range
+          creeperThreat = id
+        }
+      }
+    }
+    this.threatCount = count
+    this.rangedThreat = ranged
+    this.explosionThreat = explosion
+    this.creeperThreatId = creeperThreat
   }
 
   private async step(): Promise<void> {
@@ -321,27 +496,49 @@ export class CombatSession {
     if (self.health < this.lastHealth) this.lastHurtAt = now
     this.lastHealth = self.health
 
-    const entity = this.port.entity(this.targetId)
+    const entity = this.port.entity(this.currentTargetId)
     if (entity === undefined) {
-      this.finish('failed', 'ATTACK_TARGET_LOST', 'target left query range')
+      this.lostTargets.add(this.currentTargetId)
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
       return
     }
     if (this.options.targetName !== undefined && entity.name !== this.options.targetName) {
-      this.finish('failed', 'ATTACK_TARGET_CHANGED', 'target name changed')
+      this.lostTargets.add(this.currentTargetId)
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
       return
     }
     const protectedCode = this.protectedTarget(entity)
     if (protectedCode !== undefined) {
-      this.finish('failed', protectedCode, 'protected target')
+      this.protectedTargets.add(this.currentTargetId)
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
       return
     }
     if ((entity.health ?? 1) <= 0) {
-      this.finish('succeeded')
+      this.deadTargets.add(this.currentTargetId)
+      if (this.allTargetsDead()) {
+        this.finish('succeeded')
+        return
+      }
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
+      return
+    }
+    this.updateThreats()
+    if (this.creeperThreatId !== undefined && this.creeperThreatId !== this.currentTargetId) {
+      this.currentTargetId = this.creeperThreatId
+      this.targetSwitches += 1
       return
     }
 
     const distance = eyeReach(self, entity)
-    const visible = this.port.canSee(this.targetId)
+    const visible = this.port.canSee(this.currentTargetId)
+    if (visible) {
+      this.lastSeen.set(this.currentTargetId, { ...entity.position })
+      this.losTicks.set(this.currentTargetId, 0)
+    }
     const targetFacing = this.targetFacing(entity, self.pos)
 
     // Guard is movement-only: it holds position, but attack/shield continue.
@@ -372,11 +569,15 @@ export class CombatSession {
 
     let decision: CombatMove = 'hold'
     if (!visible) {
-      this.misses += 1
-      if (this.misses >= (this.options.maxMisses ?? DEFAULT_MAX_MISSES)) {
-        this.finish('failed', 'ATTACK_NO_LINE_OF_SIGHT', 'target not visible')
+      const ticks = (this.losTicks.get(this.currentTargetId) ?? 0) + 1
+      this.losTicks.set(this.currentTargetId, ticks)
+      if (ticks > (this.options.losRecoveryTicks ?? 40)) {
+        this.finish('failed', 'ATTACK_NO_LINE_OF_SIGHT', 'LOS recovery budget')
         return
       }
+      decision = this.options.movement === false
+        ? 'hold'
+        : distance > this.tooClose ? 'approach' : 'backoff'
     } else if (this.options.movement === false) {
       decision = 'hold'
     } else if (distance > this.reach) {
@@ -396,7 +597,19 @@ export class CombatSession {
         side: this.side,
       })
     }
+    // Creeper spacing: opt-in; with a shield it adds no survival benefit and
+    // only delays the fight. It stays available for fuse-aware experiments.
+    if (visible
+      && this.options.creeperBackpedal === true
+      && /creeper/iu.test(entity.name)
+      && distance <= this.reach) {
+      decision = 'backoff'
+    }
 
+    if (this.detourTicks > 0) {
+      decision = this.detourDecision
+      this.detourTicks -= 1
+    }
     const inputOk = await this.applyInput(decision)
     if (this.state !== 'running') return
     if (decision === 'strafe-left' || decision === 'strafe-right') {
@@ -423,7 +636,7 @@ export class CombatSession {
     this.attacksIssued += 1
     this.attacksSinceDamage += 1
     this.lastAttackAt = now
-    const hit = await this.port.attack(this.targetId)
+    const hit = await this.port.attack(this.currentTargetId)
     if (hit.state !== 'ok') {
       this.misses += 1
       if (this.misses >= (this.options.maxMisses ?? DEFAULT_MAX_MISSES)) {
@@ -431,8 +644,30 @@ export class CombatSession {
       }
       return
     }
-    const after = this.port.entity(this.targetId)
-    if (after === undefined || (after.health ?? 1) <= 0) this.finish('succeeded')
+    const after = this.port.entity(this.currentTargetId)
+    if (after === undefined) {
+      if (this.deadTargets.has(this.currentTargetId)) {
+        if (this.allTargetsDead()) {
+          this.finish('succeeded')
+          return
+        }
+        if (!this.advanceTarget()) return
+        return
+      }
+      this.lostTargets.add(this.currentTargetId)
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
+      return
+    }
+    if ((after.health ?? 1) <= 0) {
+      this.deadTargets.add(this.currentTargetId)
+      if (this.allTargetsDead()) {
+        this.finish('succeeded')
+        return
+      }
+      if (this.finishIfResolved()) return
+      if (!this.advanceTarget()) return
+    }
   }
 
   private protectedTarget(target: CombatEntity): string | undefined {

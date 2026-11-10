@@ -28,6 +28,7 @@ export type CombatInput = {
   back?: boolean
   left?: boolean
   right?: boolean
+  jump?: boolean
 }
 
 /**
@@ -50,6 +51,8 @@ export type CombatPort = {
   offhandHold?(active: boolean): Promise<CombatAction>
   onEntityHurt(cb: (entityId: string) => void): () => void
   onEntityDead(cb: (entityId: string) => void): () => void
+  /** Explosion center/radius; used only to classify creeper neutralization. */
+  onExplosion?(cb: (pos: Vec3, radius?: number) => void): () => void
 }
 
 export type MeleeOptions = {
@@ -69,10 +72,18 @@ export type MeleeOptions = {
   strafe?: boolean
   /** Test/A-B only: disable the persistent shield stance. */
   shield?: boolean
+  /** Additional allowed targets; the session switches inside this set. */
+  targetIds?: string[]
   /** Raise the shield before the first swing. */
   preShield?: boolean
   /** Distance at which the opening stance is raised (default 12). */
   preShieldRange?: number
+  /** Test/A-B only: back off while facing a creeper at blast range. */
+  creeperBackpedal?: boolean
+  /** LOS recovery budget before ATTACK_NO_LINE_OF_SIGHT (default 40 ticks). */
+  losRecoveryTicks?: number
+  /** A fight engagement resolves when no allowed target remains alive. */
+  engagement?: boolean
 }
 
 export type MeleeResult = {
@@ -81,6 +92,14 @@ export type MeleeResult = {
   observed: {
     kind: 'attack'
     entityId: string
+    targets: string[]
+    kills: number
+    neutralized: number
+    targetSwitches: number
+    lostTargets: number
+    threatCount: number
+    rangedThreat: boolean
+    explosionThreat: boolean
     targetName?: string
     attacks: number
     attacksIssued: number

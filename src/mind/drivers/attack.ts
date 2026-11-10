@@ -17,6 +17,10 @@ const ATTACK_SCHEMA: SchemaNode = {
   type: 'object',
   properties: {
     entityId: { type: 'string' },
+    /** Additional allowed targets; the session switches inside this set. */
+    entityIds: { type: 'array', items: { type: 'string' } },
+    /** Pre-authorized fight: resolve when no allowed target remains. */
+    engagement: { type: 'boolean' },
     targetName: { type: 'string' },
     orderId: { type: 'string' },
     /** Explicit Agent order: skip the automatic player/passive guard. */
@@ -36,6 +40,8 @@ const ATTACK_SCHEMA: SchemaNode = {
 
 type AttackParams = {
   entityId: string
+  entityIds?: string[]
+  engagement?: boolean
   targetName?: string
   orderId?: string
   allowAny?: boolean
@@ -62,6 +68,10 @@ export function createAttackDriver(): Driver {
     validate(job: Job, _world: WorldView): DriverValidation {
       const params = job.params as unknown as AttackParams
       if (typeof params.entityId !== 'string' || params.entityId.length === 0) {
+        return { ok: false, code: 'BAD_ARGS' }
+      }
+      if (params.entityIds !== undefined
+        && (!Array.isArray(params.entityIds) || params.entityIds.length > 16)) {
         return { ok: false, code: 'BAD_ARGS' }
       }
       return { ok: true }
@@ -91,13 +101,15 @@ async function prepareCombat(
     }
   }
   const options: MeleeOptions = {
+    targetIds: [...new Set([params.entityId, ...(params.entityIds ?? [])])],
+    ...(params.engagement === true ? { engagement: true } : {}),
     ...(params.targetName === undefined ? {} : { targetName: params.targetName }),
     ...(params.allowAny === true ? { allowAny: true } : {}),
     ...(params.allowPassive === true ? { allowPassive: true } : {}),
   }
   return {
     port: combatPort(port, params.locateRadius ?? 32),
-    targetId: params.entityId,
+    targetIds: options.targetIds ?? [params.entityId],
     options,
     shieldAutoEquip,
   }
@@ -139,6 +151,22 @@ function combatPort(port: BodyApi, locateRadius: number): CombatPort {
       : { offhandHold: (active: boolean) => asAction(port.offhandHold!(active)) }),
     onEntityHurt: cb => subscribe(port, 'entityHurt', cb),
     onEntityDead: cb => subscribe(port, 'entityDead', cb),
+    ...(port.on === undefined
+      ? {}
+      : {
+          onExplosion: (cb: (pos: Vec3, radius?: number) => void) => {
+            const listener = (payload: unknown): void => {
+              if (!isRecord(payload)) return
+              const x = payload.x
+              const y = payload.y
+              const z = payload.z
+              if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return
+              cb({ x, y, z }, typeof payload.radius === 'number' ? payload.radius : undefined)
+            }
+            port.on('explosion', listener)
+            return () => port.off?.('explosion', listener)
+          },
+        }),
   }
 }
 

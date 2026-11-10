@@ -541,6 +541,7 @@ export class MineflayerBody implements BodyApi {
     back?: boolean
     left?: boolean
     right?: boolean
+    jump?: boolean
   }): Promise<ActResult> {
     if (!isVec3(opts.face)) return actFailed('INVALID_TARGET', 0)
     return await this.run('combat-input', {
@@ -551,6 +552,7 @@ export class MineflayerBody implements BodyApi {
       ...(opts.back === true ? { back: true } : {}),
       ...(opts.left === true ? { left: true } : {}),
       ...(opts.right === true ? { right: true } : {}),
+      ...(opts.jump === true ? { jump: true } : {}),
     }, 1_000)
   }
 
@@ -956,6 +958,19 @@ export class MineflayerBody implements BodyApi {
     this.bot.on('entityDead', entity => {
       const id = (entity as unknown as { id?: number }).id
       if (typeof id === 'number') this.emit('entityDead', { entityId: String(id) })
+    })
+    ;(this.bot as unknown as {
+      on: (event: string, listener: (payload: unknown) => void) => void
+    }).on('explosion', (packet: unknown) => {
+      if (packet === null || typeof packet !== 'object') return
+      const value = packet as { x?: unknown; y?: unknown; z?: unknown; radius?: unknown }
+      if (typeof value.x !== 'number' || typeof value.y !== 'number' || typeof value.z !== 'number') return
+      this.emit('explosion', {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+        ...(typeof value.radius === 'number' ? { radius: value.radius } : {}),
+      })
     })
     this.bot.on('playerCollect', collector => {
       if (collector === this.bot.entity) this.emit('inventoryChanged', {})

@@ -41,6 +41,8 @@ function fakePort(options: {
   selfHealth?: number
   hasInput?: boolean
   killOnAttack?: boolean
+  canSee?: () => boolean
+  combatInput?: (opts: CombatInput) => Promise<{ state: 'ok' | 'failed' | 'unknown'; code?: string }>
 } = {}): Fake {
   let target: CombatEntity | undefined = options.target === undefined ? zombie() : options.target
   let self = { pos: { x: 0.5, y: 64, z: 0.5 }, health: options.selfHealth ?? 20, height: 1.8 }
@@ -55,7 +57,7 @@ function fakePort(options: {
     now: () => Date.now(),
     self: () => ({ ...self }),
     entity: () => target,
-    canSee: () => true,
+    canSee: options.canSee ?? (() => true),
     attackSpeed: () => 4,
     reach: () => 3,
     attack: async () => {
@@ -71,6 +73,7 @@ function fakePort(options: {
       : {
           combatInput: async (opts: CombatInput) => {
             inputs.push(opts)
+            if (options.combatInput !== undefined) return options.combatInput(opts)
             if (opts.forward === true) self = { ...self, pos: { ...self.pos, x: self.pos.x + 0.3 } }
             return { state: 'ok' }
           },
@@ -220,5 +223,117 @@ describe('CombatSession tick', () => {
     session.tick()
     await sleep(0)
     expect(session.result()?.code).toBe('ATTACK_NO_APPROACH')
+  })
+
+  it('switches to the next allowed target when the first dies', async () => {
+    const targets = new Map<string, CombatEntity>([
+      ['z1', zombie(6)],
+      ['z2', zombie(4)],
+    ])
+    let self = { pos: { x: 0.5, y: 64, z: 0.5 }, health: 20, height: 1.8 }
+    const deadListeners = new Set<(id: string) => void>()
+    const port: CombatPort = {
+      now: () => Date.now(),
+      self: () => self,
+      entity: id => targets.get(id),
+      canSee: () => true,
+      attackSpeed: () => 4,
+      reach: () => 3,
+      attack: async id => {
+        targets.delete(id)
+        for (const cb of deadListeners) cb(id)
+        return { state: 'ok' }
+      },
+      combatInput: async opts => {
+        if (opts.forward === true) self = { ...self, pos: { ...self.pos, x: self.pos.x + 0.3 } }
+        return { state: 'ok' }
+      },
+      hasShield: () => false,
+      onEntityHurt: () => () => {},
+      onEntityDead: cb => {
+        deadListeners.add(cb)
+        return () => deadListeners.delete(cb)
+      },
+    }
+    const session = new CombatSession(port, ['z1', 'z2'], { totalMs: 5_000, shield: false })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(session.result()?.observed.kills).toBe(2)
+    expect(session.result()?.observed.targetSwitches).toBeGreaterThanOrEqual(1)
+  })
+
+  it('recovers line of sight by approaching before the LOS budget expires', async () => {
+    let visible = false
+    let ticks = 0
+    const fake = fakePort({
+      target: zombie(6),
+      canSee: () => {
+        ticks += 1
+        if (ticks > 3) visible = true
+        return visible
+      },
+    })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, losRecoveryTicks: 10 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.inputs.some(input => input.forward === true)).toBe(true)
+  })
+
+  it('fails LOS only after the recovery budget', async () => {
+    const fake = fakePort({ target: zombie(6), canSee: () => false })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, losRecoveryTicks: 2 })
+    await run(session)
+    expect(session.result()?.code).toBe('ATTACK_NO_LINE_OF_SIGHT')
+  })
+
+  it('backpedals while facing a creeper in attack range', async () => {
+    const fake = fakePort({ target: zombie(2.5, { name: 'creeper' }) })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000, creeperBackpedal: true })
+    session.tick()
+    await sleep(0)
+    expect(session.result()?.observed.backoffMoves).toBeGreaterThan(0)
+    expect(session.result()?.observed.explosionThreat).toBe(true)
+    expect(fake.inputs[0]?.back).toBe(true)
+  })
+
+  it('reports ranged threat without auto-escaping', async () => {
+    const fake = fakePort({ target: zombie(3.2, { name: 'skeleton', yaw: Math.PI / 2 }) })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
+    session.tick()
+    await sleep(0)
+    expect(session.result()?.observed.rangedThreat).toBe(true)
+    expect(session.result()?.observed.kills).toBe(1)
+  })
+
+  it('tries a one-block jump before a lateral detour', async () => {
+    const fake = fakePort({
+      target: zombie(6),
+      combatInput: async opts => opts.forward === true && opts.jump === true
+        ? { state: 'ok' }
+        : opts.forward === true
+          ? { state: 'failed', code: 'COMBAT_INPUT_BLOCKED' }
+          : { state: 'ok' },
+    })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
+    session.tick()
+    await sleep(0)
+    session.tick()
+    await sleep(0)
+    expect(fake.inputs.some(input => input.jump === true)).toBe(true)
+  })
+
+  it('detours sideways when a jump does not clear the obstacle', async () => {
+    const fake = fakePort({
+      target: zombie(6),
+      combatInput: async opts => opts.forward === true
+        ? { state: 'failed', code: 'COMBAT_INPUT_BLOCKED' }
+        : { state: 'ok' },
+    })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
+    for (let index = 0; index < 4; index += 1) {
+      session.tick()
+      await sleep(0)
+    }
+    expect(fake.inputs.some(input => input.left === true || input.right === true)).toBe(true)
   })
 })

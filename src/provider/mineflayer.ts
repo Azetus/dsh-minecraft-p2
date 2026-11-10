@@ -1336,6 +1336,7 @@ class MineflayerActHandle implements ActHandle {
     from: Vec3,
     yaw: number,
     movement: { forward: boolean; back: boolean; left: boolean; right: boolean },
+    jump = false,
   ): boolean {
     const forward = (movement.forward ? 1 : 0) - (movement.back ? 1 : 0)
     const right = (movement.right ? 1 : 0) - (movement.left ? 1 : 0)
@@ -1354,16 +1355,26 @@ class MineflayerActHandle implements ActHandle {
     const aheadFeet = this.bot.blockAt(new Vec3(aheadX, feetY, aheadZ))
     const aheadHead = this.bot.blockAt(new Vec3(aheadX, feetY + 1, aheadZ))
     const aheadBelow = this.bot.blockAt(new Vec3(aheadX, feetY - 1, aheadZ))
-    if (aheadFeet === null || aheadHead === null || aheadBelow === null) return false
+    const aheadBelow2 = this.bot.blockAt(new Vec3(aheadX, feetY - 2, aheadZ))
+    const aheadAbove = this.bot.blockAt(new Vec3(aheadX, feetY + 2, aheadZ))
+    if (aheadFeet === null || aheadHead === null || aheadBelow === null
+      || aheadBelow2 === null || aheadAbove === null) return false
     const passable = (block: { boundingBox?: string }): boolean => block.boundingBox === 'empty'
     const supported = (block: { boundingBox?: string }): boolean => block.boundingBox !== 'empty'
     const hazard = /^(?:lava|water|fire|soul_fire|cactus|magma_block|sweet_berry_bush|powder_snow)$/u
+    if (hazard.test(aheadFeet.name) || hazard.test(aheadHead.name)
+      || hazard.test(aheadBelow.name) || hazard.test(aheadBelow2.name)) return false
+    // A one-block step is allowed only while jumping forward; the head/above
+    // cells must stay passable. Two-block walls still block and require detour.
+    if (!passable(aheadFeet) && jump && movement.forward && passable(aheadHead) && passable(aheadAbove)) {
+      return true
+    }
+    // A one-block drop is normal walking, not a separate "down" control:
+    // feet/head ahead are clear, the immediately below cell is air and the
+    // next cell down is solid. Deeper drops/pits remain blocked.
     return passable(aheadFeet)
       && passable(aheadHead)
-      && supported(aheadBelow)
-      && !hazard.test(aheadFeet.name)
-      && !hazard.test(aheadHead.name)
-      && !hazard.test(aheadBelow.name)
+      && (supported(aheadBelow) || (passable(aheadBelow) && supported(aheadBelow2)))
   }
 
   private forceAbort(): void {
@@ -2028,16 +2039,17 @@ class MineflayerActHandle implements ActHandle {
             back: this.args.back === true,
             left: this.args.left === true,
             right: this.args.right === true,
+            jump: this.args.jump === true,
           }
           void this.bot.look(yaw, 0, true).then(() => {
             if (this.stopRequested || this.completed || this.failed !== undefined) return
-            if (!this.moveCellSafe(from, yaw, desired)) {
+            if (!this.moveCellSafe(from, yaw, desired, desired.jump)) {
               this.bot.clearControlStates()
               this.failed = new Error('combat-input next cell is not safe')
               this.failedCode = 'COMBAT_INPUT_BLOCKED'
               return
             }
-            for (const control of ['forward', 'back', 'left', 'right'] as const) {
+            for (const control of ['forward', 'back', 'left', 'right', 'jump'] as const) {
               this.bot.setControlState(control, desired[control])
             }
             this.result = { ...desired, yaw }
