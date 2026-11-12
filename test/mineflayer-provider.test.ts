@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Bot } from 'mineflayer'
 
-import { MineflayerProvider } from '../src/provider/mineflayer.ts'
+import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -355,6 +355,27 @@ describe('MineflayerProvider status', () => {
     const bare = fakeBot()
     delete (bare.bot as unknown as { version?: string }).version
     expect(new MineflayerProvider(bare.bot).liveStatus().minecraftVersion).toBeUndefined()
+  })
+})
+
+describe('Mineflayer connect failures', () => {
+  /**
+   * Category: cross-module contract (CONTRACTS §2).
+   * Protects: a failed connect tells the owner which target and version mode
+   * were used, plus the one actionable check. Failure mode: the owner only
+   * sees a bare socket error and cannot tell a wrong pinned version from a
+   * server that is down.
+   */
+  it('names the target, the version mode and the version hint', async () => {
+    // Mineflayer itself prints the raw socket error on this path
+    // (`logErrors` defaults on); only our wrapped message is asserted here.
+    await expect(connectMineflayer({
+      host: '127.0.0.1', port: 1, username: 'P2_Bot', version: '1.21.1', timeoutMs: 3_000,
+    })).rejects.toThrow(/cannot connect to 127\.0\.0\.1:1 \(version 1\.21\.1\).*"version": "auto"/u)
+
+    await expect(connectMineflayer({
+      host: '127.0.0.1', port: 1, username: 'P2_Bot', timeoutMs: 3_000,
+    })).rejects.toThrow(/cannot connect to 127\.0\.0\.1:1 \(version auto\).*Auto-detection may have failed/u)
   })
 })
 

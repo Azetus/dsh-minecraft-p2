@@ -83,7 +83,7 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
     const timer = setTimeout(() => {
       cleanup()
       try { bot.quit('connect timeout') } catch {}
-      reject(new Error(`Mineflayer connect timed out after ${timeout}ms`))
+      reject(connectFailure(options, `connect timed out after ${timeout}ms`))
     }, timeout)
     const cleanup = (): void => {
       clearTimeout(timer)
@@ -98,21 +98,41 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
     }
     const onError = (error: Error): void => {
       cleanup()
-      reject(error)
+      reject(connectFailure(options, error))
     }
     const onKicked = (reason: unknown): void => {
       cleanup()
-      reject(new Error(`Mineflayer kicked: ${typeof reason === 'string' ? reason : JSON.stringify(reason)}`))
+      reject(connectFailure(options, `kicked: ${typeof reason === 'string' ? reason : JSON.stringify(reason)}`))
     }
     const onEnd = (reason: unknown): void => {
       cleanup()
-      reject(new Error(`Mineflayer ended before spawn: ${String(reason)}`))
+      reject(connectFailure(options, `connection ended before spawn: ${String(reason)}`))
     }
     bot.once('spawn', onSpawn)
     bot.once('error', onError)
     bot.once('kicked', onKicked)
     bot.once('end', onEnd)
   })
+}
+
+/**
+ * A connect failure the owner can act on: which target, which version mode and
+ * what to check. The protocol-level cause of a version mismatch is a bare
+ * socket error, so the version hint is the only actionable part.
+ */
+function connectFailure(options: MineflayerConnectionOptions, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  const target = `${options.host}:${options.port}`
+  const hint = options.version === undefined
+    ? 'Auto-detection may have failed; check that this build supports the server\'s Minecraft version.'
+    : `If the server runs a different Minecraft version, set "version": "auto" or the matching version (currently pinned to ${options.version}).`
+  const error = new Error(`cannot connect to ${target} (${versionMode(options.version)}): ${detail}. ${hint}`)
+  ;(error as { cause?: unknown }).cause = cause
+  return error
+}
+
+function versionMode(version: string | undefined): string {
+  return version === undefined ? 'version auto' : `version ${version}`
 }
 
 const PLACE_FACES: Record<string, readonly [number, number, number]> = {
