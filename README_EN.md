@@ -24,7 +24,7 @@ The plugin uses Mineflayer over the vanilla Java protocol. Whether it can connec
 P2 connects through [Mineflayer](https://github.com/PrismarineJS/mineflayer) using the vanilla Java protocol, so **which game versions can connect is decided by Mineflayer**. Mineflayer declares support for Java Edition `1.8.8` through `26.1`; see its `testedVersions` for the exact list.
 
 - **You normally do not set a version** — the server version is detected automatically.
-- **The versions we have fully verified are `1.21.1` and `26.1.2`**: movement, mining, placement, cancellation and reconnect were exercised live on both.
+- **The fully verified versions are `1.21.1` and `26.1.2`**: all live testing was carried out on these two.
 - **Logging in is not the same as working tools**: other versions will usually connect, but mining, placement, crafting, combat and similar behavior is not guaranteed. Please report those as version-compatibility issues.
 - If detection fails or behavior looks clearly wrong, pin the version in `.p2/config.json`, for example `"version": "1.21.1"`.
 - Java Edition only; Bedrock Edition is not supported.
