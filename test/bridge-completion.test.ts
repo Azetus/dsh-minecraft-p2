@@ -564,7 +564,11 @@ function createHarness(
   }
   const plugin = createP2Plugin({
     bodyEntry: 'unused-body.mjs',
-    heartbeatMs: 20,
+    // The body lease is 3x this. At 20ms a single event-loop stall while the
+    // suite runs in parallel (plus the build step before it) faults the fake
+    // body mid-test; nothing here asserts heartbeat timing, so keep the lease
+    // well above a plausible stall.
+    heartbeatMs: 100,
     requestTimeoutMs: 200,
     lockDir: tempLockDir(),
     workspaceDir: tempWorkspace(),

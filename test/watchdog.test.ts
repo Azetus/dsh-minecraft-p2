@@ -137,7 +137,7 @@ function createManager(
   }
   harness.manager = new BodyManager({
     bodyEntry: 'unused-body.mjs',
-    heartbeatMs: 10,
+    heartbeatMs: 100,
     requestTimeoutMs: 20,
     stopTimeoutMs: 50,
     lockDir: options.lockDir ?? tempLockDir(),
@@ -178,7 +178,7 @@ describe('body watchdog', () => {
     expect(harness.spawnEnvs[0]).toMatchObject({ P2_MC_HOST: '127.0.0.1', P2_MC_PORT: '25575' })
 
     bodies[0]!.setSilent(true)
-    await wait(150)
+    await wait(800)
     expect(harness.spawns).toBe(2)
     expect(harness.spawnEnvs[1]).toMatchObject({ P2_MC_HOST: '127.0.0.1', P2_MC_PORT: '25575' })
     expect(harness.manager.target).toEqual(target)
@@ -230,7 +230,7 @@ describe('body watchdog', () => {
     const bodies = [createFakeBody('epoch-1', { providerStatus })]
     const harness = createManager(bodies)
     await harness.manager.start(owner, { host: 'localhost', port: 25575 })
-    await wait(120)
+    await wait(800)
 
     expect(harness.spawns).toBe(1)
     expect(bodies[0]!.killTreeCalls).toBe(1)
@@ -258,7 +258,7 @@ describe('body watchdog', () => {
     const harness = createManager(bodies)
     await harness.manager.start(owner)
     bodies[0]!.setSilent(true)
-    await wait(150)
+    await wait(800)
 
     expect(harness.spawns).toBe(2)
     expect(harness.manager.currentState).toBe('active')
@@ -280,13 +280,13 @@ describe('body watchdog', () => {
     await harness.manager.start(owner)
 
     bodies[0]!.setSilent(true)
-    await wait(150)
+    await wait(800)
     expect(harness.restarts[0]).toMatchObject({ attempt: 1 })
 
     // The first restart ages out of the 50ms window before the next fault.
-    await wait(150)
+    await wait(800)
     bodies[1]!.setSilent(true)
-    await wait(150)
+    await wait(800)
     expect(harness.restarts[1]).toMatchObject({ attempt: 1 })
     await harness.manager.stop()
   })
@@ -296,11 +296,11 @@ describe('body watchdog', () => {
     const harness = createManager(bodies, { maxRestarts: 1 })
     await harness.manager.start(owner)
     bodies[0]!.setSilent(true)
-    await wait(120)
+    await wait(800)
     expect(harness.manager.bodyEpoch).toBe('epoch-2')
 
     bodies[1]!.setSilent(true)
-    await wait(120)
+    await wait(800)
     expect(harness.spawns).toBe(2)
     expect(harness.manager.currentState).toBe('faulted')
     expect(harness.faults.at(-1)).toMatchObject({ reason: 'heartbeat-missed', autoRestart: 'exhausted' })
@@ -339,7 +339,7 @@ describe('body watchdog', () => {
     const harness = createManager(bodies)
     await harness.manager.start(owner)
     await harness.manager.stop()
-    await wait(120)
+    await wait(800)
     expect(harness.spawns).toBe(1)
     expect(harness.faults).toHaveLength(0)
     expect(harness.manager.currentState).toBe('inactive')
@@ -353,7 +353,7 @@ describe('body watchdog', () => {
     const stopping = harness.manager.stop()
     await wait(10)
     await stopping
-    await wait(100)
+    await wait(800)
     expect(harness.spawns).toBe(1)
     expect(harness.manager.currentState).toBe('inactive')
   })
@@ -363,7 +363,7 @@ describe('body watchdog', () => {
     const harness = createManager(bodies)
     await harness.manager.start(owner)
     bodies[0]!.server.stop()
-    await wait(80)
+    await wait(800)
     expect(harness.manager.currentState).toBe('active')
     expect(harness.manager.bodyEpoch).toBe('epoch-2')
     expect(harness.faults[0]).toMatchObject({ reason: 'process-exit', autoRestart: 'scheduled' })
@@ -375,7 +375,7 @@ describe('body watchdog', () => {
     const harness = createManager(bodies, { autoRestart: false })
     await harness.manager.start(owner)
     bodies[0]!.setSilent(true)
-    await wait(120)
+    await wait(800)
     expect(harness.spawns).toBe(1)
     expect(harness.manager.currentState).toBe('faulted')
     expect(harness.faults[0]).toMatchObject({ autoRestart: 'disabled' })
@@ -416,7 +416,7 @@ describe('body watchdog', () => {
     }
     const plugin = createP2Plugin({
       bodyEntry: 'unused-body.mjs',
-      heartbeatMs: 10,
+      heartbeatMs: 100,
       requestTimeoutMs: 20,
       bodyControl: true,
       autoRestart: true,
@@ -431,7 +431,7 @@ describe('body watchdog', () => {
     if (bodyTool === undefined) throw new Error('p2_body was not registered')
     const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
     await bodyTool.execute({ action: 'start', host: '127.0.0.1', port: 25575 }, { agent })
-    await wait(150)
+    await wait(800)
 
     const status = await bodyTool.execute({ action: 'status' }, { agent }) as {
       state?: string
@@ -464,7 +464,7 @@ describe('body watchdog', () => {
     }
     const plugin = createP2Plugin({
       bodyEntry: 'unused-body.mjs',
-      heartbeatMs: 10,
+      heartbeatMs: 100,
       requestTimeoutMs: 20,
       bodyControl: true,
       lockDir: tempLockDir(),
@@ -506,7 +506,7 @@ describe('body watchdog', () => {
     }
     const plugin = createP2Plugin({
       bodyEntry: 'unused-body.mjs',
-      heartbeatMs: 10,
+      heartbeatMs: 100,
       requestTimeoutMs: 20,
       bodyControl: true,
       lockDir: tempLockDir(),
@@ -558,7 +558,7 @@ describe('body watchdog', () => {
     }
     const plugin = createP2Plugin({
       bodyEntry: 'unused-body.mjs',
-      heartbeatMs: 10,
+      heartbeatMs: 100,
       requestTimeoutMs: 20,
       autoRestart: true,
       restartBackoffMs: [0, 0, 0],
@@ -575,7 +575,7 @@ describe('body watchdog', () => {
     expect(started.kind).toBe('success')
 
     bodies[0]!.setSilent(true)
-    await wait(180)
+    await wait(800)
     const texts = followups.map(message => message.content[0]?.text ?? '')
     expect(texts.some(text => text.includes('body faulted'))).toBe(true)
     expect(texts.some(text => text.includes('body restarted'))).toBe(true)
@@ -626,7 +626,7 @@ describe('body watchdog', () => {
     }
     const plugin = createP2Plugin({
       bodyEntry: 'unused-body.mjs',
-      heartbeatMs: 10,
+      heartbeatMs: 100,
       requestTimeoutMs: 20,
       autoRestart: true,
       restartBackoffMs: [0],
@@ -639,7 +639,7 @@ describe('body watchdog', () => {
     const agent = { id: owner.agentId, session: { id: owner.sessionId, header: { cwd: owner.cwd } } }
     const started = await definitions[0]!.handler({ agent, rawInput: ' start 127.0.0.1:25575' })
     expect(started.kind).toBe('success')
-    await wait(150)
+    await wait(800)
 
     const texts = followups.map(message => message.content[0]?.text ?? '')
     expect(texts.some(text => text.includes('body faulted (provider-disconnected)'))).toBe(true)
@@ -650,6 +650,7 @@ describe('body watchdog', () => {
     expect(texts.some(text => text.includes('body restarted'))).toBe(false)
   })
 })
+
 
 
 
