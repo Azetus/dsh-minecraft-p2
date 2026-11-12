@@ -174,6 +174,12 @@ export type MoveOptions = {
   allowPlace?: boolean
   material?: string
   /**
+   * Explicit authorization to sprint on plain ground traversal. Off by
+   * default; the driver drops it when the body is too hungry, and jump/descend
+   * moves never sprint regardless. Vanilla plannner (`risky`) ignores it.
+   */
+  sprint?: boolean
+  /**
    * Only for an explicit `traverse scaffold`: an exact goal may start
    * unsupported because the Pillar move will place the column under it. The
    * implementation ignores this unless `allowPlace` is also true.

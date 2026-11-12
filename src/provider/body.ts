@@ -597,6 +597,7 @@ export class MineflayerBody implements BodyApi {
       ...(opts.material === undefined ? {} : { material: opts.material }),
       ...(opts.allowUnsupportedGoal === undefined ? {} : { allowUnsupportedGoal: opts.allowUnsupportedGoal }),
       ...(opts.planner === undefined ? {} : { planner: opts.planner }),
+      ...(opts.sprint === true ? { sprint: true } : {}),
     }, timeoutMs)
   }
 

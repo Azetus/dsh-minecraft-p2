@@ -188,6 +188,8 @@ export class MotionRun {
       activeTarget: this.activeTarget,
       at: position,
       range: this.range,
+      /** Motion profile this run planned and executed with (`walk`/`sprint`). */
+      profile: this.baseConstraints.profile,
       phase: this.phase,
       pathStatus: this.pathStatus,
       path: this.path.slice(0, 64),

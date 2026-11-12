@@ -29,6 +29,8 @@ const MOVE_SCHEMA: SchemaNode = {
     allowDiagonal: { type: 'boolean' },
     allowPlace: { type: 'boolean' },
     material: { type: 'string' },
+    /** Explicit authorization to sprint on plain ground traversal. */
+    sprint: { type: 'boolean' },
     /**
      * Unvalidated vanilla-style path: best effort only. It never grants
      * break/place, and the result is marked `unvalidated`.
@@ -55,6 +57,7 @@ type MoveParams = {
   allowDiagonal?: boolean
   allowPlace?: boolean
   material?: string
+  sprint?: boolean
   risky?: boolean
   continuationKey?: string
   unstickDig?: MoveOptions['unstickDig']
@@ -113,6 +116,9 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
         observed: moveFailure(ctx, 'GOTO_TIMEOUT', last?.observed, params),
       }
     }
+    // Sprint is re-decided per segment: hunger can cross the vanilla threshold
+    // mid-run, and the vanilla planner (`risky`) never adds speed.
+    const sprint = params.sprint === true && params.risky !== true && canSprint(ctx.body)
     const result = await ctx.body.moveTo(goal, {
       range,
       timeoutMs: Math.min(remaining, SEGMENT_MS),
@@ -123,6 +129,7 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
       ...(params.allowDiagonal === undefined ? {} : { allowDiagonal: params.allowDiagonal }),
       ...(params.allowPlace === undefined ? {} : { allowPlace: params.allowPlace }),
       ...(params.material === undefined ? {} : { material: params.material }),
+      ...(sprint ? { sprint: true } : {}),
       ...(params.risky === true ? { planner: 'vanilla' as const } : {}),
     })
     last = result
@@ -151,6 +158,15 @@ async function move(ctx: DriverCtx, params: MoveParams, job: Job): Promise<Drive
     state: 'failed',
     code: 'GOTO_SEGMENTS_EXCEEDED',
     observed: moveFailure(ctx, 'GOTO_SEGMENTS_EXCEEDED', last?.observed, params),
+  }
+}
+
+/** Vanilla stops sprinting at food 6; the client physics does not model hunger. */
+function canSprint(body: BodyApi): boolean {
+  try {
+    return body.self().food > 6
+  } catch {
+    return false
   }
 }
 

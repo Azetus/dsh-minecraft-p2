@@ -31,7 +31,7 @@ function job(params: Record<string, unknown> = { x: 1, y: 64, z: 0, range: 2 }):
   }
 }
 
-function portWith(promise: Promise<ActResult>): {
+function portWith(promise: Promise<ActResult>, options: { food?: number } = {}): {
   port: BodyApi
   calls: Array<{ target: unknown; opts: unknown }>
 } {
@@ -41,7 +41,7 @@ function portWith(promise: Promise<ActResult>): {
       calls.push({ target, opts })
       return promise
     },
-    self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 } }),
+    self: () => ({ pos: { x: 0.5, y: 64, z: 0.5 }, food: options.food ?? 20 }),
     blockAt: () => ({ name: 'air', loaded: true }),
   } as unknown as BodyApi
   return { port, calls }
@@ -65,6 +65,27 @@ describe('move driver', () => {
     await flush()
     expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { x: 1, y: 64, z: 0 } })
     expect(handle.stopStatus()).toBe('stopping')
+  })
+
+  it('forwards explicit sprint only when the body is fed', async () => {
+    const fed = deferred<ActResult>()
+    const first = portWith(fed.promise, { food: 20 })
+    createMoveDriver().start(job({ x: 1, y: 64, z: 0, range: 2, sprint: true }), { body: first.port, now: () => 0 })
+    expect(first.calls[0]?.opts).toMatchObject({ sprint: true })
+
+    const hungry = deferred<ActResult>()
+    const second = portWith(hungry.promise, { food: 4 })
+    createMoveDriver().start(job({ x: 1, y: 64, z: 0, range: 2, sprint: true }), { body: second.port, now: () => 0 })
+    expect((second.calls[0]?.opts as { sprint?: boolean }).sprint).toBeUndefined()
+
+    // The vanilla planner never adds speed.
+    const risky = deferred<ActResult>()
+    const third = portWith(risky.promise, { food: 20 })
+    createMoveDriver().start(
+      job({ x: 1, y: 64, z: 0, range: 2, sprint: true, risky: true }),
+      { body: third.port, now: () => 0 },
+    )
+    expect((third.calls[0]?.opts as { sprint?: boolean }).sprint).toBeUndefined()
   })
 
   it('never reports an unknown ActResult as success', async () => {

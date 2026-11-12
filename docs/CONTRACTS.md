@@ -203,7 +203,7 @@ type BodyApi = {
 - `collision` 是方块局部坐标中的 AABB 列表（`[minX,minY,minZ,maxX,maxY,maxZ]`）；空数组表示无碰撞，省略表示未知，不能用非空气代替碰撞形状。
 - `serverTags` 是适配器层的服务端 block tags（`ReadonlySet<string>`），不序列化到 bridge；`undefined` 表示 tags 尚未就绪，不是“没有 tag”。
 - `moveTo` 目标为脚下路径格坐标，按格取整；`range` 默认 1、范围 0–8，使用三维格距离。容差内只接受已加载、有安全支撑及身体净空的格；半砖按真实支撑高度完成读回。
-- `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material`；没有授权时不得搭桥/垫脚。所有普通移动和授权 `unstickDig` 都走 motion；不存在独立的 `motion` 开关或 `goto` 路径。
+- `moveTo` 可带显式移动授权 `allowParkour / allowDiagonal / allowPlace / material / sprint`；没有授权时不得搭桥/垫脚，也不得冲刺。`sprint` 默认关闭，只作用于平地直线（`Traverse`），在 `food <= 6` 时被 move driver 丢弃，`risky`（vanilla planner）忽略它；`go.params.sprint` 是唯一来源。所有普通移动和授权 `unstickDig` 都走 motion；不存在独立的 `motion` 开关或 `goto` 路径。
 - `unstickDig` 是显式 break 白名单：只允许列出的坐标/方块名，核心先挖掘并读回，再执行移动；没有列出的块不可挖。
 - 成功需要角色实际落地到有效终点，并重新检查站位。路径计算成功、`isMoving=false`、走到 partial 前缀都不是成功。成功体带 `arrival{kind,policy,from,to,cell,feetY,at,movedDistance,elapsedMs}`；干地水平容差 0.45，水 1.0。
 - `BODY_OVERLAP`：真实 0.6×1.8 AABB 与已加载方块碰撞相交（半嵌、1 格高小窝）。规划前与到达后 fail-fast，`observed.blockedBy` 给出 `{x,y,z,name}`，不重试；自动清格不在 motion 内实现，Agent 用 `go {unstickDig}` 显式授权。

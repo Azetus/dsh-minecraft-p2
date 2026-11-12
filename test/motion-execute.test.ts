@@ -116,6 +116,27 @@ describe('move state machines', () => {
     expect(world.inputs.get('forward')).toBe(false)
   })
 
+  it('holds sprint only for plain traversal under the sprint profile', () => {
+    const world = flatWorld()
+    const source = contextFor(world, { profile: 'sprint' })
+    const move = new TraverseMove({ x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 1 })
+    const state = { status: 'running' as const, ticks: 0, startedAt: 0, elapsedMs: 0 }
+    expect(move.update(state, source.next())).toBe('running')
+    expect(world.inputs.get('sprint')).toBe(true)
+    movePos(world, { x: 0, y: 64, z: 1 })
+    expect(move.update(state, source.next())).toBe('success')
+    expect(world.inputs.get('sprint')).toBe(false)
+
+    // A step up never sprints, even under the sprint profile.
+    const climb = flatWorld()
+    climb.blocks.set('0,64,2', rawBlock('stone', FULL_CUBE))
+    climb.blocks.set('0,65,2', rawBlock('air', []))
+    const climbSource = contextFor(climb, { profile: 'sprint' })
+    const ascend = new AscendMove({ x: 0, y: 64, z: 1 }, { x: 0, y: 65, z: 2 })
+    ascend.update(state, climbSource.next())
+    expect(climb.inputs.get('sprint')).not.toBe(true)
+  })
+
   it('opens a closed door before walking into its cell', () => {
     const world = flatWorld()
     world.blocks.set('0,64,1', rawBlock('oak_door', FULL_CUBE, { half: 'lower', open: 'false' }))

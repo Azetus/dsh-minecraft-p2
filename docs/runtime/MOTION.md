@@ -130,6 +130,8 @@ type MotionWorld = {
 
 `MotionConstraints` 把“这次移动允许什么”集中传入：
 
+> `profile:'sprint'` 只让 `Traverse`（平地直线）按住 sprint；`Ascend/Descend/Fall/Parkour` 等仍走 `walk`，并在每个 move 的每拍把 sprint 关掉。`go { sprint:true }` 是唯一入口，默认关闭；move driver 在 `food <= 6` 时丢弃该授权（原版饥饿门槛），`risky`（vanilla planner）忽略 sprint。客户端物理会应用冲刺速度修正；服务端只校验位移上限。
+
 ```ts
 type MotionConstraints = {
   profile: 'walk' | 'sprint' | 'parkour' | 'descend' | 'ascend'
@@ -317,7 +319,7 @@ interface Move {
 - `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
 - `recheck`：冷却结束后、真正发 `attack` 前重新读目标；等待期间移动、遮挡或死亡的目标不补刀。每次挥击前 `lookAt`；失败不取消攻击。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 当前不包含 sprint、远程、暴击。
+- 当前不包含远程、暴击。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 

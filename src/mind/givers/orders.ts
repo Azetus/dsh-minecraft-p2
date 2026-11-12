@@ -98,6 +98,7 @@ export function createGoOrderGiver(active: () => OrderView | undefined): WorkGiv
           ...(current.order.params?.allowDiagonal === true ? { allowDiagonal: true } : {}),
           ...(current.order.params?.allowPlace === true ? { allowPlace: true } : {}),
           ...(typeof current.order.params?.material === 'string' ? { material: current.order.params.material } : {}),
+          ...(current.order.params?.sprint === true ? { sprint: true } : {}),
           ...(risky ? { risky: true } : {}),
         },
         keys: `order.go:${current.order.id}`,

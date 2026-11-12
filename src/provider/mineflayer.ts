@@ -1667,7 +1667,7 @@ class MineflayerActHandle implements ActHandle {
             this.vanillaRun.start()
             return
           }
-          const constraints = defaultConstraints('walk')
+          const constraints = defaultConstraints(this.args.sprint === true ? 'sprint' : 'walk')
           if (this.args.allowParkour === true) constraints.allowParkour = true
           if (this.args.allowDiagonal === true) constraints.allowDiagonal = true
           if (this.args.allowPlace === true) constraints.allowPlace = true

@@ -266,6 +266,17 @@ describe('mineflayer port timeout and authority', () => {
     })
   })
 
+  it('forwards explicit sprint to the movement act', async () => {
+    const { port, source } = createPort()
+    await port.moveTo({ x: 1, y: 64, z: 2 }, { range: 2, timeoutMs: 500, sprint: true })
+    expect(source.calls.at(-1)).toEqual({
+      name: 'motion-goto',
+      args: { x: 1, y: 64, z: 2, range: 2, timeoutMs: 500, sprint: true },
+    })
+    await port.moveTo({ x: 1, y: 64, z: 2 }, { range: 2, timeoutMs: 500 })
+    expect((source.calls.at(-1)?.args as { sprint?: boolean }).sprint).toBeUndefined()
+  })
+
   it('rejects writes without a token', async () => {
     const source = new FakeActSource()
     const port = new MineflayerBody(new FakeBot() as unknown as Bot, source as unknown as MineflayerProvider, { pollIntervalMs: 2 })

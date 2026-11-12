@@ -248,6 +248,16 @@ describe('order and traverse givers', () => {
       params: { x: 6, y: 64, z: 0, range: 0 } } }))
     expect(giver.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { range: 0 } })
   })
+
+  it('passes an explicit sprint authorization into the move job only', () => {
+    const sprint = createGoOrderGiver(() => ({ order: { id: 'go-s', verb: 'go',
+      params: { x: 6, y: 64, z: 0, sprint: true } } }))
+    expect(sprint.find(ctx, flatWorld())).toMatchObject({ driverId: 'move', params: { sprint: true } })
+
+    const walking = createGoOrderGiver(() => ({ order: { id: 'go-w', verb: 'go',
+      params: { x: 6, y: 64, z: 0 } } }))
+    expect(walking.find(ctx, flatWorld())).not.toHaveProperty('params.sprint')
+  })
   it('routes an explicitly allowed lethal fall to the Agent fatal driver', () => {
     const go = createGoOrderGiver(() => ({ order: { id: 'go-lf', verb: 'go',
       params: { x: 6, y: 60, z: 0 },
