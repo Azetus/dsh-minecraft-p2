@@ -7,7 +7,7 @@ import type { BodyApi, Vec3 } from './api.ts'
 import { createMind } from './mind.ts'
 import type { MindRuntime } from './mind.ts'
 import { loadBodyInfo } from './manifest.ts'
-import { loadProviderConfig } from './provider-config.ts'
+import { loadProviderConfig, resolveMinecraftVersion } from './provider-config.ts'
 import type { MinecraftProviderConfig } from './provider-config.ts'
 import { BodyRuntime } from './runtime.ts'
 import { BodyServer } from './server.ts'
@@ -114,11 +114,14 @@ async function connectProvider(body: BodyInfo): Promise<ConnectedProvider | unde
   try {
     const providerUrl = new URL('../provider/minecraft.mjs', import.meta.url).href
     const providerModule = await import(providerUrl) as typeof import('../provider/index.ts')
+    const resolvedVersion = resolveMinecraftVersion(loaded.config.version)
     const opened = await providerModule.openMineflayerBody({
       host: loaded.config.host,
       port: loaded.config.port,
       username: loaded.config.username,
-      version: loaded.config.version,
+      // Omitting `version` makes mineflayer resolve it from the server's
+      // protocol; the config keeps the literal so status can show the request.
+      ...(resolvedVersion === undefined ? {} : { version: resolvedVersion }),
       connectTimeoutMs: loaded.config.connectTimeoutMs,
       serverIdleMs: loaded.config.serverIdleMs,
       worldId: loaded.config.worldId,

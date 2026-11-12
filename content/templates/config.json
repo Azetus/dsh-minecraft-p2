@@ -1,7 +1,7 @@
 {
   "minecraft": {
     "username": "P2_Bot",
-    "version": "1.21.1",
+    "version": "auto",
     "connectTimeoutMs": 15000,
     "serverIdleMs": 1500
   },

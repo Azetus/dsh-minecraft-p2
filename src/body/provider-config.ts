@@ -5,6 +5,10 @@ export type MinecraftProviderConfig = {
   host: string
   port: number
   username: string
+  /**
+   * `auto` (default) lets mineflayer resolve the version from the server's
+   * advertised protocol number; any other value is used verbatim.
+   */
   version: string
   connectTimeoutMs: number
   serverIdleMs: number
@@ -26,10 +30,29 @@ type UnknownRecord = Record<string, unknown>
 const DEFAULTS = {
   port: 25575,
   username: 'P2_Bot',
-  version: '1.21.1',
+  /**
+   * `auto` resolves the server version from its advertised protocol number
+   * before connecting; pinning a literal version is still supported.
+   */
+  version: 'auto',
   connectTimeoutMs: 15_000,
   serverIdleMs: 1500,
 } as const
+
+/** The configured `version` value that means "ask the server". */
+export const AUTO_VERSION = 'auto'
+
+/**
+ * Translate the configured version into a mineflayer `version` option.
+ * `undefined` lets mineflayer ping the server and resolve the version itself.
+ */
+export function resolveMinecraftVersion(version: string): string | undefined {
+  return version === AUTO_VERSION ? undefined : version
+}
+
+function asVersion(value: string): string {
+  return value.trim().toLowerCase() === AUTO_VERSION ? AUTO_VERSION : value
+}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -101,11 +124,11 @@ export async function loadProviderConfig(
     'username',
     DEFAULTS.username,
   )
-  const version = asString(
+  const version = asVersion(asString(
     envValue(env, 'P2_MC_VERSION') ?? file?.version,
     'version',
     DEFAULTS.version,
-  )
+  ))
   const connectTimeoutMs = asPositive(
     envValue(env, 'P2_MC_CONNECT_TIMEOUT_MS') ?? file?.connectTimeoutMs,
     'connectTimeoutMs',

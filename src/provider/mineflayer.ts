@@ -70,7 +70,9 @@ export async function connectMineflayer(options: MineflayerConnectionOptions): P
     port: options.port,
     username: options.username,
     auth: 'offline',
-    version: options.version ?? '1.21.1',
+    // Omitting `version` makes mineflayer ping the server and resolve the
+    // version from its advertised protocol number; a literal pins it.
+    ...(options.version === undefined ? {} : { version: options.version }),
     hideErrors: false,
   })
   // The tags packet can arrive before spawn (and before the registry exists),
@@ -461,11 +463,13 @@ export class MineflayerProvider {
   liveStatus(): ProviderRuntimeStatus {
     const serverAge = this.serverAge()
     const current = this.current as MineflayerActHandle | undefined
+    const minecraftVersion = this.resolvedMinecraftVersion()
     return {
       connected: this.disconnected === undefined && !this.resetRequested,
       paused: this.paused,
       serverAge,
       idleMs: this.paused && this.lastServerAgeAt > 0 ? Date.now() - this.lastServerAgeAt : 0,
+      ...(minecraftVersion === undefined ? {} : { minecraftVersion }),
       controlState: this.controlState(),
       controlRelease: current?.controlRelease() ?? null,
       lastDeathAt: this.lastDeath?.at ?? null,
@@ -473,6 +477,12 @@ export class MineflayerProvider {
       ...(this.lastDisconnect === undefined ? {} : { lastDisconnect: { ...this.lastDisconnect } }),
       pauseDiagnostics: this.pauseDiagnostics(),
     }
+  }
+
+  /** The version mineflayer actually used, whether pinned or auto-resolved. */
+  private resolvedMinecraftVersion(): string | undefined {
+    const value = (this.bot as unknown as { version?: unknown }).version
+    return typeof value === 'string' && value.length > 0 ? value : undefined
   }
 
   /** Subscribe to provider pause/resume transitions (one listener per port). */

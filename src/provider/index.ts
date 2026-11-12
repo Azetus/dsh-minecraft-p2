@@ -14,7 +14,8 @@ export type OpenMineflayerBodyOptions = {
   host: string
   port: number
   username: string
-  version: string
+  /** Omitted lets mineflayer resolve the version from the server's protocol. */
+  version?: string
   connectTimeoutMs: number
   serverIdleMs: number
   worldId: string
@@ -38,7 +39,7 @@ export async function openMineflayerBody(options: OpenMineflayerBodyOptions): Pr
     host: options.host,
     port: options.port,
     username: options.username,
-    version: options.version,
+    ...(options.version === undefined ? {} : { version: options.version }),
     timeoutMs: options.connectTimeoutMs,
   })
   const provider = new MineflayerProvider(bot, {

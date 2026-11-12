@@ -4,7 +4,7 @@
 
 Let DeepSeek Harness (DSH) join your Minecraft world as a **second player**. You can chat with P2 in-game and ask it to go somewhere, mine, or pick up dropped items. Once it takes on a task, P2 finds its own route, chooses tools, and tries to reroute or retry if it gets blocked.
 
-P2 joins the server as a separate player. No client mod is required. This release supports **Minecraft Java Edition 1.21.1** servers that allow offline login (`online-mode=false`).
+P2 joins the server as a separate player. No client mod is required. This release supports Minecraft Java Edition servers that allow offline login (`online-mode=false`); see [Compatibility](#minecraft-versions) for the supported game versions.
 
 > **0.2.x preview** · Some features are still in development, and commands and tool parameters may change between releases.
 
@@ -21,12 +21,14 @@ The plugin uses Mineflayer over the vanilla Java protocol. Whether it can connec
 
 ### Minecraft versions
 
-- **Stable support: Java Edition `1.21.1`.** This is the tested scope.
-- The protocol library also supports versions up to `26.1`. We have only run a quick test on `26.1`; that is not stable support, and tool behavior is not guaranteed there.
-- **Protocol support does not equal stable plugin support.** Other versions may allow login, but movement, mining, placement, crafting, and other behavior are not guaranteed.
-- Java Edition only; Bedrock is not supported.
-- `minecraft.version` in `.p2/config.json` must match the server version; the default is `1.21.1`.
-- Offline login only (`online-mode=false`); servers that require Mojang/Microsoft authentication are not supported.
+P2 connects through [Mineflayer](https://github.com/PrismarineJS/mineflayer) using the vanilla Java protocol, so **which game versions can connect is decided by Mineflayer**. Mineflayer declares support for Java Edition `1.8.8` through `26.1`; see its `testedVersions` for the exact list.
+
+- **You normally do not set a version** — the server version is detected automatically.
+- **The versions we have fully verified are `1.21.1` and `26.1.2`**: movement, mining, placement, cancellation and reconnect were exercised live on both.
+- **Logging in is not the same as working tools**: other versions will usually connect, but mining, placement, crafting, combat and similar behavior is not guaranteed. Please report those as version-compatibility issues.
+- If detection fails or behavior looks clearly wrong, pin the version in `.p2/config.json`, for example `"version": "1.21.1"`.
+- Java Edition only; Bedrock Edition is not supported.
+- Offline login only (`online-mode=false`); Mojang/Microsoft-authenticated servers are not supported.
 
 ### Mods and servers
 
@@ -56,7 +58,7 @@ Mineflayer only knows the vanilla blocks, items, recipes, and entities in its pr
 ### Requirements
 
 - An installed copy of DSH. This plugin was tested with DSH `0.2.1-rc.3`.
-- A reachable Minecraft Java Edition `1.21.1` server with `online-mode=false`.
+- A reachable Minecraft Java Edition server with `online-mode=false`.
 - A unique name for P2. The default is `P2_Bot`. Make sure no player with that name is already connected.
 
 ### Install from the DSH Plugins page

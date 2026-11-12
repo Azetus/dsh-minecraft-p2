@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { loadProviderConfig } from '../src/body/provider-config.ts'
+import { loadProviderConfig, resolveMinecraftVersion } from '../src/body/provider-config.ts'
 
 const dirs: string[] = []
 
@@ -103,5 +103,30 @@ describe('provider config', () => {
     await expect(loadProviderConfig(configDir({ username: '' }), {
       P2_MC_HOST: '127.0.0.1',
     })).rejects.toThrow(/username/)
+  })
+
+  it('defaults the version to auto and keeps an explicit one verbatim', async () => {
+    const byDefault = await loadProviderConfig(configDir(undefined), { P2_MC_HOST: '127.0.0.1' })
+    expect(byDefault?.config.version).toBe('auto')
+
+    const explicit = await loadProviderConfig(configDir({ version: '26.1.2' }), { P2_MC_HOST: '127.0.0.1' })
+    expect(explicit?.config.version).toBe('26.1.2')
+
+    // Case and surrounding whitespace do not create a second sentinel spelling.
+    const loose = await loadProviderConfig(configDir({ version: '  AUTO ' }), { P2_MC_HOST: '127.0.0.1' })
+    expect(loose?.config.version).toBe('auto')
+
+    // The environment still wins over the file.
+    const fromEnv = await loadProviderConfig(configDir({ version: '1.20.1' }), {
+      P2_MC_HOST: '127.0.0.1',
+      P2_MC_VERSION: 'auto',
+    })
+    expect(fromEnv?.config.version).toBe('auto')
+  })
+
+  it('maps auto to "let mineflayer resolve it" and pins anything else', () => {
+    expect(resolveMinecraftVersion('auto')).toBeUndefined()
+    expect(resolveMinecraftVersion('1.21.1')).toBe('1.21.1')
+    expect(resolveMinecraftVersion('26.1.2')).toBe('26.1.2')
   })
 })

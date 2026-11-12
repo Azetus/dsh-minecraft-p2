@@ -87,6 +87,7 @@
 `mind.status.metrics` 提供进程内 run metrics：`orders`（accepted/succeeded/failed/blocked/cancelled）、`jobs`（started/succeeded/failed/interrupted/retried/preempted）、`holds`、`holdReasons`、`failureCodes`、`completionRate`、`lastFailure`。`job.terminal` 事件附带 `diagnostic {code,category,hint}`；指标只从事件派生，不读世界。
 
 `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`；bridge 用它给 owner 记忆分 scope，不参与控制。缺失时 bridge 回退到 target/unknown 并日志。
+`providerState.minecraftVersion`（可选）是实际使用的 MC 版本：显式配置时按配置值解析，`version: "auto"` 时为连接前按服务器协议号解析的结果；它是 `minecraft-data` 的规范版本名（服务器 `26.1.2` → `26.1`），缺失表示 adapter 报不出。
 `mind.status.worldTime` 是当前观测时钟：`{day, timeOfDay, isNight, ticksToSunset}`；`day=floor(worldAge/24000)`，`timeOfDay` 0–23999，`isNight` 为 13000–22999，`ticksToSunset` 白天为 `max(0,13000-timeOfDay)`、夜间 0。
 `metrics.jsonl`（journal 同目录）在每个 order 终态追加一行：`orderId/verb/state/acceptedAt/durationMs/attempts/lastCode/blockedKeys/target`；写入失败不影响 order。`p2_orders` 的每个视图带 `attempts/lastCode/blockedKeys`。
 `mind.status.duty` 是常驻任务视图：`duty.work` 仅在无 active order/plan 时选择 duty.item 的来源并挖取；配额完成/无来源/超时/工作预算会结束为 completed/blocked。显式 order/plan 优先，结束后 duty 恢复；`p2_duty stop` 立即停止。duty 会持久化到 journal 同目录的 `duty.json` v2：baseline、activeMs、pausedMs、jobs 与状态；body 重启后只恢复未过期且 identity 匹配的 active duty，`collected` 从 baseline+背包重算，`activeMs` 从文件恢复（宕机时间不计入 active 时间）；completed/blocked/failed/cancelled 不复活。duty 被 order/plan/threat 暂停时不消耗 active 时间；blocked/failed 会让 base 保持 inactive，等 Agent 决定。

@@ -163,6 +163,7 @@ type BodyApi = {
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。
 - `mind.status.metrics` 是进程内 run metrics：已接受的 order 数、order 终态分布、job 计数/重试/抢占、hold 次数与原因、失败码计数、完成率、最近失败诊断。它只从事件派生，不读世界、不产生额外写入。
 - `mind.status.identity`（可选）是 provider 的恢复身份 `{worldId, characterId}`。它只读、不参与控制；bridge 用它给记忆/owner-session 分 scope。provider 没有 identity 时字段省略，调用方必须回退而不是猜测。
+- `providerState.minecraftVersion`（可选）是**实际使用的 MC 版本**：显式配置时按配置值解析，`version: "auto"` 时是连接前按服务器通告协议号解析出的版本。它是 `minecraft-data` 的规范版本名，可能比服务器对外的版本字符串更粗（例如服务器 `26.1.2` 解析为 `26.1`）。它是诊断字段，不是控制输入；adapter 报不出时字段省略。
 - `mind.status.worldTime` 是当前观测的时钟：`{day, timeOfDay, isNight, ticksToSunset}`。`day = floor(worldAge/24000)`；`timeOfDay` 归一化到 0–23999；`isNight` 为 13000–22999；`ticksToSunset` 在白天为 `max(0, 13000-timeOfDay)`，夜间为 0。它是观测值，不是控制输入。
 - **Duty（gather）**：`p2_duty {action:"start", duty:{kind:"gather",item,quota,radius?,maxJobs?,maxWallMs?}}` 启动显式常驻任务；`mind.status.duty` 显示状态。duty 只在没有 active order、没有 active plan、没有常驻威胁时运行；显式 order/plan 会暂停它，结束后恢复。配额达到 → completed；无来源/超时/job 预算 → blocked；内部定义错误 → failed；`p2_duty stop` → cancelled。只支持单物品 gather 配额，不自行选新目标。
   - `p2_duty start` 会替换当前 duty：先校验新 spec（失败则现有 duty 不变），再把当前 active duty 置为 `cancelled` + `REPLACED_BY_NEW_DUTY`，停止当前 job，然后启动新 duty；返回 `{previousDuty,started}` 并发出 `duty.terminal`。tracker 的单写者门保证当前 job 停止确认前不会并行启动新 job。

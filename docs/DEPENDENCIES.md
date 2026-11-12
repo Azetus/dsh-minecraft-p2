@@ -29,7 +29,7 @@
 
 ### 3.1 provider 版本边界
 
-当前 provider 固定 `mineflayer 4.39.0` / `minecraft-protocol 1.67.0` / `minecraft-data 3.114.0`，目标 MC 1.21.1。依赖行为按以下边界使用：
+当前 provider 固定 `mineflayer 4.39.0` / `minecraft-protocol 1.67.0` / `minecraft-data 3.114.0`。MC 版本默认由 `minecraft.version: "auto"` 在连接前解析（ping 服务器 → 按协议号查本机 `minecraft-data`），也可以显式钉死；实测环境为 `26.1.2`。依赖行为按以下边界使用：
 
 - 没有 `mayPlace` / `waitForUpdate` / `noPath` 事件 / `craft` 事件；放置事件是 `blockPlaced`。
 - `openContainer(crafting_table)` 必抛（工作台不是容器），合成走 `bot.craft`。

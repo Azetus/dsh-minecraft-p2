@@ -97,6 +97,12 @@ export type ProviderRuntimeStatus = {
   paused: boolean
   serverAge: number | null
   idleMs: number
+  /**
+   * The Minecraft version actually in use. With `version: "auto"` this is the
+   * value resolved from the server's advertised protocol; absent only when the
+   * adapter cannot report one.
+   */
+  minecraftVersion?: string
   /** Provider-visible control release state for the current handle. */
   controlState?: 'idle' | 'active' | 'unknown'
   /** `best-effort` means stop was issued but release could not be confirmed. */

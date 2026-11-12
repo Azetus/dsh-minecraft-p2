@@ -31,6 +31,7 @@ function fakeBot() {
     setControlState: (name: string, value: boolean) => { controls.set(name, value) },
     getControlState: (name: string) => controls.get(name) ?? false,
     clearControlStates: () => { controls.clear() },
+    version: '26.1.2',
   })
   return { bot: bot as unknown as Bot, controls, emitter: bot }
 }
@@ -343,6 +344,17 @@ describe('MineflayerProvider off-hand stance', () => {
     goneProvider.offhandHold(true)
     gone.emitter.emit('end', 'server closed')
     expect(goneProvider.offhandActive()).toBe(false)
+  })
+})
+
+describe('MineflayerProvider status', () => {
+  it('reports the resolved minecraft version and omits an unknown one', () => {
+    const { bot } = fakeBot()
+    expect(new MineflayerProvider(bot).liveStatus().minecraftVersion).toBe('26.1.2')
+
+    const bare = fakeBot()
+    delete (bare.bot as unknown as { version?: string }).version
+    expect(new MineflayerProvider(bare.bot).liveStatus().minecraftVersion).toBeUndefined()
   })
 })
 
