@@ -541,4 +541,40 @@ describe('mineflayer port events', () => {
       { event: 'inventoryChanged', payload: {} },
     ])
   })
+
+  it('attributes self damage to the reported source, and only while fresh', () => {
+    let now = 1_000
+    const { port, bot } = createPort(undefined, undefined, { now: () => now })
+    const hurt: unknown[] = []
+    const damaged: unknown[] = []
+    port.on('entityHurt', payload => hurt.push(payload))
+    port.on('damaged', payload => damaged.push(payload))
+    ;(bot.entity as unknown as { id?: number }).id = 7
+
+    bot.emit('entityHurt', { id: 7 }, { id: 9, name: 'zombie', type: 'hostile' })
+    bot.health = 16
+    bot.emit('health')
+    expect(hurt).toEqual([{ entityId: '7', source: { id: '9', name: 'zombie', type: 'hostile' } }])
+    expect(damaged).toEqual([{ health: 16, source: { id: '9', name: 'zombie', type: 'hostile' } }])
+
+    // A stale source must not be attached to a later health packet.
+    now += 600
+    bot.health = 14
+    bot.emit('health')
+    expect(damaged.at(-1)).toEqual({ health: 14 })
+
+    // Environmental damage arrives with no damage_event at all.
+    bot.health = 12
+    bot.emit('health')
+    expect(damaged.at(-1)).toEqual({ health: 12 })
+  })
+
+  it('forwards a damage source for other entities without claiming it as self damage', () => {
+    const { port, bot } = createPort()
+    const hurt: unknown[] = []
+    port.on('entityHurt', payload => hurt.push(payload))
+    ;(bot.entity as unknown as { id?: number }).id = 7
+    bot.emit('entityHurt', { id: 11 }, { id: 9, name: 'skeleton' })
+    expect(hurt).toEqual([{ entityId: '11', source: { id: '9', name: 'skeleton' } }])
+  })
 })

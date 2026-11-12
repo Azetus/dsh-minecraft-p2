@@ -41,6 +41,8 @@ export type MindLoopOptions = {
   observe?: (box: Box) => void
   /** The known target for this tick, resolved by the mind; never an Agent payload. */
   focus?: () => EntityInfo | undefined
+  /** Recent damage attacker, already age-filtered by the mind. */
+  attacker?: () => { id: string; name?: string } | undefined
   /** Adapter visibility for automatic fight target checks. */
   canSee?: (entityId: string) => boolean
   /** Last GOTO_STUCK terminal time. */
@@ -73,6 +75,7 @@ export class MindLoop {
   private readonly gatherCount: (() => number) | undefined
   private readonly observe: ((box: Box) => void) | undefined
   private readonly focus: (() => EntityInfo | undefined) | undefined
+  private readonly attacker: (() => { id: string; name?: string } | undefined) | undefined
   private readonly canSee: ((entityId: string) => boolean) | undefined
   private readonly lastStuckAt: (() => number | undefined) | undefined
   private readonly mainIdleDelayMs: number
@@ -101,6 +104,7 @@ export class MindLoop {
     this.gatherCount = options.gatherCount
     this.observe = options.observe
     this.focus = options.focus
+    this.attacker = options.attacker
     this.canSee = options.canSee
     this.lastStuckAt = options.lastStuckAt
     this.mainIdleDelayMs = options.mainIdleDelayMs ?? 20_000
@@ -125,6 +129,7 @@ export class MindLoop {
     const materialPolicy = this.materialPolicy?.()
     const gatherCount = this.gatherCount?.()
     const focus = this.focus?.()
+    const attacker = this.attacker?.()
     const ctx: EvalCtx = {
       now,
       ...(this.home === undefined ? {} : { home: this.home }),
@@ -138,6 +143,7 @@ export class MindLoop {
       isBlocked: key => this.tracker.isBlocked(key),
       ...(this.observe === undefined ? {} : { observe: this.observe }),
       ...(focus === undefined ? {} : { focus }),
+      ...(attacker === undefined ? {} : { attacker }),
       ...(this.canSee === undefined ? {} : { canSee: this.canSee }),
       ...(this.lastStuckAt === undefined ? {} : { lastStuckAt: this.lastStuckAt() }),
     }

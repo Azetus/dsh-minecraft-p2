@@ -86,6 +86,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
       const ids: string[] = []
       let best: EntityInfo | undefined
       let bestDistance = Number.POSITIVE_INFINITY
+      let preferred: EntityInfo | undefined
       for (const entity of targets) {
         if (failed.has(entity.id)) continue
         if (!isAutoFightTarget(entity, policy())) continue
@@ -93,11 +94,15 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
         const range = distance(self.pos, entity.position)
         if (range > fight.radius) continue
         ids.push(entity.id)
+        // Retaliate against whoever just hit us, but only when it passes every
+        // other filter: attribution must not widen the auto-fight policy.
+        if (ctx.attacker?.id === entity.id) preferred = entity
         if (range < bestDistance) {
           best = entity
           bestDistance = range
         }
       }
+      if (preferred !== undefined) best = preferred
       if (best === undefined) return null
       lock = {
         entityId: best.id,

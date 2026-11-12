@@ -391,6 +391,10 @@ export class BodyRuntime {
     const previous = this.lastHealth
     this.lastHealth = health
     if (previous !== undefined && health >= previous) return
+    const source = isRecord(payload.source) ? payload.source : undefined
+    const sourceName = source !== undefined && typeof source.name === 'string'
+      ? source.name
+      : source !== undefined && typeof source.username === 'string' ? source.username : undefined
     const at = this.now()
     if (at - this.lastDamageNoticeAt < 1_000 && health > 4) return
     this.lastDamageNoticeAt = at
@@ -398,8 +402,14 @@ export class BodyRuntime {
       kind: 'damaged',
       severity: health <= 4 ? 'critical' : 'warning',
       key: 'damaged',
-      summary: `health ${previous ?? '?'} -> ${health}`,
-      data: { health, previous: previous ?? null },
+      summary: sourceName === undefined
+        ? `health ${previous ?? '?'} -> ${health}`
+        : `health ${previous ?? '?'} -> ${health} (${sourceName})`,
+      data: {
+        health,
+        previous: previous ?? null,
+        ...(source === undefined ? {} : { source }),
+      },
     })
   }
 

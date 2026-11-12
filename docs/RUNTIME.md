@@ -36,7 +36,7 @@
 
 **常驻树优先级**：常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`。这个门只决定本轮谁来 offer，不改变 order/duty 状态；紧急解除后主树恢复。`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
 
-常驻树顺序：`threat.fight → escape → self.eat → self.unstuck`。自动 fight 只在 `p2_policy.fight` 存在时启用；显式 `attack` order 期间它关闭，`escape` 也只保留致命环境反射。`p2_policy` 是 body 级、process-local、不持久化：重启回只 flee。
+常驻树顺序：`threat.fight → escape → self.eat → self.unstuck`。自动 fight 只在 `p2_policy.fight` 存在时启用；显式 `attack` order 期间它关闭，`escape` 也只保留致命环境反射。`p2_policy` 是 body 级、process-local、不持久化：重启回只 flee。自动 fight 在**同一允许集合**内优先 5s 内攻击过自己的实体（来源由 `damaged.source` 提供）；归因不放宽 radius、保护名单或 auto-avoid。
 
 **活动层**：主树每次只推进当前生效层，优先级为 `常驻树 > active order/plan（含 hold） > active duty > base activity`。base activity 默认 `idle`，不持久化；base active 时主树保持 hot。层切换时由 body 记录/重记 wandering anchor；`hold` order 暂停 duty 和 base，但常驻树仍可做最小生存动作。
 

@@ -181,6 +181,7 @@ type BodyApi = {
   - `mind.status.reaction` 返回 `{source:"default"|"agent", mode:"flee"|"allowlist"|"all-hostiles", fight, selfCare}`。`selfCare` 默认启用 `eat`/`unstuck`，`retreat` 只作为血量门槛。
   - 显式 `attack` order 期间自动 fight 关闭；常驻树只保留岩浆/深水等致命环境反射，不因敌对、低血、饥饿或卡住而打断。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
+- **事件负载**：`entityHurt` 为 `{entityId, source?}`；`damaged` 为 `{health, source?}`。`source` 是 `{id, name?, username?, type?}`，来自服务端 `damage_event`（1.20+，`sourceCauseId` 对应的实体）；字段缺失表示环境伤害（摔落/岩浆/溺水）或 adapter 无法解析，不能当作“无伤害来源”猜测。`damaged` 只在同一伤害窗口（500ms）内附带来源，避免把旧来源算给环境伤害。归因是观测事实，不改变任何写权限或目标选择权。
 - provider 动作依赖物理 tick；区块未加载、死亡或传送中时 `await` 可能没有终态。所有动作都有硬超时，超时按 `ACT_TIMEOUT` / `ACT_UNCONFIRMED` 返回，不重放。
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
   - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。

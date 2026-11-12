@@ -69,6 +69,38 @@ const RETRY_SAFE_TIMEOUT_ACTS: ReadonlySet<string> = new Set([
   'equip',
 ])
 
+/**
+ * How long a `damage_event` source stays usable for a later health packet.
+ * Both packets describe the same hit but arrive independently; a stale source
+ * must not attribute fall/lava damage to the previous attacker.
+ */
+const DAMAGE_SOURCE_WINDOW_MS = 500
+
+/** The adapter-side description of who caused a hit; all fields are optional. */
+type DamageSourceInfo = {
+  id: string
+  name?: string
+  username?: string
+  type?: string
+}
+
+/**
+ * Mineflayer already resolves `damage_event.sourceCauseId` to an entity
+ * (`entities.js`); copy only the plain fields so nothing library-owned crosses
+ * the BodyApi boundary.
+ */
+function damageSourceInfo(source: unknown): DamageSourceInfo | undefined {
+  if (source === null || typeof source !== 'object') return undefined
+  const value = source as { id?: unknown; name?: unknown; username?: unknown; type?: unknown }
+  if (typeof value.id !== 'number') return undefined
+  return {
+    id: String(value.id),
+    ...(typeof value.name === 'string' ? { name: value.name } : {}),
+    ...(typeof value.username === 'string' ? { username: value.username } : {}),
+    ...(typeof value.type === 'string' ? { type: value.type } : {}),
+  }
+}
+
 function timeoutCode(name: string): typeof BodyErrorCodes.ACT_TIMEOUT | typeof BodyErrorCodes.ACT_UNCONFIRMED {
   return RETRY_SAFE_TIMEOUT_ACTS.has(name) ? BodyErrorCodes.ACT_TIMEOUT : BodyErrorCodes.ACT_UNCONFIRMED
 }
@@ -148,6 +180,12 @@ export class MineflayerBody implements BodyApi {
   private readonly pollIntervalMs: number
   private readonly worldId: string
   private readonly blockTags: BlockTagIndex
+  /**
+   * Last damage source observed for the body itself. `damage_event` and the
+   * health packet are separate packets, so `damaged` attaches a source only
+   * when it is fresh; a stale entry must not attribute environmental damage.
+   */
+  private selfDamageSource: { source: DamageSourceInfo | undefined; at: number } | undefined
   private suspensionState: SuspensionState = {
     suspended: false,
     at: 0,
@@ -237,6 +275,12 @@ export class MineflayerBody implements BodyApi {
     } catch {
       return {}
     }
+  }
+
+  /** The adapter's id for the body itself, when it exposes one. */
+  private selfEntityId(): number | undefined {
+    const id = (this.bot.entity as unknown as { id?: number } | undefined)?.id
+    return typeof id === 'number' ? id : undefined
   }
 
   identity(): { worldId: string; characterId: string } {
@@ -982,14 +1026,32 @@ export class MineflayerBody implements BodyApi {
       if (position === undefined) return
       this.emit('blockUpdated', { x: position.x, y: position.y, z: position.z, name: newBlock.name })
     })
-    this.bot.on('health', () => this.emit('damaged', { health: this.bot.health }))
+    this.bot.on('health', () => {
+      const source = this.selfDamageSource !== undefined
+        && this.now() - this.selfDamageSource.at <= DAMAGE_SOURCE_WINDOW_MS
+        ? this.selfDamageSource.source
+        : undefined
+      this.emit('damaged', {
+        health: this.bot.health,
+        ...(source === undefined ? {} : { source }),
+      })
+    })
     this.bot.on('death', () => {
       this.releaseOffhand()
+      this.selfDamageSource = undefined
       this.emit('died', {})
     })
-    this.bot.on('entityHurt', entity => {
-      const id = (entity as unknown as { id?: number }).id
-      if (typeof id === 'number') this.emit('entityHurt', { entityId: String(id) })
+    this.bot.on('entityHurt', (entity: unknown, source: unknown) => {
+      const id = (entity as { id?: number } | undefined)?.id
+      if (typeof id !== 'number') return
+      const info = damageSourceInfo(source)
+      if (id === this.selfEntityId()) {
+        this.selfDamageSource = { source: info, at: this.now() }
+      }
+      this.emit('entityHurt', {
+        entityId: String(id),
+        ...(info === undefined ? {} : { source: info }),
+      })
     })
     this.bot.on('entityDead', entity => {
       const id = (entity as unknown as { id?: number }).id

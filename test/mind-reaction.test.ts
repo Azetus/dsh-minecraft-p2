@@ -163,6 +163,46 @@ describe('threat.fight giver', () => {
     expect(giver.find({ now: 0, orderVerb: 'attack' }, flatWorld({ entities: [entity('zombie')] }))).toBeNull()
   })
 
+  it('retaliates against the recent attacker when it is an eligible target', () => {
+    const giver = createThreatFightGiver(() => fightPolicy())
+    const world = flatWorld({
+      entities: [
+        entity('zombie', { id: 'id-near', position: { x: 2.5, y: 64, z: 0.5 } }),
+        entity('skeleton', { id: 'id-sk', position: { x: 6.5, y: 64, z: 0.5 } }),
+      ],
+    })
+    const candidate = asCandidate(giver.find({ now: 0, attacker: { id: 'id-sk', name: 'skeleton' } }, world))
+    expect(candidate.params.entityId).toBe('id-sk')
+  })
+
+  it('does not let attribution widen the auto-fight policy', () => {
+    // Out of radius: the nearer zombie wins.
+    const near = createThreatFightGiver(() => fightPolicy())
+    const distant = asCandidate(near.find(
+      { now: 0, attacker: { id: 'id-sk' } },
+      flatWorld({
+        entities: [
+          entity('zombie', { id: 'id-near', position: { x: 2.5, y: 64, z: 0.5 } }),
+          entity('skeleton', { id: 'id-sk', position: { x: 20.5, y: 64, z: 0.5 } }),
+        ],
+      }),
+    ))
+    expect(distant.params.entityId).toBe('id-near')
+
+    // Protected class: a player attacker never becomes an auto-fight target.
+    const protectedClass = createThreatFightGiver(() => fightPolicy())
+    const kept = asCandidate(protectedClass.find(
+      { now: 0, attacker: { id: 'id-p' } },
+      flatWorld({
+        entities: [
+          entity('zombie', { id: 'id-near', position: { x: 2.5, y: 64, z: 0.5 } }),
+          entity('Human_Player', { id: 'id-p', type: 'player', kind: 'player' }),
+        ],
+      }),
+    ))
+    expect(kept.params.entityId).toBe('id-near')
+  })
+
   it('selects the nearest allowed hostile and locks the target', () => {
     const giver = createThreatFightGiver(() => fightPolicy())
     const candidate = asCandidate(giver.find({ now: 0 }, flatWorld({ entities: [entity('zombie')] })))

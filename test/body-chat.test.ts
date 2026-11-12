@@ -114,6 +114,21 @@ describe('body chat transport', () => {
     })
   })
 
+  it('names the damage source when the adapter reports one', async () => {
+    const fake = fakePort()
+    const runtime = runtimeWith(fake.port)
+    fake.emit('damaged', { health: 12, source: { id: '9', name: 'zombie', type: 'hostile' } })
+    const result = await runtime.handleRequestAsync(request('perception.poll', { afterSeq: 0 }))
+    expect(result.result).toMatchObject({
+      notices: [{
+        kind: 'damaged',
+        severity: 'warning',
+        summary: 'health ? -> 12 (zombie)',
+        data: { health: 12, previous: null, source: { id: '9', name: 'zombie' } },
+      }],
+    })
+  })
+
   it('notices a hostile entering eight blocks', async () => {
     vi.useFakeTimers()
     const fake = fakePort()

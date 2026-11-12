@@ -104,6 +104,12 @@ export type EvalCtx = {
    * the adapter's server-side tracking range remains the visibility limit.
    */
   focus?: EntityInfo
+  /**
+   * The entity that recently damaged the body, when the adapter reports a
+   * damage source. Already filtered for freshness by the mind; a giver only
+   * checks whether it is an eligible target.
+   */
+  attacker?: { id: string; name?: string }
   /** Adapter visibility; absent means the caller may only use distance. */
   canSee?: (entityId: string) => boolean
   /** Last observed GOTO_STUCK terminal, for the bounded self-unstuck reflex. */

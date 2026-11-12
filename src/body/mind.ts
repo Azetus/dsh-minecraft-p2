@@ -191,6 +191,33 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     chunkBudget: 2,
   })
   options.body.on('blockUpdated', payload => areaResources.onBlockUpdate(payload))
+  /**
+   * Recent damage attacker for `EvalCtx.attacker`. The adapter reports the
+   * source with `damaged`; the giver only needs a short window, and death
+   * clears it so the body does not target whoever killed the previous run.
+   */
+  let lastAttacker: { id: string; name?: string; at: number } | undefined
+  options.body.on('damaged', payload => {
+    if (!isRecord(payload) || !isRecord(payload.source)) return
+    const id = payload.source.id
+    if (typeof id !== 'string' || id.length === 0) return
+    lastAttacker = {
+      id,
+      ...(typeof payload.source.name === 'string' ? { name: payload.source.name } : {}),
+      at: now(),
+    }
+  })
+  options.body.on('died', () => {
+    lastAttacker = undefined
+  })
+  const freshAttacker = (): { id: string; name?: string } | undefined => {
+    if (lastAttacker === undefined) return undefined
+    if (now() - lastAttacker.at > ATTACKER_WINDOW_MS) return undefined
+    return {
+      id: lastAttacker.id,
+      ...(lastAttacker.name === undefined ? {} : { name: lastAttacker.name }),
+    }
+  }
   const planLedger = new PlanItemLedger()
   const duty = new DutyController({
     statePath: join(dirname(options.journalPath), 'duty.json'),
@@ -511,6 +538,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     gatherCount: () => gatherCount,
     observe: box => sensors.observeBox(box),
     focus: () => currentFocus,
+    attacker: freshAttacker,
     ...(options.body.canSee === undefined ? {} : { canSee: (id: string) => options.body.canSee!(id) }),
     lastStuckAt: () => lastStuckAt,
     onEvent: event => {
@@ -1609,6 +1637,9 @@ function viewOf(
     ...(expiresAt === undefined ? {} : { expiresAt }),
   }
 }
+
+/** How long a reported damage source stays usable as `EvalCtx.attacker`. */
+const ATTACKER_WINDOW_MS = 5_000
 
 const PRIMITIVE_ORDER_VERBS = new Set([
   'go', 'attack', 'dig', 'collect', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
