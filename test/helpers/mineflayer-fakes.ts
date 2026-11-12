@@ -122,6 +122,8 @@ export type FakeMode = 'succeed' | 'running' | 'fail' | 'disconnected'
 
 export class FakeHandle implements ActHandle {
   stopped = false
+  /** Write-authority probe captured by the body when the act started. */
+  authorized: () => boolean = () => true
 
   constructor(
     private readonly mode: Exclude<FakeMode, 'disconnected'>,
@@ -162,13 +164,14 @@ export class FakeActSource {
   releaseOnStop = true
   onStart: ((name: string, args: Record<string, JsonValue>) => void) | undefined
 
-  start(name: string, args: Record<string, JsonValue>): ActHandle {
+  start(name: string, args: Record<string, JsonValue>, authorized?: () => boolean): ActHandle {
     if (this.mode === 'disconnected') {
       throw p2Error('CONNECTION_LOST', 'environment', 'the connection ended', { module: 'fake.provider' })
     }
     this.calls.push({ name, args })
     this.onStart?.(name, args)
     const handle = new FakeHandle(this.mode, this.failCode, { name }, this.releaseOnStop)
+    if (authorized !== undefined) handle.authorized = authorized
     this.handles.push(handle)
     return handle
   }

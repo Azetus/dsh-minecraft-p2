@@ -293,6 +293,24 @@ describe('mineflayer port timeout and authority', () => {
     expect((await pending).state).toBe('failed')
     expect(source.handles[0]?.stopped).toBe(true)
   })
+
+  it('gives every act the authority probe of the run that started it', async () => {
+    const { port, source } = createPort()
+    await port.dig({ x: 1, y: 64, z: 1 })
+    const handle = source.handles[0]
+    expect(handle?.authorized()).toBe(true)
+    port.endWrite(writeToken(1))
+    expect(handle?.authorized()).toBe(false)
+  })
+
+  it('refuses to open a container without write authority', async () => {
+    const source = new FakeActSource()
+    const bot = new FakeBot()
+    bot.blocks.set('1,64,1', { name: 'chest' })
+    const port = new MineflayerBody(bot as unknown as Bot, source as unknown as MineflayerProvider, { pollIntervalMs: 2 })
+    expect(await port.containerAt({ x: 1, y: 64, z: 1 }))
+      .toEqual({ state: 'failed', code: 'STALE_WRITE' })
+  })
 })
 
 describe('mineflayer port reads', () => {

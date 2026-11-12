@@ -73,6 +73,8 @@ class FakeDriver implements Driver {
 
   readonly starts: Job[] = []
   readonly handles: FakeHandle[] = []
+  /** Body view handed to each run; used to prove a preempted run cannot write. */
+  readonly bodies: BodyApi[] = []
   startError: Error | undefined
   validation: { ok: true } | { ok: false; code: string } = { ok: true }
 
@@ -88,11 +90,12 @@ class FakeDriver implements Driver {
     return this.validation
   }
 
-  start(job: Job, _ctx: DriverCtx): DriverHandle {
+  start(job: Job, ctx: DriverCtx): DriverHandle {
     if (this.startError !== undefined) throw this.startError
     const handle = new FakeHandle(`key-${String(job.params.x)}`)
     this.starts.push(job)
     this.handles.push(handle)
+    this.bodies.push(ctx.body)
     return handle
   }
 }
@@ -102,6 +105,8 @@ type Harness = {
   driver: FakeDriver
   events: TrackerEvent[]
   writes: Array<{ op: 'begin' | 'end'; token: WriteToken }>
+  /** Writes that actually reached the shared body (must stay empty after revoke). */
+  bodyCalls: string[]
   setNow(value: number): void
 }
 
@@ -109,11 +114,24 @@ function harness(options: { interrupt?: 'constant-only' | 'never' | 'any'; stopT
   const driver = new FakeDriver(options.interrupt)
   const events: TrackerEvent[] = []
   const writes: Array<{ op: 'begin' | 'end'; token: WriteToken }> = []
+  const bodyCalls: string[] = []
   let now = 0
   let run = 0
   const port = {
     beginWrite: (token: WriteToken) => { writes.push({ op: 'begin', token }) },
     endWrite: (token: WriteToken) => { writes.push({ op: 'end', token }) },
+    dig: async () => {
+      bodyCalls.push('dig')
+      return { state: 'ok', elapsedMs: 1 }
+    },
+    moveTo: async () => {
+      bodyCalls.push('moveTo')
+      return { state: 'ok', elapsedMs: 1 }
+    },
+    blockAt: () => {
+      bodyCalls.push('blockAt')
+      return null
+    },
   } as unknown as BodyApi
   const tracker = new JobTracker({
     body: port,
@@ -127,7 +145,7 @@ function harness(options: { interrupt?: 'constant-only' | 'never' | 'any'; stopT
     ...(options.stopTimeoutMs === undefined ? {} : { stopTimeoutMs: options.stopTimeoutMs }),
     onEvent: event => events.push(event),
   })
-  return { tracker, driver, events, writes, setNow: value => { now = value } }
+  return { tracker, driver, events, writes, bodyCalls, setNow: value => { now = value } }
 }
 
 function candidate(x = 1): Candidate {
@@ -441,6 +459,68 @@ describe('job tracker', () => {
     tracker.resume(60)
     tracker.tick(61)
     expect(tracker.state()).toBe('idle')
+  })
+})
+
+describe('job tracker write authority', () => {
+  it('refuses the preempted run, even after the next job took over', async () => {
+    const { tracker, driver, bodyCalls, events } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick(0)
+    const first = driver.bodies[0] as BodyApi
+    expect(await first.dig({ x: 1, y: 64, z: 0 })).toMatchObject({ state: 'ok' })
+    expect(bodyCalls).toEqual(['dig'])
+
+    // Preempt: the old scope is revoked before the provider loses the token.
+    tracker.offer(candidate(2))
+    tracker.tick(1)
+    expect(tracker.state()).toBe('stopping')
+    const afterRevoke = await first.dig({ x: 1, y: 64, z: 0 })
+    expect(afterRevoke).toMatchObject({ state: 'failed', code: 'STALE_WRITE' })
+    expect(bodyCalls).toEqual(['dig'])
+
+    // Confirm the stop and let the next run start, then retry from the old run.
+    ;(driver.handles[0] as FakeHandle).stopState = 'stopped'
+    tracker.tick(2)
+    tracker.tick(3)
+    expect(tracker.state()).toBe('running')
+    expect(tracker.current()?.job.runId).toBe('run-2')
+
+    const late = await first.dig({ x: 1, y: 64, z: 0 })
+    expect(late).toMatchObject({ state: 'failed', code: 'STALE_WRITE' })
+    expect(bodyCalls).toEqual(['dig'])
+
+    // The new run keeps its authority.
+    const second = driver.bodies[1] as BodyApi
+    expect(await second.dig({ x: 2, y: 64, z: 0 })).toMatchObject({ state: 'ok' })
+    expect(bodyCalls).toEqual(['dig', 'dig'])
+
+    // The refusal is reported once, not silently swallowed.
+    expect(events.filter(event => event.kind === 'job.write-after-stop')).toHaveLength(1)
+  })
+
+  it('keeps reads available to the preempted run', async () => {
+    const { tracker, driver, bodyCalls } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick(0)
+    const first = driver.bodies[0] as BodyApi
+    tracker.offer(candidate(2))
+    tracker.tick(1)
+    expect(first.blockAt({ x: 0, y: 64, z: 0 })).toBeNull()
+    expect(bodyCalls).toEqual(['blockAt'])
+  })
+
+  it('gives each run its own scope and does not revoke a renewed run', async () => {
+    const { tracker, driver } = harness()
+    tracker.offer(candidate(1))
+    tracker.tick(0)
+    for (let index = 0; index < 3; index += 1) {
+      tracker.offer(candidate(1))
+      tracker.tick(index + 1)
+    }
+    expect(tracker.state()).toBe('running')
+    const body = driver.bodies[0] as BodyApi
+    expect(await body.dig({ x: 1, y: 64, z: 0 })).toMatchObject({ state: 'ok' })
   })
 })
 

@@ -239,9 +239,11 @@ fault ─人工/自愈─► idle
 
 1. 持有当前实例与身份（`runId`）；树只交候选；
 2. **续做判定**：`candidate.keys === current.continuationKey()` → 只续期，不重启；
-3. **撤销旧实例写权限**：`seq++` 使旧令牌失效；
+3. **撤销旧实例写权限**：给每个 run 发一个绑定令牌的 BodyApi 视图（`src/mind/scope.ts`、`src/mind/scoped-body.ts`），`seq++` 使旧令牌失效，同时撤销旧视图——撤权之后的写调用在 mind 层就被拒绝，不需要等 provider 校验；
 4. **请求停止并等待** `stopStatus()`；超时或不可确认 → `fault`；
 5. **只接受当前 runId 的结果**；迟到结果只记 `stale-result`。
+
+视图只收紧写：读方法（`blockAt`/`inventory`/`self`…）在撤权后仍可调用，中断的 driver 用它做有界读回；权限管理（`beginWrite`/`endWrite`）不交给 driver。已进入 provider 的异步链（`equip`/`unequip`/`place`/`craft`/`container-transfer`、`combat-input`）在每个副作用之前复查启动它的权限，旧链因此不会替新 run 动手。
 
 ### 4.7 Driver
 

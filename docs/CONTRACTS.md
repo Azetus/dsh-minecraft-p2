@@ -14,7 +14,7 @@
 
 **不变量**
 
-1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 `MineflayerBody` 层被拒绝并记 `stale-write`。
+1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 `MineflayerBody` 层被拒绝并记 `stale-write`。每次 Driver 执行拿到的是**绑定该 run 的 BodyApi 视图**：撤权后视图上的写方法一律返回 `STALE_WRITE` 且不触达 provider，读方法不受影响；已进入 provider 的异步链在每个副作用之前复查同一权限。旧执行实例无法借用新实例的权限。
 2. **结果三态**：`confirmed / refuted / insufficient`；`insufficient` 不得算成功。
 3. **进度可重建**：能从世界重建的优先重建；不能重建的写意图日志。
 4. **树不产坐标**：树只选 giver；目标由 giver 选；driver 不得自行推导目标。
@@ -118,7 +118,7 @@ type BodyApi = {
 ```
 
 - 只有 `suspension`/`offhand`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`offhandHold`/`combatInput`/`lookYaw`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
-- 写门在 `src/provider/control.ts`（`WriteGate`），令牌由 `JobTracker` 发放；没有 capability/action 表。
+- 写门在 `src/provider/control.ts`（`WriteGate`），令牌由 `JobTracker` 发放；没有 capability/action 表。`JobTracker` 用 `src/mind/scope.ts` + `src/mind/scoped-body.ts` 给每个 run 发一个绑定的视图：`beginStop` 先撤销视图再 `endWrite`，所以撤权与下一实例接管之间没有可插入写的窗口。`containerAt` 开窗属于写，同样受权限约束。视图拒绝写时记 `job.write-after-stop`（每个 run 至多一次）。
 - `src/provider` 是唯一允许 import mineflayer 的目录；body bundle 动态 import `lib/provider/minecraft.mjs`。
 
 **语义**

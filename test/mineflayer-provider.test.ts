@@ -346,3 +346,68 @@ describe('MineflayerProvider off-hand stance', () => {
   })
 })
 
+describe('MineflayerProvider write authority', () => {
+  /**
+   * Category: state safety (CONTRACTS §1 invariant 1).
+   * Protects: an act whose run was preempted must not act on the next run's
+   * behalf. Failure mode: the equip chain awaits the inventory sync, the run is
+   * revoked meanwhile, and the chain still calls `bot.equip`.
+   */
+  function equipBot(): {
+    bot: Bot
+    equipCalls: number
+    releaseSync: () => void
+  } {
+    let release = (): void => {}
+    const sync = new Promise<void>(resolve => { release = resolve })
+    const state = { equipCalls: 0 }
+    const bot = Object.assign(new EventEmitter(), {
+      entity: { position: { x: 0, y: 64, z: 0 }, onGround: true },
+      inventory: {
+        items: () => [{ name: 'iron_sword', count: 1 }],
+        slots: [],
+      },
+      heldItem: null,
+      equip: async () => { state.equipCalls += 1 },
+      _syncWindow: async () => { await sync },
+      time: { timeOfDay: 1000, age: 1 },
+      game: {},
+      health: 20,
+      food: 20,
+      blockAt: () => null,
+    })
+    return {
+      bot: bot as unknown as Bot,
+      get equipCalls() { return state.equipCalls },
+      releaseSync: () => { release() },
+    }
+  }
+
+  it('does not equip after the act lost its authority mid-chain', async () => {
+    const fake = equipBot()
+    let authorized = true
+    const provider = new MineflayerProvider(fake.bot)
+    const handle = provider.start('equip', { item: 'iron_sword', destination: 'hand' }, () => authorized)
+
+    // The chain is parked on the inventory sync; revocation happens now.
+    authorized = false
+    fake.releaseSync()
+    for (let index = 0; index < 20 && handle.poll().status === 'running'; index += 1) await sleep(5)
+
+    const poll = handle.poll()
+    expect(poll.status).toBe('failed')
+    if (poll.status === 'failed') expect(poll.error.code).toBe('STALE_WRITE')
+    expect(fake.equipCalls).toBe(0)
+  })
+
+  it('equips normally while the authority is held', async () => {
+    const fake = equipBot()
+    const provider = new MineflayerProvider(fake.bot)
+    const handle = provider.start('equip', { item: 'iron_sword', destination: 'hand' }, () => true)
+    fake.releaseSync()
+    for (let index = 0; index < 20 && handle.poll().status === 'running'; index += 1) await sleep(5)
+    expect(handle.poll().status).toBe('succeeded')
+    expect(fake.equipCalls).toBe(1)
+  })
+})
+

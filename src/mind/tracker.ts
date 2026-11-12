@@ -1,5 +1,8 @@
 import type { JsonValue } from '../contracts/types.ts'
 import type { BodyApi, WriteToken } from '../body/api.ts'
+import { createScope, revokeScope } from './scope.ts'
+import type { RunScope } from './scope.ts'
+import { scopeWrites } from './scoped-body.ts'
 import { validateParams } from './schema.ts'
 import type {
   Candidate,
@@ -24,6 +27,8 @@ export type TrackerEvent =
   | { kind: 'job.terminal'; at: number; runId: string; driverId: string; state: DriverResult['state']; code?: string; blocked: boolean; observed?: DriverResult['observed']; orderId?: string; keys: string; workItemId?: string }
   | { kind: 'job.preempted'; at: number; runId: string; keys: string }
   | { kind: 'job.stale-result'; at: number; runId: string; state: DriverResult['state'] }
+  /** A revoked execution tried to write. Expected after a preempt; never silent. */
+  | { kind: 'job.write-after-stop'; at: number; runId: string; driverId: string; method: string }
   | { kind: 'tracker.fault'; at: number; code: string }
 
 export type JobTrackerOptions = {
@@ -48,6 +53,8 @@ type Current = {
   driver: Driver
   handle: DriverHandle
   token: WriteToken
+  /** This execution's write authority; revoked when the run is preempted. */
+  scope: RunScope
   /** Candidate continuation key; also the M1 failure/block identity. */
   keys: string
   /** First server age observed for this job, for the game-tick budget. */
@@ -59,6 +66,7 @@ type StopInfo = {
   job: Job
   handle: DriverHandle
   keys: string
+  scope: RunScope
   /** Set when the stop was caused by a terminal condition (for example budget). */
   final?: DriverResult
   next?: Candidate
@@ -329,6 +337,7 @@ export class JobTracker {
     }
 
     const token: WriteToken = { runId, jobId: `job-${this.seq}`, seq: this.seq }
+    const scope = createScope(token)
     try {
       this.body.beginWrite(token)
     } catch (error) {
@@ -345,9 +354,23 @@ export class JobTracker {
     }
 
     let handle: DriverHandle
+    let rejectReported = false
     try {
       handle = driver.start(job, {
-        body: this.body,
+        // The driver gets this execution's view, not the shared body: once the
+        // run is preempted, a late continuation writes into a revoked scope
+        // instead of borrowing the next run's authority.
+        body: scopeWrites(this.body, scope, method => {
+          if (rejectReported) return
+          rejectReported = true
+          this.emit({
+            kind: 'job.write-after-stop',
+            at: this.now(),
+            runId,
+            driverId: job.driverId,
+            method,
+          })
+        }),
         now: this.now,
         ...(this.allowAutoEquip === undefined ? {} : { allowAutoEquip: this.allowAutoEquip }),
       })
@@ -362,6 +385,7 @@ export class JobTracker {
       driver,
       handle,
       token,
+      scope,
       keys: candidate.keys,
       ...(gameAge === undefined ? {} : { startAge: gameAge }),
     }
@@ -381,10 +405,15 @@ export class JobTracker {
       job: current.job,
       handle: current.handle,
       keys: current.keys,
+      scope: current.scope,
       ...(final === undefined ? {} : { final }),
       ...(this.pending === undefined ? {} : { next: this.pending }),
     }
     this.pending = undefined
+    // Revoke before the provider loses the token: from this point on the old
+    // driver's writes are refused locally, so it cannot slip a write into the
+    // gap between `endWrite` and the next `beginWrite`.
+    revokeScope(current.scope)
     try {
       this.body.endWrite(current.token)
     } catch {

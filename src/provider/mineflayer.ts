@@ -1222,7 +1222,7 @@ export class MineflayerProvider {
     }
   }
 
-  start(name: string, args: Record<string, JsonValue>): ActHandle {
+  start(name: string, args: Record<string, JsonValue>, authorized?: () => boolean): ActHandle {
     if (this.disconnected !== undefined || this.resetRequested) {
       const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
       throw p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' })
@@ -1243,7 +1243,7 @@ export class MineflayerProvider {
     if (name !== 'stop' && this.current?.controlState?.() !== undefined && this.current.controlState() !== 'idle') {
       throw p2Error('STOP_UNCONFIRMED', 'runtime', 'previous act has not released control', { module: 'provider.mineflayer' })
     }
-    const handle = new MineflayerActHandle(name, args, this.bot, this.offhandStance, this.options)
+    const handle = new MineflayerActHandle(name, args, this.bot, this.offhandStance, this.options, authorized)
     this.current = handle
     return handle
   }
@@ -1286,6 +1286,12 @@ class MineflayerActHandle implements ActHandle {
     private readonly bot: Bot,
     private readonly offhandStance: OffhandStance,
     private readonly options: Required<MineflayerProviderOptions>,
+    /**
+     * Write authority captured when the act started. Checked again after every
+     * await that precedes a side effect, so an act whose run was preempted
+     * cannot act on the next run's behalf.
+     */
+    private readonly authorized?: () => boolean,
   ) {
     this.run()
   }
@@ -1779,6 +1785,7 @@ class MineflayerActHandle implements ActHandle {
             // The client inventory model can lag behind the server; refresh it
             // before trusting `heldItem` or the placement will be refused.
             await this.syncInventoryWindow()
+            this.ensureNotStopped()
             const feet = this.bot.entity.position
             const bodyX = Math.floor(feet.x)
             const bodyZ = Math.floor(feet.z)
@@ -1920,6 +1927,7 @@ class MineflayerActHandle implements ActHandle {
           }
           void (async () => {
             await this.syncInventoryWindow()
+            this.ensureNotStopped()
             const feet = this.bot.entity.position
             const bodyX = Math.floor(feet.x)
             const bodyZ = Math.floor(feet.z)
@@ -1973,6 +1981,7 @@ class MineflayerActHandle implements ActHandle {
           }
           void (async () => {
             await this.syncInventoryWindow()
+            this.ensureNotStopped()
             const item = this.bot.inventory.items().find(entry => entry.name === itemName)
             if (item === undefined) {
               throw Object.assign(new Error(`no ${itemName} in inventory`), { code: 'EQUIP_NO_ITEM' })
@@ -2007,6 +2016,7 @@ class MineflayerActHandle implements ActHandle {
           }
           void (async () => {
             await this.syncInventoryWindow()
+            this.ensureNotStopped()
             const before = destination === 'hand'
               ? this.bot.heldItem
               : destination === 'off-hand' ? this.bot.inventory.slots[45] : undefined
@@ -2026,7 +2036,9 @@ class MineflayerActHandle implements ActHandle {
             this.completed = true
           }).catch((error: unknown) => {
             this.failed = error instanceof Error ? error : new Error(String(error))
-            this.failedCode = 'UNEQUIP_FAILED'
+            this.failedCode = typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'UNEQUIP_FAILED'
           })
           return
         }
@@ -2084,6 +2096,12 @@ class MineflayerActHandle implements ActHandle {
           }
           void this.bot.look(yaw, 0, true).then(() => {
             if (this.stopRequested || this.completed || this.failed !== undefined) return
+            if (this.authorized?.() === false) {
+              this.bot.clearControlStates()
+              this.failed = new Error('combat input belongs to a superseded driver run')
+              this.failedCode = 'STALE_WRITE'
+              return
+            }
             if (!this.moveCellSafe(from, yaw, desired, desired.jump)) {
               this.bot.clearControlStates()
               this.failed = new Error('combat-input next cell is not safe')
@@ -2465,6 +2483,11 @@ class MineflayerActHandle implements ActHandle {
   }
 
   private ensureNotStopped(): void {
+    // Authority loss is checked first: it is the precise reason (the run was
+    // preempted) while `stopRequested` is only the local echo of it.
+    if (this.authorized?.() === false) {
+      throw Object.assign(new Error('act belongs to a superseded driver run'), { code: 'STALE_WRITE' })
+    }
     if (this.stopRequested) {
       throw Object.assign(new Error('act was cancelled'), { code: 'ACT_CANCELLED' })
     }
@@ -2647,6 +2670,14 @@ class MineflayerActHandle implements ActHandle {
       throw Object.assign(new Error(`unknown item: ${name}`), { code: 'CONTAINER_NO_ITEM' })
     }
     const window = await openContainerWindow(this.bot, block)
+    // Opening a window is a body interaction: refuse to touch it once this act
+    // no longer owns the write authority.
+    try {
+      this.ensureNotStopped()
+    } catch (error) {
+      await closeWindowQuietly(window)
+      throw error
+    }
     const playerBefore = this.inventoryCountOfType(itemType)
     const containerBefore = countContainerItems(window, name)
     let containerAfter: number | undefined

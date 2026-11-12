@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
 import { MineflayerBody } from '../src/provider/index.ts'
 import type { ActResult, Vec3 } from '../src/body/api.ts'
+import { createScope, revokeScope } from '../src/mind/scope.ts'
+import { scopeWrites } from '../src/mind/scoped-body.ts'
 import { writeToken } from './helpers/mineflayer-fakes.ts'
 
 /**
@@ -13,13 +15,15 @@ import { writeToken } from './helpers/mineflayer-fakes.ts'
  *
  *   P2_PORT_LIVE=1 npx vitest run test/port-live.test.ts --pool=threads
  *
- * Defaults: 127.0.0.1:25566, P2_Bot, 1.21.1 (override with P2_MC_HOST/P2_MC_PORT).
+ * Defaults: 127.0.0.1:25566, P2_Bot, 1.21.1. Override with P2_MC_HOST,
+ * P2_MC_PORT, P2_MC_USERNAME and P2_MC_VERSION (the dev LAN world moves).
  */
 
 const LIVE = process.env.P2_PORT_LIVE === '1'
 const HOST = process.env.P2_MC_HOST ?? '127.0.0.1'
 const PORT = Number(process.env.P2_MC_PORT ?? 25566)
 const USERNAME = process.env.P2_MC_USERNAME ?? 'P2_Bot'
+const VERSION = process.env.P2_MC_VERSION ?? '1.21.1'
 
 type Connection = { bot: Bot; provider: MineflayerProvider; port: MineflayerBody }
 
@@ -42,7 +46,7 @@ async function connect(): Promise<Connection> {
     host: HOST,
     port: PORT,
     username: USERNAME,
-    version: '1.21.1',
+    version: VERSION,
     timeoutMs: 20_000,
   })
   const provider = new MineflayerProvider(bot, { serverIdleMs: 1500, providerVersion: 'live-probe' })
@@ -267,13 +271,22 @@ describe.skipIf(!LIVE)('live mineflayer port', () => {
         placed ?? { item, placeCandidates },
       )
 
-      // 5. Timeout is unknown, not failed.
+      // 5. Timeout is unknown, never a silent failure. Which layer notices the
+      // deadline first is a race: the provider may report ACT_TIMEOUT /
+      // ACT_UNCONFIRMED, or core may fail the run with GOTO_TIMEOUT. All of
+      // them must surface as `unknown`, never `failed` (CONTRACTS §2).
+      const TIMEOUT_CODES = new Set([
+        'ACT_TIMEOUT', 'ACT_UNCONFIRMED', 'GOTO_TIMEOUT',
+        'GOTO_SEARCH_TIMEOUT', 'GOTO_SEARCH_LIMIT', 'CLIENT_TIMEOUT',
+      ])
       const far = port.self().pos
       const timeout = await port.moveTo({ x: far.x + 30, y: far.y, z: far.z }, { timeoutMs: 1 })
       const idleAfterTimeoutMs = await waitIdle(provider, 10_000)
       record(
         '5 timeout unknown',
-        timeout.state === 'unknown' && timeout.code === 'CLIENT_TIMEOUT',
+        timeout.state === 'unknown'
+          && timeout.code !== undefined
+          && TIMEOUT_CODES.has(timeout.code),
         { result: timeout, idleAfterTimeoutMs, controlState: provider.controlState() },
       )
 
@@ -333,6 +346,24 @@ describe.skipIf(!LIVE)('live mineflayer port', () => {
         health: reconnectedSelf.health,
         look,
       })
+
+      // 11. A revoked execution view writes nothing even while the body still
+      // holds authority, so the refusal is the mind layer and not the gate.
+      const here = feet(port)
+      const scope = createScope(writeToken(7))
+      port.beginWrite(writeToken(7))
+      const view = scopeWrites(port, scope)
+      revokeScope(scope)
+      const revokedDig = await view.dig({ x: here.x, y: here.y + 2, z: here.z })
+      const directDig = await port.dig({ x: here.x, y: here.y + 2, z: here.z })
+      record(
+        '11 revoked view writes nothing',
+        revokedDig.state === 'failed'
+          && revokedDig.code === 'STALE_WRITE'
+          && revokedDig.elapsedMs === 0
+          && directDig.code === 'DIG_NO_BLOCK',
+        { revokedDig, directDig },
+      )
     } finally {
       try {
         connection?.bot.quit('live probe done')
@@ -343,6 +374,6 @@ describe.skipIf(!LIVE)('live mineflayer port', () => {
 
     const failures = results.filter(result => !result.ok)
     expect(failures, JSON.stringify(results, null, 2)).toEqual([])
-    expect(results).toHaveLength(10)
+    expect(results).toHaveLength(11)
   }, 180_000)
 })

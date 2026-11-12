@@ -248,7 +248,12 @@ export class MineflayerBody implements BodyApi {
     }
   }
 
-  async containerAt(p: Vec3): Promise<ContainerCheckResult> {    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
+  async containerAt(p: Vec3): Promise<ContainerCheckResult> {
+    // Opening a container is a body interaction, not a pure query: it must not
+    // outlive the write authority that requested it.
+    const epoch = this.gate.currentEpoch()
+    if (epoch === undefined) return { state: 'failed', code: BodyErrorCodes.STALE_WRITE }
+    const block = this.bot.blockAt(new Vec3Class(p.x, p.y, p.z)) as unknown as BlockLike | null
     if (block === null) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
     const info = blockInfo(block, this.bot.registry)
     if (!info.loaded) return { state: 'unknown', code: 'CHECK_NOT_LOADED' }
@@ -259,17 +264,33 @@ export class MineflayerBody implements BodyApi {
       fuel?: number
       progress?: number
     }
+    const open = (block.name.includes('furnace')
+      ? this.bot.openFurnace(block as never)
+      : this.bot.openContainer(block as never)) as unknown as Promise<ContainerWindow>
+    let claimed = false
+    // A timed-out open can still resolve later. Close that window when it does,
+    // so a late open never outlives the request that asked for it.
+    void open.then(late => {
+      if (claimed) return
+      try {
+        void late?.close?.()?.catch(() => {})
+      } catch {
+        // Closing a window we never adopted is best effort.
+      }
+    }).catch(() => {})
     let window: ContainerWindow | undefined
     try {
-      const open = block.name.includes('furnace')
-        ? this.bot.openFurnace(block as never)
-        : this.bot.openContainer(block as never)
       window = await Promise.race([
-        open as unknown as Promise<ContainerWindow>,
+        open,
         new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('container open timed out')), 5_000)
         }),
       ])
+      claimed = true
+      if (!this.gate.isCurrent(epoch)) {
+        await window.close?.()
+        return { state: 'failed', code: BodyErrorCodes.STALE_WRITE }
+      }
       const raw = typeof window.containerItems === 'function'
         ? window.containerItems()
         : (window.slots ?? []).filter((item): item is { slot?: number; name: string; count: number } =>
@@ -767,7 +788,9 @@ export class MineflayerBody implements BodyApi {
 
     let handle: ActHandle
     try {
-      handle = this.acts.start(name, args)
+      // The act remembers which write authority started it. Its async chains
+      // re-check this after every await, so a preempted run cannot keep acting.
+      handle = this.acts.start(name, args, () => this.gate.isCurrent(epoch))
     } catch (error) {
       return actFailed(errorCode(error), this.now() - startedAt)
     }
