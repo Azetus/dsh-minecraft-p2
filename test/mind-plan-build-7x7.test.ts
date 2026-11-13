@@ -317,4 +317,80 @@ describe('7x7 build', () => {
       && (event.data as { state?: string }).state === 'failed')
     expect(placeFailures).toHaveLength(2)
   })
+
+  it('stops after three zero-progress batches instead of retrying the whole blueprint', async () => {
+    const orderId = 'b1-no-progress'
+    const fake = fakeWorld()
+    const blocks: Array<{ x: number; y: number; z: number; name: string }> = []
+    for (let x = -2; x <= 2; x += 1) {
+      for (let z = -2; z <= 2; z += 1) {
+        blocks.push({ x, y: 120, z, name: 'dirt' })
+        // Every target is permanently occupied: each item fails twice and is
+        // deferred, but the blueprint still has untouched items left.
+        fake.blocks.set(key({ x, y: 120, z }), {
+          name: 'chest',
+          loaded: true,
+          pos: { x, y: 120, z },
+        })
+      }
+    }
+    const blueprint = { version: 1, blocks }
+    const parsed = parseBlueprint(blueprint)
+    expect(parsed.ok).toBe(true)
+    const mind = createMind({
+      body: fake.port,
+      home: { x: 0, y: 120, z: -4 },
+      baseActivity: { kind: 'idle' },
+      plansDir: join(root, 'content', 'plans'),
+      journalPath: join(dir, 'journal-no-progress.jsonl'),
+    })
+    mind.enqueueOrder({ id: orderId, verb: 'build', blueprint })
+
+    const collected: Array<{ kind: string; data: unknown }> = []
+    let lastSeq = 0
+    for (let index = 0; index < 3_000; index += 1) {
+      mind.tick()
+      await flush()
+      for (const event of mind.events.since(lastSeq, 500)) collected.push({ kind: event.kind, data: event.data })
+      lastSeq = mind.events.lastSeq()
+      const state = mind.orders.get(orderId)?.state
+      if (state === 'succeeded' || state === 'blocked' || state === 'failed') break
+    }
+
+    expect(mind.orders.get(orderId)?.state).toBe('blocked')
+    const blocked = collected.find(event => event.kind === 'plan.blocked')
+    const data = blocked?.data as {
+      stopReason?: string
+      summary?: {
+        total?: number
+        satisfied?: number
+        failed?: number
+        skipped?: number
+        unknown?: number
+        stopReason?: string
+        codes?: Record<string, number>
+      }
+    } | undefined
+    expect(data?.stopReason).toBe('NO_PROGRESS')
+    expect(data?.summary).toMatchObject({
+      total: 25,
+      satisfied: 0,
+      stopReason: 'NO_PROGRESS',
+    })
+    const failed = data?.summary?.failed ?? 0
+    const skipped = data?.summary?.skipped ?? 0
+    const unknown = data?.summary?.unknown ?? 0
+    expect(failed).toBeGreaterThan(0)
+    // The guard fires before every one of the 25 items can be deferred.
+    expect(skipped).toBeGreaterThan(0)
+    expect(failed + skipped + unknown).toBe(25)
+    expect(data?.summary?.codes?.PLACE_TARGET_OCCUPIED ?? 0).toBeGreaterThan(0)
+
+    const placeFailures = collected.filter(event => event.kind === 'job.terminal'
+      && (event.data as { driverId?: string }).driverId === 'place'
+      && (event.data as { state?: string }).state === 'failed')
+    expect(placeFailures.length).toBeGreaterThan(0)
+    // Three batches of at most 8 offers each: well under 25 items x 2 tries.
+    expect(placeFailures.length).toBeLessThan(40)
+  }, 30_000)
 })
