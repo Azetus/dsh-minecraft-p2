@@ -131,7 +131,7 @@ agent 下达的目标，不是动作。
 }
 ```
 
-`usable-room` 是 `sealed-room` 的可用性版本：额外接受 `door`/`bed`（相对 `origin`），检查门上下两格、门两侧可站立、室内至少一个可站立格、床旁可站立；失败带 `at/detail`，若该格属于 work item 还带 `workItemId`。
+`usable-room` 是 `sealed-room` 的可用性版本：额外接受 `door`/`bed`（相对 `origin`），检查门上下两格、门两侧**在门下半同高度**可站立、室内至少一个可站立格、床旁可站立；失败带 `at/detail`，若该格属于 work item 还带 `workItemId`。抬高地板/空中平台时，门外必须在门下半同高度有台阶或门廊；建造器不会自动补门廊，缺台阶会让 verifier `refuted`。
 
 **WorkItem 四态**（由 WorkGiver 每次求值时计算）：
 

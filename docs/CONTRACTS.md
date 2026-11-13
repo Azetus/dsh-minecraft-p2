@@ -416,6 +416,7 @@ type WorkState =
 - stage 是优先级/报告标签，不是硬屏障；支撑、材料、可站立位和 access 谓词决定当下可放前沿；deferred 入口最后。
 - `safeExits` 在 plan 实例化时冻结（起始格/入口外/入口内/有界搜索；排除蓝图最终实心格；`exterior` 按 `interiorBounds`）。place 前把该项格子当作实心 overlay，从锚点用有界 A* 检查能到达任一 exit；`unknown` 不通过；最终入口只能从 `exterior` 参考点从室外封。
 - plan 结束时 `plan.blocked`/`plan.terminal` 带 `summary { total, satisfied, failed, skipped, unknown, codes, stopReason }` 与有界 failed items；plan 项逐格 place job 失败不唤醒 Agent，只发一条回执；整体成功仍由 verifier 判定。
+- `usable-room` 的 `door` 要求门下半两侧在**同一高度**有可站立格；抬高地板/空中平台需在门外提供同高度台阶/门廊，建造器不自动补。
 
 ## 9. 意图日志（恢复用）
 
