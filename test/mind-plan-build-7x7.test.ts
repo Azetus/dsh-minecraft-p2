@@ -238,10 +238,83 @@ describe('7x7 build', () => {
 
       const completed = events.filter(event => event.kind === 'stage.completed')
       expect(completed.map(event => (event.data as { stage: number }).stage).sort()).toEqual([1, 2, 3, 4])
+      const terminal = events.find(event => event.kind === 'plan.terminal'
+        && (event.data as { state: string }).state === 'succeeded')
+      expect(terminal?.data).toMatchObject({
+        stopReason: 'COMPLETE',
+        summary: {
+          total: parsed.blueprint.blocks.length - 2,
+          satisfied: parsed.blueprint.blocks.length - 2,
+          failed: 0,
+          skipped: 0,
+          unknown: 0,
+          stopReason: 'COMPLETE',
+        },
+      })
       expect(events.some(event => event.kind === 'plan.terminal'
         && (event.data as { state: string }).state === 'succeeded')).toBe(true)
       expect(events.filter(event => event.kind === 'job.terminal'
         && (event.data as { state: string }).state === 'failed')).toEqual([])
     }, 60_000)
   }
+
+  it('defers a permanently occupied cell and reports one summary', async () => {
+    const orderId = 'b1-blocked'
+    const fake = fakeWorld()
+    fake.blocks.set(key({ x: 0, y: 120, z: 0 }), {
+      name: 'chest',
+      loaded: true,
+      pos: { x: 0, y: 120, z: 0 },
+    })
+    const blueprint = {
+      version: 1,
+      blocks: [{ x: 0, y: 120, z: 0, name: 'dirt' }],
+    }
+    const parsed = parseBlueprint(blueprint)
+    expect(parsed.ok).toBe(true)
+    const mind = createMind({
+      body: fake.port,
+      home: { x: 0, y: 120, z: -4 },
+      baseActivity: { kind: 'idle' },
+      plansDir: join(root, 'content', 'plans'),
+      journalPath: join(dir, 'journal-blocked.jsonl'),
+    })
+    mind.enqueueOrder({ id: orderId, verb: 'build', blueprint })
+
+    const collected: Array<{ kind: string; data: unknown }> = []
+    let lastSeq = 0
+    for (let index = 0; index < 2_000; index += 1) {
+      mind.tick()
+      await flush()
+      for (const event of mind.events.since(lastSeq, 500)) collected.push({ kind: event.kind, data: event.data })
+      lastSeq = mind.events.lastSeq()
+      const state = mind.orders.get(orderId)?.state
+      if (state === 'succeeded' || state === 'blocked' || state === 'failed') break
+    }
+
+    expect(mind.orders.get(orderId)?.state).toBe('blocked')
+    const blocked = collected.find(event => event.kind === 'plan.blocked')
+    expect(blocked?.data).toMatchObject({
+      stopReason: 'NO_FRONTIER',
+      summary: {
+        total: 1,
+        satisfied: 0,
+        failed: 1,
+        skipped: 0,
+        unknown: 0,
+        codes: { PLACE_TARGET_OCCUPIED: 1 },
+        stopReason: 'NO_FRONTIER',
+      },
+    })
+    const data = blocked?.data as { items?: Array<Record<string, unknown>> } | undefined
+    expect(data?.items?.[0]).toMatchObject({
+      workItemId: 'b:0,120,0',
+      reason: 'PLACE_FAILED',
+      lastCode: 'PLACE_TARGET_OCCUPIED',
+    })
+    const placeFailures = collected.filter(event => event.kind === 'job.terminal'
+      && (event.data as { driverId?: string }).driverId === 'place'
+      && (event.data as { state?: string }).state === 'failed')
+    expect(placeFailures).toHaveLength(2)
+  })
 })

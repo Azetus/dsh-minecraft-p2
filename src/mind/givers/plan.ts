@@ -29,7 +29,9 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
     covered: string[]
     offers: number
     since: number
+    placed: number
   }>()
+  const zeroProgress = new WeakMap<PlanInstance, number>()
   // Plans created outside the body (tests, restored fixtures) may not carry the
   // frozen exit set; compute it once from the first snapshot and keep it.
   const safeExitCache = new WeakMap<PlanInstance, SafeExit[]>()
@@ -43,6 +45,17 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
     const exits = planSafeExits(plan, world, world.self.pos, entrance)
     safeExitCache.set(plan, exits)
     return exits
+  }
+  const finishBatch = (
+    plan: PlanInstance,
+    previous: { anchor: Vec3; covered: string[]; offers: number; since: number; placed: number } | undefined,
+  ): void => {
+    if (previous === undefined || previous.offers === 0) return
+    if (previous.placed === 0) {
+      zeroProgress.set(plan, (zeroProgress.get(plan) ?? 0) + 1)
+    } else {
+      zeroProgress.set(plan, 0)
+    }
   }
   return {
     id: 'plan.work',
@@ -83,21 +96,39 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
         .sort((left, right) => comparePlanItems(plan, left, right, deferred, world))
       const currentStageItems = stageItems(plan, deferred, stage)
 
+      const previousBatch = batchStates.get(plan)
+      if (previousBatch !== undefined) {
+        const satisfiedNow = previousBatch.covered.filter(id => states.get(id)?.kind === 'satisfied')
+        if (satisfiedNow.length > 0) {
+          previousBatch.placed += satisfiedNow.length
+          previousBatch.covered = previousBatch.covered.filter(id => states.get(id)?.kind !== 'satisfied')
+          zeroProgress.set(plan, 0)
+        }
+      }
+
       const access = planBuildAccess(plan, world, world.self.pos)
       if (access.blocked !== undefined) {
         return {
           kind: 'hold',
           reason: 'BUILD_ACCESS_BLOCKED',
-          notify: true,
+          notify: false,
           data: {
             planId: plan.planId,
             reason: access.blocked.reason,
             detail: access.blocked.detail,
+            stopReason: 'BUILD_ACCESS_BLOCKED',
             workItems: plan.workItems.map(item => item.id),
           },
         }
       }
       const safeExits = safeExitsFor(plan, world, access.entrance)
+
+      // Three batches with no confirmed placement is enough: the world is not
+      // yielding to this build, and the receipt should reach the Agent instead
+      // of burning the whole blueprint.
+      if ((zeroProgress.get(plan) ?? 0) >= MAX_ZERO_PROGRESS_BATCHES) {
+        return stageBlocked(plan, stage, summaries, items, states, ledger, 'NO_PROGRESS')
+      }
 
       // A clear policy turns an occupied place target into a clear handoff.
       // Only the current stage is considered here: clearing a far conflict
@@ -156,6 +187,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       const frontier = items.filter(item => {
         if (item.kind !== 'place' && item.kind !== 'hold') return false
         if (ledger.blocked(plan, item) !== undefined) return false
+        if (ledger.deferred(plan, item) !== undefined) return false
         const state = states.get(item.id)
         return state?.kind === 'executable'
           || (state?.kind === 'blocked' && state.reason === 'UNREACHABLE')
@@ -164,6 +196,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
         const previous = batchStates.get(plan)
         const batch = chooseBatchAnchor(plan, world, safeExits, ledger, frontier, deferred, previous, ctx.now)
         if (batch !== undefined) {
+          if (!batch.reused) finishBatch(plan, previous)
           const byId = new Map(items.map(item => [item.id, item] as const))
           const failedAtAnchor: string[] = []
           for (const id of batch.covered) {
@@ -195,7 +228,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
               ledger,
               plan,
               item,
-              [{ stance: batch.anchor }],
+              pool,
               ctx,
               world,
               safeExits,
@@ -207,16 +240,24 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
             }
             const offers = batch.reused && previous !== undefined ? previous.offers + 1 : 1
             const since = batch.reused && previous !== undefined ? previous.since : ctx.now
-            const remaining = batch.covered.filter(candidate => candidate !== id
-              && !failedAtAnchor.includes(candidate))
+            const placed = batch.reused && previous !== undefined ? previous.placed : 0
+            const remaining = batch.covered.filter(candidate => !failedAtAnchor.includes(candidate))
             batchStates.set(plan, {
               anchor: batch.anchor,
               covered: remaining,
               offers,
               since,
+              placed,
             })
             return candidateFor(plan, item, 'place', world, stageOf(plan, item, deferred), choices)
           }
+          // A reused batch that failed every covered item is retired once. A
+          // newly selected batch was never offered, so only the old batch is
+          // finished above.
+          if (batch.reused) finishBatch(plan, previous)
+          batchStates.delete(plan)
+        } else {
+          finishBatch(plan, previous)
           batchStates.delete(plan)
         }
       }
@@ -226,6 +267,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
         const state = states.get(item.id)
         if (state?.kind !== 'executable') continue
         if (ledger.blocked(plan, item) !== undefined) continue
+        if (ledger.deferred(plan, item) !== undefined) continue
         if (item.kind !== 'place' && item.kind !== 'hold') {
           // A non-place item has no stance pool; two jobs with no world change
           // are the item-level evidence that it cannot progress.
@@ -294,7 +336,8 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
 
       // No executable item: unknown cells are re-read, then reported as an
       // observation gap instead of moving the body somewhere.
-      const unknown = items.filter(item => states.get(item.id)?.kind === 'unknown')
+      const unknown = items.filter(item => states.get(item.id)?.kind === 'unknown'
+        && ledger.deferred(plan, item) === undefined)
       if (unknown.length > 0) {
         let blockedAny = false
         for (const item of unknown) {
@@ -318,6 +361,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       for (const item of items) {
         const state = states.get(item.id)
         if (state?.kind !== 'blocked' || state.reason !== 'UNREACHABLE') continue
+        if (ledger.deferred(plan, item) !== undefined) continue
         const choices = pickStances(
           ledger,
           plan,
@@ -442,13 +486,16 @@ function stageBlocked(
   items: WorkItem[],
   states: ReturnType<typeof evaluatePlan>['states'],
   ledger: PlanItemLedger,
+  stopReason = 'NO_FRONTIER',
 ): WorkGiverResult {
   const blockedItems = items
     .filter(item => states.get(item.id)?.kind !== 'satisfied')
     .map(item => {
       const state = states.get(item.id)
-      const entry = ledger.blocked(plan, item)
-      const lastCode = ledger.lastCode(plan, item)
+      const blocked = ledger.blocked(plan, item)
+      const deferred = ledger.deferred(plan, item)
+      const entry = blocked ?? deferred
+      const lastCode = deferred?.code ?? ledger.lastCode(plan, item)
       const position = itemPosition(plan, item)
       return {
         workItemId: item.id,
@@ -458,7 +505,7 @@ function stageBlocked(
         ...(entry === undefined
           ? { detail: state?.kind === 'unknown' ? 'observation is incomplete' : 'no executable step' }
           : { reason: entry.reason, detail: entry.detail }),
-        ...(entry === undefined ? {} : { triedStances: entry.triedStances as unknown as JsonValue }),
+        ...(blocked === undefined ? {} : { triedStances: blocked.triedStances as unknown as JsonValue }),
         ...(lastCode === undefined ? {} : { lastCode }),
       }
     })
@@ -469,6 +516,7 @@ function stageBlocked(
     data: {
       planId: plan.planId,
       stage,
+      stopReason,
       items: blockedItems as unknown as JsonValue,
       stages: summaries as unknown as JsonValue,
     },
@@ -541,6 +589,8 @@ function inInterior(plan: PlanInstance, pos: Vec3): boolean {
 /** A batch is as long as this many offered items, or this wall time. */
 const BATCH_MAX_ITEMS = 8
 const BATCH_MAX_MS = 30_000
+/** Consecutive batches with no confirmed placement before the plan stops. */
+const MAX_ZERO_PROGRESS_BATCHES = 3
 /** Seed stance pools are taken from at most this many frontier items. */
 const BATCH_SEEDS = 2
 /** Each seed contributes at most this many stance candidates. */

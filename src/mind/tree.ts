@@ -1,5 +1,5 @@
 import { p2Error } from '../contracts/protocol.ts'
-import type { P2Error } from '../contracts/types.ts'
+import type { JsonValue, P2Error } from '../contracts/types.ts'
 import { ErrorCodes } from '../contracts/types.ts'
 import type { Registry } from './registry.ts'
 import type { Candidate, EvalCtx, Handoff, Hold, WorldView } from './types.ts'
@@ -22,7 +22,7 @@ export type TreeNode =
 export type TreeResult =
   | { kind: 'job'; candidate: Candidate }
   | { kind: 'nowork' }
-  | { kind: 'hold'; reason: string; notify?: boolean }
+  | { kind: 'hold'; reason: string; notify?: boolean; data?: JsonValue }
   | { kind: 'need-observation'; reason: string }
   | { kind: 'definition-error'; error: P2Error }
 
@@ -78,7 +78,7 @@ type NodeOutcome =
   | { kind: 'job'; candidate: Candidate }
   | { kind: 'nowork' }
   | { kind: 'skip' }
-  | { kind: 'hold'; reason: string; notify?: boolean }
+  | { kind: 'hold'; reason: string; notify?: boolean; data?: JsonValue }
   | { kind: 'need-observation'; reason: string }
   | { kind: 'definition-error'; error: P2Error }
 
@@ -159,6 +159,7 @@ function evalNode(node: TreeNode, env: EvalEnv): NodeOutcome {
           kind: 'hold',
           reason: found.reason,
           ...(found.notify === false ? { notify: false } : {}),
+          ...(found.data === undefined ? {} : { data: found.data }),
         }
       }
       return { kind: 'job', candidate: isHandoff(found) ? handoffCandidate(found) : found }

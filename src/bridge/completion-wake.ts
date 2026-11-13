@@ -85,11 +85,12 @@ export class CompletionFeed {
           // only the terminal attempt or the order-blocked result wakes.
           if (data.retry === true) break
           const keys = text(data.keys) ?? ''
-          // Default base activity, duty work and self-care are background
-          // helpers; their per-job failures are not Agent decisions. A duty
-          // terminal or a base.waiting event carries the meaningful transition.
+          // Default base activity, duty work, self-care and individual plan
+          // work items are background helpers; their per-job failures are not
+          // Agent decisions. A plan.blocked/plan.terminal receipt carries the
+          // aggregate result instead.
           if (keys.startsWith('base:') || keys.startsWith('duty:') || keys.startsWith('self.')
-            || keys.startsWith('threat.fight:')) break
+            || keys.startsWith('threat.fight:') || keys.startsWith('plan:')) break
           const state = text(data.state)
           const blocked = data.blocked === true
           // A check job reports execution success and carries the three-state
@@ -106,14 +107,17 @@ export class CompletionFeed {
           pending.push({
             item: {
               severity: 'critical',
-              payload: {
+              payload: compact({
                 kind: 'plan.blocked',
                 planId: text(data.planId) ?? null,
-                blocked: Array.isArray(data.blocked) ? data.blocked as JsonValue : [],
+                reason: text(data.stopReason) ?? 'PLAN_BLOCKED',
+                stopReason: text(data.stopReason) ?? null,
+                summary: data.summary ?? null,
+                items: Array.isArray(data.items) ? data.items.slice(0, 20) as JsonValue : [],
                 ...(data.basis === undefined ? {} : { basis: data.basis }),
-              },
+              }),
             },
-            cause: false,
+            cause: true,
           })
           break
         }

@@ -105,6 +105,7 @@
    - ≤2 次：同一工作项换站位/换面/换材料重试；
    - 3 次：标记该工作项 `blocked`，WorkGiver 换下一个可执行项；
    - 全部 `blocked`：order `blocked`，唤醒 agent 并附 digest。
+   - plan（build）的 place 项另有 item 级结转：连续 2 个 place job 未放置 → `deferred`；连续 3 个批次 0 确认放置 → `NO_PROGRESS`。plan 结束只发一次 `plan.blocked`/`plan.terminal` 回执（summary + 有界 failed items），逐格 place job 失败不单独唤醒。
 5. 原始 order 的 retry 策略：
    - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
    - `equip / traverse / check / collect` 是一次性，首次失败即终态；`collect` 的一次 job 已经把启动时观测到的掉落物跑完，重试只会重复已消耗的实体；
@@ -333,9 +334,9 @@ order 可带 `policy.conflict`：
   同一 epoch 内按 `seq` 前进，重复轮询不会重复推送。
 - 必推（critical，不等待合并）：
   - `order.terminal` 的 `failed / blocked / abandoned`；
-  - `plan.blocked`；
+  - `plan.blocked`（带 `summary`/`stopReason`/有界 items）/ `plan.terminal` 的失败或成功回执；
   - `duty.terminal` 的 `blocked / failed`；
-  - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` / `threat.fight:` 的后台 job 失败不单独唤醒）；check job 的 `succeeded` 只表示观测完成，
+  - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` / `threat.fight:` / `plan:` 的后台 job 失败不单独唤醒；plan 项由结束回执汇总）；check job 的 `succeeded` 只表示观测完成，
     若 `observed.state=failed/unknown` 也作为失败 cause 推送；
   - `tracker.fault`，以及直接导致终态的 `plan.material-short / plan.abort /
     plan.verify(refuted) / plan.definition-error / action.unreconciled`。

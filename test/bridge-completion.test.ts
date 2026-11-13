@@ -290,14 +290,25 @@ function createCompletionFeedTest(): void {
       ])
     })
 
-    it('reports plan.blocked with the blocked work items and reasons', () => {
+    it('reports plan.blocked with the summary and failed items', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')
       const items = feed.accept([
         event(1, 'plan.blocked', {
           kind: 'plan.blocked',
           planId: 'plan-1',
-          blocked: [{ id: 'wi-1', reason: 'CONFLICT', expected: 'dirt', current: 'chest' }],
+          stopReason: 'NO_FRONTIER',
+          summary: {
+            total: 2,
+            satisfied: 1,
+            failed: 1,
+            skipped: 0,
+            unknown: 0,
+            codes: { CONFLICT: 1 },
+            stopReason: 'NO_FRONTIER',
+            items: [{ workItemId: 'wi-1', reason: 'CONFLICT' }],
+          },
+          items: [{ workItemId: 'wi-1', reason: 'CONFLICT', expected: 'dirt' }],
           basis: { at: 7 },
         }),
       ])
@@ -307,34 +318,55 @@ function createCompletionFeedTest(): void {
       expect(items[0]?.payload).toMatchObject({
         kind: 'plan.blocked',
         planId: 'plan-1',
-        blocked: [{ id: 'wi-1', reason: 'CONFLICT' }],
+        reason: 'NO_FRONTIER',
+        stopReason: 'NO_FRONTIER',
+        summary: { failed: 1, codes: { CONFLICT: 1 }, stopReason: 'NO_FRONTIER' },
+        items: [{ workItemId: 'wi-1', reason: 'CONFLICT' }],
       })
     })
 
-    it('keeps a plan-work job failure when no order terminal follows', () => {
+    it('suppresses a plan-work job failure until the plan receipt', () => {
       const feed = new CompletionFeed()
       feed.attach('epoch-1')
       const items = feed.accept([
         event(1, 'order.accepted', { orderId: 'ord-3' }),
         event(2, 'job.terminal', {
+          keys: 'plan:plan-1:wi-1',
           runId: 'run-3',
           driverId: 'place',
           state: 'failed',
-          code: 'PLACE_REFUSED',
-          blocked: true,
-          observed: { at: { x: 2, y: 64, z: 2 } },
+          code: 'PLACE_UNSUPPORTED',
+          blocked: false,
         }),
+        event(3, 'plan.blocked', {
+          kind: 'plan.blocked',
+          planId: 'plan-1',
+          stopReason: 'NO_FRONTIER',
+          summary: {
+            total: 1,
+            satisfied: 0,
+            failed: 1,
+            skipped: 0,
+            unknown: 0,
+            codes: { PLACE_UNSUPPORTED: 1 },
+            stopReason: 'NO_FRONTIER',
+            items: [{ workItemId: 'wi-1', reason: 'PLACE_FAILED' }],
+          },
+          items: [{ workItemId: 'wi-1', reason: 'PLACE_FAILED' }],
+          basis: { at: 7 },
+        }),
+        event(4, 'order.terminal', { orderId: 'ord-3', state: 'blocked' }),
       ])
 
       expect(items).toHaveLength(1)
       expect(items[0]?.payload).toMatchObject({
-        kind: 'job.terminal',
+        kind: 'order.terminal',
         orderId: 'ord-3',
-        runId: 'run-3',
-        driverId: 'place',
-        state: 'failed',
-        reason: 'PLACE_REFUSED',
-        blocked: true,
+        state: 'blocked',
+        cause: {
+          kind: 'plan.blocked',
+          summary: { failed: 1, codes: { PLACE_UNSUPPORTED: 1 } },
+        },
       })
     })
 

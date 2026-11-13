@@ -20,6 +20,8 @@ export type ItemBlockReason =
 export const MAX_ITEM_STANCES = 3
 export const MAX_STANCE_TRIES = 2
 export const MAX_STANCE_CANDIDATES = 12
+/** Attempted place jobs before the item is deferred to the final receipt. */
+export const MAX_BATCH_FAILURES = 2
 
 const FACES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const
 
@@ -47,6 +49,14 @@ export type ItemLedger = {
     detail: string
     triedStances: StanceRejection[]
   }
+  /** Consecutive place jobs that did not satisfy the item; reset on success. */
+  batchFailures: number
+  /** Item-level deferral after MAX_BATCH_FAILURES; not a stance failure. */
+  deferred?: {
+    reason: ItemBlockReason
+    detail: string
+    code?: string
+  }
   unknownReads: number
   fingerprint: string
 }
@@ -73,6 +83,7 @@ export class PlanItemLedger {
         target,
         attempts: new Map(),
         failed: new Set(),
+        batchFailures: 0,
         unknownReads: 0,
         fingerprint: fingerprint(plan, item, world),
       }
@@ -108,6 +119,8 @@ export class PlanItemLedger {
     if (result.ok) {
       entry.attempts.clear()
       entry.failed.clear()
+      entry.batchFailures = 0
+      delete entry.deferred
       delete entry.blocked
       delete entry.lastCode
       return
@@ -143,6 +156,37 @@ export class PlanItemLedger {
 
   blocked(plan: PlanInstance, item: WorkItem): ItemLedger['blocked'] {
     return this.plans.get(plan)?.get(item.id)?.blocked
+  }
+
+  /**
+   * A place job for this item ended without satisfying it. Two consecutive
+   * attempted batches defer the item to the final receipt; a success resets.
+   * Stance-level ledger limits remain the authority for stance retries.
+   */
+  noteBatchFailure(plan: PlanInstance, item: WorkItem, code?: string): number {
+    const entry = this.plans.get(plan)?.get(item.id)
+    if (entry === undefined) return 0
+    entry.batchFailures += 1
+    if (code !== undefined) entry.lastCode = code
+    if (entry.batchFailures >= MAX_BATCH_FAILURES) {
+      entry.deferred = {
+        reason: 'PLACE_FAILED',
+        detail: `deferred after ${entry.batchFailures} failed placement attempts`,
+        ...(code === undefined ? {} : { code }),
+      }
+    }
+    return entry.batchFailures
+  }
+
+  noteBatchSuccess(plan: PlanInstance, item: WorkItem): void {
+    const entry = this.plans.get(plan)?.get(item.id)
+    if (entry === undefined) return
+    entry.batchFailures = 0
+    delete entry.deferred
+  }
+
+  deferred(plan: PlanInstance, item: WorkItem): ItemLedger['deferred'] {
+    return this.plans.get(plan)?.get(item.id)?.deferred
   }
 
   lastCode(plan: PlanInstance, item: WorkItem): string | undefined {

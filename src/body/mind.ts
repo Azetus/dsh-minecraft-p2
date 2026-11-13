@@ -74,7 +74,7 @@ import {
   loadPlanTemplates,
   matchesExpected,
 } from '../mind/plan.ts'
-import type { PlanInstance, VerifySpec } from '../mind/plan.ts'
+import type { PlanInstance, VerifySpec, WorkState } from '../mind/plan.ts'
 import { parseConflictPolicy, parseMaterialPolicy } from '../mind/policy.ts'
 import type { ConflictPolicy, MaterialPolicy } from '../mind/policy.ts'
 import { parseHazardPolicy } from '../mind/policy.ts'
@@ -555,16 +555,19 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       }
       // The giver reports a stage with no advanceable item; this is the formal
       // plan block (the old path left the order active until a watchdog fired).
-      if (event.kind === 'mind.hold' && isRecord(event.data) && event.data.reason === 'PLAN_BLOCKED'
-        && activePlan !== undefined) {
+      if (event.kind === 'mind.hold' && isRecord(event.data) && activePlan !== undefined
+        && (event.data.reason === 'PLAN_BLOCKED' || event.data.reason === 'BUILD_ACCESS_BLOCKED')) {
         const detail = isRecord(event.data.data) ? event.data.data : {}
         try {
           const world = sensors.read()
           blockPlanNow(
             typeof detail.stage === 'number' ? detail.stage : planStage,
-            (detail.items ?? []) as JsonValue,
+            event.data.reason === 'BUILD_ACCESS_BLOCKED' ? [] : (detail.items ?? []) as JsonValue,
             world,
             observationBasis(world),
+            typeof detail.stopReason === 'string'
+              ? detail.stopReason
+              : event.data.reason === 'BUILD_ACCESS_BLOCKED' ? 'BUILD_ACCESS_BLOCKED' : 'NO_FRONTIER',
           )
         } catch (error) {
           events.push('mind.error', now(), { message: error instanceof Error ? error.message : String(error) })
@@ -865,6 +868,13 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     const attempts = readAttempts(event.observed)
+    if (event.driverId === 'place') {
+      if (event.state === 'succeeded') {
+        planLedger.noteBatchSuccess(activePlan, item)
+      } else {
+        planLedger.noteBatchFailure(activePlan, item, event.code)
+      }
+    }
     if (attempts.length > 0) {
       for (const attempt of attempts) {
         if (attempt.ok && event.state === 'succeeded') {
@@ -991,28 +1001,102 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   }
 
   /**
+   * Structured plan receipt. Counts are derived from the same snapshot and the
+   * per-item ledger; failed items are the ones the build deliberately gave up
+   * on, skipped items were never satisfiable/attempted. This is evidence, not
+   * a success claim: only the verifier decides completion.
+   */
+  function planReceipt(
+    plan: PlanInstance,
+    states: ReadonlyMap<string, WorkState>,
+    stopReason: string,
+  ): JsonValue {
+    let satisfied = 0
+    let failed = 0
+    let skipped = 0
+    let unknown = 0
+    const codes: Record<string, number> = {}
+    const failedItems: Array<Record<string, JsonValue>> = []
+    for (const item of plan.workItems) {
+      const state = states.get(item.id)
+      if (state?.kind === 'satisfied') {
+        satisfied += 1
+        continue
+      }
+      const deferred = planLedger.deferred(plan, item)
+      const blocked = planLedger.blocked(plan, item)
+      const entry = deferred ?? blocked
+      if (entry !== undefined) {
+        failed += 1
+        const code = deferred?.code ?? planLedger.lastCode(plan, item)
+          ?? (state?.kind === 'blocked' ? state.reason : undefined)
+        if (code !== undefined) codes[code] = (codes[code] ?? 0) + 1
+        if (failedItems.length < 20) {
+          const position = itemPosition(plan, item)
+          failedItems.push({
+            workItemId: item.id,
+            target: { x: position.x, y: position.y, z: position.z },
+            expected: item.expected?.name ?? null,
+            reason: entry.reason,
+            detail: entry.detail,
+            ...(code === undefined ? {} : { lastCode: code }),
+            attempts: planLedger.tries(plan, item),
+          })
+        }
+        continue
+      }
+      if (state?.kind === 'unknown') {
+        unknown += 1
+        continue
+      }
+      skipped += 1
+    }
+    return {
+      kind: 'plan.receipt',
+      total: plan.workItems.length,
+      satisfied,
+      failed,
+      skipped,
+      unknown,
+      codes: codes as unknown as JsonValue,
+      stopReason,
+      items: failedItems as unknown as JsonValue,
+    }
+  }
+
+  /**
    * Formal plan block: stage/item payload first, then the terminal state. This
    * replaces the old silent `PLAN_ITEMS_BLOCKED` hold and the global 45 s
    * watchdog, which could only report "something stalled".
    */
-  function blockPlanNow(stage: number, items: JsonValue, world: WorldView, basis: JsonValue): void {
+  function blockPlanNow(
+    stage: number,
+    items: JsonValue,
+    world: WorldView,
+    basis: JsonValue,
+    stopReason = 'NO_FRONTIER',
+  ): void {
     const plan = activePlan
     if (plan === undefined) return
+    const evaluation = evaluatePlan(plan, world, currentConflictPolicy())
     const summaries = stageSummaries(
       plan,
       new Set(plan.deferredWorkItems ?? []),
-      evaluatePlan(plan, world, currentConflictPolicy()).states,
+      evaluation.states,
     )
+    const summary = planReceipt(plan, evaluation.states, stopReason)
     const data = {
       planId: plan.planId,
       orderId: plan.orderId,
       stage,
+      stopReason,
       items,
       stages: summaries as unknown as JsonValue,
+      summary,
       material: materialReport(plan, world),
       basis,
     }
-    events.push('stage.blocked', now(), { planId: plan.planId, stage, items, basis })
+    events.push('stage.blocked', now(), { planId: plan.planId, stage, stopReason, items, basis })
     events.push('plan.blocked', now(), data)
     lastReport = data
     orders.complete(plan.orderId, 'blocked')
@@ -1386,8 +1470,16 @@ export function createMind(options: CreateMindOptions): MindRuntime {
         terminal = 'succeeded'
       }
       if (terminal === undefined) return
-      orders.complete(activePlan.orderId, terminal)
-      const data = { planId: activePlan.planId, state: terminal, basis: verifyBasis }
+      const stopReason = terminal === 'succeeded' ? 'COMPLETE' : 'VERIFY_REFUTED'
+      const summary = planReceipt(activePlan, evaluation.states, stopReason)
+      const data = {
+        planId: activePlan.planId,
+        state: terminal,
+        stopReason,
+        summary,
+        basis: verifyBasis,
+      }
+      orders.complete(activePlan.orderId, terminal, data)
       events.push('plan.terminal', now(), data)
       lastReport = data
       finishPlan()

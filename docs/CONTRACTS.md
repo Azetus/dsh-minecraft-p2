@@ -143,6 +143,7 @@ type BodyApi = {
 - `dig`/`check`/`craft` 在交互前先接近目标方块附近的可站立格；近处没有可站立格时返回 `APPROACH_NO_STAND`。
 - `place` 的 `{x,y,z}` 是**目标方块所占格**，不是支撑/参照格。driver 先预检：目标已是期望方块 → `succeeded` + `observed.alreadyPlaced:true`，不发包不装备；空气/流体/server tag `replaceable` 可放；其他不可替换方块 → `PLACE_TARGET_OCCUPIED`，不移动、不 `ensureHeld`、不发包。没有“自动下移一格”的语义。
 - `place` 的 stance 先按真实身体 AABB 过滤：目标格落在自身脚/头格时不移动到该格。`PLACE_BLOCKED_BY_SELF` 失败体带 `blockedBy:"self"` 与 `adjacent`（core `standCells` 给出的相邻可用站位），不靠反复 order 试错。
+- `place` 的显式 `stands` 等于当前脚格时不再发 `moveTo`（同一位置不是移动）；这是建造站位复用的前提。显式 `stands` 仍会按顺序尝试，某个 face 不可用时会尝试下一个 stance，而不是把整个 job 判失败。
 - `place` 每次只发一个 face 的包：显式 `face` 必须可用；省略时 driver 按 `up → down → north → south → east → west` 选第一个“有碰撞支撑 + 眼到面 ≤4.5 + 视线未挡”的面。provider 只执行请求的 face，不做六面 fallback。
 - 一次物品消耗最多一次 placement packet：provider 的失败体带 `retrySafe`（仅“服务端明确 refusal + 物品数不变 + 无新方块”为 true），只有 `retrySafe:true` 时 driver 才换下一个 face；超时/未知/`PLACE_OFF_TARGET`/`PLACE_ITEM_CONSUMED` 直接终态，`EQUIP_NO_ITEM`/`PLACE_NO_ITEM` 立即终态。
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
@@ -381,6 +382,9 @@ type PlanInstance = {
   materialPolicy: Record<string, { auto: boolean; maxBudgetTicks?: number }>
   workItems: WorkItem[]
   verify: VerifySpec
+  deferredWorkItems?: string[]       // 临时入口，最后阶段
+  entranceInside?: Vec3
+  safeExits?: Array<{ cell: Vec3; exterior: boolean }>
 }
 
 type VerifySpec =
@@ -408,7 +412,10 @@ type WorkState =
 ```
 
 - 匹配用 `name + state 子集`，不用 `block.name === item`。
-- WorkGiver 遍历**全部**工作项，返回任一 `executable`。
+- WorkGiver 遍历**全部**工作项，返回任一 `executable`；plan.work 先按 stage（优先级标签）/y/距离排序，再用站位覆盖贪心选锚点，一个 job 仍只放一个 work item。
+- stage 是优先级/报告标签，不是硬屏障；支撑、材料、可站立位和 access 谓词决定当下可放前沿；deferred 入口最后。
+- `safeExits` 在 plan 实例化时冻结（起始格/入口外/入口内/有界搜索；排除蓝图最终实心格；`exterior` 按 `interiorBounds`）。place 前把该项格子当作实心 overlay，从锚点用有界 A* 检查能到达任一 exit；`unknown` 不通过；最终入口只能从 `exterior` 参考点从室外封。
+- plan 结束时 `plan.blocked`/`plan.terminal` 带 `summary { total, satisfied, failed, skipped, unknown, codes, stopReason }` 与有界 failed items；plan 项逐格 place job 失败不唤醒 Agent，只发一条回执；整体成功仍由 verifier 判定。
 
 ## 9. 意图日志（恢复用）
 

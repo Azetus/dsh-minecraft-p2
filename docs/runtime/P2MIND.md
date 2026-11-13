@@ -148,7 +148,13 @@ agent 下达的目标，不是动作。
 
 **多格放置（group）**：一个门（lower/upper）或床（foot/head）是**一个** work item：`at/expected` 是锚点（门下半/床脚），`cells[]` 是同一 placement 必须产出的其余格。蓝图必须声明全部两格（床另需 `state.part`），缺第二格在 `parseBlueprint` 阶段即 `DEFINITION_ERROR`；`usable-room` 读回两格并检查 `half`/`part`/`facing`/床头空间。材料账按 placement 计一次，不按格计。
 
-**构建阶段（barrier）**：1 地板（interior 下方）、2 下层壳（`interior.min.y` 与 +1）、3 上层壳/屋顶、4 室内家具、5 临时入口（`deferredWorkItems`）。阶段是硬屏障：只有当前阶段可派工，前序阶段未完成不得进入下一阶段。事件：`stage.started/progress/completed/blocked`，`plan.blocked` 负载带 stage、workItemId、target、triedStances、每个 stance 的拒绝原因、最后 job code 与材料账。
+**构建阶段（priority/report）**：1 地板（interior 下方）、2 下层壳（`interior.min.y` 与 +1）、3 上层壳/屋顶、4 室内家具、5 临时入口（`deferredWorkItems`）。阶段现在是**优先级/报告标签，不是硬屏障**：支撑、材料、可站立位和 access 谓词决定当下可放项，侧支撑的较高项可以在低阶段仍有 pending 时先放；deferred 入口仍然是最后阶段。事件：`stage.started/progress/completed/blocked`，`plan.blocked` 负载带 stage、stopReason、每个 work item 的 target/expected/reason/triedStances/lastCode、`summary` 与材料账。stage.completed 会补发在跨越期间提前完成的阶段，不依赖“刚好是前一个 stage”。
+
+**安全出口与站位可返回**：plan 实例化时冻结 `safeExits`（身体起始格 / `entrance.outside` / `entrance.inside` / 有界搜索到的最近可站非蓝图格；排除蓝图最终实心格；`exterior` 按 `interiorBounds` 判定）。放置前把该 work item 的格子当作实心 overlay，从锚点用有界 A*（512 节点）检查能否到达任一 safe exit；`unknown` 不通过。最终入口必须由 `exterior` 参考点从室外封，室内则先发 exit handoff；没有 safe exit 时退回旧站位策略，不作为虚假保证。
+
+**站位覆盖批次**：从“当前可放前沿”（executable 或有支撑但当前够不着的 work item）里选覆盖率最高的锚点；锚点覆盖项仍按 stage/y/距离排序；同一锚点最多 8 项或 30s；一个 job 仍只放一个 work item（A 型）。世界变化后重新检查 `canPlaceFrom`/access；覆盖空、批次满或连续失败则退休锚点。`canPlaceFrom` 只检查 driver 实际点击的锚点格，per-face allowed 独立，避免与 driver 的 `faceChoices` 不一致。
+
+**失败结转与回执**：place job 失败按 work item 计数；连续 2 次失败 → item deferred；连续 3 个批次 0 确认放置 → `NO_PROGRESS`。plan 结束时 `plan.blocked`/`plan.terminal` 带 `summary { total, satisfied, failed, skipped, unknown, codes, stopReason }` 与有界 failed items；plan 项逐格 job 失败不唤醒 Agent，只由这一次回执汇总。整体成功仍只由 verifier 判定。
 
 **放置站位账本（PlanItemLedger）**：失败按 `(plan, workItem, stance)` 记账，不跨工作项共享；同一 stance 2 次无世界变化 → 失败，最多 3 个 stance，全部失败 → item blocked `NO_PLACE_STANCE`；世界指纹（目标格 + 六邻）变化或阶段切换时自动重评。`executable place` 也走同一账本，driver 逐个 stance 移动→放置，只有读回一致才算成功；`moveTo arrived` 不算放置成功。未知格先定向重读；仍未知则 item blocked `UNKNOWN`，不用 move 循环。
 
@@ -201,6 +207,7 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - `Handoff` = 先做前置工作（清障 / 补支撑 / 站位），完成后重新 `find`。
 - `keys` 是续做键：同一个 `keys` 复活不重启 job。
 - 主树顺序：`check → order.* → material.gather → plan.work → duty.work → base.work`；`base.work` 最低，base inactive 时返回 `null`。
+- `plan.work`：把 stage 当优先级/报告标签，在当前快照上取“支撑、材料、站位、access 都可放”的前沿；贪心选覆盖率最高的锚点，同一锚点最多 8 项/30s，一个 job 仍只放一个 work item；最终入口由 `safeExits` 的 `exterior` 参考点从室外封。
 - `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用 `EvalCtx.focus`（玩家名/实体名经身份解析）跟随目标，不 teleport、无客户端最大距离；目标格在方块快照内时选精确站位，否则直接 `move` 到目标点并用 `range=distance` 到达；目标 2s 不可见才标记 `TARGET_LOST`，期间追最后位置。
 - `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
 - `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
