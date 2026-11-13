@@ -358,6 +358,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   let planStage = 0
   let planStageKey = ''
   let planStageSatisfied = -1
+  let planCompletedStages = new Set<number>()
   let planProgressAt = 0
   let planLastJobAt = 0
   let suspended = false
@@ -624,6 +625,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       planStage = 0
       planStageKey = ''
       planStageSatisfied = -1
+      planCompletedStages = new Set()
       planProgressAt = now()
       planLastJobAt = now()
       planBlockedReported = false
@@ -677,6 +679,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     planStage = 0
     planStageKey = ''
     planStageSatisfied = -1
+    planCompletedStages = new Set()
     planProgressAt = now()
     planLastJobAt = now()
     planBlockedReported = false
@@ -926,6 +929,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     planStage = 0
     planStageKey = ''
     planStageSatisfied = -1
+    planCompletedStages = new Set()
     planBlockedReported = false
     planInsufficientReported = false
     jobWorkItems.clear()
@@ -943,9 +947,19 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     planProgressAt = now()
     const summary = summaries[stage - 1]
     if (stage !== previous) {
-      const completed = previous > 0 ? summaries[previous - 1] : undefined
-      if (completed?.done === true) {
-        events.push('stage.completed', now(), { stage: previous, total: completed.total, basis })
+      // A stage can be satisfied before it becomes the lowest pending stage
+      // (higher-stage side-supported work). Report every completed stage once,
+      // not only the immediate predecessor.
+      for (let completedStage = 1; completedStage < stage; completedStage += 1) {
+        const completed = summaries[completedStage - 1]
+        if (completed === undefined || completed.total === 0 || completed.done !== true) continue
+        if (planCompletedStages.has(completedStage)) continue
+        planCompletedStages.add(completedStage)
+        events.push('stage.completed', now(), {
+          stage: completedStage,
+          total: completed.total,
+          basis,
+        })
       }
       planStage = stage
       planStageSatisfied = summary?.satisfied ?? 0

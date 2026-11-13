@@ -249,6 +249,7 @@ export function placementStances(
   item: WorkItem,
   stage: number,
   safeExits?: readonly SafeExit[],
+  from?: Vec3,
 ): StanceChoice[] {
   const targets = itemCells(plan, item)
   if (targets.length === 0) return []
@@ -257,7 +258,7 @@ export function placementStances(
   const excluded = new Set(targets.map(cell => cellKey(cell.pos)))
   const reachable = coreReachableCells(
     createReadOnlyMotionWorld(point => world.blockAt(point)),
-    world.self.pos,
+    from ?? world.self.pos,
   )
   const choices: StanceChoice[] = []
   for (let dx = -5; dx <= 5; dx += 1) {
@@ -328,26 +329,30 @@ function candidatePosition(plan: PlanInstance, item: WorkItem): Vec3 {
 
 /**
  * A stance must have a clear placement line to an exposed support face.
- * `overlapsBody` separately rejects a stance whose own body would occupy the
- * target (including the upper cell of a door or the head of a bed).
+ * The driver clicks the **anchor** cell only (the server produces the rest of
+ * a door/bed group), so the predicate uses the first target, and each face gets
+ * its own allowed set. Accumulating references across faces used to accept a
+ * stance whose line only grazed a different face's support; the driver then
+ * rejected it with PLACE_UNSUPPORTED.
  */
 export function canPlaceFrom(world: WorldView, targets: Vec3[], stand: Vec3): boolean {
+  const target = targets[0]
+  if (target === undefined) return false
   const eye = { x: stand.x + 0.5, y: stand.y + 1.5, z: stand.z + 0.5 }
-  const allowed = new Set([cellKey(stand), ...targets.map(cellKey)])
-  for (const target of targets) {
-    const center = { x: target.x + 0.5, y: target.y + 0.5, z: target.z + 0.5 }
-    for (const [dx, dy, dz] of FACES) {
-      const reference = { x: target.x + dx, y: target.y + dy, z: target.z + dz }
-      if (!isSolidBlock(world.blockAt(reference))) continue
-      allowed.add(cellKey(reference))
-      const point = {
-        x: center.x + dx * 0.5,
-        y: center.y + dy * 0.5,
-        z: center.z + dz * 0.5,
-      }
-      if (Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z) > 4.5) continue
-      if (lineClear(world, eye, point, allowed)) return true
+  const baseAllowed = new Set([cellKey(stand), cellKey(target)])
+  const center = { x: target.x + 0.5, y: target.y + 0.5, z: target.z + 0.5 }
+  for (const [dx, dy, dz] of FACES) {
+    const reference = { x: target.x + dx, y: target.y + dy, z: target.z + dz }
+    if (!isSolidBlock(world.blockAt(reference))) continue
+    const point = {
+      x: center.x + dx * 0.5,
+      y: center.y + dy * 0.5,
+      z: center.z + dz * 0.5,
     }
+    if (Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z) > 4.5) continue
+    const allowed = new Set(baseAllowed)
+    allowed.add(cellKey(reference))
+    if (lineClear(world, eye, point, allowed)) return true
   }
   return false
 }

@@ -223,6 +223,12 @@ describe('7x7 build', () => {
       expect(blocked?.data ?? null, JSON.stringify(blocked?.data ?? state)).toBeNull()
       expect(fake.failures).toEqual([])
       expect(state).toBe('succeeded')
+      // Door upper and bed head are produced by the same placement packet:
+      // one packet per work item, one packet per two-cell group.
+      expect(fake.places).toBe(parsed.blueprint.blocks.length - 2)
+      // A stance is reused across covered items; the unbatched path used to
+      // move once per item (h7 baseline: 238 moves).
+      expect(fake.moves).toBeLessThan(80)
 
       // Every declared cell (including both door halves and both bed cells).
       for (const block of parsed.blueprint.blocks) {

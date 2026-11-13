@@ -1,12 +1,12 @@
 import type { JsonValue } from '../../contracts/types.ts'
 import type { Vec3 } from '../../body/api.ts'
 import { interiorBounds, planBuildAccess, planSafeExits } from '../build-access.ts'
-import { buildStage, currentStage, stageItems, stageSummaries, STAGE_COUNT } from '../build-stage.ts'
+import { buildStage, currentStage, stageItems, stageSummaries } from '../build-stage.ts'
 import { evaluatePlan, isAirName, isFluidName, itemCells, itemPosition } from '../plan.ts'
 import type { PlanInstance, SafeExit, WorkItem } from '../plan.ts'
 import { canClearBlock } from '../policy.ts'
 import { itemObservationBox } from '../plan-observation.ts'
-import { MAX_ITEM_STANCES, MAX_STANCE_TRIES, PlanItemLedger, canReachSafeExit, placementStances, stepAsideStances } from '../placement.ts'
+import { MAX_ITEM_STANCES, MAX_STANCE_TRIES, PlanItemLedger, canPlaceFrom, canReachSafeExit, placementStances, stepAsideStances } from '../placement.ts'
 import type { StanceRejection } from '../placement.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
 import { isStandable, nearestStandable } from './common.ts'
@@ -24,6 +24,12 @@ import { isStandable, nearestStandable } from './common.ts'
  */
 export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): WorkGiver {
   const ledger = options.ledger ?? new PlanItemLedger()
+  const batchStates = new WeakMap<PlanInstance, {
+    anchor: Vec3
+    covered: string[]
+    offers: number
+    since: number
+  }>()
   // Plans created outside the body (tests, restored fixtures) may not carry the
   // frozen exit set; compute it once from the first snapshot and keep it.
   const safeExitCache = new WeakMap<PlanInstance, SafeExit[]>()
@@ -66,7 +72,16 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       const states = evaluation.states
       const summaries = stageSummaries(plan, deferred, states)
       const stage = currentStage(plan, deferred, states)
-      const items = stageItems(plan, deferred, stage)
+      // The stage is a priority/report label, not a barrier: a side-supported
+      // higher item may be placed while a lower stage still has pending work.
+      // Deferred entrance items stay out of the frontier until everything else
+      // is satisfied.
+      const finalPhase = plan.workItems.every(item => deferred.has(item.id)
+        || states.get(item.id)?.kind === 'satisfied')
+      const items = plan.workItems
+        .filter(item => finalPhase || !deferred.has(item.id))
+        .sort((left, right) => comparePlanItems(plan, left, right, deferred, world))
+      const currentStageItems = stageItems(plan, deferred, stage)
 
       const access = planBuildAccess(plan, world, world.self.pos)
       if (access.blocked !== undefined) {
@@ -85,8 +100,10 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       const safeExits = safeExitsFor(plan, world, access.entrance)
 
       // A clear policy turns an occupied place target into a clear handoff.
+      // Only the current stage is considered here: clearing a far conflict
+      // before the lower-stage work would move the body away for no progress.
       if (ctx.conflictPolicy?.mode === 'clear') {
-        for (const item of items) {
+        for (const item of currentStageItems) {
           if (item.expected === undefined) continue
           const state = states.get(item.id)
           if (state?.kind !== 'blocked' || state.reason !== 'CONFLICT') continue
@@ -109,31 +126,10 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
         }
       }
 
-      // Furniture is placed from inside; entering is only forced at that point.
-      // The final entrance stage must not force entry: the body has to close it
-      // from outside, otherwise the exit handoff below would ping-pong.
-      if (stage >= 4 && stage < STAGE_COUNT && plan.entranceInside !== undefined && !inInterior(plan, world.self.pos)
-        && isStandable(world, plan.entranceInside)
-        && ctx.isBlocked?.(`handoff:enter:${plan.planId}`) !== true) {
-        return {
-          driverId: 'move',
-          target: { kind: 'point', pos: plan.entranceInside },
-          params: {
-            x: plan.entranceInside.x,
-            y: plan.entranceInside.y,
-            z: plan.entranceInside.z,
-            range: 0,
-            timeoutMs: 8_000,
-          },
-          reason: 'enter build interior',
-          orderId: plan.orderId,
-        }
-      }
-
-      // The last stage closes the temporary entrance. If the body is still
+      // The final phase closes the temporary entrance. If the body is still
       // inside, leave through the opening first: closing it from inside can
       // seal the body in, and a solid entrance cannot be reopened.
-      if (stage >= STAGE_COUNT && plan.entranceInside !== undefined && inInterior(plan, world.self.pos)) {
+      if (finalPhase && plan.entranceInside !== undefined && inInterior(plan, world.self.pos)) {
         const exit = safeExits.find(candidate => candidate.exterior && isStandable(world, candidate.cell))
         if (exit !== undefined
           && ctx.isBlocked?.(`handoff:move:${exit.cell.x},${exit.cell.y},${exit.cell.z}`) !== true) {
@@ -154,6 +150,77 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
         }
       }
 
+      // One stance can place many frontier items. Reuse the anchor until its
+      // coverage is empty or the bounded batch is full; each job still places
+      // exactly one work item (the driver contract is unchanged).
+      const frontier = items.filter(item => {
+        if (item.kind !== 'place' && item.kind !== 'hold') return false
+        if (ledger.blocked(plan, item) !== undefined) return false
+        const state = states.get(item.id)
+        return state?.kind === 'executable'
+          || (state?.kind === 'blocked' && state.reason === 'UNREACHABLE')
+      })
+      if (frontier.length > 0) {
+        const previous = batchStates.get(plan)
+        const batch = chooseBatchAnchor(plan, world, safeExits, ledger, frontier, deferred, previous, ctx.now)
+        if (batch !== undefined) {
+          const byId = new Map(items.map(item => [item.id, item] as const))
+          const failedAtAnchor: string[] = []
+          for (const id of batch.covered) {
+            const item = byId.get(id)
+            if (item === undefined) continue
+            const itemState = states.get(item.id)
+            if (itemState === undefined
+              || (itemState.kind !== 'executable'
+                && !(itemState.kind === 'blocked' && itemState.reason === 'UNREACHABLE'))) {
+              failedAtAnchor.push(id)
+              continue
+            }
+            const cells = itemCells(plan, item).map(cell => cell.pos)
+            // The world changes between jobs; a stance that covered this item
+            // when the batch was chosen may no longer expose a reachable face.
+            if (!canPlaceFrom(world, cells, batch.anchor)) {
+              failedAtAnchor.push(id)
+              continue
+            }
+            // Anchor first, then the item's own pool. The batch saves the walk
+            // when the anchor still works; if the world moved on, the driver
+            // can still place the item from another stance in the same job
+            // instead of burning a failed job.
+            const pool = [
+              { stance: batch.anchor },
+              ...placementStances(plan, world, item, stageOf(plan, item, deferred), safeExits, batch.anchor),
+            ]
+            const choices = pickStances(
+              ledger,
+              plan,
+              item,
+              [{ stance: batch.anchor }],
+              ctx,
+              world,
+              safeExits,
+              cells,
+            )
+            if (choices.length === 0) {
+              failedAtAnchor.push(id)
+              continue
+            }
+            const offers = batch.reused && previous !== undefined ? previous.offers + 1 : 1
+            const since = batch.reused && previous !== undefined ? previous.since : ctx.now
+            const remaining = batch.covered.filter(candidate => candidate !== id
+              && !failedAtAnchor.includes(candidate))
+            batchStates.set(plan, {
+              anchor: batch.anchor,
+              covered: remaining,
+              offers,
+              since,
+            })
+            return candidateFor(plan, item, 'place', world, stageOf(plan, item, deferred), choices)
+          }
+          batchStates.delete(plan)
+        }
+      }
+
       let underBody: WorkItem | undefined
       for (const item of items) {
         const state = states.get(item.id)
@@ -166,7 +233,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
             ledger.block(plan, item, 'PLACE_FAILED', 'job produced no world change twice')
             continue
           }
-          return candidateFor(plan, item, state.driverId, world, stage)
+          return candidateFor(plan, item, state.driverId, world, stageOf(plan, item, deferred))
         }
         // A cell under the body cannot be placed. Skip it and place another
         // item first: that moves the body away without a ping-pong handoff.
@@ -178,7 +245,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           ledger,
           plan,
           item,
-          placementStances(plan, world, item, stage, safeExits),
+          placementStances(plan, world, item, stageOf(plan, item, deferred), safeExits),
           ctx,
           world,
           safeExits,
@@ -196,7 +263,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           )
           continue
         }
-        return candidateFor(plan, item, state.driverId, world, stage, choices)
+        return candidateFor(plan, item, state.driverId, world, stageOf(plan, item, deferred), choices)
       }
 
       // Everything reachable is under the body (for example the last floor
@@ -207,7 +274,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           ledger,
           plan,
           underBody,
-          stepAsideStances(plan, world, underBody, stage, safeExits),
+          stepAsideStances(plan, world, underBody, stageOf(plan, underBody, deferred), safeExits),
           ctx,
           world,
           safeExits,
@@ -255,7 +322,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           ledger,
           plan,
           item,
-          reachStances(plan, world, item, stage, safeExits),
+          reachStances(plan, world, item, stageOf(plan, item, deferred), safeExits),
           ctx,
           world,
           safeExits,
@@ -469,4 +536,147 @@ function inInterior(plan: PlanInstance, pos: Vec3): boolean {
   return Math.floor(pos.x) >= interior.min.x && Math.floor(pos.x) <= interior.max.x
     && Math.floor(pos.y) >= interior.min.y && Math.floor(pos.y) <= interior.max.y
     && Math.floor(pos.z) >= interior.min.z && Math.floor(pos.z) <= interior.max.z
+}
+
+/** A batch is as long as this many offered items, or this wall time. */
+const BATCH_MAX_ITEMS = 8
+const BATCH_MAX_MS = 30_000
+/** Seed stance pools are taken from at most this many frontier items. */
+const BATCH_SEEDS = 2
+/** Each seed contributes at most this many stance candidates. */
+const BATCH_STANCE_CANDIDATES = 6
+
+type BatchChoice = { anchor: Vec3; covered: string[]; reused: boolean }
+
+function stageOf(plan: PlanInstance, item: WorkItem, deferred: ReadonlySet<string>): number {
+  return buildStage(plan, item, deferred)
+}
+
+/** Stage is a priority, not a barrier; within a stage, build bottom-up. */
+function comparePlanItems(
+  plan: PlanInstance,
+  left: WorkItem,
+  right: WorkItem,
+  deferred: ReadonlySet<string>,
+  world: WorldView,
+): number {
+  const stage = stageOf(plan, left, deferred) - stageOf(plan, right, deferred)
+  if (stage !== 0) return stage
+  const leftPos = itemPosition(plan, left)
+  const rightPos = itemPosition(plan, right)
+  if (leftPos.y !== rightPos.y) return leftPos.y - rightPos.y
+  const leftDistance = Math.hypot(
+    leftPos.x - world.self.pos.x,
+    leftPos.y - world.self.pos.y,
+    leftPos.z - world.self.pos.z,
+  )
+  const rightDistance = Math.hypot(
+    rightPos.x - world.self.pos.x,
+    rightPos.y - world.self.pos.y,
+    rightPos.z - world.self.pos.z,
+  )
+  if (leftDistance !== rightDistance) return leftDistance - rightDistance
+  return left.id.localeCompare(right.id)
+}
+
+/**
+ * Choose the stance that covers the most currently placeable work items.
+ * Reuse the previous anchor while it still covers something; a new anchor is
+ * seeded from the lowest/nearest frontier items and scored by coverage, with a
+ * bottom-up tie-break. This is a greedy selection, not a promise of optimality.
+ */
+function chooseBatchAnchor(
+  plan: PlanInstance,
+  world: WorldView,
+  safeExits: readonly SafeExit[],
+  ledger: PlanItemLedger,
+  frontier: WorkItem[],
+  deferred: ReadonlySet<string>,
+  previous: { anchor: Vec3; covered: string[]; offers: number; since: number } | undefined,
+  now: number,
+): BatchChoice | undefined {
+  const feet = {
+    x: Math.floor(world.self.pos.x),
+    y: Math.floor(world.self.pos.y),
+    z: Math.floor(world.self.pos.z),
+  }
+  if (previous !== undefined && now - previous.since < BATCH_MAX_MS && previous.offers < BATCH_MAX_ITEMS) {
+    const covered = previous.covered.filter(id => frontier.some(item => item.id === id))
+    if (covered.length > 0
+      && isStandable(world, previous.anchor)
+      && (safeExits.length === 0 || canReachSafeExit(world, previous.anchor, [], safeExits) === 'yes')) {
+      return { anchor: previous.anchor, covered, reused: true }
+    }
+  }
+
+  const seeds = [...frontier]
+    .sort((left, right) => comparePlanItems(plan, left, right, deferred, world))
+    .slice(0, BATCH_SEEDS)
+  const candidates: Vec3[] = []
+  const add = (stand: Vec3): void => {
+    if (!candidates.some(candidate => sameCell(candidate, stand))) candidates.push(stand)
+  }
+  if (isStandable(world, feet)) add(feet)
+  for (const seed of seeds) {
+    const pool = placementStances(plan, world, seed, stageOf(plan, seed, deferred), safeExits)
+    for (const choice of pool.slice(0, BATCH_STANCE_CANDIDATES)) add(choice.stance)
+  }
+
+  let best: { anchor: Vec3; covered: string[] } | undefined
+  for (const stand of candidates) {
+    if (!isStandable(world, stand)) continue
+    if (safeExits.length > 0 && canReachSafeExit(world, stand, [], safeExits) !== 'yes') continue
+    const covered = coveredBy(plan, world, ledger, stand, frontier)
+    if (covered.length === 0) continue
+    if (best === undefined
+      || covered.length > best.covered.length
+      || (covered.length === best.covered.length && preferAnchor(stand, best.anchor, feet))) {
+      best = { anchor: stand, covered }
+    }
+  }
+  return best === undefined ? undefined : { ...best, reused: false }
+}
+
+/** Items this anchor can place without standing on their target cells. */
+function coveredBy(
+  plan: PlanInstance,
+  world: WorldView,
+  ledger: PlanItemLedger,
+  anchor: Vec3,
+  frontier: WorkItem[],
+): string[] {
+  const covered: string[] = []
+  const anchorKey = cellKeyOf(anchor)
+  for (const item of frontier) {
+    if (item.kind !== 'place' && item.kind !== 'hold') continue
+    const cells = itemCells(plan, item).map(cell => cell.pos)
+    // The body at the anchor may not occupy a target it is about to place.
+    if (cells.some(cell => cell.x === anchor.x && cell.z === anchor.z
+      && (cell.y === anchor.y || cell.y === anchor.y + 1))) continue
+    if (ledger.failedStances(plan, item).has(anchorKey)) continue
+    // Cheap bound before the line-of-sight predicate.
+    if (!cells.some(cell => Math.abs(cell.x - anchor.x) <= 5
+      && Math.abs(cell.y - anchor.y) <= 5
+      && Math.abs(cell.z - anchor.z) <= 5)) continue
+    if (!canPlaceFrom(world, cells, anchor)) continue
+    covered.push(item.id)
+  }
+  return covered
+}
+
+function preferAnchor(candidate: Vec3, best: Vec3, feet: Vec3): boolean {
+  if (candidate.y !== best.y) return candidate.y < best.y
+  const candidateDistance = Math.hypot(candidate.x - feet.x, candidate.z - feet.z)
+  const bestDistance = Math.hypot(best.x - feet.x, best.z - feet.z)
+  if (candidateDistance !== bestDistance) return candidateDistance < bestDistance
+  if (candidate.x !== best.x) return candidate.x < best.x
+  return candidate.z < best.z
+}
+
+function cellKeyOf(at: Vec3): string {
+  return `${at.x},${at.y},${at.z}`
+}
+
+function sameCell(left: Vec3, right: Vec3): boolean {
+  return left.x === right.x && left.y === right.y && left.z === right.z
 }

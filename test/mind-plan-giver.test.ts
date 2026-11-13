@@ -192,4 +192,30 @@ describe('plan giver', () => {
     })) as unknown as { keys: string }
     expect(result.keys).toBe('plan:plan-ord-1-p:next')
   })
+
+  it('offers a side-supported higher-stage item while a lower stage is blocked', () => {
+    const plan = instantiatePlan(template([
+      { id: 'blocked', kind: 'place', at: [0, 1, 0], expected: { name: 'diamond_block' } },
+      { id: 'upper', kind: 'place', at: [1, 2, 0], expected: { name: 'dirt' } },
+    ]), 'ord-cross', origin)
+    const blocks: BlockInfo[] = []
+    for (let x = -2; x <= 2; x += 1) {
+      for (let z = -2; z <= 2; z += 1) {
+        blocks.push(block('stone', x, 63, z))
+        for (let y = 64; y <= 67; y += 1) blocks.push(block('air', x, y, z))
+      }
+    }
+    // The lower item has support but no material; the upper item has a side
+    // support and material, so it is placeable before stage 2 is satisfied.
+    blocks.push(block('stone', 0, 64, 0))
+    blocks.push(block('stone', 1, 65, 0))
+    const result = createPlanGiver().find({ now: 0, plan }, world({
+      blocks,
+      inventory: [{ slot: 36, name: 'dirt', count: 4 }],
+      self: { pos: { x: 0.5, y: 64, z: 1.5 } },
+    })) as unknown as { driverId: string; keys: string; params: { stands?: unknown[] } }
+    expect(result.driverId).toBe('place')
+    expect(result.keys).toContain(':upper')
+    expect(result.params.stands?.length).toBeGreaterThan(0)
+  })
 })
