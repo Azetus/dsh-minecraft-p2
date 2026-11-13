@@ -65,7 +65,7 @@ import { MindLoop } from '../mind/loop.ts'
 import { OrderStore } from '../mind/orders.ts'
 import { planShortage, materialSources } from '../mind/materials.ts'
 import { blueprintPlan, parseBlueprint } from '../mind/blueprint.ts'
-import { planBuildAccess } from '../mind/build-access.ts'
+import { planBuildAccess, planSafeExits } from '../mind/build-access.ts'
 import {
   evaluatePlan,
   instantiatePlan,
@@ -612,10 +612,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       activePlan = blueprintPlan(parsed.blueprint, active.order.id)
       const planWorld = sensors.read()
       const access = planBuildAccess(activePlan, planWorld, planWorld.self.pos)
+      const safeExits = planSafeExits(activePlan, planWorld, planWorld.self.pos, access.entrance)
       activePlan = {
         ...activePlan,
         deferredWorkItems: [...access.deferred],
         ...(access.entrance === undefined ? {} : { entranceInside: access.entrance.inside }),
+        safeExits,
       }
       sensors.setObservation('plan', planObservationBoxes(activePlan, activePlan.workItems))
       planOrderId = active.order.id
@@ -664,6 +666,12 @@ export function createMind(options: CreateMindOptions): MindRuntime {
       return
     }
     activePlan = instantiatePlan(template, active.order.id, origin)
+    const templateWorld = sensors.read()
+    const templateAccess = planBuildAccess(activePlan, templateWorld, templateWorld.self.pos)
+    activePlan = {
+      ...activePlan,
+      safeExits: planSafeExits(activePlan, templateWorld, templateWorld.self.pos, templateAccess.entrance),
+    }
     sensors.setObservation('plan', planObservationBoxes(activePlan, activePlan.workItems))
     planOrderId = active.order.id
     planStage = 0

@@ -120,6 +120,19 @@ describe('place driver', () => {
     expect(fake.places.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('does not move when the explicit stance is the current cell', async () => {
+    const fake = fakePort()
+    fake.world.set('1,63,0', block('stone', { x: 1, y: 63, z: 0 }))
+    fake.world.set('1,64,0', block('air', { x: 1, y: 64, z: 0 }))
+    const handle = createPlaceDriver().start(
+      job({ x: 1, y: 64, z: 0, item: 'dirt', stands: [{ x: 0, y: 64, z: 0 }] }),
+      { body: fake.port, now: () => 0 },
+    )
+    await wait(50)
+    expect(handle.result()).toMatchObject({ state: 'succeeded' })
+    expect(fake.moves).toEqual([])
+  })
+
   it('retries another support face only when the provider proves retrySafe', async () => {
     const fake = fakePort({
       failPlaceFaces: ['up'],

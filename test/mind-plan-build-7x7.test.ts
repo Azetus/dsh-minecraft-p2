@@ -69,6 +69,8 @@ type Fake = {
   blocks: Map<string, BlockInfo>
   self: { pos: Vec3 }
   places: number
+  moves: number
+  moveTargets: string[]
   failures: string[]
 }
 
@@ -104,6 +106,8 @@ function fakeWorld(): Fake {
     blocks,
     self: { pos: self.pos },
     places: 0,
+    moves: 0,
+    moveTargets: [],
     failures,
   }
   const port = {
@@ -124,6 +128,8 @@ function fakeWorld(): Fake {
       return { state: 'ok' as const, elapsedMs: 1 }
     },
     moveTo: async (target: Vec3) => {
+      fake.moves += 1
+      fake.moveTargets.push(key(target))
       fake.self.pos = { x: target.x + 0.5, y: target.y, z: target.z + 0.5 }
       return { state: 'ok' as const, elapsedMs: 1 }
     },

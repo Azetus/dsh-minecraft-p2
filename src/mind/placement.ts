@@ -1,8 +1,9 @@
-import type { Vec3 } from '../body/api.ts'
-import { reachableCells as coreReachableCells } from '../motion/search/index.ts'
+import type { BlockInfo, Vec3 } from '../body/api.ts'
+import { reachableCells as coreReachableCells, MotionSearch } from '../motion/search/index.ts'
+import { createRules, defaultConstraints } from '../motion/model/index.ts'
 import { interiorBounds } from './build-access.ts'
 import { itemCells } from './plan.ts'
-import type { BlockReason, PlanInstance, WorkItem } from './plan.ts'
+import type { BlockReason, PlanInstance, SafeExit, WorkItem } from './plan.ts'
 import { isSolidBlock } from './plan.ts'
 import { createReadOnlyMotionWorld, isStandable } from './standing.ts'
 import type { WorldView } from './types.ts'
@@ -188,6 +189,55 @@ export class PlanItemLedger {
 }
 
 /**
+ * A placement stance must still be able to reach one of the plan's frozen safe
+ * exits after the requested cells are placed. This is the placement-side
+ * counterpart of the pickup return probe: a one-way stance (wall top, sealed
+ * room) is rejected before the driver moves there.
+ */
+export function canReachSafeExit(
+  world: WorldView,
+  stand: Vec3,
+  placed: readonly Vec3[],
+  safeExits: readonly SafeExit[],
+): 'yes' | 'no' | 'unknown' {
+  if (safeExits.length === 0) return 'no'
+  const overlay = new Set(placed.map(cellKey))
+  const motion = createReadOnlyMotionWorld(point => overlay.has(cellKey(point))
+    ? SOLID_BLOCK
+    : world.blockAt(point))
+  const constraints = defaultConstraints()
+  const rules = createRules(motion, constraints)
+  const context = () => ({
+    world: motion,
+    rules,
+    constraints,
+    self: motion.self(),
+    tick: 0,
+    now: 0,
+    position: stand,
+  })
+  let unknown = false
+  for (const exit of safeExits) {
+    if (cellKey(exit.cell) === cellKey(stand)) return 'yes'
+    const search = new MotionSearch(stand, exit.cell, context, {
+      maxNodes: 512,
+      timeoutMs: Number.POSITIVE_INFINITY,
+    })
+    let result = search.step(0)
+    while (result.status === 'running') result = search.step(0)
+    if (result.status === 'success') return 'yes'
+    if (result.status !== 'noPath') unknown = true
+  }
+  return unknown ? 'unknown' : 'no'
+}
+
+const SOLID_BLOCK: BlockInfo = {
+  name: 'stone',
+  loaded: true,
+  collision: [[0, 0, 0, 1, 1, 1]],
+}
+
+/**
  * Full placement-stance scan around one work item. A future target that is
  * still air is a legal temporary stand; a target that is already solid is not
  * (the body cannot occupy it). Stage decides preference, not admission, so a
@@ -198,6 +248,7 @@ export function placementStances(
   world: WorldView,
   item: WorkItem,
   stage: number,
+  safeExits?: readonly SafeExit[],
 ): StanceChoice[] {
   const targets = itemCells(plan, item)
   if (targets.length === 0) return []
@@ -227,6 +278,12 @@ export function placementStances(
         // interior is preferred for roof/furniture work.
         if (stage <= 2 && inside) continue
         if (!canPlaceFrom(world, targets.map(cell => cell.pos), stance)) continue
+        // A build stance must be reachable now and returnable after the
+        // placement. The return half is probed by pickStances on the few
+        // candidates it actually offers; a proven-unreachable cell is never a
+        // candidate in the first place. Without a safe-exit reference the old
+        // soft penalty stays in place.
+        if (safeExits !== undefined && safeExits.length > 0 && !reachable.has(key)) continue
         const distance = Math.hypot(stance.x - anchor.x, stance.y - anchor.y, stance.z - anchor.z)
         choices.push({ stance, distance: distance + (stage >= 3 && !inside ? 2 : 0) + (reachable.has(key) ? 0 : 4) })
       }
@@ -243,6 +300,7 @@ export function stepAsideStances(
   world: WorldView,
   item: WorkItem,
   stage: number,
+  safeExits?: readonly SafeExit[],
 ): StanceChoice[] {
   const feet = {
     x: Math.floor(world.self.pos.x),
@@ -254,7 +312,7 @@ export function stepAsideStances(
     planned.add(cellKey(candidatePosition(plan, candidate)))
     for (const cell of itemCells(plan, candidate)) planned.add(cellKey(cell.pos))
   }
-  const choices = placementStances(plan, world, item, stage)
+  const choices = placementStances(plan, world, item, stage, safeExits)
     .filter(choice => cellKey(choice.stance) !== cellKey(feet))
   // Stepping onto another pending target only moves the same problem to the
   // next work item and ping-pongs the body between two floor cells.

@@ -1,6 +1,8 @@
 import type { Vec3 } from '../body/api.ts'
-import { itemPosition } from './plan.ts'
-import type { PlanInstance, WorkItem } from './plan.ts'
+import { itemCells, itemPosition } from './plan.ts'
+import type { PlanInstance, SafeExit, WorkItem } from './plan.ts'
+import { isStandable, createReadOnlyMotionWorld } from './standing.ts'
+import { standCells } from '../motion/search/index.ts'
 import type { WorldView } from './types.ts'
 
 export type BuildAccess = {
@@ -165,4 +167,87 @@ function inside(min: Vec3, maxX: number, maxY: number, maxZ: number, cell: Vec3)
 
 function key(at: Vec3): string {
   return `${at.x},${at.y},${at.z}`
+}
+
+/**
+ * Standable reference cells the body must still be able to reach after a
+ * placement. The set is frozen when the plan is created (like the deferred
+ * entrance) so later build progress cannot silently move the goalposts.
+ * Prefer the body's own cell, then the entrance outside/inside, then a bounded
+ * search for the nearest standable cell that is not a future blueprint block.
+ */
+export function planSafeExits(
+  plan: PlanInstance,
+  world: WorldView,
+  self: Vec3,
+  entrance?: { inside: Vec3; outside: Vec3 },
+): SafeExit[] {
+  const solid = blueprintSolidCells(plan)
+  const interior = interiorBounds(plan)
+  const exits: SafeExit[] = []
+  const start = floorCell(self)
+  const add = (cell: Vec3, exterior?: boolean): void => {
+    const at = floorCell(cell)
+    const id = key(at)
+    if (solid.has(id)) return
+    if (!isStandable(world, at)) return
+    if (exits.some(exit => key(exit.cell) === id)) return
+    exits.push({ cell: at, exterior: exterior ?? !insideBox(at, interior.min, interior.max) })
+  }
+
+  add(start)
+  if (entrance !== undefined) {
+    add(entrance.outside, true)
+    add(entrance.inside)
+  }
+  if (exits.length < 3) {
+    const motion = createReadOnlyMotionWorld(point => world.blockAt(point))
+    const query = standCells(
+      motion,
+      {
+        near: start,
+        desired: entrance?.outside ?? start,
+        reach: { horizontal: 8, vertical: 3 },
+        accept: cell => !solid.has(key(cell)),
+      },
+      { from: start, reachability: { maxNodes: 512 }, dry: true },
+    )
+    const ranked = [...query.cells]
+      .filter(candidate => candidate.reachable !== 'no')
+      .sort((left, right) => {
+        const leftExterior = insideBox(left.cell, interior.min, interior.max) ? 1 : 0
+        const rightExterior = insideBox(right.cell, interior.min, interior.max) ? 1 : 0
+        return leftExterior - rightExterior
+          || left.distance - right.distance
+          || left.cell.y - right.cell.y
+          || left.cell.x - right.cell.x
+          || left.cell.z - right.cell.z
+      })
+    for (const candidate of ranked) {
+      add(candidate.cell)
+      if (exits.length >= 3) break
+    }
+  }
+  return exits
+}
+
+/** Final-solid cells of the blueprint work items (place/hold expected cells). */
+function blueprintSolidCells(plan: PlanInstance): Set<string> {
+  const solid = new Set<string>()
+  for (const item of plan.workItems) {
+    if (item.expected === undefined) continue
+    if (item.kind !== 'place' && item.kind !== 'hold') continue
+    for (const cell of itemCells(plan, item)) solid.add(key(cell.pos))
+  }
+  return solid
+}
+
+function floorCell(at: Vec3): Vec3 {
+  return { x: Math.floor(at.x), y: Math.floor(at.y), z: Math.floor(at.z) }
+}
+
+function insideBox(at: Vec3, min: Vec3, max: Vec3): boolean {
+  return at.x >= min.x && at.x <= max.x
+    && at.y >= min.y && at.y <= max.y
+    && at.z >= min.z && at.z <= max.z
 }

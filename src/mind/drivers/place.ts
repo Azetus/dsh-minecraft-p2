@@ -179,12 +179,19 @@ async function placeCell(port: BodyApi, params: PlaceParams): Promise<DriverResu
   }
 
   if (explicit.length > 0) {
+    // Standing on the requested cell is already the goal: do not spend an act
+    // on a no-op moveTo. This is what makes a reused coverage anchor free.
+    const explicitFeet = {
+      x: Math.floor(port.self().pos.x),
+      y: Math.floor(port.self().pos.y),
+      z: Math.floor(port.self().pos.z),
+    }
     return await placeFromStances(
       port,
       cells,
       params,
       expected,
-      explicit.map(stand => ({ stand, move: true })),
+      explicit.map(stand => ({ stand, move: !sameCell(stand, explicitFeet) })),
       supportHint,
     )
   }

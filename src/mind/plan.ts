@@ -57,6 +57,13 @@ export type PlanTemplate = {
   verify?: VerifySpec
 }
 
+/** A standable cell a placement stance must be able to return to. */
+export type SafeExit = {
+  cell: Vec3
+  /** True when the cell is outside the plan's interior box. */
+  exterior: boolean
+}
+
 export type PlanInstance = {
   planId: string
   orderId: string
@@ -71,6 +78,12 @@ export type PlanInstance = {
   deferredWorkItems?: string[]
   /** Interior cell just inside the temporary entrance. */
   entranceInside?: Vec3
+  /**
+   * Pre-build standable reference cells used by the placement access check.
+   * Frozen when the plan is created; on recovery they are recomputed from the
+   * current world (like deferredWorkItems), never from a previous body's state.
+   */
+  safeExits?: SafeExit[]
 }
 
 export type BlockReason = 'NO_SUPPORT' | 'NO_STAND' | 'NO_MATERIAL' | 'UNREACHABLE' | 'CONFLICT'

@@ -1,12 +1,12 @@
 import type { JsonValue } from '../../contracts/types.ts'
 import type { Vec3 } from '../../body/api.ts'
-import { interiorBounds, planBuildAccess } from '../build-access.ts'
-import { buildStage, currentStage, stageItems, stageSummaries } from '../build-stage.ts'
+import { interiorBounds, planBuildAccess, planSafeExits } from '../build-access.ts'
+import { buildStage, currentStage, stageItems, stageSummaries, STAGE_COUNT } from '../build-stage.ts'
 import { evaluatePlan, isAirName, isFluidName, itemCells, itemPosition } from '../plan.ts'
-import type { PlanInstance, WorkItem } from '../plan.ts'
+import type { PlanInstance, SafeExit, WorkItem } from '../plan.ts'
 import { canClearBlock } from '../policy.ts'
 import { itemObservationBox } from '../plan-observation.ts'
-import { MAX_ITEM_STANCES, MAX_STANCE_CANDIDATES, MAX_STANCE_TRIES, PlanItemLedger, placementStances, stepAsideStances } from '../placement.ts'
+import { MAX_ITEM_STANCES, MAX_STANCE_TRIES, PlanItemLedger, canReachSafeExit, placementStances, stepAsideStances } from '../placement.ts'
 import type { StanceRejection } from '../placement.ts'
 import type { Candidate, EvalCtx, Handoff, WorkGiver, WorkGiverResult, WorldView } from '../types.ts'
 import { isStandable, nearestStandable } from './common.ts'
@@ -24,6 +24,20 @@ import { isStandable, nearestStandable } from './common.ts'
  */
 export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): WorkGiver {
   const ledger = options.ledger ?? new PlanItemLedger()
+  // Plans created outside the body (tests, restored fixtures) may not carry the
+  // frozen exit set; compute it once from the first snapshot and keep it.
+  const safeExitCache = new WeakMap<PlanInstance, SafeExit[]>()
+  const safeExitsFor = (
+    plan: PlanInstance,
+    world: WorldView,
+    entrance?: { inside: Vec3; outside: Vec3 },
+  ): SafeExit[] => {
+    const known = plan.safeExits ?? safeExitCache.get(plan)
+    if (known !== undefined) return known
+    const exits = planSafeExits(plan, world, world.self.pos, entrance)
+    safeExitCache.set(plan, exits)
+    return exits
+  }
   return {
     id: 'plan.work',
     find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
@@ -68,6 +82,7 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           },
         }
       }
+      const safeExits = safeExitsFor(plan, world, access.entrance)
 
       // A clear policy turns an occupied place target into a clear handoff.
       if (ctx.conflictPolicy?.mode === 'clear') {
@@ -95,7 +110,9 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       }
 
       // Furniture is placed from inside; entering is only forced at that point.
-      if (stage >= 4 && plan.entranceInside !== undefined && !inInterior(plan, world.self.pos)
+      // The final entrance stage must not force entry: the body has to close it
+      // from outside, otherwise the exit handoff below would ping-pong.
+      if (stage >= 4 && stage < STAGE_COUNT && plan.entranceInside !== undefined && !inInterior(plan, world.self.pos)
         && isStandable(world, plan.entranceInside)
         && ctx.isBlocked?.(`handoff:enter:${plan.planId}`) !== true) {
         return {
@@ -110,6 +127,30 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           },
           reason: 'enter build interior',
           orderId: plan.orderId,
+        }
+      }
+
+      // The last stage closes the temporary entrance. If the body is still
+      // inside, leave through the opening first: closing it from inside can
+      // seal the body in, and a solid entrance cannot be reopened.
+      if (stage >= STAGE_COUNT && plan.entranceInside !== undefined && inInterior(plan, world.self.pos)) {
+        const exit = safeExits.find(candidate => candidate.exterior && isStandable(world, candidate.cell))
+        if (exit !== undefined
+          && ctx.isBlocked?.(`handoff:move:${exit.cell.x},${exit.cell.y},${exit.cell.z}`) !== true) {
+          return {
+            driverId: 'move',
+            target: { kind: 'point', pos: exit.cell },
+            params: {
+              x: exit.cell.x,
+              y: exit.cell.y,
+              z: exit.cell.z,
+              range: 0,
+              exact: true,
+              timeoutMs: 8_000,
+            },
+            reason: 'exit build interior before closing entrance',
+            orderId: plan.orderId,
+          }
         }
       }
 
@@ -133,13 +174,24 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
           underBody ??= item
           continue
         }
-        const choices = pickStances(ledger, plan, item, placementStances(plan, world, item, stage), ctx)
+        const choices = pickStances(
+          ledger,
+          plan,
+          item,
+          placementStances(plan, world, item, stage, safeExits),
+          ctx,
+          world,
+          safeExits,
+          itemCells(plan, item).map(cell => cell.pos),
+        )
         if (choices.length === 0) {
           ledger.block(
             plan,
             item,
             'NO_PLACE_STANCE',
-            'no standable placement stance can reach an exposed support face',
+            safeExits.length === 0
+              ? 'no safe exit reference cell for placement'
+              : 'no standable placement stance with a safe return path',
             staleRejections(ledger, plan, item),
           )
           continue
@@ -151,7 +203,16 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       // cell): step off the footprint, preferring a cell that is not itself a
       // pending target.
       if (underBody !== undefined) {
-        const choice = pickStance(ledger, plan, underBody, stepAsideStances(plan, world, underBody, stage), ctx)
+        const choice = pickStance(
+          ledger,
+          plan,
+          underBody,
+          stepAsideStances(plan, world, underBody, stage, safeExits),
+          ctx,
+          world,
+          safeExits,
+          [],
+        )
         if (choice !== undefined) {
           return {
             driverId: 'move',
@@ -190,7 +251,16 @@ export function createPlanGiver(options: { ledger?: PlanItemLedger } = {}): Work
       for (const item of items) {
         const state = states.get(item.id)
         if (state?.kind !== 'blocked' || state.reason !== 'UNREACHABLE') continue
-        const choices = pickStances(ledger, plan, item, reachStances(plan, world, item, stage), ctx)
+        const choices = pickStances(
+          ledger,
+          plan,
+          item,
+          reachStances(plan, world, item, stage, safeExits),
+          ctx,
+          world,
+          safeExits,
+          [],
+        )
         if (choices.length === 0) {
           ledger.block(
             plan,
@@ -259,6 +329,9 @@ function pickStances(
   item: WorkItem,
   choices: Array<{ stance: Vec3 }>,
   ctx: EvalCtx,
+  world: WorldView,
+  safeExits: readonly SafeExit[],
+  placed: readonly Vec3[],
 ): Vec3[] {
   const failed = ledger.failedStances(plan, item)
   const seen = new Set<string>()
@@ -267,12 +340,19 @@ function pickStances(
     const key = `${choice.stance.x},${choice.stance.y},${choice.stance.z}`
     if (seen.has(key) || failed.has(key)) continue
     seen.add(key)
+    // A stance whose move handoff the tracker blocked gives no new information.
+    if (ctx.isBlocked?.(`handoff:move:${key}`) === true) continue
+    // The stance must still reach a safe exit after this item is placed. The
+    // trial cells are the item's full group; a wall top or a closing entrance
+    // is rejected here, before the driver moves. When no safe exit can be
+    // established (synthetic/void worlds), keep the old stance policy: the
+    // guard is only as strong as its reference cell.
+    if (placed.length > 0 && safeExits.length > 0
+      && canReachSafeExit(world, choice.stance, placed, safeExits) !== 'yes') continue
     result.push(choice.stance)
-    if (result.length >= Math.min(MAX_ITEM_STANCES, MAX_STANCE_CANDIDATES)) break
+    if (result.length >= MAX_ITEM_STANCES) break
   }
-  // A stance whose move handoff the tracker blocked gives no new information;
-  // it is skipped here and the next stance is offered.
-  return result.filter(stand => ctx.isBlocked?.(`handoff:move:${stand.x},${stand.y},${stand.z}`) !== true)
+  return result
 }
 
 function pickStance(
@@ -281,8 +361,11 @@ function pickStance(
   item: WorkItem,
   choices: Array<{ stance: Vec3 }>,
   ctx: EvalCtx,
+  world: WorldView,
+  safeExits: readonly SafeExit[],
+  placed: readonly Vec3[],
 ): Vec3 | undefined {
-  return pickStances(ledger, plan, item, choices, ctx)[0]
+  return pickStances(ledger, plan, item, choices, ctx, world, safeExits, placed)[0]
 }
 
 function stageBlocked(
@@ -344,8 +427,11 @@ function reachStances(
   world: WorldView,
   item: WorkItem,
   stage: number,
+  safeExits: readonly SafeExit[],
 ): Array<{ stance: Vec3 }> {
-  if (item.kind === 'place' || item.kind === 'hold') return placementStances(plan, world, item, stage)
+  if (item.kind === 'place' || item.kind === 'hold') {
+    return placementStances(plan, world, item, stage, safeExits)
+  }
   const target = itemPosition(plan, item)
   const stand = nearestStandable(world, target, 3, target, 3)
   return stand === undefined ? [] : [{ stance: stand }]
