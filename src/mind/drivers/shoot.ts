@@ -99,13 +99,24 @@ export function createShootDriver(): Driver {
     start(job: Job, ctx: DriverCtx) {
       const params = job.params as unknown as ShootParams
       const key = params.continuationKey ?? `shoot:${params.entityId}:${params.weapon}`
-      const run = new ShootRun(ctx.body, params)
+      const run = new RangedAttack(ctx.body, params)
       return new AsyncDriverHandle(key, run.work(), () => run.stop())
     },
   }
 }
 
-class ShootRun {
+export type RangedAttackOptions = {
+  /** Standalone `shoot` requires dry, still ground; combat may move. */
+  requireStationary?: boolean
+  /** Use the shooter's current velocity for bow ballistics. */
+  useShooterVelocity?: boolean
+  maxShots?: number
+  /** Called between charge polls; lets a combat session keep moving. */
+  onChargeTick?: () => Promise<void>
+}
+
+export class RangedAttack {
+  private readonly options: RangedAttackOptions
   private stopRequested = false
   private useActive = false
   private targetDead = false
@@ -131,7 +142,10 @@ class ShootRun {
   constructor(
     private readonly body: BodyApi,
     private readonly params: ShootParams,
-  ) {}
+    options: RangedAttackOptions = {},
+  ) {
+    this.options = options
+  }
 
   stop(): void {
     this.stopRequested = true
@@ -149,13 +163,19 @@ class ShootRun {
       const self = body.self()
       this.selfId = self.id
       this.startPos = { ...self.pos }
-      if (!self.onGround || self.inWater || self.inLava) {
+      if (this.options.requireStationary !== false
+        && (!self.onGround || self.inWater || self.inLava)) {
         return this.failed('SHOOT_NOT_STATIONARY', { reason: 'shooter not standing on dry ground' })
       }
       const target = this.resolveTarget()
       if (target === undefined) return this.failed('SHOOT_TARGET_NOT_FOUND', {})
       this.sampleTarget(target)
-      if (!body.inventory().some(item => isArrowName(item.name))
+      const heldBefore = body.held?.()
+      const loadedCrossbow = this.params.weapon === 'crossbow'
+        && heldBefore !== undefined
+        && isCrossbowLoadedWithArrow(heldBefore)
+      if (!loadedCrossbow
+        && !body.inventory().some(item => isArrowName(item.name))
         && !isArrowName(body.offhand?.()?.name ?? '')) {
         return this.failed('SHOOT_NO_AMMO', {})
       }
@@ -176,7 +196,7 @@ class ShootRun {
       }
 
       const shots: Record<string, unknown>[] = []
-      const maxShots = this.params.maxShots ?? DEFAULT_MAX_SHOTS
+      const maxShots = this.options.maxShots ?? this.params.maxShots ?? DEFAULT_MAX_SHOTS
       let anyMiss = false
       let anyInconclusive = false
       for (let index = 0; index < maxShots; index += 1) {
@@ -463,7 +483,8 @@ class ShootRun {
 
   private planAim(target: EntityInfo, profile: ArrowProfile): AimSolution {
     const self = this.body.self()
-    if (!self.onGround || self.inWater || self.inLava) {
+    if (this.options.requireStationary !== false
+      && (!self.onGround || self.inWater || self.inLava)) {
       throw new CodedShootError('SHOOT_NOT_STATIONARY', { reason: 'shooter left dry ground' })
     }
     // `canSee` checks the target's feet; a low fence can block that ray while
@@ -479,7 +500,12 @@ class ShootRun {
     }
     let solution: AimSolution | undefined
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = solveAim(origin, point, profile)
+      const result = solveAim(
+        origin,
+        point,
+        profile,
+        this.options.useShooterVelocity === true ? self.velocity : undefined,
+      )
       if ('code' in result) {
         throw new CodedShootError(result.code === 'NO_SOLUTION' ? 'SHOOT_NO_SOLUTION' : 'SHOOT_OUT_OF_RANGE', {
           range,
@@ -622,6 +648,7 @@ class ShootRun {
   }
 
   private ensureStationary(): void {
+    if (this.options.requireStationary === false) return
     const self = this.body.self()
     if (!self.onGround || self.inWater || self.inLava) {
       throw new CodedShootError('SHOOT_NOT_STATIONARY', { reason: 'shooter left dry ground' })
@@ -652,6 +679,7 @@ class ShootRun {
     const deadline = Date.now() + ms
     while (Date.now() < deadline) {
       this.ensureRunning()
+      await this.options.onChargeTick?.()
       await sleep(Math.min(50, Math.max(1, deadline - Date.now())))
     }
   }

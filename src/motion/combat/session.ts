@@ -28,6 +28,11 @@ const STALLED_TICKS = 3
 const NO_DAMAGE_WINDOWS = 4
 const FACING_CONE = Math.PI / 3
 const BLAST_RANGE = 4.5
+const RANGED_MAX = 24
+const RANGED_ENTER_MARGIN = 2
+const TOO_CLOSE_MARGIN = 1
+const MAX_RANGED_SHOTS = 3
+const RANGED_COOLDOWN_MS = 500
 
 export type CombatSessionState = 'running' | 'succeeded' | 'failed' | 'interrupted'
 
@@ -76,6 +81,16 @@ export class CombatSession {
   private attacksIssued = 0
   private attacksSinceDamage = 0
   private damageObserved = 0
+  private weaponMode: 'melee' | 'ranged' = 'melee'
+  private weaponSwitches = 0
+  private rangedShots = 0
+  private rangedHits = 0
+  private rangedMisses = 0
+  private rangedInconclusive = 0
+  private rangedWeapon: 'bow' | 'crossbow' | undefined
+  private rangedUnavailableReason: string | undefined
+  private lastRangedAt = 0
+  private rangedTargetId: string | undefined
   private misses = 0
   private side: 'left' | 'right' = 'left'
   private strafeSteps = 0
@@ -177,6 +192,7 @@ export class CombatSession {
 
   requestStop(): void {
     this.stopRequested = true
+    this.port.ranged?.stop()
     this.finish('interrupted', 'ATTACK_INTERRUPTED')
   }
 
@@ -186,6 +202,7 @@ export class CombatSession {
 
   private finish(state: CombatSessionState, code?: string, reason?: string): void {
     if (this.state !== 'running') return
+    this.port.ranged?.stop()
     this.state = state
     this.disposeDead?.()
     this.disposeHurt?.()
@@ -200,6 +217,15 @@ export class CombatSession {
       state: state === 'succeeded' ? 'succeeded' : 'failed',
       ...(code === undefined ? {} : { code }),
       observed,
+    }
+  }
+
+  private refreshResultObserved(): void {
+    const current = this.resultValue
+    if (current === undefined) return
+    this.resultValue = {
+      ...current,
+      observed: this.observed(current.code),
     }
   }
 
@@ -244,6 +270,16 @@ export class CombatSession {
       inputFailures: this.inputFailures,
       reach: this.reach,
       reachSource,
+      weaponMode: this.weaponMode,
+      weaponSwitches: this.weaponSwitches,
+      rangedShots: this.rangedShots,
+      rangedHits: this.rangedHits,
+      rangedMisses: this.rangedMisses,
+      rangedInconclusive: this.rangedInconclusive,
+      ...(this.rangedWeapon === undefined ? {} : { rangedWeapon: this.rangedWeapon }),
+      ...(this.rangedUnavailableReason === undefined
+        ? {}
+        : { rangedUnavailableReason: this.rangedUnavailableReason }),
       ...(reason === undefined ? {} : { lostReason: reason }),
     }
   }
@@ -471,6 +507,10 @@ export class CombatSession {
     if (best.id !== this.currentTargetId) {
       this.currentTargetId = best.id
       this.targetSwitches += 1
+      this.rangedShots = 0
+      this.rangedTargetId = undefined
+      this.rangedUnavailableReason = undefined
+      this.weaponMode = 'melee'
     }
     return true
   }
@@ -505,6 +545,119 @@ export class CombatSession {
     this.rangedThreat = ranged
     this.explosionThreat = explosion
     this.creeperThreatId = creeperThreat
+  }
+
+  private shouldRanged(entity: CombatEntity, distance: number, visible: boolean, now: number): boolean {
+    if (this.options.allowRanged !== true || this.port.ranged === undefined) return false
+    if (!visible || this.rangedShots >= MAX_RANGED_SHOTS) {
+      if (this.rangedShots >= MAX_RANGED_SHOTS) this.rangedUnavailableReason = 'RANGED_SHOT_LIMIT'
+      return false
+    }
+    if (distance <= this.reach + TOO_CLOSE_MARGIN) return false
+    if (distance > RANGED_MAX) return false
+    if (this.weaponMode === 'melee' && distance < this.reach + RANGED_ENTER_MARGIN) return false
+    if (now - this.lastRangedAt < RANGED_COOLDOWN_MS) return false
+    if (this.lastHurtAt !== undefined && now - this.lastHurtAt <= this.guardMs) {
+      this.rangedUnavailableReason = 'RECENTLY_HURT'
+      return false
+    }
+    if (/creeper/iu.test(entity.name) && distance <= BLAST_RANGE) return false
+    const status = this.port.ranged.status(entity)
+    if (!status.ready) {
+      this.rangedUnavailableReason = status.code ?? 'RANGED_UNAVAILABLE'
+      return false
+    }
+    this.rangedUnavailableReason = undefined
+    return true
+  }
+
+  private async tryRanged(entity: CombatEntity, distance: number, visible: boolean, now: number): Promise<boolean> {
+    if (!this.shouldRanged(entity, distance, visible, now)) return false
+    const capability = this.port.ranged
+    if (capability === undefined) return false
+    if (this.weaponMode !== 'ranged') {
+      this.weaponMode = 'ranged'
+      this.weaponSwitches += 1
+    }
+    this.rangedTargetId = entity.id
+    this.rangedWeapon = capability.status(entity).weapon
+    if (this.port.combatInput !== undefined) {
+      await this.port.combatInput({ face: this.aim(entity) })
+    }
+    await this.releaseShieldForRanged()
+    let outcome
+    try {
+      outcome = await capability.fire(entity)
+    } catch (error) {
+      this.rangedUnavailableReason = error instanceof Error ? error.message : String(error)
+      await this.switchToMelee()
+      return false
+    }
+    this.rangedShots += 1
+    this.lastRangedAt = now
+    if (outcome.weapon !== undefined) this.rangedWeapon = outcome.weapon
+    if (outcome.state === 'hit') this.rangedHits += 1
+    else if (outcome.state === 'missed') this.rangedMisses += 1
+    else if (outcome.state === 'inconclusive') this.rangedInconclusive += 1
+    if (this.state !== 'running' || this.stopRequested) {
+      this.refreshResultObserved()
+      return true
+    }
+    if (outcome.state === 'unavailable' || outcome.state === 'failed') {
+      this.rangedUnavailableReason = outcome.code ?? 'RANGED_UNAVAILABLE'
+      await this.switchToMelee()
+      return false
+    }
+    const fresh = this.port.entity(this.currentTargetId)
+    if (fresh === undefined) {
+      this.lostTargets.add(this.currentTargetId)
+      if (this.finishIfResolved()) return true
+      this.advanceTarget()
+      return true
+    }
+    if ((fresh.health ?? 1) <= 0) {
+      this.deadTargets.add(this.currentTargetId)
+      if (this.allTargetsDead()) {
+        this.finish('succeeded')
+        return true
+      }
+      if (this.finishIfResolved()) return true
+      this.advanceTarget()
+      return true
+    }
+    if (this.rangedShots >= MAX_RANGED_SHOTS
+      || eyeReach(this.port.self(), fresh) <= this.reach + TOO_CLOSE_MARGIN) {
+      await this.switchToMelee()
+    }
+    return true
+  }
+
+  private async releaseShieldForRanged(): Promise<void> {
+    if (!this.shieldHeld) return
+    try {
+      const released = await this.port.offhandHold?.(false)
+      if (released?.state === 'ok') {
+        this.shieldHeld = false
+        this.shieldHeldSince = undefined
+        this.stanceDrops += 1
+      } else {
+        this.stanceReleaseFailures += 1
+      }
+    } catch {
+      this.stanceReleaseFailures += 1
+    }
+  }
+
+  private async switchToMelee(): Promise<void> {
+    if (this.weaponMode !== 'melee') {
+      this.weaponMode = 'melee'
+      this.weaponSwitches += 1
+    }
+    try {
+      await this.port.switchToMelee?.()
+    } catch {
+      // The next melee swing still reports its own equip/attack failure.
+    }
   }
 
   private async step(): Promise<void> {
@@ -585,6 +738,8 @@ export class CombatSession {
       this.losTicks.set(this.currentTargetId, 0)
     }
     const targetFacing = this.targetFacing(entity, self.pos)
+    if (await this.tryRanged(entity, distance, visible, now)) return
+    if (this.state !== 'running') return
 
     // Waypoint path: plan once, then follow one cell-center per 50ms tick.
     // Visible + in reach cancels the path and returns to attack normal.

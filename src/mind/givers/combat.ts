@@ -163,6 +163,7 @@ function candidateFor(
       targetName: entity.name,
       orderId: current.order.id,
       allowAny: true,
+      ...(current.order.params?.allowRanged === true ? { allowRanged: true } : {}),
       locateRadius: ATTACK_ACQUIRE_RADIUS,
       ...(typeof current.order.params?.chaseLeash === 'number'
         ? { chaseLeash: current.order.params.chaseLeash }

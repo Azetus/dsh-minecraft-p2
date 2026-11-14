@@ -430,6 +430,9 @@ function validateOrder(value: unknown): Order {
 function validateAttackParams(params: JsonValue | undefined): void {
   if (params === undefined) return
   if (!isRecord(params)) throw orderError('INVALID_ORDER', 'attack.params must be an object')
+  if (params.allowRanged !== undefined && typeof params.allowRanged !== 'boolean') {
+    throw orderError('INVALID_ORDER', 'attack.allowRanged must be a boolean')
+  }
   if (params.maxChases !== undefined
     && (typeof params.maxChases !== 'number' || !Number.isInteger(params.maxChases)
       || params.maxChases < 1 || params.maxChases > 64)) {

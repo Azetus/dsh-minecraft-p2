@@ -8,6 +8,7 @@ import {
   type CombatEntity,
   type CombatInput,
   type CombatPort,
+  type RangedCombatOutcome,
 } from '../src/motion/combat/index.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -30,6 +31,9 @@ type Fake = {
   inputs: CombatInput[]
   stances: boolean[]
   attacks: () => number
+  rangedFires: () => number
+  rangedStops: () => number
+  meleeSwitches: () => number
   setTarget: (target: CombatEntity | undefined) => void
   setSelfHealth: (health: number) => void
   hurt: (id: string) => void
@@ -48,12 +52,21 @@ function fakePort(options: {
     state: 'ok' | 'failed'
     path?: Array<{ x: number; y: number; z: number }>
   }>
+  ranged?: {
+    ready?: boolean
+    outcome?: RangedCombatOutcome
+    kill?: boolean
+    fire?: () => Promise<RangedCombatOutcome>
+  }
 } = {}): Fake {
   let target: CombatEntity | undefined = options.target === undefined ? zombie() : options.target
   let self = { pos: { x: 0.5, y: 64, z: 0.5 }, health: options.selfHealth ?? 20, height: 1.8 }
   const inputs: CombatInput[] = []
   const stances: boolean[] = []
   let attacks = 0
+  let rangedFires = 0
+  let rangedStops = 0
+  let meleeSwitches = 0
   const hurtListeners = new Set<(id: string) => void>()
   const deadListeners = new Set<(id: string) => void>()
   const explosionListeners = new Set<(pos: { x: number; y: number; z: number }, radius?: number) => void>()
@@ -91,6 +104,28 @@ function fakePort(options: {
       stances.push(active)
       return { state: 'ok' }
     },
+    ...(options.ranged === undefined
+      ? {}
+      : {
+          ranged: {
+            status: () => ({
+              ready: options.ranged?.ready !== false,
+              weapon: 'bow' as const,
+              ...(options.ranged?.ready === false ? { code: 'NO_AMMO' } : {}),
+            }),
+            fire: async (): Promise<RangedCombatOutcome> => {
+              rangedFires += 1
+              if (options.ranged?.fire !== undefined) return options.ranged.fire()
+              if (options.ranged?.kill === true) {
+                target = undefined
+                emitDead('z1')
+              }
+              return options.ranged?.outcome ?? { state: 'hit', weapon: 'bow' }
+            },
+            stop: () => { rangedStops += 1 },
+          },
+          switchToMelee: async () => { meleeSwitches += 1 },
+        }),
     onEntityHurt: cb => {
       hurtListeners.add(cb)
       return () => hurtListeners.delete(cb)
@@ -109,6 +144,9 @@ function fakePort(options: {
     inputs,
     stances,
     attacks: () => attacks,
+    rangedFires: () => rangedFires,
+    rangedStops: () => rangedStops,
+    meleeSwitches: () => meleeSwitches,
     setTarget: value => { target = value },
     setSelfHealth: value => { self = { ...self, health: value } },
     hurt: id => emitHurt(id),
@@ -229,6 +267,56 @@ describe('CombatSession tick', () => {
     expect(session.state).toBe('interrupted')
     expect(session.result()?.code).toBe('ATTACK_INTERRUPTED')
     expect(fake.stances.at(-1)).toBe(false)
+  })
+
+  it('uses ranged only when allowRanged is true and the target is outside melee band', async () => {
+    const fake = fakePort({ target: zombie(10), ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.attacks()).toBe(0)
+    expect(fake.rangedFires()).toBe(1)
+    expect(session.result()?.observed).toMatchObject({
+      rangedShots: 1,
+      rangedHits: 1,
+      weaponSwitches: 1,
+      weaponMode: 'ranged',
+    })
+  })
+
+  it('stops a pending ranged shot without reporting success', async () => {
+    let release!: (outcome: RangedCombatOutcome) => void
+    const pending = new Promise<RangedCombatOutcome>(resolve => { release = resolve })
+    const fake = fakePort({ target: zombie(10), ranged: { fire: () => pending } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    session.tick()
+    for (let index = 0; index < 20 && fake.rangedFires() === 0; index += 1) await sleep(5)
+    expect(fake.rangedFires()).toBe(1)
+    session.requestStop()
+    release({ state: 'hit', weapon: 'bow' })
+    await sleep(10)
+    expect(session.state).toBe('interrupted')
+    expect(fake.rangedStops()).toBeGreaterThan(0)
+    expect(session.result()?.state).toBe('failed')
+    expect(session.result()?.observed.killed).toBe(false)
+  })
+
+  it('does not use ranged without explicit authorization', async () => {
+    const fake = fakePort({ target: zombie(10), ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.rangedFires()).toBe(0)
+    expect(fake.attacks()).toBe(1)
+  })
+
+  it('does not draw a ranged weapon when the target is already too close', async () => {
+    const fake = fakePort({ target: zombie(3), ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.rangedFires()).toBe(0)
+    expect(fake.attacks()).toBe(1)
   })
 
   it('fails explicitly when the adapter has no combatInput', async () => {

@@ -68,6 +68,20 @@ describe('order store', () => {
     }))).toBe('INVALID_ORDER')
   })
 
+  it('validates the attack allowRanged boolean', () => {
+    const store = new OrderStore()
+    expect(() => store.enqueue({
+      id: 'ord-ranged',
+      verb: 'attack',
+      params: { entityId: 'z1', allowRanged: true },
+    })).not.toThrow()
+    expect(errorCode(() => store.enqueue({
+      id: 'ord-ranged-bad',
+      verb: 'attack',
+      params: { entityId: 'z1', allowRanged: 'yes' },
+    }))).toBe('INVALID_ORDER')
+  })
+
   it('rejects an unknown verb and a duplicate id', () => {
     const store = new OrderStore()
     expect(errorCode(() => store.enqueue(order('bad', 'fly')))).toBe('INVALID_ORDER')

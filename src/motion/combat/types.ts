@@ -22,6 +22,19 @@ export type CombatEntity = {
   height?: number
 }
 
+export type RangedCombatStatus = {
+  ready: boolean
+  code?: string
+  weapon?: 'bow' | 'crossbow'
+}
+
+export type RangedCombatOutcome = {
+  state: 'hit' | 'missed' | 'inconclusive' | 'unavailable' | 'stopped' | 'failed'
+  code?: string
+  weapon?: 'bow' | 'crossbow'
+  observed?: Record<string, unknown>
+}
+
 export type CombatInput = {
   face: Vec3
   forward?: boolean
@@ -55,6 +68,14 @@ export type CombatPort = {
   hasShield?(): boolean
   /** Persistent off-hand shield stance; true holds, false releases. */
   offhandHold?(active: boolean): Promise<CombatAction>
+  /** Optional ranged capability; target selection remains in the session. */
+  ranged?: {
+    status(target: CombatEntity): RangedCombatStatus
+    fire(target: CombatEntity): Promise<RangedCombatOutcome>
+    stop(): void
+  }
+  /** Restore a melee weapon after leaving ranged mode. */
+  switchToMelee?(): Promise<void>
   onEntityHurt(cb: (entityId: string) => void): () => void
   onEntityDead(cb: (entityId: string) => void): () => void
   /** Explosion center/radius; used only to classify creeper neutralization. */
@@ -63,6 +84,8 @@ export type CombatPort = {
 
 export type MeleeOptions = {
   targetName?: string
+  /** Agent authorizes switching to a ranged weapon; method choice stays P2's. */
+  allowRanged?: boolean
   /** Explicit Agent order: no P2-side player/passive protection filter. */
   allowAny?: boolean
   /** Compatibility flag for passive/neutral targets. */
@@ -138,5 +161,13 @@ export type MeleeResult = {
     shieldAutoEquip?: 'equipped' | 'present' | 'skipped' | 'failed' | 'no-shield'
     lostReason?: string
     targetHealth?: number
+    weaponMode?: 'melee' | 'ranged'
+    weaponSwitches?: number
+    rangedShots?: number
+    rangedHits?: number
+    rangedMisses?: number
+    rangedInconclusive?: number
+    rangedWeapon?: 'bow' | 'crossbow'
+    rangedUnavailableReason?: string
   }
 }

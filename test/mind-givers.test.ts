@@ -285,6 +285,19 @@ describe('order and traverse givers', () => {
     expect(attack.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
   })
 
+  it('passes allowRanged from an explicit attack order to the attack driver', () => {
+    const attack = createAttackOrderGiver(() => ({
+      order: { id: 'a-ranged', verb: 'attack', params: { entityId: 'z1', allowRanged: true } },
+    }))
+    const world = flatWorld({
+      entities: [{ id: 'z1', name: 'zombie', type: 'hostile', position: { x: 10, y: 64, z: 0 } }],
+    })
+    expect(attack.find(ctx, world)).toMatchObject({
+      driverId: 'attack',
+      params: { entityId: 'z1', allowRanged: true },
+    })
+  })
+
   it('targets the exact entity for an explicit shoot order and carries its weapon bounds', () => {
     const shoot = createShootOrderGiver(() => ({
       order: { id: 's-1', verb: 'shoot', params: { entityId: 'p1', weapon: 'crossbow', maxShots: 2, maxRange: 24 } },
