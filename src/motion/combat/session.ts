@@ -29,6 +29,8 @@ const NO_DAMAGE_WINDOWS = 4
 const FACING_CONE = Math.PI / 3
 const BLAST_RANGE = 4.5
 const RANGED_MAX = 24
+const RANGED_PREFERRED_MIN = 8
+const RANGED_PREFERRED_MAX = 12
 const RANGED_ENTER_MARGIN = 2
 const TOO_CLOSE_MARGIN = 1
 const MAX_RANGED_SHOTS = 3
@@ -582,12 +584,28 @@ export class CombatSession {
     this.rangedTargetId = entity.id
     this.rangedWeapon = capability.status(entity).weapon
     if (this.port.combatInput !== undefined) {
-      await this.port.combatInput({ face: this.aim(entity) })
+      await this.port.combatInput({ face: this.aim(entity), preservePitch: true })
     }
     await this.releaseShieldForRanged()
+    const moveDuringDraw = async (): Promise<void> => {
+      if (this.port.combatInput === undefined) return
+      const fresh = this.port.entity(this.currentTargetId)
+      if (fresh === undefined) return
+      const range = eyeReach(this.port.self(), fresh)
+      if (range <= this.reach + TOO_CLOSE_MARGIN) {
+        capability.stop()
+        return
+      }
+      await this.port.combatInput({
+        face: this.aim(fresh),
+        preservePitch: true,
+        ...(range < RANGED_PREFERRED_MIN ? { back: true } : {}),
+        ...(range > RANGED_PREFERRED_MAX ? { forward: true } : {}),
+      })
+    }
     let outcome
     try {
-      outcome = await capability.fire(entity)
+      outcome = await capability.fire(entity, moveDuringDraw)
     } catch (error) {
       this.rangedUnavailableReason = error instanceof Error ? error.message : String(error)
       await this.switchToMelee()
@@ -603,8 +621,10 @@ export class CombatSession {
       this.refreshResultObserved()
       return true
     }
-    if (outcome.state === 'unavailable' || outcome.state === 'failed') {
-      this.rangedUnavailableReason = outcome.code ?? 'RANGED_UNAVAILABLE'
+    if (outcome.state === 'unavailable' || outcome.state === 'failed' || outcome.state === 'stopped') {
+      this.rangedUnavailableReason = outcome.code ?? (outcome.state === 'stopped'
+        ? 'RANGED_STOPPED'
+        : 'RANGED_UNAVAILABLE')
       await this.switchToMelee()
       return false
     }

@@ -156,6 +156,8 @@ function combatPort(port: BodyApi, locateRadius: number, allowRanged: boolean): 
             back?: boolean
             left?: boolean
             right?: boolean
+            jump?: boolean
+            preservePitch?: boolean
           }) => asAction(port.combatInput!(opts)),
         }),
     ...(port.lookAt === undefined ? {} : { lookAt: (pos: Vec3) => asAction(port.lookAt!(pos)) }),
@@ -169,7 +171,10 @@ function combatPort(port: BodyApi, locateRadius: number, allowRanged: boolean): 
       ? {
           ranged: {
             status: (target: CombatEntity) => rangedStatus(port, target),
-            fire: async (target: CombatEntity): Promise<RangedCombatOutcome> => {
+            fire: async (
+              target: CombatEntity,
+              onTick?: () => Promise<void>,
+            ): Promise<RangedCombatOutcome> => {
               const weapon = chooseRangedWeapon(port)
               if (weapon === undefined) return { state: 'unavailable', code: 'NO_RANGED_WEAPON' }
               const attack = new RangedAttack(port, {
@@ -182,6 +187,7 @@ function combatPort(port: BodyApi, locateRadius: number, allowRanged: boolean): 
                 requireStationary: false,
                 useShooterVelocity: true,
                 maxShots: 1,
+                ...(onTick === undefined ? {} : { onChargeTick: onTick }),
               })
               currentRanged = attack
               try {

@@ -113,8 +113,9 @@ function fakePort(options: {
               weapon: 'bow' as const,
               ...(options.ranged?.ready === false ? { code: 'NO_AMMO' } : {}),
             }),
-            fire: async (): Promise<RangedCombatOutcome> => {
+            fire: async (_entity: unknown, onTick?: () => Promise<void>): Promise<RangedCombatOutcome> => {
               rangedFires += 1
+              await onTick?.()
               if (options.ranged?.fire !== undefined) return options.ranged.fire()
               if (options.ranged?.kill === true) {
                 target = undefined
@@ -299,6 +300,14 @@ describe('CombatSession tick', () => {
     expect(fake.rangedStops()).toBeGreaterThan(0)
     expect(session.result()?.state).toBe('failed')
     expect(session.result()?.observed.killed).toBe(false)
+  })
+
+  it('keeps moving while the ranged draw is in flight', async () => {
+    const fake = fakePort({ target: zombie(7), ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.inputs.some(input => input.back === true && input.preservePitch === true)).toBe(true)
   })
 
   it('does not use ranged without explicit authorization', async () => {

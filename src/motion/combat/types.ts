@@ -42,6 +42,7 @@ export type CombatInput = {
   left?: boolean
   right?: boolean
   jump?: boolean
+  preservePitch?: boolean
 }
 
 /**
@@ -71,7 +72,8 @@ export type CombatPort = {
   /** Optional ranged capability; target selection remains in the session. */
   ranged?: {
     status(target: CombatEntity): RangedCombatStatus
-    fire(target: CombatEntity): Promise<RangedCombatOutcome>
+    /** `onTick` runs during draw/load so the body can keep moving. */
+    fire(target: CombatEntity, onTick?: () => Promise<void>): Promise<RangedCombatOutcome>
     stop(): void
   }
   /** Restore a melee weapon after leaving ranged mode. */
