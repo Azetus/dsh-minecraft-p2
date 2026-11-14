@@ -310,6 +310,20 @@ describe('CombatSession tick', () => {
     expect(fake.inputs.some(input => input.back === true && input.preservePitch === true)).toBe(true)
   })
 
+  it('drops the shield before a ranged shot', async () => {
+    const fake = fakePort({ target: zombie(2.5), killOnAttack: false, ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    session.tick()
+    await sleep(20)
+    expect(fake.stances).toContain(true)
+    fake.setTarget(zombie(10))
+    session.tick()
+    await sleep(20)
+    expect(session.state).toBe('succeeded')
+    expect(fake.stances).toContain(false)
+    expect(fake.rangedFires()).toBe(1)
+  })
+
   it('does not use ranged without explicit authorization', async () => {
     const fake = fakePort({ target: zombie(10), ranged: { kill: true } })
     const session = new CombatSession(fake.port, 'z1', { totalMs: 5_000 })
