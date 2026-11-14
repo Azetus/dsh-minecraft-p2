@@ -596,12 +596,18 @@ export class CombatSession {
         capability.stop()
         return
       }
-      await this.port.combatInput({
+      const backward = range < RANGED_PREFERRED_MIN
+      const forward = range > RANGED_PREFERRED_MAX
+      this.inputTicks += 1
+      if (backward) this.backoffMoves += 1
+      else if (forward) this.approachMoves += 1
+      const moved = await this.port.combatInput({
         face: this.aim(fresh),
         preservePitch: true,
-        ...(range < RANGED_PREFERRED_MIN ? { back: true } : {}),
-        ...(range > RANGED_PREFERRED_MAX ? { forward: true } : {}),
+        ...(backward ? { back: true } : {}),
+        ...(forward ? { forward: true } : {}),
       })
+      if (moved.state !== 'ok') this.inputFailures += 1
     }
     let outcome
     try {
