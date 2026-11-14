@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createEscapeGiver } from '../src/mind/givers/escape.ts'
-import { createAttackOrderGiver } from '../src/mind/givers/combat.ts'
+import { createAttackOrderGiver, createShootOrderGiver } from '../src/mind/givers/combat.ts'
 import { createThreatFightGiver } from '../src/mind/givers/threat.ts'
 import { defaultReactionPolicy } from '../src/mind/reaction-policy.ts'
 import { createDigOrderGiver } from '../src/mind/givers/dig.ts'
@@ -232,6 +232,7 @@ describe('main tree wiring', () => {
       ? MAIN_TREE.children.map(child => child.type === 'giver' ? child.ref : undefined)
       : []
     expect(refs).toContain('order.traverse')
+    expect(refs).toContain('order.shoot')
   })
 })
 
@@ -282,6 +283,41 @@ describe('order and traverse givers', () => {
       order: { id: 'a-1', verb: 'attack', params: { entityId: 'zombie-1' } },
     }))
     expect(attack.find(ctx, flatWorld())).toMatchObject({ kind: 'hold', reason: 'ATTACK_TARGET_LOST' })
+  })
+
+  it('targets the exact entity for an explicit shoot order and carries its weapon bounds', () => {
+    const shoot = createShootOrderGiver(() => ({
+      order: { id: 's-1', verb: 'shoot', params: { entityId: 'p1', weapon: 'crossbow', maxShots: 2, maxRange: 24 } },
+    }))
+    const world = flatWorld({
+      entities: [{
+        id: 'p1', name: 'Player', username: 'Player', type: 'player',
+        position: { x: 8, y: 64, z: 0 },
+      }],
+    })
+    expect(shoot.find(ctx, world)).toMatchObject({
+      driverId: 'shoot',
+      params: { entityId: 'p1', weapon: 'crossbow', maxShots: 2, maxRange: 24 },
+    })
+  })
+
+  it('suppresses automatic threats and self-care during an explicit shoot order', () => {
+    const hostile = {
+      id: 'z1', name: 'zombie', type: 'hostile', kind: 'Hostile mobs',
+      position: { x: 2.5, y: 64, z: 0.5 },
+    }
+    expect(createEscapeGiver().find(
+      { ...ctx, orderVerb: 'shoot' },
+      flatWorld({ entities: [hostile] }),
+    )).toBeNull()
+    expect(createThreatFightGiver(() => {
+      const policy = defaultReactionPolicy()
+      policy.fight = { allowedTargets: [], retreatHealth: 8, radius: 8, leash: 12 }
+      return policy
+    }).find(
+      { ...ctx, orderVerb: 'shoot' },
+      flatWorld({ entities: [hostile] }),
+    )).toBeNull()
   })
 
   it('terminates an explicit attack target that was seen and then vanished', () => {

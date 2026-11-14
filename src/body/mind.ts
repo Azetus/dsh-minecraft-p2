@@ -17,6 +17,7 @@ import { createMoveDriver, MOVE_DRIVER_ID } from '../mind/drivers/move.ts'
 import { createClearDriver, CLEAR_DRIVER_ID } from '../mind/drivers/clear.ts'
 import { createCheckDriver, CHECK_DRIVER_ID } from '../mind/drivers/check.ts'
 import { createAttackDriver, ATTACK_DRIVER_ID } from '../mind/drivers/attack.ts'
+import { createShootDriver, SHOOT_DRIVER_ID } from '../mind/drivers/shoot.ts'
 import { createDigDriver, DIG_DRIVER_ID } from '../mind/drivers/dig.ts'
 import { createCollectDriver, COLLECT_DRIVER_ID } from '../mind/drivers/collect.ts'
 import { createContainerDriver, CONTAINER_DRIVER_ID } from '../mind/drivers/container.ts'
@@ -46,7 +47,7 @@ import { ReactionPolicyState } from '../mind/reaction-policy.ts'
 import { buildActivityView, resolveActivityLayer } from '../mind/activity.ts'
 import type { ActivityLayer, MindActivityView } from '../contracts/protocol.ts'
 import { createGoOrderGiver, createHoldOrderGiver, createTraverseGiver } from '../mind/givers/orders.ts'
-import { createAttackOrderGiver } from '../mind/givers/combat.ts'
+import { createAttackOrderGiver, createShootOrderGiver } from '../mind/givers/combat.ts'
 import { createDigOrderGiver } from '../mind/givers/dig.ts'
 import { createCollectOrderGiver } from '../mind/givers/collect.ts'
 import { createContainerOrderGiver } from '../mind/givers/container.ts'
@@ -174,6 +175,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerDriver({ id: CLEAR_DRIVER_ID, driver: createClearDriver() })
   registry.registerDriver({ id: CHECK_DRIVER_ID, driver: createCheckDriver() })
   registry.registerDriver({ id: ATTACK_DRIVER_ID, driver: createAttackDriver() })
+  registry.registerDriver({ id: SHOOT_DRIVER_ID, driver: createShootDriver() })
   registry.registerDriver({ id: DIG_DRIVER_ID, driver: createDigDriver() })
   registry.registerDriver({ id: COLLECT_DRIVER_ID, driver: createCollectDriver() })
   registry.registerDriver({ id: CONTAINER_DRIVER_ID, driver: createContainerDriver() })
@@ -235,6 +237,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
   registry.registerGiver({ id: 'check', factory: () => createCheckGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.go', factory: () => createGoOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.attack', factory: () => createAttackOrderGiver(() => activeOrderLookup?.()) })
+  registry.registerGiver({ id: 'order.shoot', factory: () => createShootOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.dig', factory: () => createDigOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.collect', factory: () => createCollectOrderGiver(() => activeOrderLookup?.()) })
   registry.registerGiver({ id: 'order.container', factory: () => createContainerOrderGiver(() => activeOrderLookup?.()) })
@@ -1286,7 +1289,7 @@ export function createMind(options: CreateMindOptions): MindRuntime {
     const active = orders.active()
     const view = base.view()
     let intent: { name: string; kind: 'escort' | 'attack' } | undefined
-    if (active !== undefined && active.order.verb === 'attack') {
+    if (active !== undefined && (active.order.verb === 'attack' || active.order.verb === 'shoot')) {
       const entityId = active.order.params?.entityId
       if (typeof entityId === 'string' && entityId.length > 0) intent = { name: entityId, kind: 'attack' }
     } else if (base.isActive() && view.kind === 'escort'

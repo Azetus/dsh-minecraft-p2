@@ -24,7 +24,7 @@ p2_order {verb:"container", params:{x:47,y:64,z:29,action:"take-output",item:"ch
 p2_order {verb:"use", params:{x:51,y:64,z:31}}
 ```
 
-- 有限词表：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`。
+- 有限词表：`go / place / dig / collect / equip / use / attack / shoot / check / container / craft / build / traverse / hold`。
 - 默认活动用 `p2_base_activity`：默认 `{kind:"idle"}`（静止）；`{kind:"wandering"}` 需显式设置，只在 anchor 半径 8 内移动；`{kind:"escort",target:"玩家名",distance:3}` 跟随玩家，目标丢失只报 `TARGET_LOST`，不传送到目标。base **不持久化**，body 重启后回 idle；要完全停住用 `p2_order {verb:"hold"}`。
 - 常驻任务用 `p2_duty`，不是 order：`{action:"start",duty:{kind:"gather",item:"dirt",quota:8,radius:16}}`；`p2_duty {action:"stop"}`。显式 order/plan 会暂停 duty。`p2_duty start` 会**替换**当前 active duty：当前 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，当前 job 停止后才启动新 duty；返回 `previousDuty/started`。duty 持久化到 `duty.json` v2（baseline/activeMs/pausedMs/jobs），未过期且 world/character 匹配的 active duty 会在重启后恢复；blocked/failed 不自动复活，base 保持 inactive 等 Agent 决定。
 - 自动战逃/自理用 `p2_policy`，不要用 `combat` order：`{action:"set",reaction:{fight:{allowedTargets:["zombie"],retreatHealth:8,radius:8,leash:12},selfCare:{...}}}`。没有 `fight` 就只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight **默认**不选玩家/被动/中立——这是自动选择的默认值，不是 Agent 的权限上限。policy 不持久化，重启后要重设。

@@ -29,6 +29,7 @@ export function orderTargetKey(verb: string, params: unknown): string {
       return cellKey(record) ?? '-'
     }
     case 'attack':
+    case 'shoot':
       return typeof record.entityId === 'string' ? `entity:${record.entityId}` : '-'
     case 'craft':
     case 'equip':

@@ -113,7 +113,7 @@ describe('order store', () => {
 
   it('accepts only the finite execution surface', () => {
     expect(ORDER_VERBS).toEqual([
-      'go', 'place', 'dig', 'collect', 'equip', 'use', 'attack', 'check', 'container', 'craft', 'build',
+      'go', 'place', 'dig', 'collect', 'equip', 'use', 'attack', 'shoot', 'check', 'container', 'craft', 'build',
       'traverse', 'hold',
     ])
     const store = new OrderStore()
@@ -157,6 +157,29 @@ describe('order store', () => {
       params: { shape: 'tunnel' } }))).toBe('INVALID_ORDER')
     expect(errorCode(() => store.enqueue({ id: 'dig-tunnel-high', verb: 'dig',
       params: { shape: 'tunnel', to: { x: 3, y: 64, z: 0 }, height: 4 } }))).toBe('INVALID_ORDER')
+  })
+
+  it('validates explicit shoot params and rejects unknown keys', () => {
+    const store = new OrderStore()
+    expect(store.enqueue({
+      id: 'shoot-good', verb: 'shoot', params: { entityId: 'z1', weapon: 'bow' },
+    }).state).toBe('active')
+    expect(store.enqueue({
+      id: 'shoot-good-2', verb: 'shoot',
+      params: { entityId: 'z1', weapon: 'crossbow', maxShots: 3, maxRange: 24 },
+    }).state).toBe('queued')
+    for (const [index, params] of [
+      { weapon: 'bow' },
+      { entityId: 'z1' },
+      { entityId: 'z1', weapon: 'trident' },
+      { entityId: 'z1', weapon: 'bow', maxShots: 0 },
+      { entityId: 'z1', weapon: 'bow', maxRange: 65 },
+      { entityId: 'z1', weapon: 'bow', extra: true },
+    ].entries()) {
+      expect(errorCode(() => store.enqueue({
+        id: `shoot-bad-${index}`, verb: 'shoot', params,
+      }))).toBe('INVALID_ORDER')
+    }
   })
 
   it('validates per-order hazard permissions and the traverse verb', () => {

@@ -42,7 +42,7 @@ export function createThreatFightGiver(policy: () => ReactionPolicy): ThreatFigh
   return {
     id: 'threat.fight',
     find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
-      if (ctx.orderVerb === 'attack') return null
+      if (ctx.orderVerb === 'attack' || ctx.orderVerb === 'shoot') return null
       const fight = policy().fight
       if (fight === null) return null
       const self = world.self

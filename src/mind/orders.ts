@@ -15,6 +15,7 @@ export const ORDER_VERBS = [
   'equip',
   'use',
   'attack',
+  'shoot',
   'check',
   'container',
   'craft',
@@ -395,6 +396,7 @@ function validateOrder(value: unknown): Order {
   }
   if (value.verb === 'traverse') validateTraverseParams(value.params)
   if (value.verb === 'attack') validateAttackParams(value.params)
+  if (value.verb === 'shoot') validateShootParams(value.params)
   if (value.verb === 'dig') validateDigParams(value.params)
   if (value.verb === 'collect') validateCollectParams(value.params)
   if (value.verb === 'place') validatePlaceParams(value.params)
@@ -432,6 +434,38 @@ function validateAttackParams(params: JsonValue | undefined): void {
     && (typeof params.maxChases !== 'number' || !Number.isInteger(params.maxChases)
       || params.maxChases < 1 || params.maxChases > 64)) {
     throw orderError('INVALID_ORDER', 'attack.maxChases must be an integer between 1 and 64')
+  }
+}
+
+const SHOOT_PARAM_KEYS = new Set(['entityId', 'weapon', 'targetName', 'maxShots', 'maxRange'])
+
+/** Explicit ranged order; target identity and weapon are mandatory. */
+function validateShootParams(params: JsonValue | undefined): void {
+  if (!isRecord(params)) throw orderError('INVALID_ORDER', 'shoot requires params {entityId,weapon}')
+  for (const key of Object.keys(params)) {
+    if (!SHOOT_PARAM_KEYS.has(key)) {
+      throw orderError('INVALID_ORDER', `shoot.${key} is not a supported parameter`)
+    }
+  }
+  if (typeof params.entityId !== 'string' || params.entityId.trim().length === 0) {
+    throw orderError('INVALID_ORDER', 'shoot.entityId is required')
+  }
+  if (params.weapon !== 'bow' && params.weapon !== 'crossbow') {
+    throw orderError('INVALID_ORDER', 'shoot.weapon must be bow or crossbow')
+  }
+  if (params.targetName !== undefined
+    && (typeof params.targetName !== 'string' || params.targetName.trim().length === 0)) {
+    throw orderError('INVALID_ORDER', 'shoot.targetName must be a non-empty string')
+  }
+  if (params.maxShots !== undefined
+    && (typeof params.maxShots !== 'number' || !Number.isInteger(params.maxShots)
+      || params.maxShots < 1 || params.maxShots > 5)) {
+    throw orderError('INVALID_ORDER', 'shoot.maxShots must be an integer between 1 and 5')
+  }
+  if (params.maxRange !== undefined
+    && (typeof params.maxRange !== 'number' || !Number.isInteger(params.maxRange)
+      || params.maxRange < 8 || params.maxRange > 64)) {
+    throw orderError('INVALID_ORDER', 'shoot.maxRange must be an integer between 8 and 64')
   }
 }
 

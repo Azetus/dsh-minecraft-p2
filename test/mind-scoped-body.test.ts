@@ -74,6 +74,10 @@ function fakeBody(options: { full?: boolean } = {}): { body: BodyApi; calls: Cal
   if (options.full !== false) {
     base.suspension = () => ({ suspended: false, at: 0, idleMs: 0, serverAge: null })
     base.offhand = () => undefined
+    base.held = () => {
+      calls.push('held')
+      return undefined
+    }
     base.entityByName = () => undefined
     base.entityById = () => undefined
     base.playerOnline = () => false
@@ -83,6 +87,9 @@ function fakeBody(options: { full?: boolean } = {}): { body: BodyApi; calls: Cal
     base.combatInput = () => act('combatInput')
     base.lookYaw = () => act('lookYaw')
     base.offhandHold = () => act('offhandHold')
+    base.itemUseStart = () => act('itemUseStart')
+    base.itemUseRelease = () => act('itemUseRelease')
+    base.itemUseCancel = () => act('itemUseCancel')
     base.unequip = () => act('unequip')
     base.pathTo = async () => {
       calls.push('pathTo')
@@ -96,7 +103,8 @@ function fakeBody(options: { full?: boolean } = {}): { body: BodyApi; calls: Cal
 const WRITES = [
   'moveTo', 'lookAt', 'dig', 'place', 'useItem', 'equip', 'craft', 'useOn',
   'attack', 'sleep', 'fatalStep', 'containerTransfer', 'containerAt',
-  'combatInput', 'lookYaw', 'offhandHold', 'unequip',
+  'combatInput', 'lookYaw', 'offhandHold', 'itemUseStart', 'itemUseRelease',
+  'itemUseCancel', 'unequip',
 ] as const
 
 type LooseView = Record<string, (...args: unknown[]) => Promise<unknown>>
@@ -136,8 +144,9 @@ describe('scoped body', () => {
     revokeScope(scope)
     expect(view.blockAt({ x: 0, y: 0, z: 0 })).toBeNull()
     expect(view.inventory()).toEqual([])
+    expect(view.held?.()).toBeUndefined()
     expect(view.self().health).toBe(20)
-    expect(calls).toEqual(['blockAt', 'inventory', 'self'])
+    expect(calls).toEqual(['blockAt', 'inventory', 'held', 'self'])
   })
 
   it('preserves optional method presence in both directions', () => {

@@ -64,7 +64,7 @@ export function createEscapeGiver(): WorkGiver {
       // An explicit attack order owns combat: only lethal environment reflexes
       // may preempt it. Hostile flee/cover stays out of the way until the order
       // ends.
-      if (ctx.orderVerb === 'attack') return null
+      if (ctx.orderVerb === 'attack' || ctx.orderVerb === 'shoot') return null
 
       const threat = hostilesNear(world, self.pos, 6)[0]
       if (threat === undefined) {

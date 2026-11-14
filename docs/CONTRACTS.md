@@ -50,7 +50,12 @@ type BlockInfo = {
   skyLight?: number
   harvestTools?: string[]
 }
-type Item = { slot: number; name: string; count: number }
+type Item = {
+  slot: number; name: string; count: number
+  /** Crossbow projectiles when the adapter can read the charged state;
+   * undefined = cannot tell, [] = known empty, entries = loaded item names. */
+  chargedProjectiles?: string[]
+}
 type WriteToken = { runId: string; jobId: string; seq: number }
 type ActResult = { state: 'ok' | 'failed' | 'unknown'; code?: string; observed?: unknown; elapsedMs: number }
 
@@ -64,6 +69,8 @@ type BodyApi = {
   findBlocks(query: { near: Vec3; radius: number; names: string[]; count: number }): BlockInfo[]
   inventory(): Item[]
   offhand?(): Item | undefined
+  /** Current main-hand item, with optional crossbow charged-state readback. */
+  held?(): Item | undefined
   entities(box: { min: Vec3; max: Vec3 }): EntityInfo[]
   entityByName?(name: string): EntityInfo | undefined
   entityById?(id: string): EntityInfo | undefined
@@ -92,6 +99,13 @@ type BodyApi = {
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
   useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
   /**
+   * Main-hand use stance. start only begins using; release may aim and then
+   * release (bow); cancel changes the held slot so a drawn bow is not fired.
+   */
+  itemUseStart?(aim?: { yaw: number; pitch: number }): Promise<ActResult>
+  itemUseRelease?(aim?: { yaw: number; pitch: number }): Promise<ActResult>
+  itemUseCancel?(): Promise<ActResult>
+  /**
    * Persistent off-hand stance: true holds the item across acts, false
    * releases it. Released on false, endWrite, a write-epoch change or reset.
    */
@@ -117,7 +131,7 @@ type BodyApi = {
 }
 ```
 
-- 只有 `suspension`/`offhand`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`offhandHold`/`combatInput`/`lookYaw`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
+- 只有 `suspension`/`offhand`/`held`/`entityByName`/`entityById`/`playerOnline`/`canSee`/`attackSpeed`/`attackReach`/`offhandHold`/`combatInput`/`lookYaw`/`itemUseStart`/`itemUseRelease`/`itemUseCancel`/`unequip`/`off` 是可选方法，调用方必须能回退；这是为了兼容不完整 fake，不是多 provider 协商。
 - 写门在 `src/provider/control.ts`（`WriteGate`），令牌由 `JobTracker` 发放；没有 capability/action 表。`JobTracker` 用 `src/mind/scope.ts` + `src/mind/scoped-body.ts` 给每个 run 发一个绑定的视图：`beginStop` 先撤销视图再 `endWrite`，所以撤权与下一实例接管之间没有可插入写的窗口。`containerAt` 开窗属于写，同样受权限约束。视图拒绝写时记 `job.write-after-stop`（每个 run 至多一次）。
 - `src/provider` 是唯一允许 import mineflayer 的目录；body bundle 动态 import `lib/provider/minecraft.mjs`。
 
@@ -151,6 +165,10 @@ type BodyApi = {
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
 - `attack` 锁定 `entityId`，可选 `entityIds` 扩展为允许的目标集合；`threat.fight` 以 `engagement:true` 传入一次 engagement 的集合，`attack` order 保持单目标严格 kill。追击距离由可选 `chaseLeash`（从 order 起点算的水平距离）限制；战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear` 使用手动手持，不自动切换；动作启动后恢复自动。
+- `shoot` 是独立显式远程 order，参数 `{entityId, weapon:"bow"|"crossbow", maxShots? 1–5 默认 3, maxRange? 8–64 默认 32}`；成功 = 主箭确认命中，`killed` 单独报告，不要求死亡。目标身份锁与显式 `attack` 相同，但不追击、不自动索敌；射手必须基本静止。自动 fight 不生成 `shoot`，保护过滤不变；显式 `shoot` 期间与 `attack` 一样抑制自动 fight/自理，保留致命环境反射。
+- `shoot` 先做弹药/武器/range/静止预检和弹道采样遮挡检查（不拿脚部 `canSee` 否决；低栅栏可能挡住脚部射线但挡不住到躯干的箭道），再按弓“蓄力→释放瞄准”或弩“确保装填→发射”执行；最多 `maxShots` 发，首发命中即停。命中只认主箭（Multishot 时取初始方向与瞄准方向最接近的一支）的 `entityHurt` source；侧箭命中不算成功。26.1.2 实测 `damage_event` 的 source 是**射手玩家**而非箭实体，因此同时接受 `SelfInfo.id` 作为本发命中来源，并在 `hitEvidence` 区分 `damage-source-arrow` / `damage-source-shooter`。Piercing 不要求箭消失；Infinity/Unbreaking/其他 arrow 系箭种不作为成功条件。箭矢回收不在首版范围。
+- **弩装填**是内部独立动作 `loadCrossbow`，不加 order 词表；成功 = `Item.chargedProjectiles` 含 arrow 系且没有箭射出，并且 use stance 已释放。1.21.1 在 release 装填，26.1.2 在满蓄力的 `onUseTick` 装填；驱动用“start → 等到 charged 或满蓄力 → release → 轮询 charged”兼容两种行为，绝不在装填动作里第二次 activate。`charged` 读不到 → `CROSSBOW_LOAD_STATE_UNKNOWN`，不 activate；26.1.2 满蓄力后停止可能已经装填/扣箭，如实记 `loadedDuringStop`，但不发射。
+- `Item.chargedProjectiles` 由 provider 从物品组件或旧 NBT 做 best-effort 读取；`undefined` 是“无法判断”，不是未装填。旧 NBT 只尝试 `Charged`/`ChargedProjectiles`，形状不认识就 unknown。
 - **CombatSession（唯一实现）**：每 50ms tick 读取 self/target/health/cooldown，维护 `entityId + entityIds` 允许集合；只在集合内选主目标，当前目标死亡/丢失/受保护时切到最近可用目标，带 `targetSwitches` 证据，不自行扩大集合。移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance。attack/lookAt 是短动作，**不停止移动、不放下盾**；`lookAt` 失败不取消攻击。
 - **LOS 恢复**：`canSee=false` 时不立即失败；向目标/最后可见位置短距重定位，`losRecoveryTicks`（默认 40）预算内恢复视线；丢失超过短预算时用 `pathTo` 规划 waypoint，按 50ms tick 跟随；超时才报 `ATTACK_NO_LINE_OF_SIGHT`。
 - **威胁反馈**：`threatCount`/`rangedThreat`/`explosionThreat` 仅作观测；Combat 不自动 escape。creeper backpedal 是 opt-in 的短距 backoff（`creeperBackpedal:true`），默认关闭。
@@ -314,6 +332,7 @@ interface DriverHandle {
 | `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
 | `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
 | `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`shieldUses`、`shieldFailures`、`shieldAutoEquip`、`ATTACK_TARGET_LOST` |
+| `shoot` | 主箭确认命中目标（`entityHurt.source.id` 匹配；Multishot 只认中间主箭）；`killed` 只作独立观测 | `entityId`、`weapon`、`shots`（aim/release/arrow/hit/miss/load）、`hitEvidence`、`sideHit`、`SHOOT_*`、`CROSSBOW_*` |
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 
@@ -461,3 +480,14 @@ type WorkState =
 | `DIG_VOLUME_TOO_LARGE` | 体积超过 `maxBlocks`，未开始挖掘 |
 | `GOAL_NOT_STANDABLE` | `exact` 目标格不可站；带 `reason/blockedBy` |
 | `PICKUP_NOT_COLLECTED` | 已到达掉落物附近，背包仍未增加 |
+| `CROSSBOW_LOAD_STATE_UNKNOWN` | provider 无法判断弩是否已装填；为了不误发射，拒绝装填 |
+| `CROSSBOW_LOAD_UNCONFIRMED` | 装填序列结束但 `chargedProjectiles` 仍为空/未知 |
+| `CROSSBOW_UNEXPECTED_FIRE` | 装填期间出现箭实体，说明起始“未装填”判断过期/错误 |
+| `CROSSBOW_UNSUPPORTED_PROJECTILE` | 已装填/将装填的不是 arrow 系投射物（例如 firework） |
+| `SHOOT_NO_WEAPON` / `SHOOT_NO_AMMO` | 请求的远程武器/箭系物品不存在 |
+| `SHOOT_OUT_OF_RANGE` / `SHOOT_NO_SOLUTION` | 超出 maxRange 或没有弹道解 |
+| `SHOOT_LINE_BLOCKED` / `SHOOT_OBSERVATION_UNAVAILABLE` | 弹道采样被方块挡住，或路径方块未加载/无法判断 |
+| `SHOOT_NOT_STATIONARY` | 蓄力/装填期间射手离开原站位或不在干燥地面 |
+| `SHOOT_NOT_CONFIRMED` | 使用动作已发出但没有可确认的箭/命中证据 |
+| `SHOOT_MISSED` / `SHOOT_INCONCLUSIVE` | 主箭落地未命中 / 箭失踪或无法判定 |
+| `SHOOT_TARGET_NOT_FOUND` / `SHOOT_TARGET_LOST` | 目标身份解析不到/中途丢失 |

@@ -19,7 +19,7 @@ export function createSelfEatGiver(policy: () => ReactionPolicy): WorkGiver {
   return {
     id: 'self.eat',
     find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
-      if (ctx.orderVerb === 'attack') return null
+      if (ctx.orderVerb === 'attack' || ctx.orderVerb === 'shoot') return null
       const eat = policy().selfCare.eat
       if (!eat.enabled) return null
       if (world.self.food > eat.foodBelow) return null
@@ -47,7 +47,7 @@ export function createSelfUnstuckGiver(policy: () => ReactionPolicy): WorkGiver 
   return {
     id: 'self.unstuck',
     find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
-      if (ctx.orderVerb === 'attack') return null
+      if (ctx.orderVerb === 'attack' || ctx.orderVerb === 'shoot') return null
       if (!policy().selfCare.unstuck.enabled) return null
       if (ctx.lastStuckAt === undefined || ctx.now - ctx.lastStuckAt > UNSTUCK_RECENT_MS) return null
       if (ctx.now < nextAt) return null

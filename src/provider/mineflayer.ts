@@ -36,6 +36,7 @@ export const mineflayerModule: unknown = mineflayer
 
 import type { LastDisconnect, PauseDiagnostics, ProviderRuntimeStatus, SuspensionState } from '../contracts/protocol.ts'
 import type { JsonValue, ValueMeta } from '../contracts/types.ts'
+import type { ItemUseAim } from '../body/api.ts'
 import { p2Error } from '../contracts/protocol.ts'
 import type {
   ActHandle,
@@ -216,6 +217,24 @@ function delay(ms: number): Promise<void> {
   })
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, code: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(p2Error(code, 'timeout', `operation timed out after ${timeoutMs}ms`, { module: 'provider.mineflayer' }))
+    }, timeoutMs)
+    void promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 /**
  * The trading window fills its offers asynchronously; mineflayer documents a
  * `ready` event for that. Wait for it (bounded) before reading trades.
@@ -319,6 +338,15 @@ export class MineflayerProvider {
 
   private current: ActHandle | undefined
   private readonly offhandStance: OffhandStance = { active: false }
+  /**
+   * Main-hand use stance. It is separate from the act broker: loading or
+   * drawing outlives one act, and stop must switch slots instead of calling
+   * `deactivateItem` (which would fire a drawn bow).
+   */
+  private readonly itemUseStance: { active: boolean; item: string | null } = {
+    active: false,
+    item: null,
+  }
   private disconnected: Error | undefined
   private lastDisconnect: LastDisconnect | undefined
   private paused = false
@@ -378,6 +406,7 @@ export class MineflayerProvider {
     })
     bot.on('death', () => {
       this.bot.clearControlStates()
+      this.cancelItemUse(false)
       this.releaseOffhand()
       const position = this.bot.entity?.position
       this.lastDeath = {
@@ -448,6 +477,7 @@ export class MineflayerProvider {
     clearInterval(this.pauseTimer)
     this.disconnected = error
     this.bot.clearControlStates()
+    this.cancelItemUse(false)
     this.releaseOffhand()
     const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
     current?.abort?.(this.disconnected, 'CONNECTION_LOST')
@@ -540,6 +570,7 @@ export class MineflayerProvider {
    */
   controlState(): 'idle' | 'active' | 'unknown' {
     if (this.disconnected !== undefined || this.resetRequested) return 'unknown'
+    if (this.itemUseStance.active) return 'active'
     const current = this.current as MineflayerActHandle | undefined
     return current === undefined ? 'idle' : current.controlState()
   }
@@ -575,6 +606,7 @@ export class MineflayerProvider {
       this.packetsAtSuspend = this.timePackets
       this.ageChangesAtSuspend = this.ageChanges
       this.bot.clearControlStates()
+      this.cancelItemUse(false)
       this.releaseOffhand()
       const current = this.current as (ActHandle & { abort?: (error: Error, code?: string) => void }) | undefined
       current?.abort?.(new Error('server ticks are paused'), 'GAME_PAUSED')
@@ -611,6 +643,7 @@ export class MineflayerProvider {
   private requestReset(): void {
     if (this.resetRequested || this.disconnected !== undefined) return
     this.resetRequested = true
+    this.cancelItemUse(false)
     this.releaseOffhand()
     this.recordDisconnect('reset', 'p2: act release unconfirmed; requesting body rebuild')
     try {
@@ -655,6 +688,137 @@ export class MineflayerProvider {
       throw p2Error('RESCUE_COMMAND_INVALID', 'validation', 'rescue command is not a single chat command', { module: 'provider.mineflayer' })
     }
     this.bot.chat(command)
+  }
+
+  itemUseActive(): boolean {
+    return this.itemUseStance.active
+  }
+
+  /**
+   * Begin one main-hand use without releasing it. `aim` is applied with the
+   * force look path, which is enough because `use_item` carries the rotation
+   * to the server. This operation never fires a loaded crossbow by itself;
+   * callers must inspect the loaded state first.
+   */
+  async itemUseStart(
+    aim?: ItemUseAim,
+    authorized?: () => boolean,
+  ): Promise<{ active: boolean; item: string | null }> {
+    if (this.disconnected !== undefined || this.resetRequested) {
+      const error = this.disconnected ?? new Error('provider reset requested; the connection is not authoritative')
+      throw p2Error('CONNECTION_LOST', 'environment', error.message, { module: 'provider.mineflayer' })
+    }
+    if (this.paused) {
+      throw p2Error('GAME_PAUSED', 'environment', 'cannot start item use while server ticks are paused', { module: 'provider.mineflayer' })
+    }
+    if (authorized?.() === false) {
+      throw p2Error('STALE_WRITE', 'control', 'item use belongs to a superseded driver run', { module: 'provider.mineflayer' })
+    }
+    if (this.itemUseStance.active) {
+      return { active: true, item: this.itemUseStance.item }
+    }
+    const held = this.bot.heldItem
+    if (held === null || held === undefined) {
+      throw p2Error('USE_NO_ITEM', 'validation', 'no item is held', { module: 'provider.mineflayer' })
+    }
+    if (aim !== undefined) {
+      if (![aim.yaw, aim.pitch].every(Number.isFinite)) {
+        throw p2Error('BAD_ARGS', 'validation', 'item use aim must be finite', { module: 'provider.mineflayer' })
+      }
+      await this.bot.look(aim.yaw, aim.pitch, true)
+    }
+    if (authorized?.() === false) {
+      throw p2Error('STALE_WRITE', 'control', 'item use belongs to a superseded driver run', { module: 'provider.mineflayer' })
+    }
+    this.bot.activateItem(false)
+    this.itemUseStance.active = true
+    this.itemUseStance.item = held.name
+    return { active: true, item: held.name }
+  }
+
+  /**
+   * Release the current use. With `aim`, a non-forced look is awaited so the
+   * look packet reaches the server before `block_dig` (the release packet has
+   * no rotation of its own).
+   */
+  async itemUseRelease(
+    aim?: ItemUseAim,
+    authorized?: () => boolean,
+  ): Promise<{ item: string | null; yaw: number; pitch: number }> {
+    if (!this.itemUseStance.active) {
+      throw p2Error('ITEM_USE_NOT_ACTIVE', 'validation', 'no main-hand item use is active', { module: 'provider.mineflayer' })
+    }
+    if (authorized?.() === false) {
+      this.cancelItemUse(false)
+      throw p2Error('STALE_WRITE', 'control', 'item use belongs to a superseded driver run', { module: 'provider.mineflayer' })
+    }
+    if (aim !== undefined) {
+      if (![aim.yaw, aim.pitch].every(Number.isFinite)) {
+        throw p2Error('BAD_ARGS', 'validation', 'item use aim must be finite', { module: 'provider.mineflayer' })
+      }
+      await withTimeout(this.bot.look(aim.yaw, aim.pitch, false), 2_000, 'ITEM_USE_LOOK_TIMEOUT')
+      if (authorized?.() === false) {
+        this.cancelItemUse(false)
+        throw p2Error('STALE_WRITE', 'control', 'item use belongs to a superseded driver run', { module: 'provider.mineflayer' })
+      }
+    }
+    const item = this.itemUseStance.item
+    this.bot.deactivateItem()
+    this.itemUseStance.active = false
+    this.itemUseStance.item = null
+    const entity = this.bot.entity as unknown as { yaw?: number; pitch?: number } | undefined
+    return {
+      item,
+      yaw: typeof entity?.yaw === 'number' ? entity.yaw : 0,
+      pitch: typeof entity?.pitch === 'number' ? entity.pitch : 0,
+    }
+  }
+
+  /**
+   * Cancel without releasing. A held-item slot change makes the server call
+   * `stopUsingItem`, which does not invoke `releaseUsing`; a drawn bow is
+   * therefore not fired. The original slot is restored immediately.
+   */
+  itemUseCancel(): { cancelled: boolean; item: string | null } {
+    if (!this.itemUseStance.active) return { cancelled: false, item: null }
+    const item = this.itemUseStance.item
+    this.cancelItemUse(true)
+    return { cancelled: true, item }
+  }
+
+  private cancelItemUse(throwOnError: boolean): boolean {
+    if (!this.itemUseStance.active) return true
+    const bot = this.bot as unknown as {
+      quickBarSlot?: number | null
+      setQuickBarSlot?: (slot: number) => void
+      usingHeldItem?: boolean
+    }
+    if (typeof bot.setQuickBarSlot !== 'function') {
+      if (throwOnError) {
+        throw p2Error('ITEM_USE_CANCEL_FAILED', 'runtime', 'adapter cannot change the held slot to cancel item use', { module: 'provider.mineflayer' })
+      }
+      return false
+    }
+    const current = typeof bot.quickBarSlot === 'number' ? bot.quickBarSlot : 0
+    const next = (current + 1) % 9
+    try {
+      bot.setQuickBarSlot(next)
+      bot.setQuickBarSlot(current)
+      bot.usingHeldItem = false
+      this.itemUseStance.active = false
+      this.itemUseStance.item = null
+      return true
+    } catch (error) {
+      if (throwOnError) {
+        throw p2Error(
+          'ITEM_USE_CANCEL_FAILED',
+          'runtime',
+          error instanceof Error ? error.message : String(error),
+          { module: 'provider.mineflayer' },
+        )
+      }
+      return false
+    }
   }
 
   /**
@@ -1266,6 +1430,9 @@ export class MineflayerProvider {
         { module: 'provider.mineflayer', nodePath: name },
         { serverAge: this.serverAge(), idleMs: this.liveStatus().idleMs },
       )
+    }
+    if (name !== 'stop' && this.itemUseStance.active) {
+      throw p2Error('ITEM_USE_ACTIVE', 'runtime', 'a main-hand item use stance is active', { module: 'provider.mineflayer' })
     }
     if (name !== 'stop' && this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })

@@ -1,7 +1,7 @@
 # P2Mind：NPC AI 控制结构
 
 > 命名：**P2Mind** = P2 的常驻 NPC AI 控制结构；P2 运行时是 bridge + body + provider。
-> 当前 order 面：`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`。
+> 当前 order 面：`go / place / dig / collect / equip / use / attack / shoot / check / container / craft / build / traverse / hold`。
 > 常驻任务不走 order 面：`p2_duty` 启动显式 gather 配额；显式 order/plan 优先并暂停 duty。duty 持久化到 journal 同目录的 `duty.json` v2（baseline/activeMs/pausedMs/jobs），body 重启后只恢复未过期且 identity 匹配的 active duty；终态不复活。
 > 默认活动是 base activity：`idle / wandering / escort`，默认 `idle`；`wandering` 只做 anchor 半径内的局部移动；不持久化，重启回 idle。`p2_base_activity` 设置，`p2_order {verb:"hold"}` 完全停住。`mind.activity` 报告当前生效层（constant/order/duty/base）。
 > 反应策略是 `p2_policy`：body 级、不持久化；无 `fight` 只 flee，`allowedTargets:[]` 为所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立。显式 `attack` order 可指定任何实体，P2 不做保护拦截；期间常驻树只保留致命环境反射。
@@ -100,7 +100,7 @@ agent 下达的目标，不是动作。
 }
 ```
 
-- 词表固定（`go / place / dig / collect / equip / use / attack / check / container / craft / build / traverse / hold`）。
+- 词表固定（`go / place / dig / collect / equip / use / attack / shoot / check / container / craft / build / traverse / hold`）。
 - `blueprint` 只给最终几何；选址与可达性由 Planner 处理。
 - Order 只能由模型或对话管线产生；**树与 driver 不能创建 order**。
 
@@ -209,10 +209,12 @@ type Hold      = { kind: 'hold'; reason: string; notify?: boolean }
 - 主树顺序：`check → order.* → material.gather → plan.work → duty.work → base.work`；`base.work` 最低，base inactive 时返回 `null`。
 - `plan.work`：把 stage 当优先级/报告标签，在当前快照上取“支撑、材料、站位、access 都可放”的前沿；贪心选覆盖率最高的锚点，同一锚点最多 8 项/30s，一个 job 仍只放一个 work item；最终入口由 `safeExits` 的 `exterior` 参考点从室外封。
 - `base.work` 只做 `move`：wandering 在 anchor 半径内选可站格；escort 用 `EvalCtx.focus`（玩家名/实体名经身份解析）跟随目标，不 teleport、无客户端最大距离；目标格在方块快照内时选精确站位，否则直接 `move` 到目标点并用 `range=distance` 到达；目标 2s 不可见才标记 `TARGET_LOST`，期间追最后位置。
-- `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。
+- `threat.fight` 只做索敌：目标锁定、`radius`/`leash`、`canSee`、neutral/auto-avoid 过滤；接近/攻击复用现有 `attack` driver，不新增战斗移动。自动 fight 不生成 `shoot`。
+- `order.shoot` 只做显式远程目标锁：与 `attack` 相同地解析 `entityId`/`focus`，不索敌、不追击；候选交给 `shoot` driver。显式 `shoot` 期间与 `attack` 一样抑制 `threat.fight`/`escape`/`self.*`，只保留致命环境反射。
 - `self.eat` 用 `use` driver 吃背包食物；`self.unstuck` 只做 3 格内 move，不传 `unstickDig`。
 - `dig`/`clear`/`attack` 启动前做一次自动装备：`dig`/`clear` 用 `chooseTool`，`attack` 用 `chooseWeapon`；最近一次**主手**显式 `equip`/`unequip` 成功后，下一次这类动作跳过自动选择，动作启动后恢复自动。
 - `equip` order：`{item?, destination?: "hand"|"offhand", unequip?: boolean}`；`item` 与 `unequip:true` 二选一，`destination` 缺省 `hand`。offhand equip/unequip 不触发主手 override；offhand 已空时 unequip 成功。`attack` 开头若副手为空且背包有盾，自动换盾（不替换非空副手）。
+- `shoot` order：`{entityId, weapon:"bow"|"crossbow", maxShots? 1–5 默认 3, maxRange? 8–64 默认 32}`。成功 = 主箭确认命中；`killed` 独立。射手静止、不追击；弓蓄力后按释放时刻的 lead/重力解瞄准，弩先确保 `chargedProjectiles` 含 arrow 再发射；内部 `loadCrossbow` 不是 order。`maxShots` 内首发命中即停，未命中/不确定继续下一发；移除箭矢回收。
 
 ### 4.5 Job
 

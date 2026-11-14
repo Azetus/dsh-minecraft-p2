@@ -59,6 +59,7 @@ export function scopeWrites(
     time: () => body.time(),
     ...(body.suspension === undefined ? {} : { suspension: () => body.suspension!() }),
     ...(body.offhand === undefined ? {} : { offhand: () => body.offhand!() }),
+    ...(body.held === undefined ? {} : { held: () => body.held!() }),
     ...(body.entityByName === undefined
       ? {}
       : { entityByName: (name: string) => body.entityByName!(name) }),
@@ -82,6 +83,24 @@ export function scopeWrites(
     dig: async p => (deny('dig') ? deniedAct() : body.dig(p)),
     place: async (p, face, item) => (deny('place') ? deniedAct() : body.place(p, face, item)),
     useItem: async opts => (deny('useItem') ? deniedAct() : body.useItem(opts)),
+    ...(body.itemUseStart === undefined
+      ? {}
+      : {
+          itemUseStart: async aim =>
+            (deny('itemUseStart') ? deniedAct() : body.itemUseStart!(aim)),
+        }),
+    ...(body.itemUseRelease === undefined
+      ? {}
+      : {
+          itemUseRelease: async aim =>
+            (deny('itemUseRelease') ? deniedAct() : body.itemUseRelease!(aim)),
+        }),
+    ...(body.itemUseCancel === undefined
+      ? {}
+      : {
+          itemUseCancel: async () =>
+            (deny('itemUseCancel') ? deniedAct() : body.itemUseCancel!()),
+        }),
     equip: async (item, destination) => (deny('equip') ? deniedAct() : body.equip(item, destination)),
     craft: async (item, count) => (deny('craft') ? deniedAct() : body.craft(item, count)),
     useOn: async p => (deny('useOn') ? deniedAct() : body.useOn(p)),

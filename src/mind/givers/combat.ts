@@ -70,6 +70,87 @@ export function createAttackOrderGiver(active: () => OrderView | undefined): Wor
 const ATTACK_ACQUIRE_RADIUS = 64
 const LOST_GRACE_MS = 5_000
 
+/**
+ * Explicit `shoot` order: exactly the Agent-named entity, same identity lock
+ * as `order.attack`, but a ranged driver. It never acquires or switches
+ * targets and never applies the auto-fight protection filter.
+ */
+export function createShootOrderGiver(active: () => OrderView | undefined): WorkGiver {
+  let orderId: string | undefined
+  let lastKnown: { id: string; name: string; position: { x: number; y: number; z: number } } | undefined
+  let lostSince: number | undefined
+  let lostAttempted = false
+  return {
+    id: 'order.shoot',
+    find(ctx: EvalCtx, world: WorldView): WorkGiverResult {
+      const current = activeOrder(active, 'shoot')
+      if (current === undefined) {
+        orderId = undefined
+        lastKnown = undefined
+        lostSince = undefined
+        lostAttempted = false
+        return null
+      }
+      if (orderId !== current.order.id) {
+        orderId = current.order.id
+        lastKnown = undefined
+        lostSince = undefined
+        lostAttempted = false
+      }
+      const entityId = current.order.params?.entityId
+      const weapon = current.order.params?.weapon
+      if (typeof entityId !== 'string' || entityId.length === 0) {
+        return { kind: 'hold', reason: 'SHOOT_TARGET_INVALID' }
+      }
+      if (weapon !== 'bow' && weapon !== 'crossbow') {
+        return { kind: 'hold', reason: 'SHOOT_WEAPON_INVALID' }
+      }
+      const entity = (ctx.focus?.id === entityId ? ctx.focus : undefined)
+        ?? world.entitiesIn(boxAround(world.self.pos, ATTACK_ACQUIRE_RADIUS, 16))
+          .find(candidate => candidate.id === entityId)
+      if (entity === undefined) {
+        if (lastKnown === undefined) return { kind: 'hold', reason: 'SHOOT_TARGET_LOST' }
+        lostSince ??= ctx.now
+        if (!lostAttempted && ctx.now - lostSince >= LOST_GRACE_MS) {
+          lostAttempted = true
+          return shootCandidate(current, lastKnown, weapon)
+        }
+        return { kind: 'hold', reason: 'SHOOT_TARGET_LOST' }
+      }
+      lastKnown = { id: entity.id, name: entity.name, position: entity.position }
+      lostSince = undefined
+      lostAttempted = false
+      return shootCandidate(current, entity, weapon)
+    },
+  }
+}
+
+function shootCandidate(
+  current: OrderView,
+  entity: { id: string; name: string; position: { x: number; y: number; z: number } },
+  weapon: 'bow' | 'crossbow',
+): WorkGiverResult {
+  return {
+    driverId: 'shoot',
+    target: { kind: 'point', pos: entity.position },
+    params: {
+      entityId: entity.id,
+      weapon,
+      targetName: entity.name,
+      orderId: current.order.id,
+      ...(typeof current.order.params?.maxShots === 'number'
+        ? { maxShots: current.order.params.maxShots }
+        : {}),
+      ...(typeof current.order.params?.maxRange === 'number'
+        ? { maxRange: current.order.params.maxRange }
+        : {}),
+      continuationKey: `order.shoot:${current.order.id}:${entity.id}:${weapon}`,
+    },
+    keys: `order.shoot:${current.order.id}:${entity.id}:${weapon}`,
+    orderId: current.order.id,
+  }
+}
+
 function candidateFor(
   current: OrderView,
   entity: { id: string; name: string; position: { x: number; y: number; z: number } },

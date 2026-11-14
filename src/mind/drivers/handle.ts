@@ -12,6 +12,7 @@ export class AsyncDriverHandle implements DriverHandle {
   constructor(
     private readonly key: string,
     work: Promise<DriverResult>,
+    private readonly onStop?: () => void,
   ) {
     void work.then(
       result => {
@@ -36,6 +37,7 @@ export class AsyncDriverHandle implements DriverHandle {
 
   requestStop(): void {
     this.stopRequested = true
+    this.onStop?.()
   }
 
   stopStatus(): 'stopping' | 'stopped' | 'unconfirmed' {

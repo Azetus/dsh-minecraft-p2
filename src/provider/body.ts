@@ -28,6 +28,7 @@ import type {
 import { BodyErrorCodes, actFailed, actOk, actUnknown } from '../body/api.ts'
 import { blockTagsFor, type BlockTagIndex } from './block-tags.ts'
 import { WriteGate, staleWriteResult } from './control.ts'
+import { readChargedProjectiles } from './charged.ts'
 
 export type MineflayerBodyOptions = {
   /** Monotonic clock; tests may substitute one. */
@@ -227,6 +228,7 @@ export class MineflayerBody implements BodyApi {
 
   self(): SelfInfo {
     const entity = this.bot.entity as unknown as {
+      id?: number
       position?: { x: number; y: number; z: number }
       yaw?: number
       pitch?: number
@@ -240,6 +242,7 @@ export class MineflayerBody implements BodyApi {
     if (entity === undefined || position === undefined) throw unavailable('bot position is not available')
 
     return {
+      ...(typeof entity.id === 'number' ? { id: String(entity.id) } : {}),
       pos: { x: position.x, y: position.y, z: position.z },
       yaw: entity.yaw ?? 0,
       pitch: entity.pitch ?? 0,
@@ -478,6 +481,19 @@ export class MineflayerBody implements BodyApi {
     }
   }
 
+  held(): Item | undefined {
+    const item = this.bot.heldItem as unknown as {
+      name?: string
+      count?: number
+      slot?: number
+      components?: unknown
+      componentMap?: unknown
+      nbt?: unknown
+    } | null
+    if (item === null || item === undefined || typeof item.name !== 'string') return undefined
+    return heldItemInfo(item, this.bot.registry, typeof item.slot === 'number' ? item.slot : -1)
+  }
+
   entities(box: Box): EntityInfo[] {
     const result: EntityInfo[] = []
     for (const entity of Object.values(this.bot.entities) as unknown as EntityLike[]) {
@@ -546,6 +562,7 @@ export class MineflayerBody implements BodyApi {
     for (const entry of [...this.running]) {
       if (entry.epoch !== epoch) this.stopHandle(entry.handle)
     }
+    this.releaseItemUse()
     this.releaseOffhand()
     this.releaseControls()
   }
@@ -553,8 +570,22 @@ export class MineflayerBody implements BodyApi {
   endWrite(token: WriteToken): void {
     this.gate.end(token)
     for (const entry of [...this.running]) this.stopHandle(entry.handle)
+    this.releaseItemUse()
     this.releaseOffhand()
     this.releaseControls()
+  }
+
+  /**
+   * Main-hand use must not outlive the write. Cancel via a slot change so a
+   * drawn bow is not released/fired during handoff.
+   */
+  private releaseItemUse(): void {
+    try {
+      ;(this.acts as { itemUseCancel?: () => unknown }).itemUseCancel?.()
+    } catch {
+      // A failed cancel leaves the provider stance active; controlState keeps
+      // it visible and the next write cannot start until it is released.
+    }
   }
 
   /** Best-effort stance release on authority/stop paths; the next epoch retries. */
@@ -664,6 +695,51 @@ export class MineflayerBody implements BodyApi {
     if (opts.durationMs !== undefined) args.durationMs = opts.durationMs
     if (opts.offhand === true) args.offhand = true
     return await this.action('useItem', 'use', args)
+  }
+
+  async itemUseStart(aim?: { yaw: number; pitch: number }): Promise<ActResult> {
+    const startedAt = this.now()
+    const epoch = this.gate.currentEpoch()
+    if (epoch === undefined) return staleWriteResult(0)
+    if (this.acts.itemUseStart === undefined) {
+      return actFailed('ITEM_USE_UNSUPPORTED', this.now() - startedAt)
+    }
+    try {
+      const observed = await this.acts.itemUseStart(aim, () => this.gate.isCurrent(epoch))
+      return actOk(this.now() - startedAt, observed as unknown as JsonValue)
+    } catch (error) {
+      return actFailed(errorCode(error), this.now() - startedAt)
+    }
+  }
+
+  async itemUseRelease(aim?: { yaw: number; pitch: number }): Promise<ActResult> {
+    const startedAt = this.now()
+    const epoch = this.gate.currentEpoch()
+    if (epoch === undefined) return staleWriteResult(0)
+    if (this.acts.itemUseRelease === undefined) {
+      return actFailed('ITEM_USE_UNSUPPORTED', this.now() - startedAt)
+    }
+    try {
+      const observed = await this.acts.itemUseRelease(aim, () => this.gate.isCurrent(epoch))
+      return actOk(this.now() - startedAt, observed as unknown as JsonValue)
+    } catch (error) {
+      return actFailed(errorCode(error), this.now() - startedAt)
+    }
+  }
+
+  async itemUseCancel(): Promise<ActResult> {
+    const startedAt = this.now()
+    const epoch = this.gate.currentEpoch()
+    if (epoch === undefined) return staleWriteResult(0)
+    if (this.acts.itemUseCancel === undefined) {
+      return actFailed('ITEM_USE_UNSUPPORTED', this.now() - startedAt)
+    }
+    try {
+      const observed = this.acts.itemUseCancel()
+      return actOk(this.now() - startedAt, observed as unknown as JsonValue)
+    } catch (error) {
+      return actFailed(errorCode(error), this.now() - startedAt)
+    }
   }
 
   async offhandHold(active: boolean): Promise<ActResult> {
@@ -1117,6 +1193,35 @@ function blockInfo(
     ...(serverTags === undefined ? {} : { serverTags }),
   }
   return Object.keys(state).length === 0 ? base : { ...base, state }
+}
+
+function heldItemInfo(
+  item: {
+    name?: string
+    count?: number
+    components?: unknown
+    componentMap?: unknown
+    nbt?: unknown
+  },
+  registry: unknown,
+  slot: number,
+): Item {
+  const name = (item.name ?? '').replace(/^minecraft:/u, '')
+  const base: Item = {
+    slot,
+    name,
+    count: typeof item.count === 'number' ? item.count : 1,
+  }
+  if (name !== 'crossbow') return base
+  const charged = readChargedProjectiles(item, id => itemNameOrUndefined(registry, id))
+  if (charged === undefined) return base
+  return { ...base, chargedProjectiles: charged }
+}
+
+function itemNameOrUndefined(registry: unknown, id: number): string | undefined {
+  const items = (registry as { items?: Record<string, { name?: string }> } | undefined)?.items
+  const name = items?.[String(id)]?.name
+  return typeof name === 'string' ? name.replace(/^minecraft:/u, '') : undefined
 }
 
 function entityInfo(entity: EntityLike, registry: unknown): EntityInfo | undefined {

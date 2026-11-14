@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { Bot } from 'mineflayer'
 
 import { MineflayerProvider, connectMineflayer } from '../src/provider/mineflayer.ts'
+import { MineflayerBody } from '../src/provider/body.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -441,6 +442,145 @@ describe('MineflayerProvider write authority', () => {
     for (let index = 0; index < 20 && handle.poll().status === 'running'; index += 1) await sleep(5)
     expect(handle.poll().status).toBe('succeeded')
     expect(fake.equipCalls).toBe(1)
+  })
+})
+
+describe('MineflayerProvider main-hand use stance', () => {
+  function useBot(): {
+    bot: Bot
+    activations: () => number
+    deactivations: () => number
+    slots: number[]
+    using: () => boolean
+  } {
+    const { bot } = fakeBot()
+    let activations = 0
+    let deactivations = 0
+    const slots: number[] = []
+    let using = false
+    const record = bot as unknown as {
+      heldItem: unknown
+      quickBarSlot: number
+      usingHeldItem: boolean
+      activateItem: (offhand?: boolean) => void
+      deactivateItem: () => void
+      setQuickBarSlot: (slot: number) => void
+    }
+    record.heldItem = { name: 'bow', count: 1, slot: 0 }
+    record.quickBarSlot = 0
+    record.usingHeldItem = false
+    record.activateItem = () => {
+      activations += 1
+      using = true
+    }
+    record.deactivateItem = () => {
+      deactivations += 1
+      using = false
+    }
+    record.setQuickBarSlot = (slot: number) => {
+      slots.push(slot)
+      record.quickBarSlot = slot
+      // A real held-slot change clears the client use flag.
+      using = false
+    }
+    return {
+      bot,
+      activations: () => activations,
+      deactivations: () => deactivations,
+      slots,
+      using: () => using,
+    }
+  }
+
+  it('starts and releases without an act and reports the stance as active', async () => {
+    const fake = useBot()
+    const provider = new MineflayerProvider(fake.bot)
+    expect(await provider.itemUseStart()).toEqual({ active: true, item: 'bow' })
+    expect(provider.itemUseActive()).toBe(true)
+    expect(provider.controlState()).toBe('active')
+    expect(fake.activations()).toBe(1)
+    expect(() => provider.start('lookAt', { x: 1, y: 64, z: 1 })).toThrow(/item use stance/u)
+
+    const released = await provider.itemUseRelease({ yaw: 0, pitch: 0 })
+    expect(released.item).toBe('bow')
+    expect(provider.itemUseActive()).toBe(false)
+    expect(provider.controlState()).toBe('idle')
+    expect(fake.deactivations()).toBe(1)
+    expect(fake.using()).toBe(false)
+  })
+
+  it('cancels through a held-slot change without calling deactivateItem', async () => {
+    const fake = useBot()
+    const provider = new MineflayerProvider(fake.bot)
+    await provider.itemUseStart()
+    expect(provider.itemUseCancel()).toEqual({ cancelled: true, item: 'bow' })
+    expect(provider.itemUseActive()).toBe(false)
+    expect(fake.deactivations()).toBe(0)
+    expect(fake.slots).toEqual([1, 0])
+    expect(fake.using()).toBe(false)
+  })
+
+  it('does not cancel an inactive stance', () => {
+    const fake = useBot()
+    const provider = new MineflayerProvider(fake.bot)
+    expect(provider.itemUseCancel()).toEqual({ cancelled: false, item: null })
+    expect(fake.slots).toEqual([])
+  })
+})
+
+describe('MineflayerBody held item readback', () => {
+  it('exposes component-era charged projectiles as names', () => {
+    const { bot } = fakeBot()
+    ;(bot as unknown as { registry: unknown }).registry = {
+      items: { 1: { name: 'arrow' }, 2: { name: 'firework_rocket' } },
+    }
+    ;(bot as unknown as { heldItem: unknown }).heldItem = {
+      name: 'crossbow',
+      count: 1,
+      slot: 0,
+      components: [{
+        type: 'charged_projectiles',
+        data: { projectiles: [{ itemId: 1, itemCount: 1, components: [] }] },
+      }],
+    }
+    const body = new MineflayerBody(bot, new MineflayerProvider(bot))
+    expect(body.held()).toMatchObject({
+      name: 'crossbow',
+      chargedProjectiles: ['arrow'],
+    })
+  })
+
+  it('exposes legacy NBT charged projectiles and unknown state', () => {
+    const { bot } = fakeBot()
+    ;(bot as unknown as { registry: unknown }).registry = {
+      items: { 1: { name: 'arrow' } },
+    }
+    ;(bot as unknown as { heldItem: unknown }).heldItem = {
+      name: 'crossbow',
+      count: 1,
+      slot: 0,
+      nbt: {
+        type: 'compound',
+        value: {
+          ChargedProjectiles: {
+            type: 'list',
+            value: {
+              type: 'compound',
+              value: [{
+                type: 'compound',
+                value: { id: { type: 'string', value: 'minecraft:arrow' } },
+              }],
+            },
+          },
+        },
+      },
+    }
+    const body = new MineflayerBody(bot, new MineflayerProvider(bot))
+    expect(body.held()).toMatchObject({ chargedProjectiles: ['arrow'] })
+
+    ;(bot as unknown as { heldItem: unknown }).heldItem = { name: 'crossbow', count: 1, slot: 0 }
+    expect(body.held()).toMatchObject({ name: 'crossbow' })
+    expect(body.held()?.chargedProjectiles).toBeUndefined()
   })
 })
 

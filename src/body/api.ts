@@ -37,7 +37,20 @@ export type BlockInfo = {
   harvestTools?: string[]
 }
 
-export type Item = { slot: number; name: string; count: number }
+export type Item = {
+  slot: number
+  name: string
+  count: number
+  /**
+   * Crossbow projectiles when the adapter can read the charged state.
+   * `undefined` means "cannot tell"; `[]` means "known empty"; a non-empty
+   * list is the charged projectile item names (arrow variants or firework).
+   */
+  chargedProjectiles?: string[]
+}
+
+/** Aim angles in mineflayer coordinates (0 yaw = -z, positive pitch = up). */
+export type ItemUseAim = { yaw: number; pitch: number }
 
 /**
  * Read-only nearest-block query. The implementation searches only loaded
@@ -93,6 +106,8 @@ export type ContainerCheckResult =
   | { state: 'unknown'; code: string; message?: string }
 
 export type SelfInfo = {
+  /** Adapter entity id when exposed; used to attribute player-source damage. */
+  id?: string
   pos: Vec3
   yaw: number
   pitch: number
@@ -258,6 +273,8 @@ export type BodyApi = {
   findBlocks(query: FindBlocksQuery): BlockInfo[]
   inventory(): Item[]
   offhand?(): Item | undefined
+  /** Current main-hand item with optional charged-projectile readback. */
+  held?(): Item | undefined
   entities(box: Box): EntityInfo[]
   /** Resolve one entity by username or entity name without a box scan. */
   entityByName?(name: string): EntityInfo | undefined
@@ -295,6 +312,14 @@ export type BodyApi = {
   dig(p: Vec3): Promise<ActResult>
   place(p: Vec3, face: Face, item: string): Promise<ActResult>
   useItem(opts?: { durationMs?: number; offhand?: boolean }): Promise<ActResult>
+  /**
+   * Main-hand item-use stance. `start` only begins using (it never fires);
+   * `release` aims when requested and releases the use; `cancel` stops using
+   * through a held-item slot change so a drawn bow is not fired.
+   */
+  itemUseStart?(aim?: ItemUseAim): Promise<ActResult>
+  itemUseRelease?(aim?: ItemUseAim): Promise<ActResult>
+  itemUseCancel?(): Promise<ActResult>
   /**
    * Persistent off-hand stance: `true` holds the off-hand item across acts,
    * `false` releases it. Unlike `useItem` the stance is not tied to one act's

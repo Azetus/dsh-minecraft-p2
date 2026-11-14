@@ -16,6 +16,7 @@ describe('repeat failure hints', () => {
     expect(orderTargetKey('dig', { from: { x: 1, y: 64, z: 0 }, to: { x: 3, y: 64, z: 0 }, height: 2 }))
       .toContain('1,64,0')
     expect(orderTargetKey('attack', { entityId: '12' })).toBe('entity:12')
+    expect(orderTargetKey('shoot', { entityId: '12' })).toBe('entity:12')
   })
 
   it('warns after two failed terminals and resets after a success', () => {
