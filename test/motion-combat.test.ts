@@ -56,6 +56,7 @@ function fakePort(options: {
     ready?: boolean
     outcome?: RangedCombatOutcome
     kill?: boolean
+    fireTicks?: number
     fire?: () => Promise<RangedCombatOutcome>
   }
 } = {}): Fake {
@@ -115,7 +116,9 @@ function fakePort(options: {
             }),
             fire: async (_entity: unknown, onTick?: () => Promise<void>): Promise<RangedCombatOutcome> => {
               rangedFires += 1
-              await onTick?.()
+              for (let tick = 0; tick < (options.ranged?.fireTicks ?? 1); tick += 1) {
+                await onTick?.()
+              }
               if (options.ranged?.fire !== undefined) return options.ranged.fire()
               if (options.ranged?.kill === true) {
                 target = undefined
@@ -322,6 +325,26 @@ describe('CombatSession tick', () => {
     expect(session.state).toBe('succeeded')
     expect(fake.stances).toContain(false)
     expect(fake.rangedFires()).toBe(1)
+  })
+
+  it('plans around a blocked ranged backoff', async () => {
+    let pathCalls = 0
+    const fake = fakePort({
+      target: zombie(7),
+      ranged: { kill: true, fireTicks: 3 },
+      combatInput: async opts => opts.back === true
+        ? { state: 'failed', code: 'COMBAT_INPUT_BLOCKED' }
+        : { state: 'ok' },
+      pathTo: async () => {
+        pathCalls += 1
+        return { state: 'ok', path: [{ x: -2, y: 64, z: 0.5 }] }
+      },
+    })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(pathCalls).toBeGreaterThan(0)
+    expect(fake.inputs.some(input => input.forward === true && input.preservePitch === true)).toBe(true)
   })
 
   it('does not use ranged without explicit authorization', async () => {

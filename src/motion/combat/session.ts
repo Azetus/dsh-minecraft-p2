@@ -93,6 +93,8 @@ export class CombatSession {
   private rangedUnavailableReason: string | undefined
   private lastRangedAt = 0
   private rangedTargetId: string | undefined
+  private rangedWaypoints: Vec3[] = []
+  private lastRangedPathAt = 0
   private misses = 0
   private side: 'left' | 'right' = 'left'
   private strafeSteps = 0
@@ -205,6 +207,7 @@ export class CombatSession {
   private finish(state: CombatSessionState, code?: string, reason?: string): void {
     if (this.state !== 'running') return
     this.port.ranged?.stop()
+    this.rangedWaypoints = []
     this.state = state
     this.disposeDead?.()
     this.disposeHurt?.()
@@ -582,6 +585,7 @@ export class CombatSession {
       this.weaponSwitches += 1
     }
     this.rangedTargetId = entity.id
+    this.rangedWaypoints = []
     this.rangedWeapon = capability.status(entity).weapon
     if (this.port.combatInput !== undefined) {
       await this.port.combatInput({ face: this.aim(entity), preservePitch: true })
@@ -591,9 +595,25 @@ export class CombatSession {
       if (this.port.combatInput === undefined) return
       const fresh = this.port.entity(this.currentTargetId)
       if (fresh === undefined) return
-      const range = eyeReach(this.port.self(), fresh)
+      const self = this.port.self()
+      const range = eyeReach(self, fresh)
       if (range <= this.reach + TOO_CLOSE_MARGIN) {
         capability.stop()
+        return
+      }
+      if (this.rangedWaypoints.length > 0) {
+        const next = this.rangedWaypoints[0]!
+        if (Math.hypot(next.x - self.pos.x, next.z - self.pos.z) < 0.8) {
+          this.rangedWaypoints.shift()
+          return
+        }
+        this.inputTicks += 1
+        this.approachMoves += 1
+        const moved = await this.port.combatInput({ face: next, forward: true, preservePitch: true })
+        if (moved.state !== 'ok') {
+          this.rangedWaypoints = []
+          this.inputFailures += 1
+        }
         return
       }
       const backward = range < RANGED_PREFERRED_MIN
@@ -607,7 +627,25 @@ export class CombatSession {
         ...(backward ? { back: true } : {}),
         ...(forward ? { forward: true } : {}),
       })
-      if (moved.state !== 'ok') this.inputFailures += 1
+      if (moved.state === 'ok') return
+      this.inputFailures += 1
+      if (!backward || this.port.pathTo === undefined) return
+      const now = this.port.now()
+      if (now - this.lastRangedPathAt < 1_000) return
+      this.lastRangedPathAt = now
+      const dx = self.pos.x - fresh.position.x
+      const dz = self.pos.z - fresh.position.z
+      const length = Math.hypot(dx, dz)
+      if (length < 1e-6) return
+      const point = {
+        x: self.pos.x + (dx / length) * 8,
+        y: self.pos.y,
+        z: self.pos.z + (dz / length) * 8,
+      }
+      const planned = await this.port.pathTo(point, 2, 500)
+      if (planned.state === 'ok' && (planned.path?.length ?? 0) > 0) {
+        this.rangedWaypoints = planned.path!
+      }
     }
     let outcome
     try {
