@@ -740,6 +740,12 @@ export class CombatSession {
     this.lastHealth = self.health
     if (this.chaseLeash !== undefined
       && Math.hypot(self.pos.x - this.startOrigin.x, self.pos.z - this.startOrigin.z) > this.chaseLeash) {
+      if (this.options.engagement === true) {
+        this.escapedTargets.add(this.currentTargetId)
+        if (this.finishIfResolved()) return
+        if (!this.advanceTarget()) return
+        return
+      }
       this.finish('failed', 'ATTACK_CHASE_LIMIT', 'chase leash exceeded')
       return
     }
@@ -749,17 +755,6 @@ export class CombatSession {
       this.lostTargets.add(this.currentTargetId)
       if (this.finishIfResolved()) return
       if (!this.advanceTarget()) return
-      return
-    }
-    if (this.chaseLeash !== undefined
-      && Math.hypot(entity.position.x - this.startOrigin.x, entity.position.z - this.startOrigin.z) > this.chaseLeash) {
-      if (this.options.engagement === true) {
-        this.escapedTargets.add(this.currentTargetId)
-        if (this.finishIfResolved()) return
-        if (!this.advanceTarget()) return
-        return
-      }
-      this.finish('failed', 'ATTACK_CHASE_LIMIT', 'target left chase leash')
       return
     }
     if (this.options.targetName !== undefined && entity.name !== this.options.targetName) {

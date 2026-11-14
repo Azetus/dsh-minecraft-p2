@@ -531,6 +531,19 @@ describe('CombatSession tick', () => {
     })
   })
 
+  it('allows a ranged target outside the movement leash', async () => {
+    const fake = fakePort({ target: zombie(10), ranged: { kill: true } })
+    const session = new CombatSession(fake.port, 'z1', {
+      totalMs: 5_000,
+      chaseLeash: 5,
+      allowRanged: true,
+    })
+    await run(session)
+    expect(session.state).toBe('succeeded')
+    expect(fake.rangedFires()).toBe(1)
+    expect(session.result()?.observed.rangedShots).toBe(1)
+  })
+
   it('plans a path and follows waypoints when line of sight is missing', async () => {
     let calls = 0
     const fake = fakePort({

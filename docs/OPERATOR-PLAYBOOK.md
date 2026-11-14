@@ -92,7 +92,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `failed(UNEQUIP_READBACK_UNKNOWN)` / `failed(UNEQUIP_READBACK_MISMATCH)` | 卸载后目标槽位读回缺失或仍非空；先读副手/主手再决定，不要当成功。副手已空时 unequip 本身算成功 |
 | `failed(CONTAINER_READBACK_UNKNOWN)` / `failed(CONTAINER_INCOMPLETE)` | provider 完成传输但前后计数缺失/未达请求；重新打开容器核对，不要当成功 |
 | `failed(ATTACK_TARGET_LOST)` | 目标消失或超出定位范围；显式 attack 在 5s 丢失宽限后终结。重新获取 entityId 并确认，不要盲目追击 |
-| `failed(ATTACK_CHASE_LIMIT)` | 超过 `chaseLeash` 或目标离开允许追击距离；看 facts 的 `damageObserved/targetHealth`，低血可重新 `attack` 或换方式，不要无限重下 |
+| `failed(ATTACK_CHASE_LIMIT)` | 自身移动超过 `chaseLeash`；目标在 leash 外仍可被 24 格内远程攻击。看 facts 的 `damageObserved/targetHealth`，低血可重新 `attack` 或换方式，不要无限重下 |
 | `failed(ATTACK_TARGET_PROTECTED)` | 自动 fight/未授权 driver 遇到受保护目标；显式 attack order 不会返回此码，玩家/中立也可由 Agent 明确指定 |
 | `failed(ATTACK_NOT_KILLED)` | 24 次攻击/40s 内未击杀；检查武器/目标类型，重新下令 |
 | `blocked(SITE_NOT_FOUND)` | 换区域/换蓝图变体 |
