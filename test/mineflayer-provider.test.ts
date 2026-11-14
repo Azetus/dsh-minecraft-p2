@@ -452,20 +452,26 @@ describe('MineflayerProvider main-hand use stance', () => {
     deactivations: () => number
     slots: number[]
     using: () => boolean
+    looks: Array<{ yaw: number; pitch: number }>
   } {
     const { bot } = fakeBot()
     let activations = 0
     let deactivations = 0
     const slots: number[] = []
+    const looks: Array<{ yaw: number; pitch: number }> = []
     let using = false
     const record = bot as unknown as {
+      entity: { pitch: number }
       heldItem: unknown
       quickBarSlot: number
       usingHeldItem: boolean
+      look: (yaw: number, pitch: number, force?: boolean) => Promise<void>
       activateItem: (offhand?: boolean) => void
       deactivateItem: () => void
       setQuickBarSlot: (slot: number) => void
     }
+    record.entity.pitch = 0.42
+    record.look = async (yaw, pitch) => { looks.push({ yaw, pitch }) }
     record.heldItem = { name: 'bow', count: 1, slot: 0 }
     record.quickBarSlot = 0
     record.usingHeldItem = false
@@ -489,6 +495,7 @@ describe('MineflayerProvider main-hand use stance', () => {
       deactivations: () => deactivations,
       slots,
       using: () => using,
+      looks,
     }
   }
 
@@ -507,6 +514,47 @@ describe('MineflayerProvider main-hand use stance', () => {
     expect(provider.controlState()).toBe('idle')
     expect(fake.deactivations()).toBe(1)
     expect(fake.using()).toBe(false)
+  })
+
+  it('updates combat movement during item use and keeps the aim pitch', async () => {
+    const fake = useBot()
+    ;(fake.bot as unknown as { blockAt: (p: { y: number }) => unknown }).blockAt = point =>
+      point.y < 64
+        ? { name: 'stone', boundingBox: 'block' }
+        : { name: 'air', boundingBox: 'empty' }
+    const provider = new MineflayerProvider(fake.bot)
+    await provider.itemUseStart()
+    const handle = provider.start('combat-input', {
+      faceX: 3, faceY: 64, faceZ: 2, forward: true, preservePitch: true,
+    })
+    for (let index = 0; index < 20 && handle.poll().status === 'running'; index += 1) await sleep(10)
+
+    expect(handle.poll().status).toBe('succeeded')
+    expect(provider.itemUseActive()).toBe(true)
+    expect(fake.using()).toBe(true)
+    expect((fake.bot as unknown as { getControlState: (name: string) => boolean }).getControlState('forward')).toBe(true)
+    expect(fake.looks.at(-1)?.pitch).toBeCloseTo(0.42)
+
+    provider.itemUseCancel()
+    provider.clearControls()
+    expect(fake.using()).toBe(false)
+  })
+
+  it('resets pitch for ordinary melee combat input', async () => {
+    const fake = useBot()
+    ;(fake.bot as unknown as { blockAt: (p: { y: number }) => unknown }).blockAt = point =>
+      point.y < 64
+        ? { name: 'stone', boundingBox: 'block' }
+        : { name: 'air', boundingBox: 'empty' }
+    const provider = new MineflayerProvider(fake.bot)
+    const handle = provider.start('combat-input', {
+      faceX: 3, faceY: 64, faceZ: 2, forward: true,
+    })
+    for (let index = 0; index < 20 && handle.poll().status === 'running'; index += 1) await sleep(10)
+
+    expect(handle.poll().status).toBe('succeeded')
+    expect(fake.looks.at(-1)?.pitch).toBe(0)
+    provider.clearControls()
   })
 
   it('cancels through a held-slot change without calling deactivateItem', async () => {

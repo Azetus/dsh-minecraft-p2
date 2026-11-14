@@ -92,6 +92,8 @@ type BodyApi = {
     back?: boolean
     left?: boolean
     right?: boolean
+    /** Keep the current pitch while updating yaw/controls (ranged draw). */
+    preservePitch?: boolean
   }): Promise<ActResult>
   lookAt(p: Vec3): Promise<ActResult>
   lookYaw?(yaw: number): Promise<ActResult>
@@ -177,6 +179,7 @@ type BodyApi = {
 - **观测**：`resolution`/`resolved`/`retryable`/`escaped` 与 `kills`/`neutralized`/`lostTargets` 分开；`killed` 只在全部目标都有 `entityDead` 时为 true。
 - **guard**：自血下降时进入 1000ms 窗口；窗口内移动 hold（tooClose 仍 backoff），攻击/盾照常；计时到期、无盾、目标丢失/死亡/job 结束退出。
 - **盾/开场**：副手有盾时 `offhandHold(true)` 持久保持，进入 `preShieldRange`（默认 12）提前举起；stop/endWrite/epoch/suspended/death/disconnect 释放。攻击不强制放下盾；若服务端行为拒绝，才做显式例外，不作为默认。
+- **移动与 item use 并发**：主手 `itemUseStart/Release/Cancel` 是同一 Driver 下的独立控制 stance；item use 活跃时仍允许 `combat-input` 更新移动/朝向（`preservePitch:true` 保留瞄准 pitch），但 `attack`/`dig`/`place`/`equip` 等冲突 act 继续返回 `ITEM_USE_ACTIVE`。这支持“移动射击”，不是第二个 Driver 或第二个写者。
 - **移动安全**：`combat-input` provider 对下一格的脚/头/支撑/液体/火/岩浆/仙人掌做本地检查；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先尝试 jump/短 detour，持续 blocked 时改用 `pathTo` waypoint，都不可达才 hold。
 - **证据**：`inputTicks`/`inputBlocked`/`inputFailures`、`approachMoves`/`strafeMoves`/`backoffMoves`、`guardWindows`/`guardExits`、`stanceRaises`/`stanceDrops`/`stanceReleaseFailures`/`shieldHeldMs`、`preShieldRaises`、`targets`/`kills`/`neutralized`/`escaped`/`targetSwitches`/`lostTargets`、`resolution`/`resolved`/`retryable`、`threatCount`/`rangedThreat`/`explosionThreat`、`reach`/`reachSource`。
 - `material.gather` 使用有界区域索引：半径 32，16×16 列分块，每次求值最多取 2 块；命中缓存在内存，`blockUpdated` 直接增删条目，不触发全量重扫。中心移动 >8 格、垂直变化 >4 或缓存超过 15s 时重建并标记 stale。

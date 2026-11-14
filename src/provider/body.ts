@@ -639,6 +639,7 @@ export class MineflayerBody implements BodyApi {
     left?: boolean
     right?: boolean
     jump?: boolean
+    preservePitch?: boolean
   }): Promise<ActResult> {
     if (!isVec3(opts.face)) return actFailed('INVALID_TARGET', 0)
     return await this.run('combat-input', {
@@ -650,6 +651,7 @@ export class MineflayerBody implements BodyApi {
       ...(opts.left === true ? { left: true } : {}),
       ...(opts.right === true ? { right: true } : {}),
       ...(opts.jump === true ? { jump: true } : {}),
+      ...(opts.preservePitch === true ? { preservePitch: true } : {}),
     }, 1_000)
   }
 

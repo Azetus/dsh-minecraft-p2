@@ -1431,8 +1431,13 @@ export class MineflayerProvider {
         { serverAge: this.serverAge(), idleMs: this.liveStatus().idleMs },
       )
     }
-    if (name !== 'stop' && this.itemUseStance.active) {
-      throw p2Error('ITEM_USE_ACTIVE', 'runtime', 'a main-hand item use stance is active', { module: 'provider.mineflayer' })
+    if (name !== 'stop' && name !== 'combat-input' && this.itemUseStance.active) {
+      throw p2Error(
+        'ITEM_USE_ACTIVE',
+        'runtime',
+        'a main-hand item use stance is active; only combat movement controls may update',
+        { module: 'provider.mineflayer' },
+      )
     }
     if (name !== 'stop' && this.current !== undefined && this.current.poll().status === 'running') {
       throw p2Error('ACT_BUSY', 'runtime', 'another Mineflayer act is running', { module: 'provider.mineflayer' })
@@ -2284,6 +2289,9 @@ class MineflayerActHandle implements ActHandle {
           }
           const from = this.bot.entity.position
           const yaw = Math.atan2(-(faceX - from.x), -(faceZ - from.z))
+          const currentPitch = typeof (this.bot.entity as unknown as { pitch?: unknown }).pitch === 'number'
+            ? (this.bot.entity as unknown as { pitch: number }).pitch
+            : 0
           const desired = {
             forward: this.args.forward === true,
             back: this.args.back === true,
@@ -2291,7 +2299,11 @@ class MineflayerActHandle implements ActHandle {
             right: this.args.right === true,
             jump: this.args.jump === true,
           }
-          void this.bot.look(yaw, 0, true).then(() => {
+          void this.bot.look(
+            yaw,
+            this.args.preservePitch === true ? currentPitch : 0,
+            true,
+          ).then(() => {
             if (this.stopRequested || this.completed || this.failed !== undefined) return
             if (this.authorized?.() === false) {
               this.bot.clearControlStates()

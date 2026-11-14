@@ -299,6 +299,11 @@ export type BodyApi = {
     left?: boolean
     right?: boolean
     jump?: boolean
+    /**
+     * Keep the current pitch while updating yaw/controls. Used by a ranged
+     * draw so movement input does not erase the bow/crossbow aim.
+     */
+    preservePitch?: boolean
   }): Promise<ActResult>
   /** Read-only bounded path planning; combat follows the returned waypoints. */
   pathTo?(target: Vec3, range: number, timeoutMs: number): Promise<{
