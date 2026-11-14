@@ -433,10 +433,8 @@ function validateAttackParams(params: JsonValue | undefined): void {
   if (params.allowRanged !== undefined && typeof params.allowRanged !== 'boolean') {
     throw orderError('INVALID_ORDER', 'attack.allowRanged must be a boolean')
   }
-  if (params.maxChases !== undefined
-    && (typeof params.maxChases !== 'number' || !Number.isInteger(params.maxChases)
-      || params.maxChases < 1 || params.maxChases > 64)) {
-    throw orderError('INVALID_ORDER', 'attack.maxChases must be an integer between 1 and 64')
+  if (params.maxChases !== undefined) {
+    throw orderError('INVALID_ORDER', 'attack.maxChases is not supported; use chaseLeash')
   }
 }
 

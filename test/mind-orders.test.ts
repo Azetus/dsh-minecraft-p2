@@ -54,18 +54,18 @@ describe('order store', () => {
     expect(store.all().map(record => record.order.id)).toEqual(['ord-1', 'ord-2'])
   })
 
-  it('validates attack maxChases without rejecting the normal target params', () => {
+  it('rejects the retired attack.maxChases and accepts chaseLeash', () => {
     const store = new OrderStore()
-    expect(() => store.enqueue({
-      id: 'ord-attack',
+    expect(errorCode(() => store.enqueue({
+      id: 'ord-attack-max-chases',
       verb: 'attack',
       params: { entityId: 'e1', maxChases: 12 },
-    })).not.toThrow()
-    expect(errorCode(() => store.enqueue({
-      id: 'ord-attack-bad',
-      verb: 'attack',
-      params: { entityId: 'e2', maxChases: 0 },
     }))).toBe('INVALID_ORDER')
+    expect(() => store.enqueue({
+      id: 'ord-attack-leash',
+      verb: 'attack',
+      params: { entityId: 'e2', chaseLeash: 12 },
+    })).not.toThrow()
   })
 
   it('validates the attack allowRanged boolean', () => {
