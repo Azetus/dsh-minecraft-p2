@@ -108,6 +108,8 @@ export type ContainerCheckResult =
 export type SelfInfo = {
   /** Adapter entity id when exposed; used to attribute player-source damage. */
   id?: string
+  /** Adapter-reported velocity in blocks per tick; absent means unknown. */
+  velocity?: Vec3
   pos: Vec3
   yaw: number
   pitch: number

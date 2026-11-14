@@ -576,6 +576,18 @@ describe('MineflayerProvider main-hand use stance', () => {
   })
 })
 
+describe('MineflayerBody self readback', () => {
+  it('exposes adapter velocity only when every component is finite', () => {
+    const { bot } = fakeBot()
+    const body = new MineflayerBody(bot, new MineflayerProvider(bot))
+    ;(bot as unknown as { entity: { velocity: unknown } }).entity.velocity = { x: 0.1, y: -0.2, z: 0.3 }
+    expect(body.self().velocity).toEqual({ x: 0.1, y: -0.2, z: 0.3 })
+
+    ;(bot as unknown as { entity: { velocity: unknown } }).entity.velocity = { x: 0.1, y: Number.NaN, z: 0.3 }
+    expect(body.self().velocity).toBeUndefined()
+  })
+})
+
 describe('MineflayerBody held item readback', () => {
   it('exposes component-era charged projectiles as names', () => {
     const { bot } = fakeBot()

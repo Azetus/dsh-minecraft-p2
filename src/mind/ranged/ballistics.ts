@@ -11,10 +11,26 @@ export type ArrowProfile = {
   speed: number
   drag: number
   gravity: number
+  /**
+   * Vanilla bow uses `Projectile.shootFromRotation`, which adds the shooter's
+   * known movement to the arrow's initial velocity. Crossbow calls
+   * `Projectile.shoot` directly and does not add it.
+   */
+  inheritsShooterVelocity: boolean
 }
 
-export const BOW_PROFILE: ArrowProfile = Object.freeze({ speed: 3, drag: 0.99, gravity: 0.05 })
-export const CROSSBOW_PROFILE: ArrowProfile = Object.freeze({ speed: 3.15, drag: 0.99, gravity: 0.05 })
+export const BOW_PROFILE: ArrowProfile = Object.freeze({
+  speed: 3,
+  drag: 0.99,
+  gravity: 0.05,
+  inheritsShooterVelocity: true,
+})
+export const CROSSBOW_PROFILE: ArrowProfile = Object.freeze({
+  speed: 3.15,
+  drag: 0.99,
+  gravity: 0.05,
+  inheritsShooterVelocity: false,
+})
 
 export type AimSolution = {
   yaw: number
@@ -57,9 +73,17 @@ export function simulateShot(
   pitch: number,
   profile: ArrowProfile,
   ticks: number,
+  shooterVelocity?: Vec3,
 ): Vec3[] {
   const dir = launchDirection(yaw, pitch)
-  let velocity = { x: dir.x * profile.speed, y: dir.y * profile.speed, z: dir.z * profile.speed }
+  const inherited = profile.inheritsShooterVelocity && shooterVelocity !== undefined
+    ? shooterVelocity
+    : { x: 0, y: 0, z: 0 }
+  let velocity = {
+    x: dir.x * profile.speed + inherited.x,
+    y: dir.y * profile.speed + inherited.y,
+    z: dir.z * profile.speed + inherited.z,
+  }
   const point = { ...origin }
   const points: Vec3[] = [{ ...point }]
   const count = Math.max(0, Math.min(MAX_FLIGHT_TICKS, Math.floor(ticks)))
@@ -82,7 +106,58 @@ export function simulateShot(
  * uses the same constants as the server model; it returns OUT_OF_RANGE when no
  * real root exists, never a guessed pitch.
  */
-export function solveAim(origin: Vec3, target: Vec3, profile: ArrowProfile): AimResult {
+export function solveAim(
+  origin: Vec3,
+  target: Vec3,
+  profile: ArrowProfile,
+  shooterVelocity?: Vec3,
+): AimResult {
+  const velocity = shooterVelocity
+  if (!profile.inheritsShooterVelocity || velocity === undefined || isZero(velocity)) {
+    return solveStationaryAim(origin, target, profile)
+  }
+  // The arrow starts with the stationary launch plus the shooter's movement.
+  // For a fixed flight n, that extra displacement is `velocity * S(n)` where
+  // S(n) = 100 * (1 - drag^n). Aim at the target minus that drift; S(n) only
+  // depends on the flight time, so a few fixed-point passes are sufficient.
+  let effective = { ...target }
+  let solution: AimResult = { code: 'OUT_OF_RANGE', range: 0, targetY: target.y, profile }
+  for (let pass = 0; pass < 8; pass += 1) {
+    solution = solveStationaryAim(origin, effective, profile)
+    if ('code' in solution) return solution
+    const drift = 100 * (1 - profile.drag ** solution.flightTicks)
+    const next = {
+      x: target.x - velocity.x * drift,
+      y: target.y - velocity.y * drift,
+      z: target.z - velocity.z * drift,
+    }
+    if (distance(effective, next) < 1e-4) {
+      effective = next
+      break
+    }
+    effective = next
+  }
+  const final = solveStationaryAim(origin, effective, profile)
+  if ('code' in final) return final
+  const points = simulateShot(
+    origin,
+    final.yaw,
+    final.pitch,
+    profile,
+    Math.ceil(final.flightTicks) + 2,
+    velocity,
+  )
+  const impactIndex = Math.max(1, Math.min(points.length - 1, Math.round(final.flightTicks)))
+  return {
+    yaw: final.yaw,
+    pitch: final.pitch,
+    flightTicks: final.flightTicks,
+    trajectory: points,
+    impact: { ...points[impactIndex]! },
+  }
+}
+
+function solveStationaryAim(origin: Vec3, target: Vec3, profile: ArrowProfile): AimResult {
   const dx = target.x - origin.x
   const dz = target.z - origin.z
   const dy = target.y - origin.y
@@ -176,6 +251,15 @@ function bisect(
     }
   }
   return (low + high) / 2
+}
+
+function isZero(value: Vec3 | undefined): boolean {
+  return value === undefined
+    || (Math.abs(value.x) < 1e-9 && Math.abs(value.y) < 1e-9 && Math.abs(value.z) < 1e-9)
+}
+
+function distance(left: Vec3, right: Vec3): number {
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
 }
 
 export function segmentHitsBox(

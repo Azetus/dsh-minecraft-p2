@@ -229,6 +229,7 @@ export class MineflayerBody implements BodyApi {
   self(): SelfInfo {
     const entity = this.bot.entity as unknown as {
       id?: number
+      velocity?: { x?: unknown; y?: unknown; z?: unknown }
       position?: { x: number; y: number; z: number }
       yaw?: number
       pitch?: number
@@ -241,8 +242,16 @@ export class MineflayerBody implements BodyApi {
     const position = entity?.position
     if (entity === undefined || position === undefined) throw unavailable('bot position is not available')
 
+    const velocity = entity.velocity
+    const selfVelocity = velocity !== undefined
+      && typeof velocity.x === 'number' && Number.isFinite(velocity.x)
+      && typeof velocity.y === 'number' && Number.isFinite(velocity.y)
+      && typeof velocity.z === 'number' && Number.isFinite(velocity.z)
+      ? { x: velocity.x, y: velocity.y, z: velocity.z }
+      : undefined
     return {
       ...(typeof entity.id === 'number' ? { id: String(entity.id) } : {}),
+      ...(selfVelocity === undefined ? {} : { velocity: selfVelocity }),
       pos: { x: position.x, y: position.y, z: position.z },
       yaw: entity.yaw ?? 0,
       pitch: entity.pitch ?? 0,

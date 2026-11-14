@@ -52,6 +52,46 @@ describe('ranged ballistics', () => {
     expect(above.pitch).toBeGreaterThan(below.pitch)
   })
 
+  it('adds shooter movement to a bow but not to a crossbow', () => {
+    const velocity = { x: 1, y: 0, z: 0 }
+    const bow = simulateShot(origin, 0, 0, BOW_PROFILE, 20, velocity)
+    const crossbow = simulateShot(origin, 0, 0, CROSSBOW_PROFILE, 20, velocity)
+    expect(bow[20]!.x).toBeCloseTo(100 * (1 - 0.99 ** 20), 3)
+    expect(bow[20]!.z).toBeCloseTo(-54.628, 2)
+    expect(crossbow[20]!.x).toBeCloseTo(0, 6)
+    expect(crossbow[20]!.z).toBeCloseTo(-57.359, 2)
+  })
+
+  it('solves a bow shot while the shooter is moving', () => {
+    const target = { x: 60, y: 70, z: 0 }
+    const velocity = { x: 0, y: 0, z: 1 }
+    const moving = solveAim(origin, target, BOW_PROFILE, velocity)
+    const stationary = solveAim(origin, target, BOW_PROFILE)
+    expect('code' in moving).toBe(false)
+    expect('code' in stationary).toBe(false)
+    if ('code' in moving || 'code' in stationary) return
+    const impact = moving.trajectory[Math.round(moving.flightTicks)]!
+    expect(Math.abs(impact.x - target.x)).toBeLessThan(1.5)
+    expect(Math.abs(impact.y - target.y)).toBeLessThan(0.5)
+    expect(Math.abs(impact.z - target.z)).toBeLessThan(1.5)
+    expect(moving.yaw).not.toBeCloseTo(stationary.yaw, 4)
+  })
+
+  it('does not apply shooter velocity to a crossbow solution', () => {
+    const target = { x: 60, y: 70, z: 0 }
+    const velocity = { x: 1, y: 0, z: 0 }
+    const moving = solveAim(origin, target, CROSSBOW_PROFILE, velocity)
+    const stationary = solveAim(origin, target, CROSSBOW_PROFILE)
+    expect('code' in moving).toBe(false)
+    expect('code' in stationary).toBe(false)
+    if ('code' in moving || 'code' in stationary) return
+    expect(moving).toMatchObject({
+      yaw: stationary.yaw,
+      pitch: stationary.pitch,
+      flightTicks: stationary.flightTicks,
+    })
+  })
+
   it('refuses a range beyond the model limit', () => {
     const result = solveAim(origin, { x: 350, y: 70, z: 0 }, BOW_PROFILE)
     expect(result).toMatchObject({ code: 'OUT_OF_RANGE' })
