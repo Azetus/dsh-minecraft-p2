@@ -92,7 +92,6 @@ export class CombatSession {
   private rangedWeapon: 'bow' | 'crossbow' | undefined
   private rangedUnavailableReason: string | undefined
   private lastRangedAt = 0
-  private rangedTargetId: string | undefined
   private rangedWaypoints: Vec3[] = []
   private lastRangedPathAt = 0
   private misses = 0
@@ -513,7 +512,6 @@ export class CombatSession {
       this.currentTargetId = best.id
       this.targetSwitches += 1
       this.rangedShots = 0
-      this.rangedTargetId = undefined
       this.rangedUnavailableReason = undefined
       this.weaponMode = 'melee'
     }
@@ -584,7 +582,6 @@ export class CombatSession {
       this.weaponMode = 'ranged'
       this.weaponSwitches += 1
     }
-    this.rangedTargetId = entity.id
     this.rangedWaypoints = []
     this.rangedWeapon = capability.status(entity).weapon
     if (this.port.combatInput !== undefined) {

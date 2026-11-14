@@ -192,15 +192,14 @@ function combatPort(port: BodyApi, locateRadius: number, allowRanged: boolean): 
               currentRanged = attack
               try {
                 const result = await attack.work()
-                const observed = isRecord(result.observed) ? result.observed : {}
                 if (result.state === 'succeeded') {
-                  return { state: 'hit', weapon, observed }
+                  return { state: 'hit', weapon }
                 }
-                if (result.state === 'interrupted') return { state: 'stopped', weapon, observed }
+                if (result.state === 'interrupted') return { state: 'stopped', weapon }
                 const code = result.code ?? ''
-                if (code === 'SHOOT_MISSED') return { state: 'missed', code, weapon, observed }
-                if (code === 'SHOOT_INCONCLUSIVE') return { state: 'inconclusive', code, weapon, observed }
-                return { state: 'failed', code, weapon, observed }
+                if (code === 'SHOOT_MISSED') return { state: 'missed', code, weapon }
+                if (code === 'SHOOT_INCONCLUSIVE') return { state: 'inconclusive', code, weapon }
+                return { state: 'failed', code, weapon }
               } finally {
                 currentRanged = undefined
               }

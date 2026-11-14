@@ -32,7 +32,6 @@ export type RangedCombatOutcome = {
   state: 'hit' | 'missed' | 'inconclusive' | 'unavailable' | 'stopped' | 'failed'
   code?: string
   weapon?: 'bow' | 'crossbow'
-  observed?: Record<string, unknown>
 }
 
 export type CombatInput = {
