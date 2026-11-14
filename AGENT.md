@@ -116,6 +116,19 @@ P2 以独立的第二名玩家身份与人类协作：常驻 **P2Mind** 负责�
 - 同一性质只由一个责任层守护，不增设第二控制者。
 - 不通过模拟游戏或 DSH 来制造测试通过；边界 fake 仅提供契约定义的受控输入。没有契约依据或明确失败模式的防御分支应删除。
 
+### 5.4 实机测试目录与执行
+
+- 连接真实 MC/DSH、需要人工观察的 live/实机测试统一放在本机未追踪目录 `.live/`；该目录由 `.gitignore` 排除，不得提交，也不得复制回 `test/`。
+- live 文件使用 `*.live.ts`，不用默认的 `*.test.ts` 后缀；Vitest 默认发现规则不会扫描它们，避免仅靠“目录不在 test/”却被 `npm test` 误收。
+- live 测试不进入 `npm test` / `npm run check`，不建 npm script 批处理，不进入 CI/Git workflow；每个文件单独启动并人工观察结果。
+- live 测试通过不替代快速套件、定向验证或游戏验收；结果与原始证据记录在 `.live/runs/`（本机），交付说明只写明确观察到的范围。
+- 目录内可放本机 runner 配置；仓库根目录不保留 live 专用 vitest 配置。示例：
+
+  ```powershell
+  $env:P2_AI_SHOOT_LIVE='1'
+  npx vitest run --config .live/vitest.config.ts .live/shoot-ai-live.live.ts
+  ```
+
 ## 6. 执行与提交
 
 ### 6.1 执行循环

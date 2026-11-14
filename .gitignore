@@ -33,11 +33,10 @@ node_modules/
 # P2 运行时与本地内容（.p2 整体由 p2 start 从 content/templates 创建）
 /.p2/
 
-# M5 验证运行证据（本机）
-/.m5-runs/
+# 实机/live 测试（本机，不进入 git、npm 或 CI）
+/.live/
 
-# 基线 smoke 临时行为
-/.m5-smoke/
+# P2 本地 dev ops
 /.p2/dev-ops.mjs
 
 # P2 authored-op diagnostics
