@@ -1,9 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createMind } from '../src/body/mind.ts'
+import * as shoot from '../src/mind/drivers/shoot.ts'
 import { OrderStore } from '../src/mind/orders.ts'
 import type { BodyApi, EntityInfo, SelfInfo } from '../src/body/api.ts'
 
@@ -91,6 +92,34 @@ function makeMindAt(port: BodyApi, journalPath: string) {
 }
 
 describe('primitive order retry policy', () => {
+  // CONTRACTS.md § shoot: a confirmed primary hit ends the order while its target is alive.
+  it('completes a shoot order on the first confirmed hit without redispatch', async () => {
+    const target: EntityInfo = {
+      id: 'cow-1', name: 'cow', position: { x: 9, y: 64, z: 0 }, width: 0.9, height: 1.4,
+    }
+    const observed = { kind: 'shoot', entityId: target.id, hit: true, killed: false }
+    const driver = shoot.createShootDriver()
+    using factory = vi.spyOn(shoot, 'createShootDriver').mockReturnValue({
+      ...driver,
+      start: () => ({
+        tick() {}, requestStop() {}, stopStatus: () => 'stopped', continuationKey: () => 'shot',
+        result: () => ({ state: 'succeeded', observed }),
+      }),
+    })
+    const mind = makeMind({ ...fakePort([]).port, entities: () => [target] })
+    const id = 'ord-shoot'
+    mind.enqueueOrder({ id, verb: 'shoot', params: { entityId: target.id, weapon: 'bow', maxShots: 1 } })
+    await runUntilTerminal(mind, id)
+    mind.tick()
+
+    const events = [...mind.events.since(0)]
+    expect(events.filter(event => event.kind === 'job.started')).toHaveLength(1)
+    expect(mind.orders.get(id)?.state).toBe('succeeded')
+    expect(mind.listOrders().active).toBeNull()
+    expect(events.filter(event => event.kind === 'order.result').map(event => event.data))
+      .toEqual([{ orderId: id, state: 'succeeded', observed }])
+  })
+
   it('abandons restored orders on a new epoch instead of reviving the queue', () => {
     const journalPath = tempJournal()
     const seed = new OrderStore({ journalPath })

@@ -1759,7 +1759,7 @@ function viewOf(
 const ATTACKER_WINDOW_MS = 5_000
 
 const PRIMITIVE_ORDER_VERBS = new Set([
-  'go', 'attack', 'dig', 'collect', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
+  'go', 'attack', 'shoot', 'dig', 'collect', 'traverse', 'place', 'equip', 'use', 'craft', 'container',
 ])
 
 /** Verbs that may be retried inside the same order before it becomes blocked. */
