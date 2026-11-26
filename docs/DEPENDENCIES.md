@@ -14,9 +14,9 @@
 | 依赖 | 版本 | 作用 | 为什么不放进运行时 |
 | --- | --- | --- | --- |
 | `@deepseek-ai/cordis` | `4.0.5` | bridge 的 Cordis `Context` 类型；与本机 DSH 0.2.1-rc.3 使用的 Cordis 版本一致 | 只做类型检查，bridge 不 import 它的运行时实现；宿主已提供 |
-| `esbuild` | `^0.28.2` | 把 bridge、body、authoring 分别打成独立 ESM 入口；后续也用于把 Mineflayer provider 打成一个自包含文件 | 构建工具，不进入包 |
-| `typescript` | `^6.0.3` | 类型检查；为 authoring 子路径生成 `.d.ts` | 构建工具，不进入包 |
-| `vitest` | `^4.1.11` | 测试运行器；测试套件按 `AGENT.md §5.1` 的类别组织 | 开发工具，不进入包 |
+| `esbuild` | `^0.28.2` | 分别构建 bridge、body 和 Mineflayer provider 的 ESM 入口 | 构建工具，不进入包 |
+| `typescript` | `^6.0.3` | 类型检查；为包入口生成 `.d.ts` | 构建工具，不进入包 |
+| `vitest` | `^4.1.11` | 测试运行器；测试套件按 `AGENTS.md §5.1` 的类别组织 | 开发工具，不进入包 |
 | `@types/node` | `^22.20.1` | Node API 类型；与 DSH 的 Node 类型基线一致 | 类型声明，不进入包 |
 
 ## 3. 运行时依赖
@@ -24,7 +24,7 @@
 当前 `dependencies` 是 provider 的三项（`mineflayer`、`minecraft-protocol`、`minecraft-data`）加 `vec3`，其余为零：
 
 - bridge 只使用宿主提供的 Cordis/DSH 服务，不把宿主核心打进包。
-- body 与 authoring 目前不需要第三方运行时库。
+- body 核心目前不需要第三方运行时库。
 - Mineflayer 及其插件属于 provider 的实现依赖；优先把 provider/body 打成自包含文件，避免把依赖树装进 DSH profile。若无法完整 bundle，则在 `dependencies` 中记录并在干净环境验证依赖闭包。
 
 ### 3.1 provider 版本边界

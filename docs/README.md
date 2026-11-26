@@ -5,7 +5,7 @@
 ## 入口
 
 - 面向使用者：[README.md](../README.md)
-- 面向开发 agent：[AGENT.md](../AGENT.md)
+- 面向开发 agent：[AGENTS.md](../AGENTS.md)
 - 面向游戏内 Agent：[skills/p2-operator/SKILL.md](../skills/p2-operator/SKILL.md)
 
 ## 索引
@@ -13,7 +13,7 @@
 | 文档 | 内容 |
 |---|---|
 | [../README.md](../README.md) | 项目定位、当前能力、用法、工作区副作用 |
-| [../AGENT.md](../AGENT.md) | 开发协作指南、架构边界与验证要求 |
+| [../AGENTS.md](../AGENTS.md) | 开发协作指南、架构边界与验证要求 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 进程边界、分层、目录、生命周期 |
 | [AUTHORITY.md](AUTHORITY.md) | Agent/P2Mind 决策权二分与新增行为评审清单 |
 | [runtime/P2MIND.md](runtime/P2MIND.md) | P2Mind 控制结构（权威设计） |
