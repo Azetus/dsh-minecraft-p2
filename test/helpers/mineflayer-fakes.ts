@@ -23,6 +23,7 @@ export type FakeBlock = {
 }
 
 export class FakeBot extends EventEmitter {
+  readonly _client = new EventEmitter()
   entity:
     | {
         position: { x: number; y: number; z: number }

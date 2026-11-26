@@ -11,6 +11,7 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 function fakeBot() {
   const controls = new Map<string, boolean>()
   const bot = Object.assign(new EventEmitter(), {
+    _client: new EventEmitter(),
     entity: {
       position: { x: 1, y: 64, z: 2 },
       onGround: true,

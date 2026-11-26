@@ -235,6 +235,8 @@ export type BodyEvent =
   | 'move.finished'
   | 'move.door'
   | 'move.unstick-dig'
+  | 'ownArrowSpawn'
+  | 'entityDamageSource'
   | 'entityHurt'
   | 'entityDead'
   | 'explosion'

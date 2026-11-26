@@ -1129,6 +1129,25 @@ export class MineflayerBody implements BodyApi {
       this.selfDamageSource = undefined
       this.emit('died', {})
     })
+    // The high-level entityHurt event exposes the causing entity only. Keep
+    // packet IDs even when the projectile has already left the entity cache.
+    this.bot._client.on('damage_event', packet => {
+      this.emit('entityDamageSource', {
+        entityId: String(packet.entityId),
+        ...(packet.sourceCauseId > 0 ? { sourceId: String(packet.sourceCauseId - 1) } : {}),
+        ...(packet.sourceDirectId > 0 ? { directId: String(packet.sourceDirectId - 1) } : {}),
+      })
+    })
+    this.bot._client.on('spawn_entity', packet => {
+      if (packet.objectData === 0 || packet.objectData !== this.selfEntityId()) return
+      const name = this.bot.entities[packet.entityId]?.name
+      if (name !== 'arrow' && name !== 'spectral_arrow') return
+      const velocity = packet.velocity
+      this.emit('ownArrowSpawn', {
+        id: String(packet.entityId),
+        ...(velocity ? { velocity: { x: velocity.x, y: velocity.y, z: velocity.z } } : {}),
+      })
+    })
     this.bot.on('entityHurt', (entity: unknown, source: unknown) => {
       const id = (entity as { id?: number } | undefined)?.id
       if (typeof id !== 'number') return

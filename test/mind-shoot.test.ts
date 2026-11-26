@@ -23,7 +23,10 @@ type FakeOptions = {
   multishot?: boolean
   sideHitOnly?: boolean
   hitOn?: number
-  playerSource?: boolean
+  missingDirectId?: boolean
+  missingCauseId?: boolean
+  incompleteVolley?: boolean
+  instantDespawn?: boolean
   pathBlocked?: boolean
 }
 
@@ -65,7 +68,7 @@ function fake(options: FakeOptions = {}): {
   const spawnArrow = (hit: boolean): void => {
     firedShots += 1
     const shouldHit = hit && (options.hitOn === undefined || firedShots >= options.hitOn)
-    const count = options.multishot === true ? 3 : 1
+    const count = options.multishot && !options.incompleteVolley ? 3 : 1
     const ids: string[] = []
     for (let index = 0; index < count; index += 1) {
       const id = `arrow-${nextArrow++}`
@@ -80,18 +83,22 @@ function fake(options: FakeOptions = {}): {
         width: 0.5,
         height: 0.5,
       })
+      const arrow = arrows.at(-1)!
+      emit('ownArrowSpawn', { id, velocity: arrow.velocity })
     }
+    if (options.instantDespawn) arrows.length = 0
     if (options.sideHitOnly === true) {
       const side = ids[1]
       if (side !== undefined) {
-        setTimeout(() => emit('entityHurt', { entityId: 'z1', source: { id: side, name: 'arrow' } }), 80)
+        setTimeout(() => emit('entityDamageSource', { entityId: 'z1', sourceId: 'p2', directId: side }), 80)
       }
     } else if (shouldHit) {
       const primary = ids[0]!
-      const source = options.playerSource === true
-        ? { id: 'p2', name: 'player' }
-        : { id: primary, name: 'arrow' }
-      setTimeout(() => emit('entityHurt', { entityId: 'z1', source }), 80)
+      setTimeout(() => emit('entityDamageSource', {
+        entityId: 'z1',
+        ...(options.missingCauseId ? {} : { sourceId: 'p2' }),
+        ...(options.missingDirectId ? {} : { directId: primary }),
+      }), 80)
       setTimeout(() => emit('entityDead', { entityId: 'z1' }), 120)
     } else {
       // The arrow stays landed; its stable position is before the floor.
@@ -247,19 +254,31 @@ describe('shoot driver', () => {
     expect(shots[1]?.hit).toBe(true)
   })
 
-  it('recognizes a player-source damage event from our arrow', async () => {
-    const fakeBody = fake({ weapon: 'bow', hit: true, playerSource: true })
-    const handle = createShootDriver().start(job('bow', { maxShots: 1 }), ctx(fakeBody.body))
+  it.each([
+    { missingDirectId: true },
+    { missingDirectId: true, missingCauseId: true },
+    { incompleteVolley: true },
+  ])('keeps ambiguous attribution inconclusive (%j)', async options => {
+    const volley = 'incompleteVolley' in options
+    const charged = volley ? ['arrow', 'arrow', 'arrow'] : ['arrow']
+    const fakeBody = fake({ weapon: 'crossbow', charged, multishot: volley, ...options })
+    const handle = createShootDriver().start(job('crossbow'), ctx(fakeBody.body))
     await run(handle)
-    expect(handle.result().state).toBe('succeeded')
-    const observed = handle.result().observed as Record<string, unknown>
-    expect((observed.shots as Array<Record<string, unknown>>)[0]?.hitEvidence)
-      .toBe('damage-source-shooter')
+    expect(handle.result()).toMatchObject({ state: 'failed', code: 'SHOOT_INCONCLUSIVE' })
+  })
+
+  it('confirms the primary arrow of a volley even after it despawns', async () => {
+    const fakeBody = fake({ weapon: 'crossbow', charged: ['arrow', 'arrow', 'arrow'], multishot: true, instantDespawn: true })
+    const handle = createShootDriver().start(job('crossbow'), ctx(fakeBody.body))
+    await run(handle)
+    expect(handle.result()).toMatchObject({ state: 'succeeded', observed: { shots: [
+      { hitEvidence: 'damage-source-arrow', hurt: { sourceId: 'p2', directId: 'arrow-1' } },
+    ] } })
   })
 
   it('does not count a Multishot side arrow as the primary hit', async () => {
-    const fakeBody = fake({ weapon: 'bow', hit: true, multishot: true, sideHitOnly: true })
-    const handle = createShootDriver().start(job('bow', { maxShots: 1 }), ctx(fakeBody.body))
+    const fakeBody = fake({ weapon: 'crossbow', charged: ['arrow', 'arrow', 'arrow'], multishot: true, sideHitOnly: true })
+    const handle = createShootDriver().start(job('crossbow', { maxShots: 1 }), ctx(fakeBody.body))
     await run(handle)
     expect(handle.result()).toMatchObject({ state: 'failed', code: 'SHOOT_MISSED' })
     const observed = handle.result().observed as Record<string, unknown>

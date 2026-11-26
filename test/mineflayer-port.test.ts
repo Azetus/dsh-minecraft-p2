@@ -34,6 +34,24 @@ function createPort(
 }
 
 describe('mineflayer port actions', () => {
+  it('preserves own arrow launches and direct damage IDs after despawn', () => {
+    const { bot, port } = createPort()
+    Object.assign(bot.entity!, { id: 7 })
+    bot.entities[14] = { id: 14, name: 'arrow' }
+    const launches: unknown[] = []
+    const damage: unknown[] = []
+    port.on('ownArrowSpawn', event => launches.push(event))
+    port.on('entityDamageSource', event => damage.push(event))
+    const velocity = { x: 1, y: 0, z: 0 }
+    bot._client.emit('spawn_entity', { entityId: 14, objectData: 8, velocity })
+    bot._client.emit('spawn_entity', { entityId: 14, objectData: 7, velocity })
+    delete bot.entities[14]
+    bot._client.emit('damage_event', { entityId: 2, sourceCauseId: 8, sourceDirectId: 15 })
+    bot._client.emit('damage_event', { entityId: 2, sourceCauseId: 8, sourceDirectId: 0 })
+    expect(launches).toEqual([{ id: '14', velocity }])
+    expect(damage).toEqual([{ entityId: '2', sourceId: '7', directId: '14' }, { entityId: '2', sourceId: '7' }])
+  })
+
   it('maps every write action onto one bounded provider act', async () => {
     const { port, source, bot } = createPort()
     bot.heldItem = { name: 'dirt', count: 3 }

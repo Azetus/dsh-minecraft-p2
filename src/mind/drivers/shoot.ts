@@ -51,7 +51,8 @@ const STATIONARY_TOLERANCE = 0.25
 const MAX_LEAD_BLOCKS = 6
 const HIT_SETTLE_MS = 200
 
-type HurtEvent = { entityId: string; sourceId?: string; at: number }
+type HurtEvent = { sourceId?: string; directId?: string; at: number }
+type ArrowLaunch = { id: string; velocity?: Vec3 }
 
 type ShotOutcome = {
   interrupted?: boolean
@@ -122,14 +123,22 @@ export class RangedAttack {
   private targetDead = false
   private selfId: string | undefined
   private startPos: Vec3 | undefined
+  private readonly launches = new Map<string, ArrowLaunch>()
+  private readonly onLaunch = (payload: unknown): void => {
+    if (!isRecord(payload) || typeof payload.id !== 'string' || this.launches.has(payload.id)) return
+    const v = payload.velocity
+    const velocity = isRecord(v) && typeof v.x === 'number' && typeof v.y === 'number' && typeof v.z === 'number'
+      ? { x: v.x, y: v.y, z: v.z } : undefined
+    this.launches.set(payload.id, { id: payload.id, ...(velocity === undefined ? {} : { velocity }) })
+  }
   private readonly hurts: HurtEvent[] = []
   private readonly onHurt = (payload: unknown): void => {
     if (!isRecord(payload) || typeof payload.entityId !== 'string') return
     if (payload.entityId !== this.params.entityId) return
-    const source = isRecord(payload.source) ? payload.source : undefined
+    if (payload.sourceId !== undefined && payload.sourceId !== this.selfId) return
     this.hurts.push({
-      entityId: payload.entityId,
-      ...(typeof source?.id === 'string' ? { sourceId: source.id } : {}),
+      ...(typeof payload.sourceId === 'string' ? { sourceId: payload.sourceId } : {}),
+      ...(typeof payload.directId === 'string' ? { directId: payload.directId } : {}),
       at: Date.now(),
     })
   }
@@ -157,7 +166,8 @@ export class RangedAttack {
 
   async work(): Promise<DriverResult> {
     const body = this.body
-    body.on('entityHurt', this.onHurt)
+    body.on('ownArrowSpawn', this.onLaunch)
+    body.on('entityDamageSource', this.onHurt)
     body.on('entityDead', this.onDead)
     try {
       const self = body.self()
@@ -224,7 +234,7 @@ export class RangedAttack {
       }
       return {
         state: 'failed',
-        code: anyMiss ? 'SHOOT_MISSED' : anyInconclusive ? 'SHOOT_INCONCLUSIVE' : 'SHOOT_NOT_CONFIRMED',
+        code: anyInconclusive ? 'SHOOT_INCONCLUSIVE' : anyMiss ? 'SHOOT_MISSED' : 'SHOOT_NOT_CONFIRMED',
         observed: this.resultObserved(shots, false),
       }
     } catch (error) {
@@ -236,7 +246,8 @@ export class RangedAttack {
         message: error instanceof Error ? error.message : String(error),
       })
     } finally {
-      body.off?.('entityHurt', this.onHurt)
+      body.off?.('ownArrowSpawn', this.onLaunch)
+      body.off?.('entityDamageSource', this.onHurt)
       body.off?.('entityDead', this.onDead)
     }
   }
@@ -249,8 +260,6 @@ export class RangedAttack {
     if (this.params.targetName !== undefined && target.name !== this.params.targetName) {
       return this.failedShot(index, 'SHOOT_TARGET_LOST', { reason: 'target name changed' })
     }
-    const beforeArrows = new Set(this.arrowIds())
-    const hurtStart = this.hurts.length
     const startedAt = Date.now()
     let aim: AimSolution
     try {
@@ -307,22 +316,22 @@ export class RangedAttack {
         await this.cancelUse()
         return this.failedShot(index, 'SHOOT_TARGET_LOST', { reason: 'target disappeared during draw' })
       }
-      let releaseAim: AimSolution
       try {
-        releaseAim = this.planAim(fresh, BOW_PROFILE)
+        aim = this.planAim(fresh, BOW_PROFILE)
         this.ensureStationary()
       } catch (error) {
         await this.cancelUse()
         if (error instanceof CodedShootError) return this.failedShot(index, error.code, error.observed)
         throw error
       }
-      const released = await this.body.itemUseRelease?.({ yaw: releaseAim.yaw, pitch: releaseAim.pitch })
+      this.beginShot()
+      const released = await this.body.itemUseRelease?.({ yaw: aim.yaw, pitch: aim.pitch })
       this.useActive = false
       if (released === undefined || released.state !== 'ok') {
         await this.cancelUse()
         return this.failedShot(index, released?.code ?? 'SHOOT_NOT_CONFIRMED', { act: released ?? null })
       }
-      release = { yaw: releaseAim.yaw, pitch: releaseAim.pitch }
+      release = { yaw: aim.yaw, pitch: aim.pitch }
     } else {
       const fresh = this.resolveTarget()
       if (fresh === undefined) {
@@ -335,6 +344,7 @@ export class RangedAttack {
         if (error instanceof CodedShootError) return this.failedShot(index, error.code, error.observed)
         throw error
       }
+      this.beginShot()
       const fired = await this.body.itemUseStart?.({ yaw: aim.yaw, pitch: aim.pitch })
       if (fired === undefined || fired.state !== 'ok') {
         return this.failedShot(index, fired?.code ?? 'SHOOT_NOT_CONFIRMED', { act: fired ?? null })
@@ -353,8 +363,7 @@ export class RangedAttack {
     const observed = await this.observeShot(index, {
       aim,
       release,
-      beforeArrows,
-      hurtStart,
+      expectedArrows: this.params.weapon === 'bow' ? 1 : active.chargedProjectiles?.length,
       startedAt,
       ...(loadObserved === undefined ? {} : { load: loadObserved }),
     })
@@ -366,8 +375,7 @@ export class RangedAttack {
     input: {
       aim: AimSolution
       release: { yaw: number; pitch: number } | undefined
-      beforeArrows: Set<string>
-      hurtStart: number
+      expectedArrows: number | undefined
       startedAt: number
       load?: Record<string, unknown>
     },
@@ -378,42 +386,18 @@ export class RangedAttack {
     let landed = false
     let lastPosition: Vec3 | undefined
     let hitEvent: HurtEvent | undefined
-    let sideHit = false
-    let arrowSeen = false
-    let latestArrowCount = 0
 
     while (Date.now() < deadline) {
       if (this.stopRequested) throw new StopShoot()
-      const arrows = this.newArrows(input.beforeArrows)
-      latestArrowCount = arrows.length
-      if (arrows.length > 0) {
-        arrowSeen = true
-        const primary = this.pickPrimaryArrow(arrows, input.aim)
-        if (primary !== undefined) {
-          primaryId ??= primary.id
-          if (primaryId === primary.id) {
-            const moved = lastPosition === undefined
-              ? Number.POSITIVE_INFINITY
-              : distance(lastPosition, primary.position)
-            if (moved < 0.05) stableSamples += 1
-            else stableSamples = 0
-            lastPosition = { ...primary.position }
-            if (stableSamples >= 2 && this.blockedAtFeet(primary.position)) landed = true
-          }
-        }
+      primaryId = this.primaryArrow(input.aim, input.expectedArrows)
+      const primary = primaryId === undefined ? undefined : this.body.entityById?.(primaryId)
+      if (primary !== undefined) {
+        const moved = lastPosition === undefined ? Infinity : distance(lastPosition, primary.position)
+        stableSamples = moved < 0.05 ? stableSamples + 1 : 0
+        lastPosition = { ...primary.position }
+        if (stableSamples >= 2 && this.blockedAtFeet(primary.position)) landed = true
       }
-      const targetHurts = this.hurts.slice(input.hurtStart)
-        .filter(event => event.entityId === this.params.entityId)
-      const primaryHurt = targetHurts.find(event =>
-        (primaryId !== undefined && event.sourceId === primaryId)
-        || (this.selfId !== undefined && event.sourceId === this.selfId))
-      const fallbackHurt = targetHurts.find(event =>
-        event.sourceId === undefined && arrows.length === 1)
-      hitEvent = primaryHurt ?? fallbackHurt
-      sideHit = targetHurts.some(event =>
-        event.sourceId !== undefined
-        && event.sourceId !== primaryId
-        && event.sourceId !== this.selfId)
+      hitEvent = this.primaryHurt(primaryId)
       if (hitEvent !== undefined) break
       if (landed) break
       if (this.targetDead) break
@@ -424,18 +408,18 @@ export class RangedAttack {
     if (hitEvent === undefined) {
       await sleep(HIT_SETTLE_MS)
       if (this.stopRequested) throw new StopShoot()
-      const targetHurts = this.hurts.slice(input.hurtStart)
-        .filter(event => event.entityId === this.params.entityId)
-      hitEvent = targetHurts.find(event =>
-        (primaryId !== undefined && event.sourceId === primaryId)
-        || (this.selfId !== undefined && event.sourceId === this.selfId))
-        ?? targetHurts.find(event => event.sourceId === undefined && latestArrowCount === 1)
+      primaryId = this.primaryArrow(input.aim, input.expectedArrows)
+      hitEvent = this.primaryHurt(primaryId)
     }
 
+    const sideHit = primaryId !== undefined && this.hurts.some(event =>
+      event.directId !== undefined && event.directId !== primaryId && this.launches.has(event.directId))
+    const ambiguousHurt = this.hurts.some(event => event.directId === undefined)
     const hit = hitEvent !== undefined
-    const missed = !hit && landed
+    const missed = !hit && primaryId !== undefined && landed && !ambiguousHurt
     const inconclusive = !hit && !missed
-    const arrowGone = primaryId !== undefined && !this.arrowById(primaryId)
+    const observedHurt = hitEvent ?? this.hurts.at(-1)
+    const arrowGone = primaryId !== undefined && !this.body.entityById?.(primaryId)
     const observed: Record<string, unknown> = {
       index,
       weapon: this.params.weapon,
@@ -452,23 +436,20 @@ export class RangedAttack {
       hit,
       missed,
       inconclusive,
-      hitEvidence: hit
-        ? hitEvent?.sourceId === this.selfId
-          ? 'damage-source-shooter'
-          : hitEvent?.sourceId !== undefined ? 'damage-source-arrow' : 'single-arrow-fallback'
-        : null,
+      hitEvidence: hit ? 'damage-source-arrow' : null,
       arrow: {
         id: primaryId ?? null,
-        seen: arrowSeen,
+        seen: this.launches.size > 0,
         gone: arrowGone,
         lastPosition: lastPosition ?? null,
         landed,
       },
-      hurt: hitEvent === undefined
+      hurt: observedHurt === undefined
         ? null
         : {
-            sourceId: hitEvent.sourceId ?? null,
-            at: hitEvent.at,
+            sourceId: observedHurt.sourceId ?? null,
+            directId: observedHurt.directId ?? null,
+            at: observedHurt.at,
           },
       sideHit,
       ...(input.load === undefined ? {} : { load: input.load }),
@@ -599,44 +580,33 @@ export class RangedAttack {
     }).find(entity => entity.id === this.params.entityId)
   }
 
-  private arrowIds(): string[] {
-    const self = this.body.self().pos
-    return this.body.entities({
-      min: { x: self.x - LOCATE_RADIUS, y: self.y - 32, z: self.z - LOCATE_RADIUS },
-      max: { x: self.x + LOCATE_RADIUS, y: self.y + 32, z: self.z + LOCATE_RADIUS },
-    }).filter(entity => isArrowName(entity.name)).map(entity => entity.id)
+  private beginShot(): void {
+    this.launches.clear()
+    this.hurts.length = 0
   }
 
-  private newArrows(before: Set<string>): EntityInfo[] {
-    const self = this.body.self().pos
-    return this.body.entities({
-      min: { x: self.x - LOCATE_RADIUS, y: self.y - 32, z: self.z - LOCATE_RADIUS },
-      max: { x: self.x + LOCATE_RADIUS, y: self.y + 32, z: self.z + LOCATE_RADIUS },
-    }).filter(entity => isArrowName(entity.name) && !before.has(entity.id))
+  private primaryHurt(primaryId: string | undefined): HurtEvent | undefined {
+    if (primaryId === undefined) return undefined
+    return this.hurts.find(event => event.directId === primaryId)
   }
 
-  private arrowById(id: string): EntityInfo | undefined {
-    return this.body.entityById?.(id)
-  }
-
-  private pickPrimaryArrow(arrows: EntityInfo[], aim: AimSolution): EntityInfo | undefined {
-    if (arrows.length <= 1) return arrows[0]
+  private primaryArrow(aim: AimSolution, expected: number | undefined): string | undefined {
+    if (this.launches.size !== expected) return undefined
     const direction = launchDirection(aim.yaw, aim.pitch)
-    let best: EntityInfo | undefined
-    let bestDot = Number.NEGATIVE_INFINITY
-    for (const arrow of arrows) {
-      let vector = arrow.velocity
-      if (vector !== undefined) {
-        vector = normalizeVector(vector)
-      } else {
-        vector = undefined
+    let best: string | undefined
+    let bestDot = -Infinity
+    for (const arrow of this.launches.values()) {
+      if (expected === 1) return arrow.id
+      if (arrow.velocity === undefined || Math.hypot(arrow.velocity.x, arrow.velocity.y, arrow.velocity.z) === 0) {
+        return undefined
       }
-      const dot = vector === undefined
-        ? 0
-        : vector.x * direction.x + vector.y * direction.y + vector.z * direction.z
+      const vector = normalizeVector(arrow.velocity)
+      const dot = vector.x * direction.x + vector.y * direction.y + vector.z * direction.z
       if (dot > bestDot) {
-        best = arrow
+        best = arrow.id
         bestDot = dot
+      } else if (dot === bestDot) {
+        best = undefined
       }
     }
     return best
