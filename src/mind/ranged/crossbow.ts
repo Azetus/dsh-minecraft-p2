@@ -9,6 +9,7 @@ export type LoadCrossbowOptions = {
   pollMs?: number
   now?: () => number
   isStopped?: () => boolean
+  onChargeTick?: () => Promise<void>
 }
 
 export type LoadCrossbowResult = {
@@ -96,9 +97,21 @@ export async function loadCrossbow(
 
   let chargedAfter: string[] | undefined = chargedBefore
   let shotObserved = false
+  // The loader owns the active use stance, including when a combat input fails.
+  const pollStop = async (): Promise<boolean> => {
+    if (stopped()) return true
+    try {
+      await options.onChargeTick?.()
+    } catch (error) {
+      await cancel(body)
+      throw error
+    }
+    return stopped()
+  }
   const chargeDeadline = now() + chargeWaitMs
   while (now() < chargeDeadline) {
-    if (stopped()) {
+    if (await pollStop()) {
+      chargedAfter = body.held?.()?.chargedProjectiles
       await cancel(body)
       return interrupted(startedAt, now(), chargedBefore, chargedAfter, released, shotObserved, initial.name)
     }
@@ -142,7 +155,8 @@ export async function loadCrossbow(
     }
     const settleDeadline = now() + settleWaitMs
     while (now() < settleDeadline) {
-      if (stopped()) {
+      if (await pollStop()) {
+        chargedAfter = body.held?.()?.chargedProjectiles
         await cancel(body)
         return interrupted(startedAt, now(), chargedBefore, chargedAfter, released, shotObserved, initial.name)
       }

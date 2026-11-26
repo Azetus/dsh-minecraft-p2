@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createShootDriver } from '../src/mind/drivers/shoot.ts'
+import { createAttackDriver } from '../src/mind/drivers/attack.ts'
 import type { BodyApi, EntityInfo, Item } from '../src/body/api.ts'
 import type { DriverCtx, Job } from '../src/mind/types.ts'
 
@@ -28,6 +29,7 @@ type FakeOptions = {
   incompleteVolley?: boolean
   instantDespawn?: boolean
   pathBlocked?: boolean
+  targetCloses?: 'during load' | 'on load release'
 }
 
 function fake(options: FakeOptions = {}): {
@@ -150,6 +152,9 @@ function fake(options: FakeOptions = {}): {
         spawnArrow(options.hit !== false)
       } else {
         useActive = true
+        if (options.targetCloses === 'during load') target.position.x = 3
+        // 26.1.2 can report a charged crossbow before the load stance is released.
+        if (options.targetCloses === 'on load release') charged = ['arrow']
       }
       return { state: 'ok' as const, elapsedMs: 1, observed: { aim: aim ?? null } }
     },
@@ -158,8 +163,9 @@ function fake(options: FakeOptions = {}): {
       if (weapon === 'crossbow') {
         if (firing) {
           firing = false
-        } else if (charged !== undefined && charged.length === 0) {
-          charged = ['arrow']
+        } else {
+          if (charged !== undefined && charged.length === 0) charged = ['arrow']
+          if (options.targetCloses === 'on load release') target.position.x = 3
         }
         useActive = false
       } else {
@@ -227,6 +233,34 @@ async function run(handle: ReturnType<ReturnType<typeof createShootDriver>['star
     await sleep(10)
   }
 }
+
+describe('combat crossbow (CONTRACTS.md § attack.allowRanged)', () => {
+  it.each(['during load', 'on load release'] as const)('switches to melee without firing when the target closes %s', async targetCloses => {
+    const f = fake({ weapon: 'crossbow', targetCloses })
+    const body: BodyApi = {
+      ...f.body,
+      inventory: () => [...f.body.inventory(), { slot: 2, name: 'iron_sword', count: 1 }],
+      attack: async id => {
+        expect(f.body.held?.()?.name).toBe('iron_sword')
+        f.emit('entityDead', { entityId: id })
+        return { state: 'ok', elapsedMs: 1 }
+      },
+    }
+    const handle = createAttackDriver().start({
+      ...job('crossbow'), driverId: 'attack', params: { entityId: 'z1', allowRanged: true },
+    }, ctx(body))
+    await run(handle)
+
+    expect(f.arrows()).toHaveLength(0)
+    expect(f.useStarts()).toBe(1)
+    expect(f.useReleases()).toBe(targetCloses === 'during load' ? 0 : 1)
+    expect(handle.result()).toMatchObject({
+      state: 'succeeded', observed: { weaponMode: 'melee', attacksIssued: 1, killed: true },
+    })
+    await body.equip('crossbow')
+    expect(body.held?.()?.chargedProjectiles).toEqual(targetCloses === 'on load release' ? ['arrow'] : [])
+  })
+})
 
 describe('shoot driver', () => {
   it('fires a bow and succeeds on the primary arrow hit', async () => {

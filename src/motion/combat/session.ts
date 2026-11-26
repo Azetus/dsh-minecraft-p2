@@ -16,6 +16,7 @@ import type {
   CombatPort,
   MeleeOptions,
   MeleeResult,
+  RangedChargeTick,
 } from './types.ts'
 
 const DEFAULT_REACH = 3
@@ -564,7 +565,6 @@ export class CombatSession {
       if (this.rangedShots >= MAX_RANGED_SHOTS) this.rangedUnavailableReason = 'RANGED_SHOT_LIMIT'
       return false
     }
-    if (distance <= this.reach + TOO_CLOSE_MARGIN) return false
     if (distance > RANGED_MAX) return false
     if (this.weaponMode === 'melee' && distance < this.reach + RANGED_ENTER_MARGIN) return false
     if (now - this.lastRangedAt < RANGED_COOLDOWN_MS) return false
@@ -583,6 +583,10 @@ export class CombatSession {
   }
 
   private async tryRanged(entity: CombatEntity, distance: number, visible: boolean, now: number): Promise<boolean> {
+    if (distance <= this.reach + TOO_CLOSE_MARGIN) {
+      if (this.weaponMode === 'ranged') await this.switchToMelee()
+      return false
+    }
     if (!this.shouldRanged(entity, distance, visible, now)) return false
     const capability = this.port.ranged
     if (capability === undefined) return false
@@ -596,16 +600,16 @@ export class CombatSession {
       await this.port.combatInput({ face: this.aim(entity), preservePitch: true })
     }
     await this.releaseShieldForRanged()
-    const moveDuringDraw = async (): Promise<void> => {
-      if (this.port.combatInput === undefined) return
-      const fresh = this.port.entity(this.currentTargetId)
+    const checkDuringCharge: RangedChargeTick = async (phase = 'charging') => {
+      const fresh = this.readTarget()
       if (fresh === undefined) return
       const self = this.port.self()
       const range = eyeReach(self, fresh)
-      if (range <= this.reach + TOO_CLOSE_MARGIN) {
+      if ((fresh.health !== undefined && fresh.health <= 0) || range <= this.reach + TOO_CLOSE_MARGIN) {
         capability.stop()
         return
       }
+      if (phase === 'before-fire' || this.port.combatInput === undefined) return
       if (this.rangedWaypoints.length > 0) {
         const next = this.rangedWaypoints[0]!
         if (Math.hypot(next.x - self.pos.x, next.z - self.pos.z) < 0.8) {
@@ -654,7 +658,7 @@ export class CombatSession {
     }
     let outcome
     try {
-      outcome = await capability.fire(entity, moveDuringDraw)
+      outcome = await capability.fire(entity, checkDuringCharge)
     } catch (error) {
       this.rangedUnavailableReason = error instanceof Error ? error.message : String(error)
       await this.switchToMelee()

@@ -26,6 +26,7 @@ export type {
   MeleeOptions,
   MeleeResult,
   RangedCombatOutcome,
+  RangedChargeTick,
   RangedCombatStatus,
 } from './types.ts'
 export { CombatSession, type CombatSessionState } from './session.ts'

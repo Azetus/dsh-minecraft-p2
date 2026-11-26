@@ -15,6 +15,7 @@ import {
   type ArrowProfile,
 } from '../ranged/ballistics.ts'
 import { isArrowName, isCrossbowLoadedWithArrow, loadCrossbow } from '../ranged/crossbow.ts'
+import type { RangedChargeTick } from '../../motion/combat/types.ts'
 
 export const SHOOT_DRIVER_ID = 'shoot'
 
@@ -112,8 +113,7 @@ export type RangedAttackOptions = {
   /** Use the shooter's current velocity for bow ballistics. */
   useShooterVelocity?: boolean
   maxShots?: number
-  /** Called between charge polls; lets a combat session keep moving. */
-  onChargeTick?: () => Promise<void>
+  onChargeTick?: RangedChargeTick
 }
 
 export class RangedAttack {
@@ -283,6 +283,7 @@ export class RangedAttack {
       if (!isCrossbowLoadedWithArrow(held)) {
         const loaded = await loadCrossbow(this.body, {
           isStopped: () => this.stopRequested,
+          ...(this.options.onChargeTick && { onChargeTick: this.options.onChargeTick }),
           chargeWaitMs: 1_500,
           settleWaitMs: 1_200,
         })
@@ -333,6 +334,8 @@ export class RangedAttack {
       }
       release = { yaw: aim.yaw, pitch: aim.pitch }
     } else {
+      await this.options.onChargeTick?.('before-fire')
+      this.ensureRunning()
       const fresh = this.resolveTarget()
       if (fresh === undefined) {
         return this.failedShot(index, 'SHOOT_TARGET_LOST', { reason: 'target disappeared during load' })

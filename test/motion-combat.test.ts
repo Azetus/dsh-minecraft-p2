@@ -425,6 +425,20 @@ describe('CombatSession tick', () => {
     expect(fake.attacks()).toBe(1)
   })
 
+  it('restores the melee weapon when the target closes between ranged attempts', async () => {
+    const fake = fakePort({ target: zombie(10), ranged: { outcome: { state: 'hit', weapon: 'crossbow' } } })
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: true })
+    session.tick()
+    await sleep(0)
+    expect(fake.rangedFires()).toBe(1)
+    expect(fake.meleeSwitches()).toBe(0)
+
+    fake.setTarget(zombie(3))
+    await run(session)
+    expect(fake.meleeSwitches()).toBe(1)
+    expect(session.result()?.observed).toMatchObject({ weaponMode: 'melee', attacksIssued: 1, killed: true })
+  })
+
   it('does not draw a ranged weapon when the target is already too close', async () => {
     const fake = fakePort({ target: zombie(3), ranged: { kill: true } })
     const session = new CombatSession(fake.port, 'z1', { allowRanged: true, totalMs: 5_000 })

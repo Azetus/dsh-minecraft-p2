@@ -34,6 +34,9 @@ export type RangedCombatOutcome = {
   weapon?: 'bow' | 'crossbow'
 }
 
+/** Charging polls may move; the last check before firing only revalidates range. */
+export type RangedChargeTick = (phase?: 'charging' | 'before-fire') => Promise<void>
+
 export type CombatInput = {
   face: Vec3
   forward?: boolean
@@ -72,7 +75,7 @@ export type CombatPort = {
   ranged?: {
     status(target: CombatEntity): RangedCombatStatus
     /** `onTick` runs during draw/load so the body can keep moving. */
-    fire(target: CombatEntity, onTick?: () => Promise<void>): Promise<RangedCombatOutcome>
+    fire(target: CombatEntity, onTick?: RangedChargeTick): Promise<RangedCombatOutcome>
     stop(): void
   }
   /** Restore a melee weapon after leaving ranged mode. */

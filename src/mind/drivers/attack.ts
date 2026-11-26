@@ -8,6 +8,7 @@ import type {
   CombatPort,
   MeleeOptions,
   RangedCombatOutcome,
+  RangedChargeTick,
   RangedCombatStatus,
 } from '../../motion/combat/index.ts'
 import { CombatSessionHandle, type CombatPrep } from './combat-session.ts'
@@ -173,7 +174,7 @@ function combatPort(port: BodyApi, locateRadius: number, allowRanged: boolean): 
             status: (target: CombatEntity) => rangedStatus(port, target),
             fire: async (
               target: CombatEntity,
-              onTick?: () => Promise<void>,
+              onTick?: RangedChargeTick,
             ): Promise<RangedCombatOutcome> => {
               const weapon = chooseRangedWeapon(port)
               if (weapon === undefined) return { state: 'unavailable', code: 'NO_RANGED_WEAPON' }
