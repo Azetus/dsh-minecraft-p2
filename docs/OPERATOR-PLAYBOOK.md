@@ -47,11 +47,13 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 
 | 操作 | 效果 |
 |---|---|
-| `p2_cancel {id}` | 取消 order；结束其当前 job（等待停止确认） |
+| `p2_cancel {id}` | 取消排队订单只移出该单。取消活动订单时，body 先记 `cancelled`，请求停止当前 job 后即返回订单状态。 |
 | `p2_order` 新一条 | 排队；替换类命令走立即替换语义 |
 | `p2_body stop` | 唯一“关闭”：冻结 dispatch → 等停止 → 超时 SIGTERM/killTree → 退出 body 进程并释放锁 |
 | `p2_body restart` | 停止并用上次 target 重启；可传新 `host`/`port` 换服。新 epoch，队列不恢复 |
 | `p2_body status` | 显示 `target`/`lock`/`lastDisconnect`；body inactive 时 `locks` 显示其他 session 的占用 |
+
+取消回执只确认订单状态。若有 job 正在停止，`p2_status` 中的 `mind.tracker` 为 `stopping`。JobTracker 确认旧 driver 已 `stopped` 后才允许下一份 job 接管。释放无法确认时进入 `fault`，报告 `STOP_UNCONFIRMED` 并冻结派发。
 
 ## 5. 异常处理
 
@@ -101,7 +103,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 | `OBSERVATION_STALE` | 检查连接；恢复后自动继续，不重放 pending |
 | `mind.hold(NO_SAFE_TARGET)` | 常驻树找不到安全格；先人工确认环境/改任务，不要重复下同一 order |
 | `mind.hold(ATTACK_TARGET_LOST/PROTECTED)` | 目标丢失或受保护；重新指定目标或取消该 order |
-| `HOLD_ORDER` | 已知等待，不需要处理；取消 order 才结束 |
+| `HOLD_ORDER` | 无时限的 hold 等待取消。限时 hold 从成为 active 起按 `params.durationMs` 计时，到期自动以 `succeeded` 结束，回执带 `observed.expired:true`，后续订单可递补。需要提前结束时用 `p2_cancel {id}`。 |
 | `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 找不到来源或工作项被反复阻塞；duty 变 blocked，base 保持 inactive。换物品/区域后重新 `p2_duty start`，或 `p2_duty stop` 后改用 order |
 | `blocked(DUTY_DEADLINE)` / `blocked(DUTY_JOB_BUDGET)` | duty 的 active 时间或 job 预算耗尽；duty 不自动继续，重新评估目标/预算 |
 | `TARGET_LOST` | escort 目标连续 2s 不可观测（期间会追最后位置）；base 保持 escort，不会自动切 idle/wandering；目标回来即恢复 |
@@ -112,7 +114,7 @@ p2_order {verb:"use", params:{x:51,y:64,z:31}}
 1. 不逐步微操：不要用调试入口替角色走路/放置；需要改行为就改蓝图或参数。
 2. 不轮询：等唤醒；巡检间隔 ≥60s。
 3. 不重复下同一 order：同一目标第二次失败，先看 `hint`，换策略而不是重试。
-4. 证据优先：order 成功必须有 `confirmed` 证据；`insufficient` 不算完成。
+4. 报告整单成功前，核对同一 `orderId` 的 `order.terminal` 事件，确认 `state` 为 `succeeded`。原语订单在关联 job 成功时结单，显式 `check` 要求读回 `observed.state=ok`。蓝图 `build` 要等全部工作项满足，且最终几何与声明的房间条件通过验证。`insufficient` 时订单保持 active。限时 `hold` 按到期结单。详见[结果语义分层](CONTRACTS.md#11-结果语义分层)。
 5. 一次只跑一条控制路径：不要同时开两个 body/两个 order 源。
 
 ## 7. 安全

@@ -1,6 +1,6 @@
 ---
 name: p2-operator
-description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report. Use when starting, ordering, or recovering the P2 player: order discipline, hold/queue semantics, failure-code responses, chat safety, and return-path checks.
+description: "Operate the P2 Minecraft body through p2_order/p2_status/p2_report. Use when starting, ordering, or recovering the P2 player: order discipline, hold/queue semantics, failure-code responses, chat safety, and return-path checks."
 ---
 
 # P2 战略层 playbook
@@ -11,7 +11,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 
 - 一次只推进一条 active order；后续 order 排队。
 - `p2_order` 返回 accepted 后结束本轮，不要 `Start-Sleep`、不要轮询 `p2_events`。
-- 终态、blocked、失败会以 `[p2 completion]` wake 推回来；正常执行期间不要介入。
+- 等 `[p2 completion]` 唤醒。按 `orderId` 找到对应的 `order.terminal`，`state` 为 `succeeded` 才报告整单成功。
 - 唤醒后先读 wake 的 `code` / `failure` / `observed`；`failure.facts.snapshot` 已经带同一时刻的脚/头/支撑/四邻/bodyOverlap，`failure.diagnosis` 是闭合分类。事实够就直接行动。
 - `diagnosis` 只是分类，不是命令；`recovery` 是契约级下一步（retry/replan/reobserve/wait/restart/none），不是坐标或动作参数。
 - 怀疑卡死时，间隔 ≥60s 看一次 `p2_status`，不要连续看。
@@ -36,16 +36,13 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 - 显式 `attack` 可指定玩家/被动/中立目标；期间只保留致命环境反射。
 - 击杀默认近战，`attack {entityId,allowRanged:true}` 可切弓/弩。 `shoot {entityId, weapon:"bow"|"crossbow", maxShots?, maxRange?}`；成功=主箭命中，`killed` 独立；静止不追击。
 - `dig`/`clear`/`attack` 会自动选工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物，不自动切换。
-- 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
+- 原语订单在关联 job 成功时结单，显式 `check` 要求 `observed.state=ok`。蓝图 `build` 要等工作项满足并通过最终验证，`insufficient` 时继续等。
 
 ## 3. hold 与队列
 
-- `hold` 是**让身体停在原地并占住 active 执行位**的 barrier，**不是清空队列**。
-- 提交 hold 后，所有已排队/后到的 order 都不会开始，直到这个 hold 结束或被取消。
-- 要清空队列用 `p2_cancel {all:true}`；要结束当前 hold 用 `p2_cancel {id}`。
-- 带 `durationMs` 的 hold 到期自动结束（1s–1h）；不带 duration 的 hold 只能 cancel。
-- `p2_order` 的 accepted 结果会带 `queue` 摘要（`blockedBy` / `holdsActiveSlot` / `queuedBehind` / `release`）；看到 `queuedBehind>0` 就不要继续排普通 order，先决定 hold 是否真的需要。
-- `p2_orders` 的 `queueBlockedBy` 指向占用 active 位的 hold；不要把它当成普通失败。
+- `hold` 成为 active 后占位，后续订单排队。限时 hold 从此时起按 `params.durationMs`（1 秒至 1 小时）计时，到期 `succeeded`，回执带 `observed.expired:true`。无时限则等待取消。
+- 接单回执里 `queue.queuedBehind>0` 表示已有订单在等。用 `p2_orders` 看占位的 `queueBlockedBy` 和限时 hold 的 `active.expiresAt`。需要提前结束时用 `p2_cancel {id}`。
+- 取消排队订单只移出该单。`p2_cancel {all:true}` 取消活动及排队订单。取消活动订单先记 `cancelled`，请求停止当前 job 后即返回。若 `p2_status` 的 `mind.tracker` 为 `stopping`，控制仍在交还，确认 `stopped` 后才能派发新 job。
 
 ## 4. 失败码与下一步
 
@@ -82,7 +79,7 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 | `ATTACK_NOT_KILLED` | 24 次攻击/40s 内未击杀 | 检查武器/目标类型，重新下令；不要盲目追击 |
 | `SITE_NOT_FOUND` / `WORK_ITEM_BLOCKED` | 选址/工作项卡住 | 换区域/变体/点；不要原样重下 |
 | `OBSERVATION_STALE` | 无观测更新 | 检查连接；恢复后自动继续，不重放 |
-| `HOLD_ORDER` / `mind.hold(...)` | 已知等待/常驻树无法安全行动 | 读 `p2_orders.queueBlockedBy` 或 hold reason；取消/改任务，不要重复下同一 order |
+| `HOLD_ORDER` / `mind.hold(...)` | 订单待命或树保留意图 | 订单按 §3 等到期或取消；树 hold 按 reason 处理 |
 | `DUTY_NO_SOURCE` / `DUTY_WORK_BLOCKED` | duty 无来源/工作项阻塞 | duty blocked、base inactive；换物品/区域或 stop 后改 order |
 | `DUTY_DEADLINE` / `DUTY_JOB_BUDGET` | duty 时间/预算耗尽 | 不自动继续；重新评估后再 start |
 
@@ -102,6 +99,6 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 ## 6. 恢复
 
 - `ACT_UNCONFIRMED`：先读回；如果方块/背包/位置已经变化，按新事实继续，不要重放。
-- `STOP_UNCONFIRMED`：停止未确认，继续下 order 可能叠加副作用；重启 body 是恢复手段，但会丢队列。
+- `STOP_UNCONFIRMED`：tracker 进入 `fault` 并冻结派发。重启 body 可恢复，但会丢队列。
 - body 重启 = 新 epoch、事件环清空、队列不恢复；base activity 也回默认 `idle`，duty 只有未过期且 identity 匹配的 active 状态会恢复。旧队列/active hold 以 `abandoned`（`reason:"RESTART"`）结束，不自动继续。active 非 hold order 仍可能按 pending/plan 恢复；重启后先 `p2_status`/`p2_observe`，再决定是否重新下单，不要盲目重放上一条 order。restart 不传送，`sessionOrigin` 可能变成当前位置；不要把 `mind.home` 当固定回城点。
 - provider 卡死时，`p2_body restart` 通常比连续重试更安全；可带 `host`/`port` 换服，省略则复用上次 target；代价是丢队列和未确认动作。
