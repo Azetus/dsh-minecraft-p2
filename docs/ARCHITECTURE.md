@@ -40,20 +40,8 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 | Verifier | 三态验证（只读观测） | 抢交互、改世界 |
 
 ### 2.1 结果语义分层
-`BodyApi`、driver、tracker/metrics 回答的是三个不同问题，不能混用同一个“成功”：
 
-| 层 | 回答的问题 | “成功”的含义 |
-|---|---|---|
-| `BodyApi` / provider | 动作有没有被发出、有没有回执或效果观测 | `ActResult.state='ok'`：动作效果被观测到；**不是** order 目标完成 |
-| Driver | 这个 verb 的可验证后置条件有没有成立 | `DriverResult.state='succeeded'`：后置条件已确认；`failed`：无法确认结果 |
-| JobTracker / metrics | 这个 job/order 是否算完成 | 只把 driver 的 `succeeded` 计为完成 |
-
-因此：
-
-- driver 不得因为 provider 返回 `ok` 就直接 `succeeded`；必须完成该 verb 的读回/确认。
-- `failed` **不等于**“什么都没发生”。动作可能已生效、只完成一部分，或效果未知；用 `observed.partial`、`dug`、`crafted`、`effect` 等证据区分。
-- Verifier 的 `confirmed / refuted / insufficient` 是另一条只读验证轴，不与 driver 的 `succeeded / failed` 混用。
-- 每个 driver 的成功定义见 [CONTRACTS.md §5](CONTRACTS.md#5-driver)。
+provider 报告单个动作的回执，driver 核对本次工作的后置条件，JobTracker 确认执行收尾。要向 Agent 报告整单是否完成，按 `orderId` 查 OrderStore 的终态。例如，建造中的一个放置 job 成功后，计划仍可能有待完成的工作项或待验证的条件。各层结果、终态事件及其证据见[结果语义分层](CONTRACTS.md#11-结果语义分层)。
 
 ### 2.2 Owner session 与 `.p2` 工作区
 
@@ -65,7 +53,7 @@ agent ──order──► OrderStore ──► Planner ──► PlanInstance
 ### 2.3 观测分层
 
 - **L1 Agent 观测**：`p2_observe` / `p2_entities` / `p2_status` 等工具，按需、有硬顶，是唯一进入模型上下文的世界数据。
-- **L2 决策快照**：`Sensors`（方块半径 10、实体半径 15 / 垂直 ±15，100ms 预算）；giver/plan/verify 只读同一份快照，不自行查询。
+- **L2 决策快照**：`Sensors` 采集周边方块和实体；同一轮树求值共享一份快照。普通读取默认在 100ms 内复用缓存，有目标观测组时重新采样。
 - **L3 目标解析与动作读回**：已知目标走 `entityByName/entityById` 身份解析（无客户端距离上限，服务端实体追踪范围是可见性上限）；driver 的读回按动作边界有界。
 - 三者不能互相替代：不要用扩大 L2 盒子来解决“跟踪已知目标”，也不要把 L3 的解析结果写进模型上下文。
 
@@ -103,7 +91,7 @@ content/
 1. `/p2 start <host>:<port>` 或 `p2_body start` → bridge 先确保 `.p2` 工作区（缺失文件从 `content/templates/` 复制，不覆盖），再启动 body 子进程并注入 MC target。
 2. body 连接 provider → 加载计划模板与工作区模板 → 注册表 → 读取意图日志恢复未完成 order。
 3. body active 后 bridge 在 owner agent scope 注册 skill/persona/memory/tools/auto-wake。
-4. body 进入 tick 循环（50ms）：观测 → 常驻树 → 主树（事件）→ tracker → driver。
+4. body 按 50ms 定时器驱动 mind。正常调度时先求值常驻树，满足调度条件时再求值主树，由 tracker 推进当前执行。详见[运行时的 tick 循环](RUNTIME.md#2-tick-循环)。
 5. 停止：`p2_body stop` 先冻结新 dispatch，请求当前 driver 停止并等待确认，落盘意图日志后退出；超时 SIGTERM，再 killTree；bridge 停止 auto-wake 并 dispose owner 注册。
 6. body 重启：epoch 变化，P2Mind 状态从意图日志 + 世界重建；**不重放 pending 动作**；bridge 重新读取 auto-wake 配置并恢复 owner 注册。
 7. 单 body：同一 MC target 由跨进程锁保护；owner/target/`lastDisconnect` 在 `p2_status` 可见。

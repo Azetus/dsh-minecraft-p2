@@ -19,22 +19,24 @@
 
 ## 2. tick 循环
 
-```text
-每 tick (50ms):
-  obs = sensors.tick(budget ≤ 2ms)                     // 观测缓存，不做网络查询
-  constant = constantTree.evaluate(obs)
-  if (constant 是 job) tracker.offer(constant)         // 本轮不再求值主树
-  else if (constant 是 need-observation / definition-error)
-      本轮不再求值主树                                  // 保留当前 job，不猜
-  else if (mainTreeDirty || 3s 兜底) {
-      mainTreeDirty = false
-      tracker.offer(mainTree.evaluate(obs, orders, plan))
-  }
-  tracker.tick()
-  if (tracker.state() === 'idle' && 无候选) idleFallback()
-```
+body 的定时器默认每 50ms 调用一次 tick。检测到游戏暂停时，body 进入或维持 suspended，本轮提前返回。正常运行时先处理到期的 hold、同步 plan、对账重启后遗留的 pending，再刷新 duty、活动层和目标，进入 [MindLoop](../src/mind/loop.ts)。循环返回后，body 继续检查活动 plan 的阶段进度与完工条件。见 [body 的 tick](../src/body/mind.ts)。
 
-**常驻树优先级**：常驻树本轮有结果时，主树不参与候选竞争，也不能用 `nowork` 清空 `pending`。这个门只决定本轮谁来 offer，不改变 order/duty 状态；紧急解除后主树恢复。`mainTreeDirty` 由事件置位：新 order、order 取消、job 终态、plan 一步完成、进入夜晚、饥饿跨阈值、目标失效、冷却到期、对话产生 order。
+一次树求值周期读取一份 `WorldView`，常驻树和主树共用该快照与求值上下文。采样异常且没有旧快照可用时，MindLoop 发 `mind.world-error` 并提前返回；有旧快照时，传感器将它标为 stale，树返回 `need-observation`。
+
+| 常驻树结果 | 本拍动作 |
+| --- | --- |
+| `job` | 把候选交给 tracker，跳过主树。 |
+| `hold` | tracker 正在运行 job 时调用 `abort('CONSTANT_HOLD')`，记录 hold，跳过主树。 |
+| `need-observation` / `definition-error` | 跳过主树，保留本拍已有工作；定义错误另发 `mind.definition-error`。 |
+| `nowork` | tracker 为 `idle` 时才检查下列主树求值条件。 |
+
+常驻树返回 `nowork` 且 tracker 为 `idle` 后，满足以下任一条件才求值主树：
+
+- 当前有 plan、active duty 或 active base activity。单独存在一条普通 order 不构成这个条件。
+- 主树标记为 dirty。启动时即置位，order 接收或终态、可重试的原语 job 失败、恢复暂停、更新 duty/base/policy 等也可置位。dirty 保留到主树实际求值，不会强制抢占当前 job。
+- 在以上两项都不成立时，**距上次主树求值至少 3s，且距上次主树提交 job 候选至少 20s**（默认值）。求值和提交候选分别记时。
+
+主树返回 job 时提交候选；返回 hold 或 nowork 时清除待派发候选，hold 另记原因；need-observation 不提交候选，定义错误单独上报。在正常路径上，无论本拍是否求值主树，最后都调用 `tracker.tick(now, worldAge)` 推进派发、执行或停止确认。base 工作由主树的 `base.work` 提供。
 
 常驻树顺序：`threat.fight → escape → self.eat → self.unstuck`。自动 fight 只在 `p2_policy.fight` 存在时启用；显式 `attack` order 期间它关闭，`escape` 也只保留致命环境反射。`p2_policy` 是 body 级、process-local、不持久化：重启回只 flee。自动 fight 在**同一允许集合**内优先 5s 内攻击过自己的实体（来源由 `damaged.source` 提供）；归因不放宽 radius、保护名单或 auto-avoid。
 
@@ -55,34 +57,29 @@
 
 ## 3. 预算
 
-| 项 | 预算 | 超限行为 |
-|---|---|---|
-| 传感器刷新 | ≤2ms/tick | 跳过本轮，保留旧观测并标 `stale` |
-| 常驻树求值 | ≤2ms | 本轮放弃，下轮重试 |
-| 主树求值 | ≤10ms | 记 `EVAL_TIMEOUT`，保持当前 job |
-| driver tick | 有界（不阻塞循环） | 由 driver 自己分片 |
-| 单 job | `maxTicks` + `maxWallMs` | 超限 → `failed(BUDGET_EXCEEDED)` |
+| 范围 | 当前行为 |
+| --- | --- |
+| 传感器 | 普通读默认在 100ms 内复用快照；有定向观测格时重新采样。100ms 是缓存刷新间隔，采样失败的处理见 §2。 |
+| 树与 driver tick | 树同步求值，driver 负责分片，避免阻塞事件循环。当前实现没有按求值毫秒数中止树的计时器。 |
+| 单个运行中的 job | tracker 比较经过的墙钟时间与 `maxWallMs`、服务端 worldAge 增量与 `maxTicks`。任一超出便以 `BUDGET_EXCEEDED` 请求停止，确认释放后发失败终态。 |
 
-游戏 tick 与单调墙钟分开：连接停滞时 `maxTicks` 不会推进，必须由 `maxWallMs` 兜底。
+服务端 age 停滞时游戏 tick 不增长。body 仍在正常运行时，墙钟预算继续生效；一旦进入 suspended 则按 §1 的暂停路径处理。
 
 ## 4. 抢占与停止
 
 - 常驻树提出候选 → **先判续做**：`keys` 相同则只续期，不重启（避免“着火时每 50ms 重开一次逃生”）。
-- 确需切换：`seq++`（旧写令牌失效）→ `driver.requestStop()` → 等 `stopStatus()==='stopped'`。
+- 确需切换时先撤销旧 run 的写视图、结束其写令牌，再调用 `requestStop()`。只有 `stopStatus() === 'stopped'` 才能交接；新 job 启动时获得递增的 seq。
 - `stopping` 超时或 `unconfirmed` → `fault`：冻结新 dispatch、上报 owner；恢复需人工或自愈流程。
-- 正常终态也经过停止确认；“promise 已结束”不能代替控制释放。
+- 已启动的 job 即使正常结束，也须确认控制释放后才发布 `job.terminal`。参数校验等在启动前被拒绝的候选可直接记录失败。
 - 打断时**结束当前 job**，不保留“半步状态”；恢复时由 WorkGiver 重算“下一个可执行工作项”。
 
 ### 4.1 让出、hold、blocked、cancel
 
-- `nowork`：让出选择，继续看后续分支。
-- `hold`：保留意图，不产生 job，停止下降；order/plan 保持 active。
-  - `hold` **order** 不会自己结束，会占住唯一的 active 位并堵住队列；`p2_orders` 的 `queueBlockedBy` 指出这个 barrier，取消用 `p2_cancel {id}` 或 `p2_cancel {all:true}`（取消全部 queued/active）。
-  - `hold` order 同时暂停 duty 和 base activity；常驻树的最小生存动作不受影响。
-- `blocked`：`hold` + 明确 reason + 上报；不自动换任务。
-- `cancel`：终态，不自动恢复。
+- `nowork` 让 priority 节点尝试下一个分支；树求值结束时的处理见 §2。
+- 树的 `hold` 保留给出的原因，停止本次下降。可通知的 `mind.hold` 会触发 critical 通知；同一树的同一原因通常在 10s 内去重，主树 invalidate 时重置去重键。
+- 显式 `hold` **order** 占住 active 位并暂停 duty/base，常驻生存反射仍可运行。未给 `durationMs` 时可用 `p2_cancel {id}` 释放；指定时长后，自进入 active 位起计时，到期在 body tick 中以 `succeeded` 释放。用 `p2_orders.queueBlockedBy` 查谁挡住队列，`p2_cancel {all:true}` 会取消全部 queued/active order。
+- `blocked` 是 order 的终态。特定 plan hold（如没有可推进工作项）会触发正式阻塞回执。单纯返回树 hold 不能据此判定订单已阻塞。`cancel` 使订单进入取消终态。
 
-常驻树的 `hold` 会停止当前 job（`CONSTANT_HOLD`）并 critical 上报；同一原因 10s 内不重复，持续 hold 会再次上报，不静默。
 `material.gather` 用 32 格区域索引找最近来源；索引按 16×16 列分块、每 tick 最多 2 块，`blockUpdated` 直接增删，中心移动/超时重建并标记 stale；不会每 tick 全量扫 32 格。
 `mind.status.metrics` 提供进程内 run metrics：`orders`（accepted/succeeded/failed/blocked/cancelled）、`jobs`（started/succeeded/failed/interrupted/retried/preempted）、`holds`、`holdReasons`、`failureCodes`、`completionRate`、`lastFailure`。`job.terminal` 事件附带 `diagnostic {code,category,hint}`；指标只从事件派生，不读世界。
 
@@ -98,31 +95,18 @@
 
 ## 5. 工作选择与重试
 
-1. 常驻树 → 紧急 giver → 候选（逃生/进食/脱离）。
-2. 主树 → 维护 giver → 当前 order 的 plan giver → 空闲 giver。
-3. giver 返回 `Handoff` → 先执行前置工作，完成后重新 `find`。
-4. 失败按 `(orderId|workItemId|driverId)` 计数：
-   - ≤2 次：同一工作项换站位/换面/换材料重试；
-   - 3 次：标记该工作项 `blocked`，WorkGiver 换下一个可执行项；
-   - 全部 `blocked`：order `blocked`，唤醒 agent 并附 digest。
-   - plan（build）的 place 项另有 item 级结转：连续 2 个 place job 未放置 → `deferred`；连续 3 个批次 0 确认放置 → `NO_PROGRESS`。plan 结束只发一次 `plan.blocked`/`plan.terminal` 回执（summary + 有界 failed items），逐格 place job 失败不单独唤醒。
-5. 原始 order 的 retry 策略：
-   - `go / attack / dig / place / use / craft / container` 在 order 内重试，3 次后 `blocked`；
-   - `equip / traverse / check / collect` 是一次性，首次失败即终态；`collect` 的一次 job 已经把启动时观测到的掉落物跑完，重试只会重复已消耗的实体；
-   - `collect` 的部分/不可达/无返回/超时终态同样保留 `observed.collected/collectedDrops/missed/unreachable/noReturn/inventoryDelta`，不因 `failed` 丢掉已收集数量；
-   - `BUDGET_EXCEEDED / BAD_ARGS / STALE_WRITE / DEFINITION_ERROR` 不重试；
-   - `TOOL_INSUFFICIENT / BLOCK_UNBREAKABLE / DIG_NO_BLOCK / APPROACH_NO_STAND / PICKUP_UNREACHABLE / PICKUP_NO_RETURN / PICKUP_NOT_COLLECTED / COLLECT_TIMEOUT / COLLECT_UNREACHABLE / COLLECT_NO_RETURN / COLLECT_INVENTORY_FULL / COLLECT_INCOMPLETE` 也不重试（重试同一目标不会改变结果）；
-   - `place` 的 `PLACE_TARGET_OCCUPIED / PLACE_OFF_TARGET / PLACE_ITEM_CONSUMED / PLACE_READBACK_MISMATCH / PLACE_UNSUPPORTED / NO_SUPPORT` 不重试；`PLACE_FAILED` 只有在 provider 给出 `retrySafe:true` 时才可能换面，否则终态；
-   - `ATTACK_TARGET_LOST / ATTACK_TARGET_CHANGED / ATTACK_CHASE_LIMIT / ATTACK_NO_HIT / ATTACK_NOT_KILLED` 同样不重试，避免对同一目标连续做 40s 无用追击；`ATTACK_TARGET_PROTECTED` 只可能来自自动 fight/未授权 driver 调用；
-   - 中间失败写 `job.terminal {retry:true}`，不产生 completion wake；blocked/终态才唤醒 agent。
-   - `build` 的 plan 工作项仍按第 4 条由 giver/tracker 重试。
+主树按 `check → order.* → material.gather → plan.work → duty.work → base.work` 选择工作。giver 的 `Handoff` 会转成前置工作的候选，后续求值重新选择下一项。动作、job、order 的完成条件见[结果语义分层](CONTRACTS.md#11-结果语义分层)。
+
+- **可重试原语。** `go / attack / dig / place / use / craft / container` 的 job 失败后，只有错误可重试且其 `keys` 未达失败上限时才保留当前 order，写 `job.terminal {retry:true}` 并置 dirty。默认同一 key 第三次失败会带 `blocked:true`，此时 order 进入 blocked；明确不可重试的错误可在第一次失败时结束订单。中间重试不单独唤醒 Agent。重试判断和错误码清单见 [shouldRetryOrderJob](../src/body/mind.ts)。
+- **一次性原语。** `shoot / equip / traverse / collect` 的失败 job 不在订单层重派。`shoot` 的射击次数预算在单个 job 内，首支主箭确认命中即可结束订单；`collect` 的失败终态保留已拾取、未达和背包变化等部分进度。
+- **独立完成路径。** `check` order 依据 check job 回执的 `observed.state` 判定，`ok` 才算观测成功。build 按 plan 工作项和站位记录失败；某项不能推进时可尝试其他项。连续两个 place job 未放置可使该项 deferred，连续三个批次零进展可触发 `NO_PROGRESS`。单项 job 更新工作进度；build 的成功取决于整个 plan 满足完成条件。
 
 ## 6. 恢复
 
 | 情形 | 处理 |
 |---|---|
 | 意图日志尾部半行 | 丢弃 |
-| `action.pending` 未结算 | 只对账（必要时 `check` Job），不重放 |
+| `action.pending` 未结算 | 用世界快照核对活动计划的 clear/place 效果。重启对账仍无法确认时记 `action.unreconciled`，阻塞活动订单，见 §10.4。 |
 | order 已取消 | 恢复后保持取消，plan 不复活 |
 | 重启时 queued order / active hold | 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复 |
 | base activity | **不恢复**；重启回默认 `idle`，需要 wandering/escort 时重新 `p2_base_activity` |
@@ -134,11 +118,11 @@
 
 - 观测分三层，只有 L1 进入模型上下文：
   1. **L1 Agent 观测**（`p2_observe` / `p2_entities` / `p2_status` 等工具）：按需、有硬顶，是唯一进入模型上下文的世界数据；上限见 §8。
-  2. **L2 决策快照**（`Sensors`）：内部快照，方块半径 10（y −6..+8）、实体半径 15（各向 ±15），100ms 采样预算；plan 观测组会强制重采。giver/plan/verify 只读这一份 `WorldView`，不自行查询游戏。
+  2. **L2 决策快照**（`Sensors`）：内部快照，方块半径 10（y −6..+8）、实体半径 15（各向 ±15），默认 100ms 缓存刷新间隔；有定向观测格时强制重采。giver/plan/verify 只读这一份 `WorldView`，不自行查询游戏。
   3. **L3 目标解析与动作读回**：已知目标走身份查询（玩家名 O(1)，实体 id 直接索引），**没有客户端距离上限**；真实可见性由服务端实体追踪范围决定。驱动执行期的读回（dig/place 读空气、pickup 查掉落、area 索引）也属 L3，按动作边界有界。
 - `Sensors.observeEntities` 的一次性合并已删除：谓词内部补查的结果会在下一次 resample 丢失，不能作为“目标存在”的依据。escort/attack 的目标由 mind 每 tick 解析后放进 `EvalCtx.focus`，不进入快照。
 - `WorldView` 是同一份快照，供一次求值使用；谓词不得自行查询。
-- 证据三态：`confirmed / refuted / insufficient`；`insufficient` 时发 `check` Job 或超时上报。
+- plan 最终验证给出 `confirmed / refuted / insufficient`。证据不足时，body 首次记录 `plan.insufficient`，保留活动订单，后续满足完工检查条件时再验证。
 - `p2_observe` 的同步观测有硬顶（约 1000ms）；需要等待的观测必须走 `check` Job。返回体保持精简，只读必要字段，避免拖慢 tick/心跳。
 - 开熔炉/看箱子这类需要交互的观测，只能由 `check` Job 完成；Verifier 不抢交互能力。
 - 三级检查（job 读回 / plan verify / order post）不是三个独立证据源，除非观测路径确实不同。
@@ -167,7 +151,7 @@
 | 现象 | 判定 | 处理 |
 |---|---|---|
 | driver 停止无法确认 | `STOP_UNCONFIRMED` | tracker fault，冻结 dispatch，上报 |
-| 长期无观测更新 | `OBSERVATION_STALE` | 暂停新 job，保留当前，等恢复 |
+| 采样失败，只有旧快照 | 树返回 `need-observation` | 该拍不提供新候选，保留当前工作，见 §2 |
 | 服务器暂停（server age 停滞） | `GAME_PAUSED` → `suspended` | 中止当前动作但不计失败；order/plan 保持 active；watchdog/墙钟冻结；恢复后重观测再继续；超长暂停只通知 |
 | 同一工作项反复失败 | `WORK_ITEM_BLOCKED` | 换工作项；全部阻塞 → order blocked |
 | 材料不足且不可自动补给 | `NO_MATERIAL` | order blocked，唤醒 agent |
@@ -183,7 +167,7 @@
 - 成功/失败都带实际落点 `placedAt/placedCells` 与 `itemConsumed`；target 外出现方块 → `PLACE_OFF_TARGET`，物品减少但无落点 → `PLACE_ITEM_CONSUMED`。
 - place 的 `ok` 只表示“该 face 的目标格已读回 expected”；不表示方块会永久存在。
 - provider 在 `bot.placeBlock` 前后设置/恢复 sneak：交互方块（工作台/箱子/熔炉）普通右键会打开界面，sneak 后才能放到相邻格。
-- 终态由 verifier 判定：build order 验证每个期望方块仍在；sealed-room 验证外壳/内部。
+- 蓝图工作项已满足后，body 重新采样，由 verifier 检查期望方块是否仍在；声明 `sealed-room` 的计划还要验证房间条件。其他计划的完成路径见[结果语义分层](CONTRACTS.md#11-结果语义分层)。
 - 执行期间 plan 每 tick 重算工作项：方块消失会重新变成 unsatisfied，按 policy 重试或 blocked；不用计时器或异步稳定窗口。
 - 完成之后的世界变化属于后续观测/check，不归 place 保证。
 
@@ -260,7 +244,7 @@ order 可带 `policy.conflict`：
   `action.pending` 写入后让 body 真实退出一次（标记 `.p2/crash-after-pending.done`），
   用于模拟 pending 窗口崩溃后的重启对账。生产配置不应开启。
 
-### 10.6 游戏内对话推送给 Agent
+## 11. 游戏内对话推送给 Agent
 
 - 对话**不由 body 解析**：`BodyApi` 的 `chat` 事件进入 body 有界队列（100 条），
   通过 `chat.poll {afterSeq}` 暴露给 bridge；`chat.say {text}` 只负责发一句话。
@@ -274,7 +258,7 @@ order 可带 `policy.conflict`：
 - bot 自己的聊天回显在 provider 层忽略，避免自回环。
 - 只有 active body 的 owner 会收到 wake；重启后 cursor 归零。
 
-### 10.7 check Job
+## 12. check Job
 
 - `check` 是 order verb：`p2_order {verb:"check", params:{x,y,z}}`。
 - check giver 从 active check order 选目标；check driver 才打开界面（箱子/熔炉等），
@@ -282,7 +266,7 @@ order 可带 `policy.conflict`：
 - 三态：`observed.state = ok | failed | unknown`；`unknown` 不会被当作成功。
 - Verifier 仍只用世界方块/物品快照；需要界面数据时必须排队 check，不直接开窗。
 
-### 10.8 idle 边界与执行原语
+## 13. idle 边界与执行原语
 
 - 默认无 order：**base activity**，默认 `idle`；Agent 显式设置 `wandering` 时只在 anchor 半径内做局部移动；不采集、不建造、不战斗、不生成新任务。
 - 自动战斗/自理由 `p2_policy` 预授权：`fight` 缺省只 flee；`allowedTargets:[]` = 所有非 neutral 的 hostile；自动 fight 默认不选玩家/被动/中立；creeper/boss auto-avoid。`self.eat` / `self.unstuck` 默认启用，可关闭。
@@ -297,19 +281,20 @@ order 可带 `policy.conflict`：
   - `collect`：一次有界拾取，只处理 job 启动时已观测的掉落物；`radius/item/maxDrops/timeoutMs` 有界，`missed`/`unreachable`/`timedOut` 都给出明确终态，不做战斗/挖掘/预测；
   - `equip`：切换手持物品/工具；成功后保护下一次 `dig`/`attack`/`clear`（中间可有 `go`/`place`/`use` 等非装备动作），不自动覆盖；
   - `use`：使用方块/实体/物品（床睡觉、门、按钮、食物）；
-  - `attack`：攻击 Agent 明确指定的 entityId，先做 64 格定向实体观测；driver 自动选最强剑/斧，锁定目标后由 `moveTo` 靠近并做有限追击/连续攻击，直到目标消失或预算/目标边界失败。
+  - `attack`：攻击 Agent 指定的目标，交给 CombatSession 执行。可用 `allowRanged:true` 允许远程；以目标死亡事件确认击杀。
+  - `shoot`：原地用弓或弩射指定目标，以主箭确认命中完成，击杀单独记录。
   - `check`：打开容器/熔炉做三态观测；
   - `container`：容器存取，`withdraw/deposit/load-input/load-fuel/take-*`；
   - `craft`：按配方合成；
   - `build`：执行最终几何 blueprint/Plan；
   - `traverse`：Agent 授权的桥/垫脚移动；
-  - `hold`：原地待命。
+  - `hold`：原地待命，时长与队列语义见 §4.1。
 - 组合由 Agent 完成：找矿 = `p2_observe` + `go`；挖矿 = `dig`（自动选工具，显式 `equip` 可覆盖下一次）；拾取 = `p2_entities` 确认后 `collect`（只处理已观测掉落物）；床 = `place` + `use`；熔炼 = `container` + `use/check` + `container`。
 - 失败上报，不自行消耗食物或改变目标。
 - P2Mind 不自行决定睡觉、建家、进食或游荡；`home` 只是 Agent 可使用的坐标。
 - Agent 战逃提示词见 `docs/runtime/AGENT-REACTION.md`：IMMEDIATE 先动作后观察；自动 fight 由 `p2_policy` 预授权（默认只 flee）；显式 `attack` order 可指定任何实体，P2 不拦。
 
-### 10.9 感知与唤醒粒度
+## 14. 感知与唤醒粒度
 
 - body 维护有界 `perception` 队列：
   - `damaged`：health 下降；<=4 为 critical；
@@ -327,22 +312,21 @@ order 可带 `policy.conflict`：
   只有本地无法处理/需要改变目标的 critical 才 `steer`。
 - 世界全量变化仍只在观测层/Verifier；不进入感知通知。
 
-### 10.10 异步完成通知（completion wake）
+## 15. 异步完成通知（completion wake）
 
 - bridge 与 chat/perception 共用 300ms 轮询，读 `mind.events {sinceSeq}`。
   事件 cursor 以 **body epoch** 为边界：epoch 变化时归零并丢弃旧 epoch 的待发结果；
   同一 epoch 内按 `seq` 前进，重复轮询不会重复推送。
 - 必推（critical，不等待合并）：
   - `order.terminal` 的 `failed / blocked / abandoned`；
-  - `plan.blocked`（带 `summary`/`stopReason`/有界 items）/ `plan.terminal` 的失败或成功回执；
+  - `plan.blocked`（带 `summary`、`stopReason` 和有界 items）；
   - `duty.terminal` 的 `blocked / failed`；
   - `job.terminal` 的 `failed` 或 `blocked=true`（`base:` / `duty:` / `self.` / `threat.fight:` / `plan:` 的后台 job 失败不单独唤醒；plan 项由结束回执汇总）；check job 的 `succeeded` 只表示观测完成，
     若 `observed.state=failed/unknown` 也作为失败 cause 推送；
   - `tracker.fault`，以及直接导致终态的 `plan.material-short / plan.abort /
     plan.verify(refuted) / plan.definition-error / action.unreconciled`。
-- 普通结果（合并窗口）：`order.terminal` 成功、`duty.terminal` 的 completed/cancelled、`base.waiting` 的 `TARGET_LOST`；多个结果合成一条 DIGEST。
-- 成功/取消合并：`job.terminal` 成功不单独唤醒；`order.terminal` 成功走 250ms
-  合并窗口，一条 DIGEST；多个成功结果合成一条。
+- 普通结果走 250ms 合并窗口。`order.terminal` 的 `succeeded / cancelled`、`duty.terminal` 的 `completed / cancelled` 和 `base.waiting` 的 `TARGET_LOST` 可合成一条 DIGEST。替换 duty 已同步返回的取消结果跳过推送。
+- build 完工时，body 把 plan 的汇总作为 `order.terminal` 的 `observed`，再记录 `plan.terminal`。bridge 按订单终态唤醒；`plan.terminal` 本身不另触发推送。
 - `order.terminal` 会吸收紧邻的失败 cause（runId/driverId/code/blocked/observed），
   所以一条 wake 就带 `orderId / state / observed / reason`；Agent 需要完整记录时读 `p2_report`。
 - 投递策略：Agent running 时普通结果本地挂起，idle 后一次 `followup`；critical 才 `steer`
@@ -351,7 +335,7 @@ order 可带 `policy.conflict`：
 - body 重启产生新 epoch 与空事件环，从 seq 1 开始；bridge 按 epoch 重置 cursor，
   不会把旧 epoch 的终态当成新结果重复推送。
 
-### 10.11 Owner session、persona、memory 与 auto-wake（bridge）
+## 16. Owner session、persona、memory 与 auto-wake（bridge）
 
 - body start 时 bridge 在 owner agent scope 注册 P2 工具、`p2_memory`、六个 `p2-*` skill、`.p2/skills` provider、persona section、memory context 和 auto-wake；stop 时 dispose，fault 只停 auto-wake。
 - `.p2/` 由 `p2 start`/`p2_body start` 从 `content/templates/` 创建缺失文件，绝不覆盖已有编辑；`.p2` 整体不入库。

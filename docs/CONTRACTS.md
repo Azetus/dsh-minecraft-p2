@@ -15,21 +15,26 @@
 **不变量**
 
 1. **单写者**：任一时刻只有一个 Driver 持有写令牌；令牌不匹配的写操作在 `MineflayerBody` 层被拒绝并记 `stale-write`。每次 Driver 执行拿到的是**绑定该 run 的 BodyApi 视图**：撤权后视图上的写方法一律返回 `STALE_WRITE` 且不触达 provider，读方法不受影响；已进入 provider 的异步链在每个副作用之前复查同一权限。旧执行实例无法借用新实例的权限。
-2. **结果三态**：`confirmed / refuted / insufficient`；`insufficient` 不得算成功。
+2. **Verifier 三态**：`confirmed / refuted / insufficient`；只有 `confirmed` 确认所验证的条件成立。
 3. **进度可重建**：能从世界重建的优先重建；不能重建的写意图日志。
 4. **树不产坐标**：树只选 giver；目标由 giver 选；driver 不得自行推导目标。
 
 ### 1.1 结果语义分层
 
-| 层 | 成功含义 | 失败含义 |
-|---|---|---|
-| `BodyApi` / provider | `ActResult.state='ok'`：动作效果被观测到，只是证据 | `failed`/`unknown`：动作未成功或效果未知 |
-| Driver | `DriverResult.state='succeeded'`：该 verb 的可验证后置条件已成立 | `failed`：无法确认结果；**动作可能已生效或只完成一部分** |
-| JobTracker / metrics | 只把 driver 的 `succeeded` 计为完成 | `failed` 计入失败；按失败键重试/blocked |
+| 问题 | 判断依据 |
+|---|---|
+| 一个动作执行到哪一步？ | [BodyApi](../src/body/api.ts) 的 `ActResult` 描述本次调用。`ok` 的含义由动作决定，例如 `attack` 在发出挥击后即可返回；命中与击杀另需观测。`failed` 给出失败原因，仍可能有部分效果；`unknown` 表示效果未确认，依据错误码和读回处理。 |
+| 一个 job 达到了什么结果？ | driver 执行中返回 `running`，按 [§5.1](#51-driver-成功定义) 的后置条件判定 `succeeded / failed`，中断可返回 `interrupted`。对已经启动的 job，[JobTracker](../src/mind/tracker.ts) 确认控制释放后才发布 `job.terminal`；候选抢占走 `job.preempted`。启动前拒绝的候选可直接产生失败的 `job.terminal`。用 `runId` 区分每次尝试，部分效果保留在 `observed`。 |
+| 整个 order 是否结束？ | 以同一 `orderId` 的 [OrderStore](../src/mind/orders.ts) 记录或 `order.terminal` 为准。接单后可为 `queued / active`。终态为 `succeeded / failed / blocked / cancelled / abandoned`；终结时释放该单占用的活动槽，若有排队订单则递补。 |
 
-- driver **不得**因为 provider 返回 `ok` 就直接 `succeeded`；必须完成该 verb 的读回/确认。
-- `failed` 不等于“什么都没发生”。动作已生效、部分完成、效果未知都要用同一份 `observed` 证据（`partial`、`dug`、`crafted`、`effect` 等）表达。
-- Verifier 的 `confirmed / refuted / insufficient` 是独立的只读验证轴，不与 driver 的 `succeeded / failed` 混用。
+[body 的订单处理](../src/body/mind.ts)按订单类型决定何时结单：
+
+- 原语订单（如 `shoot / attack / dig`）取关联 job 的结果。成功即结单；可重试的失败记录 `retry:true`，原单保持 active。其余失败按 `blocked` 标志记为 blocked 或 failed。`interrupted` 不触发这条结单路径。结单时另发 `order.result` 携带本次证据。三者可以同时成立：箭命中、目标存活、`shoot` 订单成功。
+- 显式 `check` 在 check job 结束时根据 `observed.state` 结单，并发 `check.result`。只有 `ok` 才使订单成功。例如容器返回明确的 `failed` 读回，check job 完成了查询，订单仍为 failed。
+- 无时限的 `hold` 占用活动槽等待取消；带 `durationMs` 的 hold 从成为 active 起计时，到期可直接成功，无需 job 成功。
+- `build` 中的一次放置只推进对应工作项。tracker 空闲且工作项已满足后，body 用新快照验证蓝图最终几何，若声明房间条件则继续验证。Verifier 的 `confirmed` 允许订单成功，`refuted` 使其失败，`insufficient` 保持待验。通用 plan 收尾分支也支持非蓝图模板：有 `verify` 时验证房间，无 `verify` 时工作项满足即可成功。
+
+[运行指标](../src/mind/metrics.ts)分别按 `job.terminal` 和 `order.terminal` 计数。带 `retry:true` 的失败增加 jobs.failed 和 jobs.retried。`completionRate` 取 orders.succeeded / (orders.succeeded + orders.failed + orders.blocked)，分母为零时返回 `null`。
 
 ## 2. BodyApi
 
@@ -206,7 +211,7 @@ type BodyApi = {
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
 - **射击事件**：`ownArrowSpawn {id, velocity?}` 提供本方箭矢的生成记录，`entityDamageSource {entityId, sourceId?, directId?}` 分别保留受伤实体、致伤者和直接来源的 ID。箭矢离开实体缓存后仍可核对。
 - **事件负载**：`entityHurt` 为 `{entityId, source?}`；`damaged` 为 `{health, source?}`。`source` 是 `{id, name?, username?, type?}`，来自服务端 `damage_event`（1.20+，`sourceCauseId` 对应的实体）；字段缺失表示环境伤害（摔落/岩浆/溺水）或 adapter 无法解析，不能当作“无伤害来源”猜测。`damaged` 只在同一伤害窗口（500ms）内附带来源，避免把旧来源算给环境伤害。归因是观测事实，不改变任何写权限或目标选择权。
-- provider 动作依赖物理 tick；区块未加载、死亡或传送中时 `await` 可能没有终态。所有动作都有硬超时，超时按 `ACT_TIMEOUT` / `ACT_UNCONFIRMED` 返回，不重放。
+- provider 动作依赖物理 tick；区块未加载、死亡或传送时可能迟迟没有完成回执。轮询超时后，先核对控制释放与服务端证据，再决定能否安全重试。
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
   - `ACT_TIMEOUT`：预算内无终态且释放已确认，动作可安全重试（当前为 `moveTo` / `lookAt` / `equip`）；重试仍受 driver 的有界重试约束。
   - `ACT_UNCONFIRMED`：动作可能已到达服务端，效果未知；不得重放，driver 必须先读回/观察，再由上层决定；不自动重试。
@@ -262,8 +267,7 @@ type Job = {
 }
 ```
 
-- `runId` 在每次尝试时新生成；非当前 `runId` 的结果只对账。
-- 失败计数键 = `(orderId|workItemId|driverId)`。
+- 每次尝试取得新的 `runId`；tracker 收到其他 run 的迟到结果只记 `job.stale-result`。失败计数使用 giver 提供的 `candidate.keys`。
 - 失败终态的 `observed.failure` 是统一投影，字段为 `{layer, phase, code, facts, diagnosis, cause, recovery}`：
   - `facts` 只来自同一份观测快照，白名单复制（pos/cell/target/blockedBy/requiredDig/skipped/partial/support/lastAction 等），不重新查世界；
   - `facts.snapshot` 是失败时的有界同快照：`self/target` 各含 feet/head/support，`targetNeighbors` 四邻，`bodyOverlap` 最多 4 格，另带 `pathStatus`/`bestReachable`；每格为 `{cell:[x,y,z], name, loaded}`，最多 16 个去重格，不含 path/candidates/visited；
@@ -313,12 +317,12 @@ interface DriverHandle {
 ```
 
 - `tick()` 必须有界；异步动作以句柄表示，**未结束不得重复启动**。
-- `requestStop()` 后进入 `stopping`；`unconfirmed` 超过阈值 → tracker 记 `fault`。
+- tracker 在 `stopping` 等待释放；`stopStatus()` 返回 `unconfirmed` 时立即进入 `fault`，持续 `stopping` 超时也进入 `fault`。
 - 读回是稳定性观察，不是服务端接受的证明；强证据走独立观测。
 
 ### 5.1 Driver 成功定义
 
-`state:'succeeded'` 只表示下表的后置条件已确认；`state:'failed'` 表示无法确认结果（动作可能已生效、部分完成或效果未知），必须保留同一份 `observed` 证据。
+下表说明各 driver 的后置条件，以及失败时用于判断部分效果的证据。跨层结单规则见 [§1.1](#11-结果语义分层)。
 
 | driver / 分支 | `succeeded` 的后置条件 | `failed` 时必须保留的证据 |
 |---|---|---|
@@ -333,10 +337,10 @@ interface DriverHandle {
 | `traverse` bridge/scaffold | 到达目标站位（`moveTo` 的 arrival 成立） | `observed.result`、motion `failure`/`snapshot` |
 | `equip` | 目标槽位实际为请求物品（hand 用 `held`，offhand 用 `equipped`） | `EQUIP_*`、`item`、`destination`、provider observed |
 | `unequip` | 目标槽位读回为空 | `UNEQUIP_*`、`item`、`destination`、provider observed |
-| `check` | 查询完成并拿到容器/熔炉结果 | `kind:"container"`、provider error/observed |
+| `check` | 完成查询，得到容器/熔炉的明确答复（包括 `failed`）；接近失败或读回 `unknown` 时 job 失败 | 接近失败证据或容器返回的 `kind:"container"`、`state`、`code` |
 | `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
 | `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
-| `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`shieldUses`、`shieldFailures`、`shieldAutoEquip`、`ATTACK_TARGET_LOST` |
+| `attack` | 显式单目标要求目标 `entityDead`；自动 fight 的 engagement 也可在全部目标已处置时以 `ATTACK_TARGETS_RESOLVED` 收尾 | `entityId`、`damageObserved`、`rejectedSwings`、`shieldUses`、`shieldFailures`、`shieldAutoEquip`、`ATTACK_TARGET_LOST` |
 | `shoot` | 主箭确认命中目标（`entityDamageSource.directId` 与本发主箭 ID 匹配）；`killed` 只作独立观测 | `entityId`、`weapon`、`shots`（aim/release/arrow/hit/miss/load）、`hitEvidence`、`sideHit`、`SHOOT_*`、`CROSSBOW_*` |
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
@@ -346,13 +350,13 @@ interface DriverHandle {
 - `craft` 以 `produced >= requested` 为成功；provider 按配方产出数计算所需操作次数，driver 也接受 provider 早停但产出已足够的 `CRAFT_INCOMPLETE`。
 - `equip` 读 provider 的目标槽位回执：hand 用 `held`，offhand 用 `equipped`；缺失或错物分别报 `EQUIP_READBACK_UNKNOWN` / `EQUIP_READBACK_MISMATCH`。`unequip` 要求目标槽位 `equipped` 为空，否则 `UNEQUIP_READBACK_MISMATCH`；缺失回执报 `UNEQUIP_READBACK_UNKNOWN`，槽位本来就空算成功。写动作前关闭已打开窗口；`held` 未确认前不得继续放置。
 - `container` 读玩家/容器前后计数；缺失计数报 `CONTAINER_READBACK_UNKNOWN`，计数未移动/未达请求量报 `CONTAINER_INCOMPLETE`。
-- 任何 `state:'unknown'` 的动作只能以 `failed + ACT_UNCONFIRMED` 收尾，不得升格为 `succeeded`。
+- 对 `state:'unknown'` 的动作，driver 不能用该回执证明成功。保留实际错误码与观测，例如导航超时、`ACT_UNCONFIRMED` 或 `STOP_UNCONFIRMED`；可能已有副作用时须先对账。
 
 ## 6. JobTracker
 
 ```
-idle ─offer─► starting ─► running ─terminal─► idle
-running ─preempt─► stopping ─stopped─► idle
+idle ─成功启动 driver─► running
+running ─driver 终态 / 中断 / 候选抢占─► stopping ─stopped─► idle
 stopping ─超时/不可确认─► fault ─► 冻结新 dispatch + 上报
 ```
 
@@ -361,8 +365,8 @@ stopping ─超时/不可确认─► fault ─► 冻结新 dispatch + 上报
 ```ts
 interface JobTracker {
   offer(candidate: Candidate | null): void
-  tick(): void
-  current(): { job: Job; driverId: string } | null
+  tick(now?: number, gameAge?: number): void
+  current(): { job: Job; driverId: string; keys: string } | null
   state(): 'idle' | 'starting' | 'running' | 'stopping' | 'fault'
   fault(): { code: string; since: number } | null
 }
@@ -371,9 +375,8 @@ interface JobTracker {
 规则：
 
 1. 续做：`candidate.keys === current.continuationKey()` → 只续期。
-2. 切换：`seq++`（当前令牌失效）→ `requestStop()` → 等 `stopped` → 起新 job。
-3. 迟到：`runId` 不匹配的结果只记 `stale-result`。
-4. 失败：按 `(orderId|workItemId|driverId)` 计数；超限上报 `blocked`。原始 order 的 retry/one-shot 见 RUNTIME §5；中间 retry 的 `job.terminal` 带 `retry: true`，不产生 completion wake。
+2. 切换：撤销旧 run 的写视图、结束其写令牌 → `requestStop()` → 等 `stopped`。新 run 派发时分配递增的 `seq`。停止未确认时冻结派发，报告 `tracker.fault / STOP_UNCONFIRMED`。
+3. 失败：同一 `keys` 的失败次数达到阈值时，`job.terminal` 携带 `blocked:true`；工作项由计划账本处理。订单是否重试见[工作选择与重试](RUNTIME.md#5-工作选择与重试)。
 
 ## 7. 树与谓词注册表
 
@@ -405,7 +408,7 @@ type PlanInstance = {
   size: [number, number, number]     // 内空尺寸
   materialPolicy: Record<string, { auto: boolean; maxBudgetTicks?: number }>
   workItems: WorkItem[]
-  verify: VerifySpec
+  verify?: VerifySpec
   deferredWorkItems?: string[]       // 临时入口，最后阶段
   entranceInside?: Vec3
   safeExits?: Array<{ cell: Vec3; exterior: boolean }>
@@ -439,17 +442,16 @@ type WorkState =
 - WorkGiver 遍历**全部**工作项，返回任一 `executable`；plan.work 先按 stage（优先级标签）/y/距离排序，再用站位覆盖贪心选锚点，一个 job 仍只放一个 work item。
 - stage 是优先级/报告标签，不是硬屏障；支撑、材料、可站立位和 access 谓词决定当下可放前沿；deferred 入口最后。
 - `safeExits` 在 plan 实例化时冻结（起始格/入口外/入口内/有界搜索；排除蓝图最终实心格；`exterior` 按 `interiorBounds`）。place 前把该项格子当作实心 overlay，从锚点用有界 A* 检查能到达任一 exit；`unknown` 不通过；最终入口只能从 `exterior` 参考点从室外封。
-- plan 结束时 `plan.blocked`/`plan.terminal` 带 `summary { total, satisfied, failed, skipped, unknown, codes, stopReason }` 与有界 failed items；plan 项逐格 place job 失败不唤醒 Agent，只发一条回执；整体成功仍由 verifier 判定。
+- plan 结束时 `plan.blocked`/`plan.terminal` 带 `summary { total, satisfied, failed, skipped, unknown, codes, stopReason }` 与有界 failed items；plan 项逐格 place job 失败不唤醒 Agent。整单终态判据见 [§1.1](#11-结果语义分层)。
 - `usable-room` 的 `door` 要求门下半两侧在**同一高度**有可站立格；抬高地板/空中平台需在门外提供同高度台阶/门廊，建造器不自动补。
 
 ## 9. 意图日志（恢复用）
 
 ```jsonc
 {"at": 1793..., "kind": "order.accepted", "order": {...}}
-{"at": 1793..., "kind": "plan.instantiated", "planId": "...", "templateVersion": 1, "origin": {...}}
-{"at": 1793..., "kind": "workItem.terminal", "planId": "...", "workItemId": "w7", "state": "satisfied"}
-{"at": 1793..., "kind": "action.pending", "runId": "...", "driverId": "place", "target": {...}}
-{"at": 1793..., "kind": "order.terminal", "orderId": "...", "state": "succeeded", "evidence": {...}}
+{"at": 1793..., "kind": "action.pending", "action": {"runId": "...", "driverId": "place", "keys": "...", "orderId": "..."}}
+{"at": 1793..., "kind": "action.settled", "runId": "...", "state": "succeeded"}
+{"at": 1793..., "kind": "order.terminal", "orderId": "...", "state": "succeeded"}
 ```
 
 恢复：尾部半行丢弃；`action.pending` 只对账不重放；已取消 order 不复活；重启时 **queued order 与 active hold** 置 `abandoned`（`observed.reason:"RESTART"`），不自动继续；active 非 hold order 仍按 pending/plan 恢复；身份/模板版本不匹配 → 归档到 `.p2/archive/journal.jsonl`（覆盖旧档）并发 `journal.archived`，空 journal 启动；JSON 损坏/版本不兼容仍拒绝恢复。
