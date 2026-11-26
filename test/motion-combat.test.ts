@@ -244,6 +244,64 @@ describe('CombatSession tick', () => {
     expect(fake.inputs[0]?.left === true || fake.inputs[0]?.right === true).toBe(true)
   })
 
+  // State safety (CONTRACTS §5): zero health alone cannot commit a kill.
+  it.each([
+    { mode: 'melee', end: 'dead' }, { mode: 'melee', end: 'lost' },
+    { mode: 'ranged', end: 'dead' }, { mode: 'ranged', end: 'lost' },
+  ])('waits for evidence after a $mode hit reads zero ($end)', async ({ mode, end }) => {
+    const target = zombie(mode === 'ranged' ? 10 : 2.5)
+    const fake = fakePort({ target, killOnAttack: false, ranged: {
+      fire: async () => {
+        target.health = 0
+        return { state: 'hit' }
+      },
+    } })
+    const attack = fake.port.attack
+    fake.port.attack = async id => {
+      target.health = 0
+      return attack(id)
+    }
+    const session = new CombatSession(fake.port, 'z1', { allowRanged: mode === 'ranged' })
+    for (let tick = 0; tick < 2; tick++) {
+      session.tick()
+      await sleep(0)
+    }
+    expect(session.state).toBe('running')
+    expect(fake.attacks() + fake.rangedFires()).toBe(1)
+    if (end === 'dead') fake.dead('z1')
+    fake.setTarget(undefined)
+    session.tick()
+    await sleep(0)
+    expect(session.result()).toMatchObject({
+      state: end === 'dead' ? 'succeeded' : 'failed',
+      ...(end === 'lost' ? { code: 'ATTACK_TARGET_LOST' } : {}),
+      observed: { killed: end === 'dead', kills: end === 'dead' ? 1 : 0, targetHealth: 0 },
+    })
+  })
+
+  it.each(['recover', 'timeout'])('handles a zero-health target that can %s', async end => {
+    const fake = fakePort({ target: zombie(2.5, { health: 0 }) })
+    let now = 0
+    fake.port.now = () => now
+    const session = new CombatSession(fake.port, 'z1', { totalMs: 1000 })
+    session.tick()
+    await sleep(0)
+    expect(fake.attacks()).toBe(0)
+    expect(session.state).toBe('running')
+    if (end === 'recover') fake.setTarget(zombie(2.5, { health: 1 }))
+    else now = 1001
+    session.tick()
+    await sleep(0)
+    if (end === 'recover') {
+      expect(fake.attacks()).toBe(1)
+      expect(session.result()?.observed.killed).toBe(true)
+    } else {
+      expect(session.result()).toMatchObject({
+        state: 'failed', code: 'ATTACK_NOT_KILLED', observed: { killed: false, targetHealth: 0 },
+      })
+    }
+  })
+
   it('reports a target that is already gone as lost', async () => {
     const fake = fakePort()
     fake.setTarget(undefined)
@@ -260,6 +318,17 @@ describe('CombatSession tick', () => {
     session.tick()
     await sleep(0)
     expect(session.result()?.code).toBe('ATTACK_TARGET_PROTECTED')
+  })
+
+  it('resolves an engagement with a protected target without reporting a kill', async () => {
+    const fake = fakePort({ target: zombie(2.5, { type: 'player' }) })
+    const session = new CombatSession(fake.port, 'z1', { engagement: true })
+    session.tick()
+    await sleep(0)
+    expect(session.result()).toMatchObject({
+      state: 'succeeded', code: 'ATTACK_TARGETS_RESOLVED',
+      observed: { killed: false, kills: 0, resolution: 'protected' },
+    })
   })
 
   it('stops input and releases the shield on requestStop', async () => {

@@ -58,6 +58,7 @@ export class CombatSession {
   private readonly shieldSupported: boolean
   private readonly targetIds: string[]
   private currentTargetId: string
+  private lastTargetHealth: { id: string; health: number } | undefined
   private readonly startOrigin: Vec3
   private readonly chaseLeash: number | undefined
   private readonly deadTargets = new Set<string>()
@@ -256,6 +257,7 @@ export class CombatSession {
       attacks: this.attacks,
       attacksIssued: this.attacksIssued,
       damageObserved: this.damageObserved,
+      ...(this.lastTargetHealth?.id === this.currentTargetId ? { targetHealth: this.lastTargetHealth.health } : {}),
       deathConfirmed: this.allTargetsDead(),
       targetLost: this.state === 'failed' && (code === 'ATTACK_TARGET_LOST' || code === 'ATTACK_TARGETS_LOST'),
       killed: this.state === 'succeeded' && this.allTargetsDead(),
@@ -351,6 +353,12 @@ export class CombatSession {
     this.shieldHeld = true
     this.shieldHeldSince = this.port.now()
     this.stanceRaises += 1
+  }
+
+  private readTarget(): CombatEntity | undefined {
+    const target = this.port.entity(this.currentTargetId)
+    if (target?.health !== undefined) this.lastTargetHealth = { id: target.id, health: target.health }
+    return target
   }
 
   private targetFacing(entity: CombatEntity, self: Vec3): boolean | undefined {
@@ -454,7 +462,7 @@ export class CombatSession {
       if (this.neutralizedTargets.size > 0) return { resolution: 'neutralized', resolved: true, retryable: false }
       if (this.escapedTargets.size > 0) return { resolution: 'escaped', resolved: true, retryable: false }
       if (this.lostTargets.size > 0) return { resolution: 'lost', resolved: true, retryable: false }
-      return { resolution: 'killed', resolved: true, retryable: false }
+      return { resolution: 'protected', resolved: true, retryable: false }
     }
     if (code === 'ATTACK_TARGET_NEUTRALIZED') return { resolution: 'neutralized', resolved: true, retryable: false }
     if (code === 'ATTACK_TARGET_PROTECTED') return { resolution: 'protected', resolved: true, retryable: false }
@@ -662,29 +670,23 @@ export class CombatSession {
       this.refreshResultObserved()
       return true
     }
-    if (outcome.state === 'unavailable' || outcome.state === 'failed' || outcome.state === 'stopped') {
-      this.rangedUnavailableReason = outcome.code ?? (outcome.state === 'stopped'
-        ? 'RANGED_STOPPED'
-        : 'RANGED_UNAVAILABLE')
-      await this.switchToMelee()
-      return false
-    }
-    const fresh = this.port.entity(this.currentTargetId)
+    const fresh = this.readTarget()
     if (fresh === undefined) {
       this.lostTargets.add(this.currentTargetId)
       if (this.finishIfResolved()) return true
       this.advanceTarget()
       return true
     }
-    if ((fresh.health ?? 1) <= 0) {
-      this.deadTargets.add(this.currentTargetId)
-      if (this.allTargetsDead()) {
-        this.finish('succeeded')
-        return true
-      }
-      if (this.finishIfResolved()) return true
-      this.advanceTarget()
+    if (fresh.health !== undefined && fresh.health <= 0) {
+      await this.port.combatInput?.({ face: this.aim(fresh) })
       return true
+    }
+    if (outcome.state === 'unavailable' || outcome.state === 'failed' || outcome.state === 'stopped') {
+      this.rangedUnavailableReason = outcome.code ?? (outcome.state === 'stopped'
+        ? 'RANGED_STOPPED'
+        : 'RANGED_UNAVAILABLE')
+      await this.switchToMelee()
+      return false
     }
     if (this.rangedShots >= MAX_RANGED_SHOTS
       || eyeReach(this.port.self(), fresh) <= this.reach + TOO_CLOSE_MARGIN) {
@@ -750,7 +752,7 @@ export class CombatSession {
       return
     }
 
-    const entity = this.port.entity(this.currentTargetId)
+    const entity = this.readTarget()
     if (entity === undefined) {
       this.lostTargets.add(this.currentTargetId)
       if (this.finishIfResolved()) return
@@ -770,14 +772,9 @@ export class CombatSession {
       if (!this.advanceTarget()) return
       return
     }
-    if ((entity.health ?? 1) <= 0) {
-      this.deadTargets.add(this.currentTargetId)
-      if (this.allTargetsDead()) {
-        this.finish('succeeded')
-        return
-      }
-      if (this.finishIfResolved()) return
-      if (!this.advanceTarget()) return
+    if (entity.health !== undefined && entity.health <= 0) {
+      // A later tick can observe recovery, disappearance, or the death event.
+      await this.port.combatInput?.({ face: this.aim(entity) })
       return
     }
     this.updateThreats()
@@ -944,6 +941,9 @@ export class CombatSession {
     // The movement input stays active: attacks do not stop movement or drop
     // the shield. lookAt only changes facing.
     if (this.port.lookAt !== undefined) await this.port.lookAt(this.aim(entity))
+    const beforeSwing = this.readTarget()
+    if (this.state !== 'running' || beforeSwing?.id !== entity.id
+      || (beforeSwing.health !== undefined && beforeSwing.health <= 0)) return
     this.attacks += 1
     this.attacksIssued += 1
     this.attacksSinceDamage += 1
@@ -956,7 +956,7 @@ export class CombatSession {
       }
       return
     }
-    const after = this.port.entity(this.currentTargetId)
+    const after = this.readTarget()
     if (after === undefined) {
       if (this.deadTargets.has(this.currentTargetId)) {
         if (this.allTargetsDead()) {
@@ -971,14 +971,8 @@ export class CombatSession {
       if (!this.advanceTarget()) return
       return
     }
-    if ((after.health ?? 1) <= 0) {
-      this.deadTargets.add(this.currentTargetId)
-      if (this.allTargetsDead()) {
-        this.finish('succeeded')
-        return
-      }
-      if (this.finishIfResolved()) return
-      if (!this.advanceTarget()) return
+    if (after.health !== undefined && after.health <= 0 && this.state === 'running') {
+      await this.port.combatInput?.({ face: this.aim(after) })
     }
   }
 
