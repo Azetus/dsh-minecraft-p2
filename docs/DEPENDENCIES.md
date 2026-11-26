@@ -37,38 +37,33 @@
 - `openFurnace` 内部 `once('windowOpen')` 等待 20s；外部 10s 超时可能留下晚开窗口，写操作前必须 `closeWindow`。
 - `update_time` 只有 `age/time`；`doDaylightCycle` 是推断值，不能当权威。
 
-## 4. 常用命令
+## 4. 本地构建与检查
 
-```text
-npm install --cache .npm-cache
-npm run typecheck
-npm run test
-npm run check
-npm run build
-npm run bundle
-npm run verify:dist
-npm run dev
-npm run dev:check
-npm run dev:smoke
-npm run clean
-```
+| 任务 | 命令 |
+| --- | --- |
+| 安装依赖并使用本地缓存 | `npm install --cache .npm-cache` |
+| 构建、类型检查、测试 | `npm run check`。单独运行时分别用 `npm run build`、`npm run typecheck`、`npm test` |
+| 生成安装包 | `npm run bundle` 先构建，再用 `npm pack` 生成 `bundles/dsh-minecraft-p2-<version>.tgz` |
+| 验证安装包 | `npm run verify:dist` 在独立的 `.dev-home/verify` 安装 tarball，检查 profile 组合、`--dump-config` 与 `--dump-config-schema`。成功后清理该验证环境，失败保留诊断 |
 
-`npm run bundle` 会先构建，再用 `npm pack` 把 `bundles/dsh-minecraft-p2-<version>.tgz` 输出到 `bundles/`。生成物和本地 npm 缓存不提交。
+生成物和本地 npm 缓存不提交。构建脚本调用 esbuild CLI 并继承 stdio，避免 Windows 沙箱拒绝 esbuild JS API 所需的管道子进程。
 
-构建脚本调用 esbuild CLI 并继承 stdio，而不是使用 esbuild 的 JS API；当前 Windows 沙箱下，JS API 启动的服务进程需要 piped stdio，会被拒绝。不要为绕开这一点改成其他捕获输出的调用方式。
+## 5. 检查或启动隔离的 p2-dev
 
-## 5. 开发与验证环境
+从仓库根运行 [dev.mjs](../scripts/dev.mjs)。隔离的 `DSH_HOME` 是 `.dev-home/run`，默认 profile 在该目录的 `profiles/p2-dev` 下，会话历史在 `sessions/` 下。要保留原会话，先确认会话记录仍在，并检查默认 `workspace/` 和 `storages/workspace.json` 是否齐全。后两者有缺失时，复用流程也会重新写入默认 workspace 登记。
 
-- `npm run verify:dist`：构建 tarball，在 `.dev-home/verify` 创建隔离 `DSH_HOME`，通过 `dsh plugin add` 安装同一个 tarball，检查 profile 组合、`--dump-config` 与 `--dump-config-schema`；成功自动清理，失败保留诊断。
-- `npm run dev`：在 `.dev-home/run` 创建隔离 `DSH_HOME`，生成包含 base、web-app 与 P2 的 profile，并启动 `dsh --port 0 --no-open`。不会读写真实 Desktop profile，也不会在用户 Documents 下创建 workspace。
-- `npm run dev:check`：只 staging 并运行 profile 检查，不启动服务，适合快速排查。
-- `node scripts/dev-api-smoke.mjs <web-url-with-token> <workspace>`：通过 DSH Web API 执行 `/p2 status/setup/start/status/stop`，验证真实 body 子进程链路。该链路需要 DSH Host 能创建带管道的子进程；workspace-write 沙箱下会 `spawn EPERM`，应在 full access 下运行。
-- 直接运行 `node scripts/dev.mjs --keep` 可保留 `.dev-home/run` 供检查；默认退出时清理。
-- 需要模型回合时用 `node scripts/dev.mjs --with-credentials`；凭据只从真实 `DSH_HOME` 复制到隔离 home。
-- Minecraft provider 的 host/port 由 `/p2 start <host>:<port>`（或 `p2_body start`）在启动时传入，不写 `.p2/config.json`；文件只保留 `username`/`version`/`connectTimeoutMs`/`serverIdleMs` 等角色与连接行为。没有启动 target 时 body 保持 provider-unavailable。模板见 `content/templates/config.json`；`p2 start` 在缺失时创建 `.p2/config.json`，已有文件不覆盖，`.p2/` 整体不入库。
-- 复用已有 session/workspace 时用 `node scripts/dev.mjs --reuse`。它跳过删除、bundle 安装和 workspace 重建，保留 `.dev-home/run` 下的 sessions、workspace 与 `.credentials.yaml`；目标 home 存在但 profile 无效时拒绝复用并保留现场，不自动删除。`--reuse` 不会自动重装 tarball。
-- 代码更新后仍要复用已有 session 时用 `node scripts/dev.mjs --refresh`：保留 sessions/workspace/credentials，只强制重装当前 tarball 并校验 profile。默认（或显式 `--fresh`）仍是全量重建。
-- `.dev-home/` 已加入 `.gitignore`；这些脚本不进入发布 tarball。
+| 任务 | 从仓库根运行 | 对环境的影响 |
+| --- | --- | --- |
+| **保留原 session，只检查已安装的 profile** | `node scripts/dev.mjs --reuse --no-start --keep` | 复用已安装的插件，执行 `dsh --profile p2-dev --dump-config` 并检查结果中包含 P2。输出应显示 `dev: reused`、`bundle: reused`，检查日志写入 `.dev-home/run/dev-check.log`。全程无需启动 Web 服务或进游戏 |
+| 用已安装的插件继续会话 | `node scripts/dev.mjs --reuse --keep` | 启动隔离 DSH，Web 端口由系统分配；按原 session ID 和工作目录选回会话 |
+| 用当前工作树的插件继续会话 | `node scripts/dev.mjs --refresh --no-start --keep` | 重新打包、在已有 profile 强制安装并检查，保留会话。检查通过后用上一行命令启动 |
+| 首次创建或明确要求重建 | `node scripts/dev.mjs --fresh --keep` | 先删除已有 `.dev-home/run`，再创建并启动新环境。`--keep` 保留的是这次生成的环境 |
+
+若 `.dev-home/run` 缺失，`--reuse` 也会创建新环境。若 home 已有但 profile 无效，`--reuse` 会报错并保留现场。`npm run dev` 和 `npm run dev:check` 都默认重建，后者只多传 `--no-start`，成功后还会清理新环境。`npm run clean` 会删除整个 `.dev-home`，包括其中的所有 session。
+
+需要模型回合且隔离环境缺少凭据时，在所选命令上追加 `--with-credentials`，将源 `DSH_HOME` 的凭据复制到隔离 home。`.dev-home/` 已加入 `.gitignore`，开发脚本不进入发布 tarball。
+
+需要在原会话里自然语言派单、连接本轮 LAN 或核对订单终态时，按[外层实机验收 skill](../.agents/skills/p2-live-acceptance/SKILL.md)执行。角色和版本从所选会话工作目录的 `.p2/config.json` 读取，使用 `/p2 start <host>:<port>` 传入本轮连接地址。单独验证 body 子进程链路时可用 `npm run dev:smoke -- <web-url-with-token> <workspace> <host>:<port>`。它会新建会话、启动并停止 body，需要 DSH Host 能创建带管道的子进程。
 
 ## 6. 版本更新原则
 
