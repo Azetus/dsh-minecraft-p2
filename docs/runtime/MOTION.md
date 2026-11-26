@@ -1,6 +1,6 @@
 # 运动模块（Motion）
 
-> **当前实现**：Combat 由 50ms tick `CombatSession` 独占；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance，attack 不停止移动/不放下盾。
+> **当前实现**：Combat 由 50ms tick `CombatSession` 独占；移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance，近战挥击不停止移动/不放下盾。
 
 > 运动模块在真实服务端与当前适配器下执行原版移动/战斗语义；方块语义优先读服务端 block tags。当前边界：水默认 `swim`，梯子/藤蔓可上下，脚手架只作为支撑/放置方块（不做柱内攀爬与侧穿），不安装也不依赖客户端 mod。
 > 本文只描述运动模块的当前契约与实现边界。
@@ -315,18 +315,18 @@ interface Move {
 - `LOS`：`canSee=false` 时向目标/最后可见位置短距重定位，`losRecoveryTicks` 预算内恢复；超过短预算时用 `pathTo` 规划 waypoint，再由 50ms tick 跟随；超时才 `ATTACK_NO_LINE_OF_SIGHT`。普通可见追击不使用阻塞 `moveTo`。
 - `threat`：`threatCount`/`rangedThreat`/`explosionThreat` 只作观测，不自动 escape。`creeperBackpedal` 为 opt-in 短距 backoff，默认关闭；有盾时无额外生存收益，无盾时只方向性减少爆炸伤害。
 - `movement safety`：`combat-input` provider 检查下一格的脚/头/支撑/液体/火/岩浆/仙人掌；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先 jump/短 detour，持续 blocked 时改用 `pathTo` waypoint，都不可达才 hold。1 格方向 + 每 tick 重新评估，不做 2 格 burst。
-- `shield`：`offhandHold(true)` 持久保持副手盾；进入 `preShieldRange`（默认 12）提前举起。attack 不停止移动、不放下盾；stop/endWrite/epoch/suspended/death/disconnect 释放。适配器没有 `offhandHold` 时 `shield:false`，不退回 timed useItem。
+- `shield`：`offhandHold(true)` 持久保持副手盾；进入 `preShieldRange`（默认 12）提前举起。近战挥击不停止移动、不放下盾；stop/endWrite/epoch/suspended/death/disconnect 释放。适配器没有 `offhandHold` 时 `shield:false`，不退回 timed useItem。
 - `auto-swap`：attack job 开头若副手为空且背包有盾，自动换盾；不替换非空副手，结果写 `shieldAutoEquip`。
 - `recheck`：冷却结束后、真正发 `attack` 前重新读目标；等待期间移动、遮挡或死亡的目标不补刀。每次挥击前 `lookAt`；失败不取消攻击。
 - `lostReason`：超出范围/卸载/死亡/失去视线。
-- 当前不包含远程、暴击。
+- 显式 `attack` 传 `allowRanged:true` 时可在弓、弩与近战间切换。使用远程武器前先放盾，蓄力期间可走位。目标进入 `reach + 1` 格以内（含边界，眼到目标 AABB）时切回近战。弩在装填轮询、发射前和两次远程尝试之间均检查近距。自动 `threat.fight` 保持近战。暴击尚未实现。
 
 目标选择仍归 Agent；控制器只执行，不换目标。
 
 ### 7.2 证据
 
 - `attacksIssued`：发出攻击次数。
-- `damageObserved`：短窗口内观察到目标受伤，且能归因到本方攻击。
+- `damageObserved`：本次交战中收到的当前目标受伤事件数，包括其他来源造成的伤害。
 - `deathConfirmed`：观察到目标死亡（`entityDead`）。
 - `targetLost`：超出跟踪范围/卸载/视线丢失。
 - `rejectedSwings`：等待后的新鲜复核拦下的“本可发出”的挥击次数；只作证据，不改变终态。
@@ -339,6 +339,20 @@ interface Move {
 - `shieldedSteps`：步进期间实际激活盾牌的 A-step 次数；`stepFallbacks`：上一层候选回退 C 的次数；`stepBlocked`：A-step 失败/无进展次数。
 - `reach` / `reachSource`：本次交战采用的 eye→AABB reach 及其来源（`attribute`/`default`/`override`）。
 - 只有死亡证据才报 `killed`；单纯从查询范围消失只能报 `targetLost` / `insufficient`。
+
+### 7.3 远程战斗实机验收
+
+2026-11-26，在 Minecraft Java 26.1.2 的 LAN 世界中，由同一 `p2-dev` DSH 会话用自然语言下单，P2_Bot 使用普通弓、弩和箭。以下结果核对了订单终态和实机读回。
+
+| 订单与场景 | 实际观察 |
+| --- | --- |
+| 显式 `shoot`，弓、弩分别攻击同一只关闭 AI 的铁傀儡，`maxShots=1` | 两单各启动一次 job，各有一支主箭命中，背包箭数依次为 10 → 9 → 8。目标仍存活（`killed=false`），两单均自然 `succeeded`。弩单结束约 58 秒后，目标仍在，队列为空，箭数仍为 8。 |
+| `attack {allowRanged:true}`，弓对主动逼近的僵尸 | 观察到纯远程击杀，也观察到三箭命中后因 `RANGED_SHOT_LIMIT` 切剑、挥剑 4 次击杀。另一次对抗击退僵尸时，首箭命中，第二次拉弓在贴近时中止，约 3.81 格切剑，实际只射一箭，挥剑 7 次后订单自然成功。 |
+| 同一攻击订单配置，空弩对主动逼近的抗击退僵尸 | P2 自行装填，首箭命中。第二次装填时目标贴近，约 4.03 格切到铁剑。背包箭数 6 → 5，服务端读回弩内装填数为 0，旁观端仅见一支箭发射。随后挥剑 7 次，收到目标死亡事件，订单自然 `succeeded`。 |
+
+`rangedShots` 统计远程尝试，包含中止的蓄力或装填。上述弩单记录了两次尝试、一次发射。表中切剑距离取自旁观端的双方位置采样，控制器判定近距使用 P2 的眼睛到目标 AABB 的最近距离。
+
+本轮实机范围限于上述版本和普通武器。多重射击、穿透、弩刚装填完成时贴近并保留装填，以及操作者主动取消装填，均未在本轮 LAN 中单独验收。主动僵尸场景使用简单难度，结束后已读回和平。
 
 ## 8. 与 P2Mind 的接口
 

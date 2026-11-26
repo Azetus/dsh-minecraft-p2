@@ -1,6 +1,6 @@
 # 契约（P2Mind）
 
-> **当前实现**：Combat 只有一个实现——50ms tick 的 `CombatSession`，由 `CombatSessionHandle` 的 `DriverHandle.tick()` 驱动。移动用 `combatInput` 持久控制、盾用 `offhandHold` 持久 stance；attack 不停止移动、不放下盾。
+> **当前实现**：Combat 只有一个实现——50ms tick 的 `CombatSession`，由 `CombatSessionHandle` 的 `DriverHandle.tick()` 驱动。移动用 `combatInput` 持久控制、盾用 `offhandHold` 持久 stance；近战挥击不停止移动、不放下盾。
 
 > 设计背景见 [P2Mind](runtime/P2MIND.md)。本文只列可实现的接口与不变量。
 
@@ -165,11 +165,11 @@ type BodyApi = {
 - provider 在发包前后快照 3×3×3 邻域与物品数量；成功/失败都带 `placedAt/placedCells/changedCells/itemCountBefore/itemCountAfter/itemConsumed`。target 未变但邻域出现方块 → `PLACE_OFF_TARGET`；物品减少且无落点 → `PLACE_ITEM_CONSUMED`。support 已是期望方块只作 `supportMatchesExpected`/`suggestedTarget` hint，不自动下移。
 - provider 在 `bot.placeBlock` 期间按原状态设置 sneak、结束后恢复：工作台/箱子/熔炉等交互方块的普通右键会打开界面而不是放置，必须 sneak 才能把方块放到其相邻格。
 - `craft` 先刷新背包模型，再按“无桌配方优先、找不到才用附近桌子”的顺序解析配方；`observed` 带 `before/after/attempted/crafted/produced` 与 `usedTable/requiresTable/recipeCount`。配方结果不足时返回 `CRAFT_INCOMPLETE`，由上层按 `crafted/attempted` 决定继续或停止；`CRAFT_INCOMPLETE` 不自动重试。
-- `attack` 锁定 `entityId`，可选 `entityIds` 扩展为允许的目标集合；`threat.fight` 以 `engagement:true` 传入一次 engagement 的集合，`attack` order 保持单目标严格 kill。追击距离由可选 `chaseLeash`（从 order 起点算的水平距离）限制；战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有 `entityDead` 才报 `killed`；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
+- `attack` 锁定 `entityId`，可选 `entityIds` 扩展为允许的目标集合；`threat.fight` 以 `engagement:true` 传入一次 engagement 的集合，`attack` order 保持单目标严格 kill。追击距离由可选 `chaseLeash`（以本次 CombatSession 启动时 P2 的位置为中心，按水平距离计算；同一 order 重新派发战斗 job 时重新取点）限制；战斗由 50ms tick `CombatSession` 独占，`CombatSessionHandle` 的 `DriverHandle.tick()` 驱动；`attack` driver 只做一次 auto-equip/选武器 prep，然后返回 tick handle，没有 async fallback。攻击间隔按 `attackSpeed`；`entityHurt` 记 `damageObserved`，只有目标的 `entityDead` 才报 `killed`；读到零血量时暂停攻击，等待死亡事件或下一次目标读回。恢复正血量后可继续，目标消失按 lost 处理，耗尽时间预算报 `ATTACK_NOT_KILLED`。有血量读回时在 `targetHealth` 保留该目标最近的数值；目标从查询范围消失只报 `ATTACK_TARGET_LOST`。显式 order 传 `allowAny:true`；自动 fight 仍做玩家/被动/中立保护。攻击距离按眼→目标 AABB 最近点计算；`reach` 来自 `attackReach?()`，带为 `[reach-0.8, reach-0.2]`、`tooClose=reach-1.4`。
 - `attack` 可选 `allowRanged?: boolean`（默认 false）：Agent 只授权“可以切远程武器”，P2 自己选弓/弩。远程只在 `distance > reach+1` 且 `distance <= 24`、有武器/弹药、可见、最近未受伤/未 guard、目标不是过近 creeper 时尝试；`reach+2` 进入、`reach+1` 退出，内部短迟滞。远程命中只是伤害，`attack` 仍要求目标死亡/engagement resolved，`killed` 只认 `entityDead`。draw/load 期间通过 `combat-input` 保持走位（距离 <8 后撤、>12 前进；接近 `reach+1` 则取消并切近战），移动输入保留瞄准 pitch。最多连续 3 次远程尝试，之后切回近战；失败/无弹药静默回退，不把整个 attack 判失败。`chaseLeash` 只限制移动，射击距离由 24 限制；自动 `threat.fight` 不传 `allowRanged`，仍纯近战。显式 `shoot` 仍是独立的强制远程、命中即成功 order。
 - `attack` driver 在第一次挥击前用 `chooseWeapon` 自动切换最强剑/斧：按材质等级，同材质优先剑，不选弓/弩；无武器则空手。最近一次显式 `equip` 成功后，下一次 `attack`/`dig`/`clear` 使用手动手持，不自动切换；动作启动后恢复自动。
 - `shoot` 是独立显式远程 order，参数 `{entityId, weapon:"bow"|"crossbow", maxShots? 1–5 默认 3, maxRange? 8–64 默认 32}`；成功 = 主箭确认命中，`killed` 单独报告，不要求死亡。目标身份锁与显式 `attack` 相同，但不追击、不自动索敌；射手必须基本静止。自动 fight 不生成 `shoot`，保护过滤不变；显式 `shoot` 期间与 `attack` 一样抑制自动 fight/自理，保留致命环境反射。
-- `shoot` 先做弹药/武器/range/静止预检和弹道采样遮挡检查（不拿脚部 `canSee` 否决；低栅栏可能挡住脚部射线但挡不住到躯干的箭道），再按弓“蓄力→释放瞄准”或弩“确保装填→发射”执行；最多 `maxShots` 发，首发命中即停。命中只认主箭（Multishot 时取初始方向与瞄准方向最接近的一支）的 `entityHurt` source；侧箭命中不算成功。26.1.2 实测 `damage_event` 的 source 是**射手玩家**而非箭实体，因此同时接受 `SelfInfo.id` 作为本发命中来源，并在 `hitEvidence` 区分 `damage-source-arrow` / `damage-source-shooter`。Piercing 不要求箭消失；Infinity/Unbreaking/其他 arrow 系箭种不作为成功条件。移动射击的弹道按 vanilla：弓继承射手 known movement，弩不继承；静止 `shoot` 仍传零速度，不受影响。箭矢回收不在首版范围。
+- `shoot` 先做弹药/武器/range/静止预检和弹道采样遮挡检查（不拿脚部 `canSee` 否决；低栅栏可能挡住脚部射线但挡不住到躯干的箭道），再按弓“蓄力→释放瞄准”或弩“确保装填→发射”执行；最多 `maxShots` 发，首发命中即停。以服务端本次发射生成的自有箭实体 ID 核对目标伤害包的直接来源；Multishot 需观测完整装填数量，并用发射方向唯一选出最接近释放瞄准方向的主箭。匹配时记 `damage-source-arrow`。只知道射手、缺少直接来源或无法确定主箭时，命中证据不足。Piercing 不要求箭消失；Infinity/Unbreaking/其他 arrow 系箭种不作为成功条件。移动射击的弹道按 vanilla：弓继承射手 known movement，弩不继承；静止 `shoot` 仍传零速度，不受影响。箭矢回收不在首版范围。
 - **弩装填**是内部独立动作 `loadCrossbow`，不加 order 词表；成功 = `Item.chargedProjectiles` 含 arrow 系且没有箭射出，并且 use stance 已释放。1.21.1 在 release 装填，26.1.2 在满蓄力的 `onUseTick` 装填；驱动用“start → 等到 charged 或满蓄力 → release → 轮询 charged”兼容两种行为，绝不在装填动作里第二次 activate。`charged` 读不到 → `CROSSBOW_LOAD_STATE_UNKNOWN`，不 activate；26.1.2 满蓄力后停止可能已经装填/扣箭，如实记 `loadedDuringStop`，但不发射。
 - `Item.chargedProjectiles` 由 provider 从物品组件或旧 NBT 做 best-effort 读取；`undefined` 是“无法判断”，不是未装填。旧 NBT 只尝试 `Charged`/`ChargedProjectiles`，形状不认识就 unknown。
 - **CombatSession（唯一实现）**：每 50ms tick 读取 self/target/health/cooldown，维护 `entityId + entityIds` 允许集合；只在集合内选主目标，当前目标死亡/丢失/受保护时切到最近可用目标，带 `targetSwitches` 证据，不自行扩大集合。移动用 `combatInput` 持久控制，盾用 `offhandHold` 持久 stance。attack/lookAt 是短动作，**不停止移动、不放下盾**；`lookAt` 失败不取消攻击。
@@ -179,7 +179,7 @@ type BodyApi = {
 - **LOS/长距离**：`combatInput` 是局部控制；`canSee=false` 超过短预算或持续 blocked 时，若 adapter 有 `pathTo`，用 `MotionSearch` 规划 waypoint，再由 50ms tick 逐点跟随；普通可见追击不使用阻塞 `moveTo`。路径仍不可达则 `ATTACK_NO_LINE_OF_SIGHT`/`ATTACK_NO_APPROACH`，不无限追。
 - **观测**：`resolution`/`resolved`/`retryable`/`escaped` 与 `kills`/`neutralized`/`lostTargets` 分开；`killed` 只在全部目标都有 `entityDead` 时为 true。
 - **guard**：自血下降时进入 1000ms 窗口；窗口内移动 hold（tooClose 仍 backoff），攻击/盾照常；计时到期、无盾、目标丢失/死亡/job 结束退出。
-- **盾/开场**：副手有盾时 `offhandHold(true)` 持久保持，进入 `preShieldRange`（默认 12）提前举起；stop/endWrite/epoch/suspended/death/disconnect 释放。攻击不强制放下盾；若服务端行为拒绝，才做显式例外，不作为默认。
+- **盾/开场**：副手有盾时 `offhandHold(true)` 持久保持，进入 `preShieldRange`（默认 12）提前举起；stop/endWrite/epoch/suspended/death/disconnect 释放。近战挥击保持盾姿态；切换到远程时先释放盾。
 - **移动与 item use 并发**：主手 `itemUseStart/Release/Cancel` 是同一 Driver 下的独立控制 stance；item use 活跃时仍允许 `combat-input` 更新移动/朝向（`preservePitch:true` 保留瞄准 pitch），但 `attack`/`dig`/`place`/`equip` 等冲突 act 继续返回 `ITEM_USE_ACTIVE`。这支持“移动射击”，不是第二个 Driver 或第二个写者。
 - **移动安全**：`combat-input` provider 对下一格的脚/头/支撑/液体/火/岩浆/仙人掌做本地检查；允许 1 格上台阶（jump）和 1 格下台阶（`aheadBelow` 空气 + `aheadBelow2` 实体），2+ 格落差/坑仍 blocked；不安全返回 `COMBAT_INPUT_BLOCKED`，session 先尝试 jump/短 detour，持续 blocked 时改用 `pathTo` waypoint，都不可达才 hold。
 - **证据**：`inputTicks`/`inputBlocked`/`inputFailures`、`approachMoves`/`strafeMoves`/`backoffMoves`、`guardWindows`/`guardExits`、`stanceRaises`/`stanceDrops`/`stanceReleaseFailures`/`shieldHeldMs`、`preShieldRaises`、`targets`/`kills`/`neutralized`/`escaped`/`targetSwitches`/`lostTargets`、`resolution`/`resolved`/`retryable`、`threatCount`/`rangedThreat`/`explosionThreat`、`reach`/`reachSource`。
@@ -204,6 +204,7 @@ type BodyApi = {
   - `mind.status.reaction` 返回 `{source:"default"|"agent", mode:"flee"|"allowlist"|"all-hostiles", fight, selfCare}`。`selfCare` 默认启用 `eat`/`unstuck`，`retreat` 只作为血量门槛。
   - 显式 `attack` order 期间自动 fight 关闭；常驻树只保留岩浆/深水等致命环境反射，不因敌对、低血、饥饿或卡住而打断。
 - `ActResult.state = 'unknown'` 表示“请求已发出但效果未确认”，调用方不得当成功，也不得立刻重放。
+- **射击事件**：`ownArrowSpawn {id, velocity?}` 提供本方箭矢的生成记录，`entityDamageSource {entityId, sourceId?, directId?}` 分别保留受伤实体、致伤者和直接来源的 ID。箭矢离开实体缓存后仍可核对。
 - **事件负载**：`entityHurt` 为 `{entityId, source?}`；`damaged` 为 `{health, source?}`。`source` 是 `{id, name?, username?, type?}`，来自服务端 `damage_event`（1.20+，`sourceCauseId` 对应的实体）；字段缺失表示环境伤害（摔落/岩浆/溺水）或 adapter 无法解析，不能当作“无伤害来源”猜测。`damaged` 只在同一伤害窗口（500ms）内附带来源，避免把旧来源算给环境伤害。归因是观测事实，不改变任何写权限或目标选择权。
 - provider 动作依赖物理 tick；区块未加载、死亡或传送中时 `await` 可能没有终态。所有动作都有硬超时，超时按 `ACT_TIMEOUT` / `ACT_UNCONFIRMED` 返回，不重放。
 - 超时（`ACT_TIMEOUT` / `ACT_UNCONFIRMED`）和停止（`STOP_UNCONFIRMED`）必须携带 port 证据：`layer`、`actId`、`epoch`、`elapsedMs`、`effect`、`retrySafe`、`lastPoll`、`controlState`、`controlRelease`、`providerCode`。非 move 动作的超时与 move 同规：释放以 `controlState === idle` 或 provider 取消回执为准，未确认即 `STOP_UNCONFIRMED`，不得硬编码成已释放；driver 返回失败时必须保留 `ActResult.observed`，让 `job.terminal.observed` 能定位到 port/provider。语义拆分：
@@ -336,7 +337,7 @@ interface DriverHandle {
 | `container` | 传输后目标容器/背包读回符合请求 | `action/item/count`、`containerTransfer` observed |
 | `use` | 对应分支的 effect 已确认（sleep / use-on / use-item） | `kind`、`target/item`、provider observed |
 | `attack` | 目标 `entityDead` | `entityId`、`damageObserved`、`rejectedSwings`、`shieldUses`、`shieldFailures`、`shieldAutoEquip`、`ATTACK_TARGET_LOST` |
-| `shoot` | 主箭确认命中目标（`entityHurt.source.id` 匹配；Multishot 只认中间主箭）；`killed` 只作独立观测 | `entityId`、`weapon`、`shots`（aim/release/arrow/hit/miss/load）、`hitEvidence`、`sideHit`、`SHOOT_*`、`CROSSBOW_*` |
+| `shoot` | 主箭确认命中目标（`entityDamageSource.directId` 与本发主箭 ID 匹配）；`killed` 只作独立观测 | `entityId`、`weapon`、`shots`（aim/release/arrow/hit/miss/load）、`hitEvidence`、`sideHit`、`SHOOT_*`、`CROSSBOW_*` |
 | `fatal` | 真实 `died` 事件或 health 归零 | `target`、`health`、`HAZARD_*` |
 | `clear` | 目标格连续两次读回空气 | `block`、`READBACK_UNSTABLE` |
 

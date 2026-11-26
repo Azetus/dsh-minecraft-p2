@@ -25,17 +25,16 @@ description: Operate the P2 Minecraft body through p2_order/p2_status/p2_report.
 ## 2. 下单
 
 - 词表：`go / place / dig / collect / equip / use / attack / shoot / check / container / craft / build / traverse / hold`。
-- 位置用坐标、命名地点或约束表达；不要用逐 tick/逐格动作代替组合。
-- 一次 order 表达一个可验证目标；不要把一个目标拆成多次微操。
+- 一次 order 表达一个可验证目标；用坐标、命名地点或约束描述位置，避免逐格微操。
 - `dig` 默认 `purpose:"harvest"`；只想清掉方块时显式 `purpose:"clear"`。
 - 体积挖掘用 `dig {shape:"box"|"line",from,to,height?,only?,preserveFloor?,maxBlocks?}`；`maxBlocks` 默认 24、硬上限 64。
 - 连续水平通道用 `dig {shape:"tunnel",to,height? 2,maxBlocks? 24,preserveFloor?}`：起点为脚格，单水平轴、至多一次 y±1，不做竖井；一次清脚/头并前进，返回 `path/returnable`；遇水/岩浆/未加载/不可破坏会 `DIG_PARTIAL` + `stoppedAt/reason`，不要继续猜。
 - 拾取用 `collect {radius?,item?,maxDrops?,timeoutMs?}`：只处理已观测掉落物，不挖/不战/不预测；一次 job 跑完，失败也保留已收集数。
 - 常驻采集用 `p2_duty`，不要用循环 order 代替；显式 order 会暂停 duty。`p2_duty start` 会替换当前 active duty：旧 duty 先 `cancelled` + `REPLACED_BY_NEW_DUTY`，旧 job 停止后才启动新 duty。duty 持久化；blocked/failed 后 base inactive。
 - 默认活动用 `p2_base_activity`：默认 `idle`；`wandering` 需显式设置（anchor 半径 8）；`escort` 跟随玩家/实体，跟丢报 `TARGET_LOST`，不传送。base **不持久化**，重启回 `idle`；完全停住用 `hold`。
-- 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认不选玩家/被动/中立——这是默认值，不是对你的限制。
-- 显式 `attack` order 由你决定目标，P2 不做玩家/被动/中立保护拦截，含玩家；显式 attack 期间自动 fight 关闭，只保留致命环境反射。
-- 远程 `shoot {entityId, weapon:"bow"|"crossbow", maxShots?, maxRange?}`；成功=主箭命中，`killed` 独立；静止不追击；自动 fight 近战。
+- 自动战逃/自理用 `p2_policy`：没有 `fight` 只 flee；`allowedTargets:[]` = 所有非 neutral/auto-avoid 的 hostile；自动 fight 默认近战，避开玩家/被动/中立。
+- 显式 `attack` 可指定玩家/被动/中立目标；期间只保留致命环境反射。
+- 击杀默认近战，`attack {entityId,allowRanged:true}` 可切弓/弩。 `shoot {entityId, weapon:"bow"|"crossbow", maxShots?, maxRange?}`；成功=主箭命中，`killed` 独立；静止不追击。
 - `dig`/`clear`/`attack` 会自动选工具/武器；显式 `equip` 成功后，下一次 `dig`/`attack`/`clear` 保留手动物，不自动切换。
 - 目标必须可验证：终态由 Verifier 判定；成功的 order 必须有 `confirmed` 证据，`insufficient` 不是成功。
 
